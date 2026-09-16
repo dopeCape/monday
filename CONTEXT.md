@@ -98,6 +98,18 @@ _Avoid_: API mode, cloud AI
 One conversation with the Agent, with its history.
 _Avoid_: chat, thread (reserved for mail)
 
+**Role**:
+A named slot a task's model is chosen through: main or fast. Each Hosted provider maps both roles to a model, and any task may instead name an exact model.
+_Avoid_: tier (reserved for approvals), size
+
+**Task**:
+One kind of model work with its own Role, effort and meter line: composer, agentic step, brief, classify, route, section, tag, draft in my voice, summarize.
+_Avoid_: job (reserved for background work)
+
+**Meter**:
+The per-Workspace record of tokens and estimated cost for every Hosted call, by Task and provider.
+_Avoid_: usage, billing
+
 **Tool call**:
 One action the Agent takes through a monday tool, such as search or send.
 
