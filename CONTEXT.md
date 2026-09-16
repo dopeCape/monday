@@ -91,6 +91,22 @@ One action the Agent takes through a monday tool, such as search or send.
 The gate before a Tool call that leaves the mailbox or destroys data. Rendered as a card with the outcome, and undoable where the action is reversible.
 _Avoid_: confirmation, permission prompt
 
+**Tier**:
+The fixed approval class of a tool: always-ask, reversible (applies with Undo) or read-only (silent).
+_Avoid_: permission level, risk level
+
+**Standing approval**:
+A stored yes on one Workflow Step that lets an always-ask tool run unattended in that Step. Shown on the Workflows page and revocable.
+_Avoid_: auto-approve, whitelist
+
+**Activity log**:
+The per-Workspace record of every Tool call: tool, input summary, who approved, result, undo pointer.
+_Avoid_: audit log, history (reserved for Session history)
+
+**Developer mode**:
+A per-Session switch that re-enables the Local runtime's own built-in tools (shell, files, web) after an explicit warning. Off by default.
+_Avoid_: unsafe mode, power mode
+
 ### Automation
 
 **Workflow**:
