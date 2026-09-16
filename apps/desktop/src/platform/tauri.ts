@@ -93,6 +93,18 @@ export function fakePlatform(initialConfig = ""): Platform {
 
 let cached: Promise<Platform> | undefined;
 export function platform(): Promise<Platform> {
-  cached ??= inTauri() ? tauriPlatform() : Promise.resolve(fakePlatform());
+  cached ??= inTauri() ? tauriPlatform() : Promise.resolve(fakePlatform(devConfig()));
   return cached;
+}
+
+/** Browser dev only: `?config=<base64 toml>` seeds the fake platform's config file. */
+function devConfig(): string {
+  if (typeof location === "undefined") return "";
+  const b64 = new URLSearchParams(location.search).get("config");
+  if (!b64) return "";
+  try {
+    return decodeURIComponent(escape(atob(b64)));
+  } catch {
+    return "";
+  }
 }

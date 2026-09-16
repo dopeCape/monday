@@ -17,11 +17,14 @@ import {
 } from "@monday/ui/fixtures";
 import { useState } from "react";
 import { Inbox } from "./screens/Inbox.tsx";
+import { Settings } from "./screens/Settings.tsx";
 import { useShell } from "./shell/Shell.tsx";
 
 export function App() {
   const shell = useShell();
-  const [active, setActive] = useState("inbox");
+  const [active, setActive] = useState(
+    () => new URLSearchParams(location.search).get("screen") ?? "inbox",
+  );
   const runtime = `Claude Code · ${workspace.accountId}`;
 
   const cols: string[] = [];
@@ -65,7 +68,7 @@ export function App() {
     );
   }
   cols.push("minmax(0, 1fr)");
-  parts.push(<Inbox key="screen" />);
+  parts.push(active === "settings" ? <Settings key="screen" /> : <Inbox key="screen" />);
   if (shell.layout.agent === "right") {
     cols.push("var(--agent-w)");
     parts.push(

@@ -37,11 +37,13 @@ export function createApi(target: () => ServerTarget | null) {
     health: () => request<{ ok: boolean }>("/health"),
     capabilities: () => request<Capabilities>("/capabilities"),
     settings: {
-      all: () => request<Record<string, unknown>>("/settings"),
-      set: (key: string, value: unknown) =>
-        request<void>(`/settings/${encodeURIComponent(key)}`, {
+      /** Global and per-Device buckets; device wins for device-scoped keys. */
+      all: () =>
+        request<{ global: Record<string, unknown>; device: Record<string, unknown> }>("/settings"),
+      set: (key: string, value: unknown, scope: "global" | "device" = "global") =>
+        request<unknown>(`/settings/${encodeURIComponent(key)}`, {
           method: "PUT",
-          body: JSON.stringify({ value }),
+          body: JSON.stringify({ value, scope }),
         }),
     },
   };
