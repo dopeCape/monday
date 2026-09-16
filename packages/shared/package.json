@@ -10,7 +10,14 @@
     "./config": "./src/config/index.ts",
     "./workflow": "./src/workflow/index.ts"
   },
-  "scripts": { "typecheck": "tsc --noEmit -p ." },
-  "dependencies": { "zod": "^4.0.0" },
-  "devDependencies": { "bun-types": "latest" }
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "smol-toml": "^1.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
 }
