@@ -22,24 +22,28 @@
   --r-lg: 12px;
   --r-xl: 16px;
 
-  /* density: comfortable */
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-md: 13px;
-  --fs-lg: 14px;
-  --fs-xl: 16px;
-  --fs-2xl: 20px;
-  --fs-3xl: 26px;
-  --row-h: 40px;
-  --list-row-py: 10px;
-  --nav-row-h: 30px;
-  --pad: 16px;
+  /* density: comfortable (default). compact and spacious override below. */
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 17px;
+  --fs-2xl: 22px;
+  --fs-3xl: 28px;
+  --icon: 17px;
+  --avatar: 30px;
+  --head-h: 50px;
+  --row-h: 44px;
+  --list-row-py: 12px;
+  --nav-row-h: 32px;
+  --pad: 20px;
   --gap: 8px;
+  --bar-h: 50px;
 
-  --nav-w: 232px;
-  --list-w: 372px;
-  --agent-w: 340px;
-  --rail-w: 52px;
+  --nav-w: 244px;
+  --list-w: 392px;
+  --agent-w: 360px;
+  --rail-w: 56px;
 
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --t-fast: 120ms;
@@ -50,14 +54,45 @@
   --fs-xs: 10.5px;
   --fs-sm: 11.5px;
   --fs-md: 12.5px;
-  --fs-lg: 13px;
+  --fs-lg: 13.5px;
   --fs-xl: 15px;
-  --row-h: 32px;
-  --list-row-py: 6px;
-  --nav-row-h: 26px;
-  --pad: 12px;
+  --fs-2xl: 19px;
+  --fs-3xl: 24px;
+  --icon: 15px;
+  --avatar: 26px;
+  --head-h: 42px;
+  --row-h: 34px;
+  --list-row-py: 7px;
+  --nav-row-h: 27px;
+  --pad: 14px;
   --gap: 6px;
-  --list-w: 340px;
+  --bar-h: 44px;
+  --nav-w: 224px;
+  --list-w: 352px;
+  --agent-w: 330px;
+}
+
+:root[data-density="spacious"] {
+  --fs-xs: 12.5px;
+  --fs-sm: 13.5px;
+  --fs-md: 15px;
+  --fs-lg: 16.5px;
+  --fs-xl: 18px;
+  --fs-2xl: 24px;
+  --fs-3xl: 31px;
+  --icon: 19px;
+  --avatar: 34px;
+  --head-h: 56px;
+  --row-h: 52px;
+  --list-row-py: 16px;
+  --nav-row-h: 37px;
+  --pad: 24px;
+  --gap: 10px;
+  --bar-h: 56px;
+  --nav-w: 268px;
+  --list-w: 430px;
+  --agent-w: 400px;
+  --rail-w: 60px;
 }
 
 /* ============================ GRAPHITE (default) ============================ */

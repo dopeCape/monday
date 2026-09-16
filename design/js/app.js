@@ -10,8 +10,9 @@ const q = new URLSearchParams(location.search);
 
 export const ui = {
   selected: q.get("sel") || "e1",
-  readerOpen: q.get("reader") !== "0",
-  agentOpen: q.get("agent") === "1",
+  readerOpen: q.get("reader") === "1" || q.has("sel") || state.list === "split",
+  agentOpen: q.get("open") === "1",
+  thread: q.get("thread") || "default",
   overlay: q.get("overlay") || null, // cmdk | compose
 };
 
@@ -23,17 +24,30 @@ function parseRoute() {
   return { screen, id };
 }
 
+// The shell is composed from knobs: nav (full | rail | hidden), agent (bottom | left | right).
 function render() {
   const route = parseRoute();
   const root = document.getElementById("app");
-  const shell = state.layout === "agent-left" ? rail(route) + agentColumn() : navSidebar(route);
-  root.innerHTML = shell + screens[route.screen].render(route, ui) +
-    (ui.overlay === "cmdk" ? cmdk() : ui.overlay === "compose" ? compose() : "");
-  const focus = root.querySelector("[autofocus]");
-  if (focus) focus.focus();
+  const parts = [], cols = [];
+  if (state.nav === "full") { parts.push(navSidebar(route)); cols.push("var(--nav-w)"); }
+  if (state.nav === "rail") { parts.push(rail(route)); cols.push("var(--rail-w)"); }
+  if (state.agent === "left") { parts.push(agentColumn("left")); cols.push("var(--agent-w)"); }
+  parts.push(screens[route.screen].render(route, ui)); cols.push("minmax(0, 1fr)");
+  if (state.agent === "right") { parts.push(agentColumn("right")); cols.push("var(--agent-w)"); }
+  root.style.gridTemplateColumns = cols.join(" ");
+  root.innerHTML = parts.join("") + (ui.overlay === "cmdk" ? cmdk() : ui.overlay === "compose" ? compose() : "");
+  root.querySelector("[autofocus]")?.focus();
 }
 
 document.addEventListener("click", e => {
+  const setEl = e.target.closest("[data-set]");
+  if (setEl) {
+    const patch = JSON.parse(setEl.dataset.set);
+    if (Object.keys(patch).length) set(patch);
+    setEl.parentElement?.querySelectorAll(".btn").forEach(b => b.classList.remove("on"));
+    setEl.classList.add("on");
+    return;
+  }
   const go = e.target.closest("[data-go]");
   if (go) {
     const href = go.dataset.go;
@@ -48,22 +62,16 @@ document.addEventListener("click", e => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "cmdk") { ui.overlay = "cmdk"; return render(); }
   if (act === "compose") { ui.overlay = "compose"; return render(); }
-  if (act === "close-overlay" && (e.target.classList.contains("scrim") || e.target.closest("button[data-act=close-overlay]"))) {
-    ui.overlay = null; return render();
-  }
+  if (act === "close-overlay" && (e.target.classList.contains("scrim") || e.target.closest("button[data-act=close-overlay]"))) { ui.overlay = null; return render(); }
   if (act === "agent-open") { ui.agentOpen = true; return render(); }
   if (act === "agent-close") { ui.agentOpen = false; return render(); }
   if (act === "close-reader") { ui.readerOpen = false; return render(); }
   if (act === "expand") { e.target.closest(".msg").classList.remove("collapsed"); return; }
 
-  const pal = e.target.closest("[data-palette]");
-  if (pal) return set({ palette: pal.dataset.palette });
-  const th = e.target.closest("[data-theme]");
-  if (th) return set({ theme: th.dataset.theme });
-  const lay = e.target.closest("[data-layout]");
-  if (lay) return set({ layout: lay.dataset.layout });
-  const den = e.target.closest("[data-density]");
-  if (den) return set({ density: den.dataset.density });
+  for (const k of ["palette", "theme", "layout", "density", "nav", "agent", "list"]) {
+    const el = e.target.closest(`[data-${k}]`);
+    if (el && el.dataset[k]) return set({ [k]: el.dataset[k] });
+  }
 
   const sw = e.target.closest(".switch");
   if (sw) sw.classList.toggle("on");
@@ -72,7 +80,7 @@ document.addEventListener("click", e => {
 });
 
 document.addEventListener("focusin", e => {
-  if (e.target.matches("[data-act=agent-focus]") && !ui.agentOpen && state.layout !== "agent-left") {
+  if (e.target.matches("[data-act=agent-focus]") && !ui.agentOpen && state.agent === "bottom") {
     ui.agentOpen = true; render();
     document.querySelector("[data-act=agent-focus]")?.focus();
   }
@@ -81,10 +89,15 @@ document.addEventListener("focusin", e => {
 document.addEventListener("keydown", e => {
   const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName);
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); ui.overlay = ui.overlay === "cmdk" ? null : "cmdk"; return render(); }
+  if ((e.metaKey || e.ctrlKey) && /^[123]$/.test(e.key)) {
+    e.preventDefault();
+    const views = { 1: { nav: "full", agent: "bottom", list: "stream" }, 2: { nav: "hidden", agent: "bottom", list: "stream" }, 3: { nav: "hidden", agent: "right", list: "stream" } };
+    return set(views[e.key]);
+  }
   if (e.key === "Escape") {
     if (ui.overlay) { ui.overlay = null; return render(); }
     if (ui.agentOpen) { ui.agentOpen = false; document.activeElement?.blur(); return render(); }
-    if (state.layout === "stream" && ui.readerOpen) { ui.readerOpen = false; return render(); }
+    if (state.list === "stream" && ui.readerOpen) { ui.readerOpen = false; return render(); }
   }
   if (typing) return;
   if (e.key === "c") { ui.overlay = "compose"; return render(); }

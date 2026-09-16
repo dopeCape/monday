@@ -58,17 +58,17 @@
     <div class="hub-head">
       <div>
         <h1>monday</h1>
-        <p>Design lock-in for the desktop client. Three layouts, seven palettes in light and dark, and every screen the agent touches. Click any preview to open it full size.</p>
+        <p>Design lock-in for the desktop client. Stream is the default layout, every layout is composed from knobs the agent can turn, seven palettes in light and dark. Click any preview to open it full size.</p>
       </div>
       <div class="ctl">
         <label>Palette</label><select id="pal"></select>
         <label>Theme</label><select id="thm"><option value="light">Light</option><option value="dark">Dark</option></select>
-        <label>Density</label><select id="den"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
+        <label>Density</label><select id="den"><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="spacious">Spacious</option></select>
       </div>
     </div>
 
     <h2>Layouts</h2>
-    <p>Same data, same components, three arrangements. The agent is always one keystroke away in all of them, the difference is how much room it gets.</p>
+    <p>Not three fixed screens. A layout is three values, nav (full, rail, hidden), agent (bottom, left, right) and list (stream, split), and a preset is just a named combination. The fourth preview is what happens when you ask the agent to hide the sidebar and move itself to the right.</p>
     <div class="big" id="layouts"></div>
 
     <h2>Screens</h2>
@@ -79,13 +79,24 @@
     <p>Shipped color schemes. On Linux the same tokens come from <span class="mono">~/.config/monday/monday.toml</span>, so a rice can drive the client. Each palette has a light and a dark half.</p>
     <div class="pals" id="pals"></div>
 
+    <h2>What the agent can change</h2>
+    <p>The interface is data. The agent edits values and picks from a catalog, it never writes code into the app, so it cannot break or slow the client and every change is one line in the config file with an undo.</p>
+    <div class="principles">
+      <div class="pr"><b><i class="ph ph-palette"></i> Tokens</b><p>Palette, accent, font, size, density, radius. "Make it warmer", "bigger text", "less rounded", "match my terminal".</p></div>
+      <div class="pr"><b><i class="ph ph-layout"></i> Composition</b><p>Nav full, rail or hidden. Agent bottom, left or right. List as stream or split. Pane widths. "Put yourself on the right, hide the sidebar."</p></div>
+      <div class="pr"><b><i class="ph ph-bookmark-simple"></i> Views</b><p>Named layouts with a shortcut, per account. "Make a writing mode with just compose and you." Switch with ⌘1, ⌘2, ⌘3.</p></div>
+      <div class="pr"><b><i class="ph ph-rows"></i> What surfaces show</b><p>Stream sections and their order, row fields (snippet, tags, avatar), brief on or off, thread collapsing. "Section by project instead of urgency."</p></div>
+      <div class="pr"><b><i class="ph ph-lightning"></i> Actions and shortcuts</b><p>Buttons on the reader toolbar or list rows, scoped to a group. Key remaps. "Give invoice threads a forward-to-accounting button."</p></div>
+      <div class="pr"><b><i class="ph ph-squares-four"></i> Panels from a catalog</b><p>Small built-in panels the agent can place: today's calendar strip, a waiting-on counter, pinned notes, a workflow status strip. Custom CSS stays a file for ricers, opt-in.</p></div>
+    </div>
+
     <h2>Type and icons</h2>
     <p>Geist for the interface, Geist Mono for shortcuts and config. Phosphor icons at regular weight, fill weight only for state.</p>
     <div class="type">
       <div class="pr"><b>Geist Variable</b><div class="sample">Re: Senior Rust engineer role, take-home submitted</div><p>13px base, 20px titles, 26px page headings. Weight and color carry hierarchy, not size.</p></div>
       <div class="pr"><b>Geist Mono Variable</b><div class="sample m">theme = "system"  # light | dark</div><p>Shortcuts, timestamps in tabular figures, the config file, and nothing else.</p></div>
       <div class="pr" style="grid-column: 1 / -1"><b>Phosphor</b><div class="icons">
-        <i class="ph ph-tray"></i><i class="ph ph-star"></i><i class="ph ph-clock"></i><i class="ph ph-archive"></i><i class="ph ph-paper-plane-tilt"></i><i class="ph ph-note-pencil"></i><i class="ph ph-users-three"></i><i class="ph ph-receipt"></i><i class="ph ph-handshake"></i><i class="ph ph-flow-arrow"></i><i class="ph ph-git-branch"></i><i class="ph-fill ph-sparkle"></i><i class="ph ph-terminal-window"></i><i class="ph ph-cloud"></i><i class="ph ph-palette"></i><i class="ph ph-gear-six"></i><i class="ph ph-magnifying-glass"></i><i class="ph ph-tag"></i><i class="ph ph-paperclip"></i><i class="ph ph-arrow-bend-up-left"></i><i class="ph ph-lightning"></i><i class="ph ph-brain"></i><i class="ph ph-hand-palm"></i><i class="ph ph-microphone"></i>
+        <i class="ph ph-tray"></i><i class="ph ph-star"></i><i class="ph ph-clock"></i><i class="ph ph-archive"></i><i class="ph ph-paper-plane-tilt"></i><i class="ph ph-note-pencil"></i><i class="ph ph-users-three"></i><i class="ph ph-receipt"></i><i class="ph ph-handshake"></i><i class="ph ph-flow-arrow"></i><i class="ph ph-git-branch"></i><i class="ph ph-terminal-window"></i><i class="ph ph-cloud"></i><i class="ph ph-palette"></i><i class="ph ph-gear-six"></i><i class="ph ph-magnifying-glass"></i><i class="ph ph-tag"></i><i class="ph ph-paperclip"></i><i class="ph ph-arrow-bend-up-left"></i><i class="ph ph-lightning"></i><i class="ph ph-brain"></i><i class="ph ph-hand-palm"></i><i class="ph ph-microphone"></i>
       </div></div>
     </div>
 
@@ -93,7 +104,7 @@
     <p>What every screen is held to.</p>
     <div class="principles">
       <div class="pr"><b><i class="ph ph-lightning"></i> Speed first</b><p>Nothing waits on the model. Briefs and tags are pre-computed on the server, the list renders from local data, and the agent streams in beside it.</p></div>
-      <div class="pr"><b><i class="ph ph-sparkle"></i> Agent is a peer, not a feature</b><p>It can do anything you can: search, draft, send, delete, forward, reroute, change a setting, write a workflow. Anything that leaves the mailbox asks first.</p></div>
+      <div class="pr"><b><i class="ph ph-chat-teardrop-text"></i> Agent is a peer, not a feature</b><p>It can do anything you can: search, draft, send, delete, forward, reroute, change a setting, write a workflow. Anything that leaves the mailbox asks first.</p></div>
       <div class="pr"><b><i class="ph ph-text-align-left"></i> Plain language over editors</b><p>Workflows and routing rules are sentences the agent wrote. You change them by talking, and can always read the source.</p></div>
       <div class="pr"><b><i class="ph ph-sliders-horizontal"></i> Everything is a token</b><p>Colors, density, font, layout and shortcuts are config values. A user, a rice, or the agent can set them, and the file is the truth.</p></div>
       <div class="pr"><b><i class="ph ph-eye"></i> Quiet surfaces</b><p>Hairline borders, one accent, no glows. Color is reserved for state and tags so the mail itself is the loudest thing on screen.</p></div>
@@ -112,26 +123,32 @@
     den.value = saved.density || "comfortable";
 
     const base = (o = {}) => {
-      const q = new URLSearchParams({ chrome: "0", palette: pal.value, theme: thm.value, density: den.value, layout: "columns", ...o });
+      const q = new URLSearchParams({ chrome: "0", palette: pal.value, theme: thm.value, density: den.value, layout: "stream", ...o });
       const hash = o.hash || "#/inbox";
       delete o.hash; q.delete("hash");
       return `./app.html?${q}${hash}`;
     };
-    const frame = (o, full) => `<div class="frame"><iframe loading="lazy" src="${base(o)}"></iframe><a href="${full || base(o).replace("chrome=0", "chrome=1")}" target="_blank" title="Open full size"></a></div>`;
+    const frame = (o, full) => `<div class="frame"><iframe data-src="${base(o)}"></iframe><a href="${full || base(o).replace("chrome=0", "chrome=1")}" target="_blank" title="Open full size"></a></div>`;
 
     const bullets = {
-      columns: ["Nav, list, reader. Familiar in ten seconds.", "Agent bar floats over the reader and rises into a panel.", "Smart inboxes as a tree with sub-groups in the nav."],
-      "agent-left": ["Icon rail replaces the nav, agent gets a permanent column.", "Conversation history stays in view while you triage.", "Best for people who talk to the agent more than they click."],
-      stream: ["One wide list sectioned by the agent: needs reply, waiting, FYI, newsletters.", "Reader opens as a sheet, Esc returns to the stream.", "Fastest for zero-inbox sessions."],
+      stream: ["Default. One wide list sectioned by the agent: needs reply, waiting, FYI, newsletters.", "Reader opens as a sheet, Esc returns to the stream.", "nav = full · agent = bottom · list = stream"],
+      columns: ["Nav, list, reader. Familiar in ten seconds.", "Agent bar floats over the reader and rises into a panel.", "nav = full · agent = bottom · list = split"],
+      "agent-left": ["Icon rail replaces the nav, agent gets a permanent column.", "Conversation history stays in view while you triage.", "nav = rail · agent = left · list = split"],
     };
-    $("#layouts").innerHTML = layouts.map(l => `
+    const order = ["stream", "columns", "agent-left"].map(k => layouts.find(l => l.key === k));
+    $("#layouts").innerHTML = order.map(l => `
       <div class="item">
         ${frame({ layout: l.key })}
-        <div><h3>${l.label}</h3><p>${l.desc}</p><ul>${bullets[l.key].map(b => `<li>${b}</li>`).join("")}</ul></div>
-      </div>`).join("");
+        <div><h3>${l.label}${l.key === "stream" ? ' <span class="tag ai">default</span>' : ""}</h3><p>${l.desc}</p><ul>${bullets[l.key].map(b => `<li>${b}</li>`).join("")}</ul></div>
+      </div>`).join("") + `
+      <div class="item">
+        ${frame({ nav: "hidden", agent: "right", list: "stream", thread: "layout", sel: "e7" })}
+        <div><h3>Composed by the agent <span class="tag ai">custom</span></h3><p>"Hide the sidebar, sit on the right, and give invoice threads a forward-to-accounting button."</p><ul><li>The agent changed three config values, added a reader action for one group, and saved it as a view on ⌘3.</li><li>Every step is a card with Keep and Undo. Nothing was generated as code.</li><li>nav = hidden · agent = right · list = stream</li></ul></div>
+      </div>`;
 
     const screens = [
-      { t: "Agent, expanded", d: "Tool calls as cards. Search results inline, calendar event created, and a send that waits for approval.", o: { agent: "1" } },
+      { t: "Agent, expanded", d: "Tool calls as cards. Search results inline, calendar event created, and a send that waits for approval.", o: { open: "1" } },
+      { t: "Agent changing the UI", d: "The same composer moving panes, adding a reader action, and saving a view. Keep or Undo on each step.", o: { open: "1", thread: "layout" } },
       { t: "Agent as a column", d: "Same conversation in the agent-left layout, including a settings change written back to the config file.", o: { layout: "agent-left", sel: "e2" } },
       { t: "Command palette", d: "Search, actions and navigation. Tab hands the query to the agent instead.", o: { overlay: "cmdk" } },
       { t: "Compose", d: "Ghost text completion, tone and length tools, and the agent noticing that Ravi has not replied.", o: { overlay: "compose" } },
@@ -154,16 +171,21 @@
     }
     scale();
     new ResizeObserver(scale).observe(document.body);
+    // Load a preview only when it is near the viewport.
+    const io = new IntersectionObserver(entries => {
+      for (const en of entries) if (en.isIntersecting) { const f = en.target; if (!f.src) f.src = f.dataset.src; io.unobserve(f); }
+    }, { rootMargin: "400px" });
+    document.querySelectorAll(".frame iframe").forEach(f => io.observe(f));
 
     function refresh() {
       const r = document.documentElement;
       r.dataset.theme = thm.value; r.dataset.palette = pal.value;
       try { localStorage.setItem("monday.design", JSON.stringify({ ...saved, theme: thm.value, palette: pal.value, density: den.value })); } catch {}
       for (const f of document.querySelectorAll(".frame iframe")) {
-        const u = new URL(f.src, location.href);
+        const u = new URL(f.dataset.src, location.href);
         if (!f.closest("#pals")) { u.searchParams.set("palette", pal.value); u.searchParams.set("theme", thm.value); }
         u.searchParams.set("density", den.value);
-        f.src = u.toString();
+        f.dataset.src = u.toString(); if (f.src) f.src = u.toString();
         const a = f.nextElementSibling; const au = new URL(u); au.searchParams.set("chrome", "1"); a.href = au.toString();
       }
     }

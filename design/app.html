@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light" data-palette="graphite" data-density="comfortable" data-layout="columns">
+<html lang="en" data-theme="light" data-palette="graphite" data-density="comfortable" data-layout="stream" data-nav="full" data-agent="bottom" data-list="stream">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,12 +9,15 @@
   <script>
     // Apply the persisted theme before first paint to avoid a flash.
     try {
-      const s = { theme: "system", palette: "graphite", density: "comfortable", layout: "columns", ...JSON.parse(localStorage.getItem("monday.design") || "{}") };
+      const presets = { stream: { nav: "full", agent: "bottom", list: "stream" }, columns: { nav: "full", agent: "bottom", list: "split" }, "agent-left": { nav: "rail", agent: "left", list: "split" } };
+      const s = { theme: "system", palette: "graphite", density: "comfortable", layout: "stream", ...presets.stream, ...JSON.parse(localStorage.getItem("monday.design") || "{}") };
       const q = new URLSearchParams(location.search);
+      if (q.get("layout") && presets[q.get("layout")]) Object.assign(s, presets[q.get("layout")]);
       for (const k in s) if (q.get(k)) s[k] = q.get(k);
       const r = document.documentElement;
       r.dataset.theme = s.theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : s.theme;
       r.dataset.palette = s.palette; r.dataset.density = s.density; r.dataset.layout = s.layout;
+      r.dataset.nav = s.nav; r.dataset.agent = s.agent; r.dataset.list = s.list;
     } catch {}
   </script>
 </head>

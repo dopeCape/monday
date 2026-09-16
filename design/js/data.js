@@ -314,8 +314,18 @@ export const agentThreadShort = [
 export const suggestions = [
   { i: "ph-lightning", t: "Reply to the 3 threads waiting on me" },
   { i: "ph-broom", t: "Archive newsletters older than a week" },
-  { i: "ph-flow-arrow", t: "Make a workflow for invoices" },
-  { i: "ph-palette", t: "Match my terminal theme" },
+  { i: "ph-sidebar-simple", t: "Hide the sidebar", set: { nav: "hidden" } },
+  { i: "ph-columns", t: "Put the agent on the right", set: { agent: "right" } },
+];
+
+export const agentThreadLayout = [
+  { u: "hide the sidebar, sit on the right, and give invoice threads a forward-to-accounting button" },
+  { a: [
+    { tool: { i: "ph-layout", t: "Changed layout", d: "nav: hidden · agent: right · wrote [layout] to monday.toml", st: "ok", stt: "Applied", acts: ["Keep", "Undo"], sets: [{ nav: "hidden", agent: "right" }, { nav: "full", agent: "bottom" }] } },
+    { tool: { i: "ph-plus-circle", t: "Added action to Finance › Invoices", d: "Reader toolbar: Forward to accounting → accounting@genai-labs.io", st: "ok", stt: "Applied" } },
+    { tool: { i: "ph-bookmark-simple", t: "Saved as view", d: "Focus · ⌘3 · your previous layout is still ⌘1", st: "ok", stt: "Saved" } },
+    { p: "Done. I can also change what the stream sections are, what a row shows, the reader toolbar, shortcuts, or add a panel from the catalog. Say <i>undo</i> at any point." },
+  ] },
 ];
 
 export const commands = [
@@ -341,10 +351,24 @@ export const toml = `<span class="c"># ~/.config/monday/monday.toml</span>
 <span class="h">[appearance]</span>
 <span class="k">theme</span>     = <span class="s">"system"</span>       <span class="c"># light | dark | system</span>
 <span class="k">palette</span>   = <span class="s">"gruvbox"</span>      <span class="c"># or path to a custom palette file</span>
-<span class="k">density</span>   = <span class="s">"compact"</span>
+<span class="k">density</span>   = <span class="s">"comfortable"</span>  <span class="c"># compact | comfortable | spacious</span>
 <span class="k">font</span>      = <span class="s">"Geist Variable"</span>
-<span class="k">font_size</span> = 13
-<span class="k">layout</span>    = <span class="s">"columns"</span>      <span class="c"># columns | agent-left | stream</span>
+<span class="k">font_size</span> = 14
+
+<span class="h">[layout]</span>
+<span class="k">preset</span>    = <span class="s">"stream"</span>       <span class="c"># stream | columns | agent-left | custom</span>
+<span class="k">nav</span>       = <span class="s">"full"</span>         <span class="c"># full | rail | hidden</span>
+<span class="k">agent</span>     = <span class="s">"bottom"</span>       <span class="c"># bottom | left | right</span>
+<span class="k">list</span>      = <span class="s">"stream"</span>       <span class="c"># stream | split</span>
+<span class="k">row</span>       = <span class="s">"two-line"</span>     <span class="c"># one-line | two-line | card</span>
+<span class="k">sections</span>  = [<span class="s">"needs-reply"</span>, <span class="s">"waiting"</span>, <span class="s">"fyi"</span>, <span class="s">"newsletters"</span>]
+
+<span class="h">[views.focus]</span>                     <span class="c"># saved by the agent, ⌘3</span>
+<span class="k">nav</span>       = <span class="s">"hidden"</span>
+<span class="k">agent</span>     = <span class="s">"right"</span>
+
+<span class="h">[actions.reader]</span>
+<span class="k">invoices</span>  = [{ <span class="k">label</span> = <span class="s">"Forward to accounting"</span>, <span class="k">to</span> = <span class="s">"accounting@genai-labs.io"</span> }]
 
 <span class="h">[appearance.palette.overrides]</span>
 <span class="k">accent</span>    = <span class="s">"#fe8019"</span>
