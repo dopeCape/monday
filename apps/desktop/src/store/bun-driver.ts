@@ -15,7 +15,8 @@ export function bunDriver(path = ":memory:"): SqlDriver {
       db.exec(sql);
       return 0;
     }
-    return db.prepare(sql).run(...bindParams(params)).changes;
+    // db.query caches the prepared statement, which a seed of many rows leans on.
+    return db.query(sql).run(...bindParams(params)).changes;
   };
 
   return {
@@ -23,7 +24,7 @@ export function bunDriver(path = ":memory:"): SqlDriver {
       return run(sql, params);
     },
     async query(sql, params) {
-      return db.prepare(sql).all(...bindParams(params)) as Row[];
+      return db.query(sql).all(...bindParams(params)) as Row[];
     },
     async batch(statements: Statement[]) {
       db.transaction(() => {

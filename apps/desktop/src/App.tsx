@@ -16,10 +16,12 @@ import {
   railTail,
   workspace,
 } from "@monday/ui/fixtures";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
+import { Search } from "./screens/Search.tsx";
 import { Settings } from "./screens/Settings.tsx";
+import type { SearchModule } from "./search/index.ts";
 import { useShell } from "./shell/Shell.tsx";
 
 export interface AppProps {
@@ -29,14 +31,53 @@ export interface AppProps {
   online?: boolean | undefined;
   /** First-sync progress for the inbox's thin line, or null. The Store feeds it. */
   syncing?: SyncProgress | null | undefined;
+  /** The Cache search behind the palette and the results screen (ADR 0011). */
+  search?: SearchModule | null | undefined;
 }
 
-export function App({ inbox, online = true, syncing = null }: AppProps) {
+export function App({ inbox, online = true, syncing = null, search = null }: AppProps) {
   const shell = useShell();
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
+  const [searchQuery, setSearchQuery] = useState(
+    () => new URLSearchParams(location.search).get("q") ?? "",
+  );
+  /** A Thread the results screen asked to open; the inbox reads it on mount. */
+  const [openThread, setOpenThread] = useState<string | null>(null);
+  /** Text the agent bar opens with after a palette handoff. */
+  const [agentText, setAgentText] = useState<string | undefined>(undefined);
   const runtime = `Claude Code · ${workspace.accountId}`;
+
+  /** The palette's "Go to" targets, from any screen. */
+  const navigate = useCallback(
+    (target: string) => {
+      const view = /^view:(\d)$/.exec(target);
+      if (view) {
+        const v = shell.settings["views.list"][Number(view[1]) - 1];
+        if (v) {
+          void shell.set("layout.nav", v.layout.nav);
+          void shell.set("layout.agent", v.layout.agent);
+          void shell.set("layout.list", v.layout.list);
+        }
+        return;
+      }
+      if (target === "settings" || target.startsWith("settings:")) setActive("settings");
+      else if (target === "search") setActive("search");
+      else if (target.startsWith("thread:")) {
+        setOpenThread(target.slice("thread:".length));
+        setActive("inbox");
+      } else if (target.startsWith("group:")) setActive(target.slice("group:".length));
+      else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
+      else setActive("inbox");
+    },
+    [shell],
+  );
+
+  const openSearch = useCallback((query: string) => {
+    setSearchQuery(query);
+    setActive("search");
+  }, []);
 
   const cols: string[] = [];
   const parts: React.ReactNode[] = [];
@@ -83,8 +124,44 @@ export function App({ inbox, online = true, syncing = null }: AppProps) {
   parts.push(
     active === "settings" ? (
       <Settings key="screen" />
+    ) : active === "search" && search ? (
+      <Search
+        key="screen"
+        search={search}
+        workspaceId={workspace.id}
+        query={searchQuery}
+        onQuery={setSearchQuery}
+        recentThreads={inbox?.threads().slice(0, 20) ?? []}
+        onOpen={(threadId) => {
+          setOpenThread(threadId);
+          setActive("inbox");
+        }}
+        onBack={() => setActive("inbox")}
+        onCommand={(command) => {
+          if (command.type === "navigate") navigate(command.target);
+          else if (command.type === "ask" || command.type === "suggest") {
+            setAgentText(command.text);
+            setActive("inbox");
+          }
+        }}
+        onAsk={(ask) => {
+          setAgentText(ask.text);
+          setActive("inbox");
+        }}
+      />
     ) : (
-      <Inbox key="screen" inbox={inbox} online={online} syncing={syncing} />
+      <Inbox
+        key="screen"
+        inbox={inbox}
+        online={online}
+        syncing={syncing}
+        search={search}
+        workspaceId={workspace.id}
+        initialOpen={openThread ?? undefined}
+        initialAgentText={agentText}
+        onNavigate={navigate}
+        onSearch={openSearch}
+      />
     ),
   );
   if (shell.layout.agent === "right") {

@@ -29,6 +29,7 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   { name: "inbox-open", app: "/?sel=e1", mock: "/app.html?chrome=0&sel=e1" },
   // The mock has no multi-select; its equivalent is the inbox with the first row on.
   { name: "inbox-multi", app: "/?multi=e1,e2,e3", mock: "/app.html?chrome=0" },
+  { name: "palette", app: "/?overlay=cmdk", mock: "/app.html?chrome=0&overlay=cmdk" },
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {

@@ -10,7 +10,16 @@
 // are found with a small parser over `from` and `join`, and every write path
 // names the tables it touched.
 
-import type { Actor, Change, Id, Intent, IntentArgs, IsoDate, ThreadChange } from "@monday/shared";
+import type {
+  Actor,
+  Change,
+  Id,
+  Intent,
+  IntentArgs,
+  IsoDate,
+  MessageBodyRow,
+  ThreadChange,
+} from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import schemaSql from "./schema.sql?raw";
@@ -55,6 +64,14 @@ export interface Store {
   live<T = Row>(sql: string, params?: SqlParam[]): LiveQuery<T>;
   /** Applies locally, appends to the Outbox, returns. The network happens in sync. */
   intent(action: StoreIntent): Promise<void>;
+  /**
+   * Cache-only writes that are not intents and never reach the Outbox: bodies
+   * landing from the content routes, meta rows, evictions. One transaction;
+   * live queries over the touched tables refresh.
+   */
+  write(statements: Statement[]): Promise<void>;
+  /** Stores decrypted bodies for Messages the Cache already has headers for; returns how many landed. */
+  applyBodies(bodies: readonly MessageBodyRow[], at?: IsoDate): Promise<number>;
   /** Drains the Outbox in order, then pulls the Changes feed from the cursor. Never throws. */
   sync(): Promise<SyncResult>;
   /** Connects the wake transport and syncs on each wake, reconnecting with backoff. */
@@ -79,6 +96,58 @@ export interface StoreOptions {
 }
 
 const CURSOR_KEY = "cursor";
+const SCHEMA_VERSION_KEY = "schema_version";
+/**
+ * Bumped when a table changes shape. Version 2 gave `messages` its rowid alias
+ * and the body index (slice 10). An older Cache is a copy, so it is rebuilt
+ * from the feed: content tables dropped, cursor reset, Outbox and settings kept.
+ */
+export const SCHEMA_VERSION = 2;
+
+const REBUILD_SQL = `
+  drop trigger if exists threads_fts_ai;
+  drop trigger if exists threads_fts_ad;
+  drop trigger if exists threads_fts_au;
+  drop trigger if exists messages_fts_ai;
+  drop trigger if exists messages_fts_ad;
+  drop trigger if exists messages_fts_au;
+  drop trigger if exists messages_fts_subject;
+  drop table if exists messages_fts;
+  drop view if exists messages_content;
+  drop table if exists threads_fts;
+  drop table if exists threads_trgm;
+  drop view if exists threads_content;
+  drop table if exists messages;
+  drop table if exists attachments;
+  drop table if exists threads;
+  drop table if exists thread_tags;
+  drop table if exists thread_labels;
+  drop table if exists briefs;
+  delete from meta where key = 'cursor';
+`;
+
+/** Applies the schema, rebuilding the content tables first when the Cache predates this version. */
+export async function applySchema(driver: SqlDriver): Promise<void> {
+  const versionRows = await driver
+    .query("select value from meta where key = ?", [SCHEMA_VERSION_KEY])
+    .catch(() => [] as Row[]);
+  const existing = await driver.query(
+    "select name from sqlite_master where type = 'table' and name = 'threads'",
+  );
+  const version = Number(versionRows[0]?.value ?? 0) || 0;
+  if (existing.length > 0 && version < SCHEMA_VERSION) await driver.exec(REBUILD_SQL);
+  await driver.exec(schemaSql);
+  await driver.exec(
+    "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+    [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
+  );
+}
+
+/**
+ * Folds the newest FTS segments into the index. Run after a batch of writes
+ * rather than 'optimize', which rewrites the whole index (research 5).
+ */
+export const FTS_MERGE_SQL = "insert into messages_fts (messages_fts, rank) values ('merge', 16)";
 
 /* ------------------------------ Tables ------------------------------ */
 
@@ -97,15 +166,35 @@ export function tablesRead(sql: string): Set<string> {
 const WRITE_TABLE =
   /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`]?([a-z_][a-z0-9_]*)/gi;
 
-/** The tables a statement writes; `threads` also touches its FTS index. */
+/** The tables a statement writes; `threads` and `messages` also touch their FTS indexes. */
 export function tablesWritten(sql: string): Set<string> {
   const out = new Set<string>();
   for (const m of sql.matchAll(WRITE_TABLE)) {
     const name = m[1]?.toLowerCase();
     if (name) out.add(name);
   }
-  if (out.has("threads")) out.add("threads_fts");
+  if (out.has("threads")) {
+    out.add("threads_fts");
+    out.add("threads_trgm");
+    out.add("messages_fts");
+  }
+  if (out.has("messages")) out.add("messages_fts");
   return out;
+}
+
+/** The Cache statements that store one decrypted body on its header row. */
+export function bodyStatements(body: MessageBodyRow, at: IsoDate): Statement[] {
+  return [
+    {
+      sql: "update messages set body_text = ?, body_html = ?, body_at = ? where id = ?",
+      params: [body.text, body.html, at, body.id],
+    },
+    {
+      // The Thread snippet is content too: the newest body fills it while it is empty.
+      sql: "update threads set snippet = ? where id = ? and snippet = '' and ? <> ''",
+      params: [body.snippet, body.threadId, body.snippet],
+    },
+  ];
 }
 
 /* ------------------------------ Local effects of an intent ------------------------------ */
@@ -280,7 +369,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   const pageSize = options.changesPageSize ?? 500;
   const log = options.log ?? (() => {});
 
-  await driver.exec(schemaSql);
+  await applySchema(driver);
 
   /* Live queries */
   interface LiveEntry {
@@ -370,6 +459,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       params: [CURSOR_KEY, String(cursor)],
     });
     await write(statements);
+    await driver.exec(FTS_MERGE_SQL);
   };
 
   const drainOutbox = async (result: SyncResult) => {
@@ -585,6 +675,27 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       // The row is already on screen; a subscribed Store tells the Server in the
       // background, an unsubscribed one (tests, offline by choice) waits for sync().
       if (subscribed) void sync();
+    },
+
+    async write(statements) {
+      await write(statements);
+    },
+
+    async applyBodies(bodies, at = now().toISOString()) {
+      if (bodies.length === 0) return 0;
+      const ids = bodies.map((b) => b.id);
+      const known = new Set(
+        (
+          await driver.query(
+            `select id from messages where id in (${ids.map(() => "?").join(", ")})`,
+            ids,
+          )
+        ).map((r) => String(r.id)),
+      );
+      const landing = bodies.filter((b) => known.has(b.id));
+      await write(landing.flatMap((b) => bodyStatements(b, at)));
+      if (landing.length > 0) await driver.exec(FTS_MERGE_SQL);
+      return landing.length;
     },
 
     sync,

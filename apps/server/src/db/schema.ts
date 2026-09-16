@@ -34,6 +34,17 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   fromDriver: (value) => new Uint8Array(value),
 });
 
+/** A Postgres text-search document; read back as its text form, never written by the app. */
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
+
+/**
+ * The plaintext participants as one string for the headers index (research 5):
+ * every name and address, weight B under the subject prefix. jsonb_path_query_array
+ * is immutable, which a generated column requires.
+ */
+export const PARTICIPANTS_TEXT_SQL =
+  "jsonb_path_query_array(participants, '$[*].name')::text || ' ' || jsonb_path_query_array(participants, '$[*].email')::text";
+
 /** One row per running Server, refreshed every 30 s (ADR 0005). */
 export const servers = pgTable("servers", {
   id: text("id").primaryKey(),
@@ -179,6 +190,17 @@ export const threads = pgTable(
      * no entry has only ever been written by sync.
      */
     writes: jsonb("writes").$type<FieldWrites>().notNull().default({}),
+    /**
+     * The headers-only search document (ADR 0011, research 5): the subject
+     * prefix at weight A and the participants at weight B, in the `simple`
+     * configuration so no language stemming is assumed. Generated, so it can
+     * never drift from the columns; GIN-indexed for `/search/headers`.
+     */
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql.raw(
+        `setweight(to_tsvector('simple', coalesce(subject_search, '')), 'A') || setweight(to_tsvector('simple', ${PARTICIPANTS_TEXT_SQL}), 'B')`,
+      ),
+    ),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -187,6 +209,7 @@ export const threads = pgTable(
     index("threads_list_idx").on(t.workspaceId, t.archived, t.lastActivity, t.id),
     index("threads_section_idx").on(t.workspaceId, t.section),
     index("threads_group_idx").on(t.workspaceId, t.groupId),
+    index("threads_search_idx").using("gin", t.searchVector),
   ],
 );
 
