@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parse as parseToml } from "smol-toml";
 import { editConfigKey, formatValue } from "./edit.ts";
-import { mockConfigFixed } from "./parse.test.ts";
+import { mockConfig } from "./parse.test.ts";
 import { parseConfig } from "./parse.ts";
 
 const sample = `# ~/.config/monday/monday.toml
@@ -89,7 +89,7 @@ describe("editConfigKey", () => {
   });
 
   test("the result is valid TOML that parseConfig applies", () => {
-    let text = mockConfigFixed;
+    let text = mockConfig;
     text = editConfigKey(text, "appearance.palette", "nord");
     text = editConfigKey(text, "routing.threshold.route", 0.75);
     text = editConfigKey(text, "views.focus.list", "split");
