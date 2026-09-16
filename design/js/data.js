@@ -371,13 +371,13 @@ export const toml = `<span class="c"># ~/.config/monday/monday.toml</span>
 <span class="h">[actions.reader]</span>
 <span class="k">invoices</span>  = [{ <span class="k">label</span> = <span class="s">"Forward to accounting"</span>, <span class="k">to</span> = <span class="s">"accounting@genai-labs.io"</span> }]
 
-<span class="h">[appearance.palette.overrides]</span>
+<span class="h">[appearance.overrides]</span>
 <span class="k">accent</span>    = <span class="s">"#fe8019"</span>
 <span class="k">bg</span>        = <span class="s">"#1d2021"</span>
 
 <span class="h">[ai]</span>
 <span class="k">mode</span>      = <span class="s">"local"</span>        <span class="c"># api | local</span>
-<span class="k">local.cli</span> = <span class="s">"claude"</span>       <span class="c"># claude | codex | opencode</span>
+<span class="k">local.cli</span> = <span class="s">"claude-code"</span>  <span class="c"># claude-code | codex | opencode</span>
 <span class="k">api.provider</span> = <span class="s">"anthropic"</span>
 <span class="k">api.model</span>    = <span class="s">"claude-fable-5-1"</span>
 
