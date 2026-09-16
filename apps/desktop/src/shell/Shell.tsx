@@ -6,29 +6,29 @@
 import {
   type ConfigWarning,
   type Density,
+  defaultSettings,
   type Layout,
   type PartialSettings,
-  type SettingKey,
-  type Settings,
-  type ThemeMode,
-  defaultSettings,
   parseConfig,
   resolveSettings,
+  type SettingKey,
+  type Settings,
   settingScope,
+  type ThemeMode,
   validateSetting,
 } from "@monday/shared";
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
-import { createApi, type Api, type ServerTarget } from "../platform/api.ts";
-import { platform, type ConfigFile, type SidecarInfo } from "../platform/tauri.ts";
+import { type Api, createApi, type ServerTarget } from "../platform/api.ts";
+import { type ConfigFile, platform, type SidecarInfo } from "../platform/tauri.ts";
 
 export interface ConfigState {
   file: ConfigFile | null;
@@ -132,11 +132,10 @@ export function Shell({ children }: { children: ReactNode }) {
     [config.values, server],
   );
   const settings = resolved.settings;
-  const layout: Layout = {
-    nav: settings["layout.nav"],
-    agent: settings["layout.agent"],
-    list: settings["layout.list"],
-  };
+  const nav = settings["layout.nav"];
+  const agent = settings["layout.agent"];
+  const list = settings["layout.list"];
+  const layout = useMemo<Layout>(() => ({ nav, agent, list }), [nav, agent, list]);
   const density = settings["appearance.density"];
   const mode = settings["appearance.mode"];
   const palette = settings["appearance.palette"];
@@ -200,21 +199,56 @@ export function Shell({ children }: { children: ReactNode }) {
       api,
       set,
     }),
-    [
-      settings,
-      resolved.pinned,
-      layout.nav,
-      layout.agent,
-      layout.list,
-      density,
-      mode,
-      palette,
-      config,
-      sidecar,
-      api,
-      set,
-    ],
+    [settings, resolved.pinned, layout, density, mode, palette, config, sidecar, api, set],
   );
 
+  return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
+}
+
+/**
+ * A Shell over given Settings with no platform or server behind it. For tests
+ * and stories: `set` applies in memory and nothing is pinned.
+ */
+export function StaticShell({
+  settings: overrides = {},
+  children,
+}: {
+  settings?: PartialSettings | undefined;
+  children: ReactNode;
+}) {
+  const [local, setLocal] = useState<PartialSettings>({});
+  const settings = useMemo(
+    () => ({ ...defaultSettings(), ...overrides, ...local }) as Settings,
+    [overrides, local],
+  );
+  const api = useMemo(() => createApi(() => null), []);
+  const set = useCallback(
+    async <K extends SettingKey>(key: K, value: Settings[K]): Promise<SetResult> => {
+      const v = validateSetting(key, value);
+      if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
+      setLocal((s) => ({ ...s, [key]: value }));
+      return { ok: true };
+    },
+    [],
+  );
+  const value = useMemo<ShellState>(
+    () => ({
+      settings,
+      pinned: new Set<SettingKey>(),
+      layout: {
+        nav: settings["layout.nav"],
+        agent: settings["layout.agent"],
+        list: settings["layout.list"],
+      },
+      density: settings["appearance.density"],
+      mode: settings["appearance.mode"],
+      palette: settings["appearance.palette"],
+      config: { file: null, values: {}, warnings: [], error: null },
+      sidecar: null,
+      api,
+      set,
+    }),
+    [settings, api, set],
+  );
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }
