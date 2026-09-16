@@ -180,6 +180,22 @@ _Avoid_: local database, mirror
 The client's queue of intents made while offline, replayed in order on reconnect.
 _Avoid_: pending queue, sync queue
 
+**Changes feed**:
+The ordered stream of change events the client reads from a cursor; the push transport that wakes it varies by deployment mode.
+_Avoid_: realtime, event stream, socket
+
+**Device**:
+One installed client that holds a per-Device token for a Server. Listed and revocable in Settings.
+_Avoid_: session (reserved for the Agent), login
+
+**Pairing**:
+Approving a new Device from an existing one with a short code.
+_Avoid_: login, sign in
+
+**Setup code**:
+The one-time code an install produces so the first Device can pair.
+_Avoid_: admin password, secret
+
 ### Layout and appearance
 
 **Layout**:
