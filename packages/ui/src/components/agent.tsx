@@ -1,0 +1,319 @@
+// The Agent surfaces: a Tool call card, a results list, the bar, the thread
+// of turns, the panel that rises from the bar, and the column layouts.
+import type { Layout, Thread, ToolCall } from "@monday/shared";
+import {
+  CaretDownIcon,
+  CheckIcon,
+  CircleNotchIcon,
+  ClockCounterClockwiseIcon,
+  PlusIcon,
+  WarningCircleIcon,
+} from "@phosphor-icons/react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import { cx, formatListTime, humanize } from "../format.ts";
+import { Icon } from "./icon.tsx";
+import { Btn, Chip, ColHead, Kbd, Mark } from "./primitives.tsx";
+
+/* ------------------------------ ToolCard ------------------------------ */
+
+const STATUS_CLASS: Record<ToolCall["status"], string> = {
+  done: "ok",
+  running: "run",
+  waiting: "wait",
+  failed: "fail",
+};
+
+const STATUS_LABEL: Record<ToolCall["status"], string> = {
+  done: "Done",
+  running: "Running",
+  waiting: "Needs approval",
+  failed: "Failed",
+};
+
+export interface ToolCardProps {
+  call: ToolCall;
+  /** Overrides the humanized tool name, such as "Searched mail". */
+  title?: string | undefined;
+  /** Overrides the status text. Defaults to the result when done. */
+  statusLabel?: string | undefined;
+  /** What the tool is about to do, shown while it waits for approval. */
+  preview?: string | undefined;
+  /** Buttons under the card; the first is primary. "Send", "Edit", "Cancel". */
+  actions?: readonly string[] | undefined;
+  onAction?: ((action: string, call: ToolCall) => void) | undefined;
+  className?: string | undefined;
+}
+
+export function ToolCard({
+  call,
+  title,
+  statusLabel,
+  preview,
+  actions,
+  onAction,
+  className,
+}: ToolCardProps) {
+  const status =
+    statusLabel ??
+    (call.status === "done" && call.result ? call.result : STATUS_LABEL[call.status]);
+  return (
+    <div className={cx("tool", STATUS_CLASS[call.status], className)} data-tier={call.tier}>
+      <span className="t">{title ?? humanize(call.tool)}</span>
+      <span className="st">
+        {call.status === "done" ? <Icon icon={CheckIcon} /> : null}
+        {call.status === "running" ? <Icon icon={CircleNotchIcon} /> : null}
+        {call.status === "failed" ? <Icon icon={WarningCircleIcon} /> : null} {status}
+      </span>
+      <span className="d">{call.inputSummary}</span>
+      {preview ? <div className="preview">{preview}</div> : null}
+      {actions?.length ? (
+        <div className="acts">
+          {actions.map((a, i) => (
+            <Btn key={a} sm primary={i === 0} onClick={() => onAction?.(a, call)}>
+              {a}
+            </Btn>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------ ResultsList ------------------------------ */
+
+export interface ResultsListProps {
+  threads: readonly Thread[];
+  now?: Date | undefined;
+  onOpen?: ((threadId: string) => void) | undefined;
+  className?: string | undefined;
+}
+
+/** Threads a search turned up, inside an Agent turn. */
+export function ResultsList({ threads, now, onOpen, className }: ResultsListProps) {
+  return (
+    <div className={cx("results", className)}>
+      {threads.map((t) => (
+        <button key={t.id} type="button" className="r" onClick={() => onOpen?.(t.id)}>
+          <b>{t.subject}</b>
+          <span>{t.snippet}</span>
+          <span className="t">{formatListTime(t.lastActivity, now)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------ AgentBar ------------------------------ */
+
+export interface AgentBarProps {
+  placeholder?: string | undefined;
+  value?: string | undefined;
+  onChange?: ((value: string) => void) | undefined;
+  onSubmit?: ((value: string) => void) | undefined;
+  onFocus?: (() => void) | undefined;
+  autoFocus?: boolean | undefined;
+  className?: string | undefined;
+}
+
+export function AgentBar({
+  placeholder = "Ask or tell monday",
+  value,
+  onChange,
+  onSubmit,
+  onFocus,
+  autoFocus,
+  className,
+}: AgentBarProps) {
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const input = e.currentTarget.elements.namedItem("ask");
+    onSubmit?.(input instanceof HTMLInputElement ? input.value : (value ?? ""));
+  };
+  return (
+    <form className={cx("agent-bar", className)} onSubmit={submit}>
+      <Mark />
+      <input
+        name="ask"
+        placeholder={placeholder}
+        aria-label="Ask or tell monday"
+        // biome-ignore lint/a11y/noAutofocus: the Shell opens the panel to take typing
+        autoFocus={autoFocus}
+        onFocus={onFocus}
+        {...(onChange
+          ? {
+              value: value ?? "",
+              onChange: (e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value),
+            }
+          : { defaultValue: value })}
+      />
+      <Kbd>↵</Kbd>
+    </form>
+  );
+}
+
+/* ------------------------------ AgentThread ------------------------------ */
+
+export type AgentPart =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; call: ToolCall; title?: string; preview?: string; actions?: readonly string[] }
+  | { kind: "results"; threads: readonly Thread[] };
+
+export type AgentTurn =
+  | { id: string; role: "user"; text: string }
+  | { id: string; role: "agent"; parts: readonly AgentPart[] };
+
+export interface AgentThreadProps {
+  turns: readonly AgentTurn[];
+  now?: Date | undefined;
+  onToolAction?: ((action: string, call: ToolCall) => void) | undefined;
+  onOpenThread?: ((threadId: string) => void) | undefined;
+  className?: string | undefined;
+}
+
+function partKey(part: AgentPart, i: number): string {
+  if (part.kind === "tool") return part.call.id;
+  return `${part.kind}-${i}`;
+}
+
+export function AgentThread({
+  turns,
+  now,
+  onToolAction,
+  onOpenThread,
+  className,
+}: AgentThreadProps) {
+  return (
+    <div className={cx("agent-thread", className)}>
+      {turns.map((turn) =>
+        turn.role === "user" ? (
+          <div key={turn.id} className="u">
+            {turn.text}
+          </div>
+        ) : (
+          <div key={turn.id} className="a">
+            {turn.parts.map((part, i) => {
+              const key = partKey(part, i);
+              if (part.kind === "text") return <p key={key}>{part.text}</p>;
+              if (part.kind === "results")
+                return (
+                  <ResultsList key={key} threads={part.threads} now={now} onOpen={onOpenThread} />
+                );
+              return (
+                <ToolCard
+                  key={key}
+                  call={part.call}
+                  title={part.title}
+                  preview={part.preview}
+                  actions={part.actions}
+                  onAction={onToolAction}
+                />
+              );
+            })}
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ AgentPanel ------------------------------ */
+
+export interface Suggestion {
+  label: string;
+  /** Layout knobs the suggestion sets when picked. */
+  layout?: Partial<Layout> | undefined;
+}
+
+export interface AgentPanelProps {
+  /** The runtime line after the title, such as "Claude Code · tejas@genai-labs.io". */
+  runtime?: string | undefined;
+  suggestions?: readonly Suggestion[] | undefined;
+  onSuggest?: ((suggestion: Suggestion) => void) | undefined;
+  onHistory?: (() => void) | undefined;
+  onClose?: (() => void) | undefined;
+  /** The AgentThread. */
+  children?: ReactNode | undefined;
+  className?: string | undefined;
+}
+
+/** The panel that rises above the bar when the Agent is open (agent: bottom). */
+export function AgentPanel({
+  runtime,
+  suggestions,
+  onSuggest,
+  onHistory,
+  onClose,
+  children,
+  className,
+}: AgentPanelProps) {
+  return (
+    <div className={cx("agent-panel", className)}>
+      <ColHead title="monday" count={runtime}>
+        <Btn icon title="History" onClick={onHistory}>
+          <Icon icon={ClockCounterClockwiseIcon} />
+        </Btn>
+        <Btn icon title="Collapse (Esc)" onClick={onClose}>
+          <Icon icon={CaretDownIcon} />
+        </Btn>
+      </ColHead>
+      {children}
+      {suggestions?.length ? (
+        <div className="agent-suggest">
+          {suggestions.map((s) => (
+            <Chip key={s.label} onClick={() => onSuggest?.(s)}>
+              {s.label}
+            </Chip>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------ AgentDock ------------------------------ */
+
+export interface AgentDockProps {
+  children?: ReactNode | undefined;
+  className?: string | undefined;
+}
+
+/** Positions the panel and bar over the main pane (agent: bottom). */
+export function AgentDock({ children, className }: AgentDockProps) {
+  return <div className={cx("agent-dock", className)}>{children}</div>;
+}
+
+/* ------------------------------ AgentColumn ------------------------------ */
+
+export interface AgentColumnProps {
+  side: "left" | "right";
+  runtime?: string | undefined;
+  onNew?: (() => void) | undefined;
+  onHistory?: (() => void) | undefined;
+  /** The AgentThread, then the AgentBar. */
+  children?: ReactNode | undefined;
+  className?: string | undefined;
+}
+
+/** The Agent as a permanent column (agent: left or right). */
+export function AgentColumn({
+  side,
+  runtime,
+  onNew,
+  onHistory,
+  children,
+  className,
+}: AgentColumnProps) {
+  return (
+    <section className={cx("agent-col", side, className)}>
+      <ColHead title="monday" count={runtime}>
+        <Btn icon title="New conversation" onClick={onNew}>
+          <Icon icon={PlusIcon} />
+        </Btn>
+        <Btn icon title="History" onClick={onHistory}>
+          <Icon icon={ClockCounterClockwiseIcon} />
+        </Btn>
+      </ColHead>
+      {children}
+    </section>
+  );
+}

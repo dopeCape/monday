@@ -7,10 +7,28 @@
     ".": "./src/index.ts",
     "./tokens.css": "./src/tokens.css",
     "./app.css": "./src/app.css",
-    "./palettes": "./src/palettes.ts"
+    "./palettes": "./src/palettes.ts",
+    "./fixtures": "./src/fixtures.ts"
   },
-  "scripts": { "typecheck": "tsc --noEmit -p ." },
-  "peerDependencies": { "react": "^19.1.0", "react-dom": "^19.1.0" },
-  "dependencies": { "@phosphor-icons/react": "^2.1.10", "@monday/shared": "workspace:*" },
-  "devDependencies": { "@types/react": "^19.1.8", "@types/react-dom": "^19.1.6", "bun-types": "latest" }
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.5",
+    "@fontsource-variable/geist-mono": "^5.2.5",
+    "@monday/shared": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^20.0.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "bun-types": "latest",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
 }
