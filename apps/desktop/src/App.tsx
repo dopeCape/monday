@@ -3,24 +3,35 @@
 
 import { AgentBar, AgentColumn, AgentThread, NavSidebar, Rail } from "@monday/ui";
 import {
-  NOW,
   agentThread,
   automationNav,
   calendarNav,
   counts,
   folders,
+  groupIcon,
   groups,
+  NOW,
   navWorkspace,
   railItems,
   railTail,
   workspace,
 } from "@monday/ui/fixtures";
 import { useState } from "react";
-import { Inbox } from "./screens/Inbox.tsx";
+import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
+import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { Settings } from "./screens/Settings.tsx";
 import { useShell } from "./shell/Shell.tsx";
 
-export function App() {
+export interface AppProps {
+  /** The inbox's data seam; the Store's implementation in the app, fixtures in tests. */
+  inbox?: InboxData | undefined;
+  /** Offline turns the workspace dot grey (docs/spec/inbox.md). The Store feeds it. */
+  online?: boolean | undefined;
+  /** First-sync progress for the inbox's thin line, or null. The Store feeds it. */
+  syncing?: SyncProgress | null | undefined;
+}
+
+export function App({ inbox, online = true, syncing = null }: AppProps) {
   const shell = useShell();
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
@@ -38,6 +49,7 @@ export function App() {
         folders={folders}
         calendar={calendarNav}
         groups={groups}
+        groupIcon={groupIcon}
         counts={counts}
         automation={automationNav}
         active={active}
@@ -68,7 +80,13 @@ export function App() {
     );
   }
   cols.push("minmax(0, 1fr)");
-  parts.push(active === "settings" ? <Settings key="screen" /> : <Inbox key="screen" />);
+  parts.push(
+    active === "settings" ? (
+      <Settings key="screen" />
+    ) : (
+      <Inbox key="screen" inbox={inbox} online={online} syncing={syncing} />
+    ),
+  );
   if (shell.layout.agent === "right") {
     cols.push("var(--agent-w)");
     parts.push(
@@ -80,7 +98,11 @@ export function App() {
   }
 
   return (
-    <div className="app" style={{ gridTemplateColumns: cols.join(" ") }}>
+    <div
+      className="app"
+      data-online={online ? "true" : "false"}
+      style={{ gridTemplateColumns: cols.join(" ") }}
+    >
       {parts}
     </div>
   );

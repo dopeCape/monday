@@ -4,9 +4,17 @@
 // tags. Every body-derived column is ciphertext (research 5); the plaintext
 // columns are exactly the header fields sync, threading and routing need.
 
-import type { AccountCapabilities, Person, Provider } from "@monday/shared";
+import type {
+  AccountCapabilities,
+  Actor,
+  ChangeKind,
+  FieldWrites,
+  Person,
+  Provider,
+} from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
+  bigserial,
   boolean,
   customType,
   index,
@@ -162,7 +170,15 @@ export const threads = pgTable(
     section: text("section"),
     groupId: text("group_id"),
     subgroupId: text("subgroup_id"),
+    /** In the Provider's trash; a permanent delete removes the row. */
+    deleted: boolean("deleted").notNull().default(false),
     hasAttachments: boolean("has_attachments").notNull().default(false),
+    /**
+     * Per field group, when it was last written and by whom, for last-writer-wins
+     * against replayed intents (ADR 0005; packages/shared sync.ts). A group with
+     * no entry has only ever been written by sync.
+     */
+    writes: jsonb("writes").$type<FieldWrites>().notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -395,4 +411,47 @@ export const syncMessages = pgTable(
     index("sync_messages_subject_idx").on(t.workspaceId, t.subjectKey, t.date),
     index("sync_messages_body_idx").on(t.workspaceId, t.bodyState, t.date),
   ],
+);
+
+/* ------------------------------ Changes feed and activity ------------------------------ */
+
+/**
+ * The ordered stream a client reads from its cursor (docs/spec/architecture.md,
+ * "API shape"). Every Mailstore write a client cares about appends one row in
+ * the same transaction; `seq` is the cursor. Payloads are headers only: content
+ * stays behind the envelope and the content routes.
+ */
+export const changes = pgTable(
+  "changes",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<ChangeKind>().notNull(),
+    entityId: text("entity_id").notNull(),
+    payload: jsonb("payload").notNull(),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("changes_workspace_seq_idx").on(t.workspaceId, t.seq)],
+);
+
+/**
+ * The Activity log (ADR 0002): one row per Tool call. This slice writes only its
+ * first rows, the intents that lost last-writer-wins; the tool server fills in
+ * approvals, results and undo pointers.
+ */
+export const activity = pgTable(
+  "activity",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    actor: text("actor").$type<Actor>().notNull(),
+    tool: text("tool").notNull(),
+    summary: text("summary").notNull(),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("activity_workspace_at_idx").on(t.workspaceId, t.at)],
 );

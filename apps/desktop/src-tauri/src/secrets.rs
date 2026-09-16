@@ -1,7 +1,7 @@
 //! OS keychain access behind Rust commands (research 4). Secrets never reach the webview
 //! except through these commands, and never touch the config file (ADR 0001).
 
-const SERVICE: &str = "io.monday.desktop";
+pub const SERVICE: &str = "io.monday.desktop";
 
 fn entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())

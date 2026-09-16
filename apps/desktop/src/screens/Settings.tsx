@@ -2,8 +2,8 @@
 // a Pinned key renders locked with "set in monday.toml" (ADR 0001, docs/spec/settings.md).
 // Other sections arrive in slice 17; this page exists so slice 2 has its "done when".
 
-import { type Density, type SettingKey, type ThemeMode, settingsSchema } from "@monday/shared";
-import { Btn, Seg, SettingsField, Swatch, Tag, palettes } from "@monday/ui";
+import { type Density, type SettingKey, settingsSchema, type ThemeMode } from "@monday/shared";
+import { Btn, palettes, Seg, SettingsField, Swatch, Tag } from "@monday/ui";
 import { GearSixIcon, MonitorIcon, MoonIcon, PaletteIcon, SunIcon } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
 import { useShell } from "../shell/Shell.tsx";

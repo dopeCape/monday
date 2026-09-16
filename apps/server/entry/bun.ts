@@ -24,6 +24,7 @@ import type { DeploymentMode } from "@monday/shared";
 import { createApp } from "../src/app.ts";
 import { createAuth, randomCode } from "../src/auth/index.ts";
 import { isDeploymentMode, needsServedBy } from "../src/capabilities.ts";
+import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
 import { createKeys, decodeKey, type Keys, WrongRootKeyError } from "../src/crypto/keys.ts";
 import { deriveRootFromPassphrase, passphraseFeatureEnabled } from "../src/crypto/passphrase.ts";
 import { createDb } from "../src/db/client.ts";
@@ -35,6 +36,7 @@ import { createMailstore } from "../src/mailstore/index.ts";
 import { createCredentialStore } from "../src/providers/credentials.ts";
 import { createProviderRegistry } from "../src/providers/index.ts";
 import { createSyncEngine } from "../src/providers/sync.ts";
+import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { migrationsFolder } from "./resources.ts";
 
@@ -187,12 +189,21 @@ async function main() {
     },
   });
 
+  // The Changes feed wake path: Mailstore writes NOTIFY, this LISTEN feeds the
+  // bus, and the WebSocket and SSE transports read the bus.
+  const changeBus = createChangeBus();
+  const changeListener = unpooledUrl
+    ? await listenForChanges(unpooledUrl, changeBus, { onError: (e) => log(String(e)) })
+    : null;
+  const changesSocket = createChangesSocket({ auth, bus: changeBus, mailstore });
+
   const app = createApp({
     db: handle.db,
     auth,
     mode,
     keys,
     mailstore,
+    changes: changeBus,
     remoteAddress: (c) => {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };
       return server?.requestIP?.(c.req.raw)?.address ?? null;
@@ -200,11 +211,12 @@ async function main() {
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");
-  const server = Bun.serve({
+  const server = Bun.serve<SocketData>({
     hostname,
     port: Number(process.env.PORT ?? 0) || 0,
     idleTimeout: 120,
-    fetch: (req, srv) => app.fetch(req, srv),
+    fetch: async (req, srv) => (await changesSocket.upgrade(req, srv)) ?? app.fetch(req, srv),
+    websocket: changesSocket.websocket,
   });
 
   // The Tauri parent reads this single line to learn the port.
@@ -224,6 +236,7 @@ async function main() {
       server.stop(true);
       await kicker.stop();
       await sync.close();
+      await changeListener?.stop();
       await handle.close();
       await embedded?.stop();
     } finally {

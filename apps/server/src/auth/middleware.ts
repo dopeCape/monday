@@ -30,9 +30,17 @@ export function isLoopbackAddress(address: string | null | undefined): boolean {
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
 }
 
+/**
+ * Paths whose clients cannot set headers (EventSource), so the Device token
+ * may ride in `?token=`. Query tokens are accepted nowhere else.
+ */
+export const QUERY_TOKEN_PATHS: readonly string[] = ["/changes/sse"];
+
 export function authenticate(auth: Auth, isLoopback: LoopbackCheck): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    const bearer = parseBearer(c.req.header("authorization"));
+    const bearer =
+      parseBearer(c.req.header("authorization")) ??
+      (QUERY_TOKEN_PATHS.includes(c.req.path) ? c.req.query("token")?.trim() || null : null);
     const principal = bearer ? await auth.authenticate(bearer, isLoopback(c)) : null;
     c.set("principal", principal);
     await next();

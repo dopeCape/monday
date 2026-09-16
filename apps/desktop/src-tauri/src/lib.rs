@@ -1,4 +1,5 @@
 mod config;
+mod db;
 mod secrets;
 mod sidecar;
 
@@ -10,6 +11,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar::SidecarState::default())
+        .manage(db::DbState::default())
         .invoke_handler(tauri::generate_handler![
             config::read_config,
             config::write_config,
@@ -17,6 +19,10 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
             sidecar::sidecar_info,
+            db::db_exec,
+            db::db_query,
+            db::db_batch,
+            db::db_close,
         ])
         .setup(|app| {
             config::watch(app.handle().clone());
