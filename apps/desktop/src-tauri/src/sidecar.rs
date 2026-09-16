@@ -35,6 +35,14 @@ pub async fn start(app: &AppHandle) -> Result<SidecarInfo, String> {
     let token = new_token();
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    // Bundled: <resource_dir>/resources/{pg,drizzle}. Dev: src-tauri/resources.
+    let resources = app
+        .path()
+        .resource_dir()
+        .map(|r| r.join("resources"))
+        .ok()
+        .filter(|r| r.join("pg").exists())
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
 
     let cmd = app
         .shell()
@@ -44,7 +52,8 @@ pub async fn start(app: &AppHandle) -> Result<SidecarInfo, String> {
         .env("MONDAY_MODE", "sidecar")
         .env("MONDAY_SIDECAR_TOKEN", &token)
         .env("MONDAY_DATA_DIR", data_dir.to_string_lossy().to_string())
-        .env("MONDAY_PARENT_PID", std::process::id().to_string());
+        .env("MONDAY_PARENT_PID", std::process::id().to_string())
+        .env("MONDAY_RESOURCES_DIR", resources.to_string_lossy().to_string());
 
     let (mut rx, child) = cmd.spawn().map_err(|e| e.to_string())?;
     let state = app.state::<SidecarState>();

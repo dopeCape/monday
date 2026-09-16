@@ -23,6 +23,7 @@ import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
 import { cloudIsAlive } from "../src/heartbeat.ts";
 import { createJobs } from "../src/jobs/index.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
+import { migrationsFolder } from "./resources.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
@@ -61,7 +62,7 @@ async function main() {
 
   const handle = createDb(databaseUrl, { max: mode === "sidecar" ? 4 : 2 });
   try {
-    const result = await migrate(handle.sql);
+    const result = await migrate(handle.sql, { migrationsFolder: migrationsFolder() });
     if (result.applied > 0) log(`applied ${result.applied} migration(s)`);
   } catch (error) {
     if (error instanceof SchemaNewerThanBuildError) {

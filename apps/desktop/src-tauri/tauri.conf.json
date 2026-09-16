@@ -34,6 +34,10 @@
     ],
     "externalBin": [
       "binaries/monday-server"
+    ],
+    "resources": [
+      "resources/pg",
+      "resources/drizzle"
     ]
   }
 }

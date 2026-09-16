@@ -3,12 +3,13 @@
 // listens on a random loopback port with a password kept in a 0600 file next
 // to it. Node and Bun APIs are fine here; this file is entry-only.
 
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import EmbeddedPostgres from "embedded-postgres";
 import postgres from "postgres";
+import { type PgBinaries, postgresBinaries } from "./resources.ts";
 
 export interface EmbeddedOptions {
   dataDir: string;
@@ -85,35 +86,18 @@ export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<E
 
   const reusePort = await runningClusterPort(dbDir);
   const port = reusePort ?? (await freePort());
-  const pg = new EmbeddedPostgres({
-    databaseDir: dbDir,
-    user,
-    password,
-    port,
-    persistent: true,
-    authMethod: "scram-sha-256",
-    initdbFlags: ["--encoding=UTF8", "--no-instructions"],
-    postgresFlags: ["-c", "listen_addresses=127.0.0.1", "-c", "log_min_messages=warning"],
-    onLog: (message) => log(String(message).trim()),
-    onError: (message) => log(`postgres: ${String(message).trim()}`),
-  });
+  const bin = await postgresBinaries();
+  let child: ChildProcess | null = null;
 
   if (reusePort) {
     log(`reusing embedded postgres already running on port ${reusePort}`);
   } else {
     if (!existsSync(join(dbDir, "PG_VERSION"))) {
       log(`initialising embedded postgres in ${dbDir}`);
-      await pg.initialise();
+      await initdb(bin, dbDir, user, password, log);
     }
-    try {
-      await pg.start();
-    } catch (error) {
-      throw new Error(
-        `embedded postgres failed to start in ${dbDir}${error instanceof Error ? `: ${error.message}` : ""}`,
-      );
-    }
+    child = await startPostgres(bin, dbDir, port, log);
   }
-
   const adminUrl = `postgres://${user}:${encodeURIComponent(password)}@127.0.0.1:${port}/postgres`;
   const admin = postgres(adminUrl, { max: 1, onnotice: () => {} });
   try {
@@ -130,16 +114,120 @@ export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<E
     port,
     startupMs,
     stop: async () => {
-      if (!reusePort) await pg.stop();
+      if (!child) return;
+      await stopPostgres(child);
     },
     killSync: () => {
-      if (reusePort) return;
-      const pid = (pg as unknown as { process?: { pid?: number } }).process?.pid;
-      if (pid) {
+      if (child?.pid) {
         try {
-          process.kill(pid, "SIGINT");
+          process.kill(child.pid, "SIGINT");
         } catch {}
       }
     },
   };
+}
+
+function libEnv(bin: PgBinaries): NodeJS.ProcessEnv {
+  const lib = join(bin.root, "lib");
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (process.platform === "linux")
+    env.LD_LIBRARY_PATH = [lib, env.LD_LIBRARY_PATH].filter(Boolean).join(":");
+  if (process.platform === "darwin")
+    env.DYLD_LIBRARY_PATH = [lib, env.DYLD_LIBRARY_PATH].filter(Boolean).join(":");
+  return env;
+}
+
+async function initdb(
+  bin: PgBinaries,
+  dbDir: string,
+  user: string,
+  password: string,
+  log: (m: string) => void,
+): Promise<void> {
+  const pwfile = join(dbDir, "..", "postgres.password");
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(
+      bin.initdb,
+      [
+        "-D",
+        dbDir,
+        "-U",
+        user,
+        "--pwfile",
+        pwfile,
+        "--auth=scram-sha-256",
+        "--encoding=UTF8",
+        "--no-instructions",
+      ],
+      { env: libEnv(bin), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let err = "";
+    p.stderr.on("data", (d) => {
+      err += String(d);
+    });
+    p.stdout.on("data", (d) => log(String(d).trim()));
+    p.on("error", reject);
+    p.on("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`initdb exited ${code}: ${err.trim()}`)),
+    );
+  });
+  void password;
+}
+
+async function startPostgres(
+  bin: PgBinaries,
+  dbDir: string,
+  port: number,
+  log: (m: string) => void,
+): Promise<ChildProcess> {
+  const p = spawn(
+    bin.postgres,
+    [
+      "-D",
+      dbDir,
+      "-p",
+      String(port),
+      "-c",
+      "listen_addresses=127.0.0.1",
+      "-c",
+      "log_min_messages=warning",
+    ],
+    { env: libEnv(bin), stdio: ["ignore", "pipe", "pipe"] },
+  );
+  await new Promise<void>((resolve, reject) => {
+    let out = "";
+    const onData = (d: Buffer) => {
+      out += String(d);
+      log(String(d).trim());
+      if (out.includes("ready to accept connections")) {
+        p.stderr.off("data", onData);
+        resolve();
+      }
+    };
+    p.stderr.on("data", onData);
+    p.on("error", reject);
+    p.on("exit", (code) =>
+      reject(new Error(`postgres exited ${code} before ready: ${out.trim()}`)),
+    );
+    setTimeout(
+      () => reject(new Error(`postgres did not become ready in 30s: ${out.trim()}`)),
+      30_000,
+    ).unref();
+  });
+  return p;
+}
+
+function stopPostgres(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve();
+    const t = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 10_000);
+    t.unref();
+    child.once("exit", () => {
+      clearTimeout(t);
+      resolve();
+    });
+    child.kill("SIGINT"); // fast shutdown
+  });
 }

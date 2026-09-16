@@ -3,16 +3,20 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun run --filter @monday/desktop dev",
-    "tauri": "bun run --filter @monday/desktop tauri",
+    "tauri": "bun run stage && bun run --filter @monday/desktop tauri",
     "server": "bun run --filter @monday/server dev",
     "design": "bun design/serve.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "stage": "bun scripts/stage-sidecar.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
