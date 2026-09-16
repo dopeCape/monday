@@ -2,7 +2,15 @@
 // loopback when it runs, the Cloud URL otherwise. Typed routes arrive with the generated
 // client in packages/shared; until then this is the minimal fetch wrapper.
 
-import type { Capabilities, ChangesPage, Id, Intent, IntentResult } from "@monday/shared";
+import type {
+  Capabilities,
+  ChangesPage,
+  HeaderSearchPage,
+  Id,
+  Intent,
+  IntentResult,
+  MessageBodiesPage,
+} from "@monday/shared";
 
 export interface ServerTarget {
   baseUrl: string;
@@ -88,6 +96,25 @@ export function createApi(target: () => ServerTarget | null) {
           body: JSON.stringify(body),
         });
       },
+    },
+    messages: {
+      /** Decrypted bodies by date range, newest first, for the Cache (ADR 0011). 423 when locked. */
+      bodies: (
+        workspaceId: Id,
+        range: { after: string | null; before: string | null; limit: number },
+      ) => {
+        const q = new URLSearchParams({ workspace: workspaceId, limit: String(range.limit) });
+        if (range.after) q.set("after", range.after);
+        if (range.before) q.set("before", range.before);
+        return request<MessageBodiesPage>(`/messages/bodies?${q}`);
+      },
+    },
+    search: {
+      /** The Server's headers-only index, for the Agent's lookups while a laptop is closed. */
+      headers: (workspaceId: Id, q: string, limit = 50) =>
+        request<HeaderSearchPage>(
+          `/search/headers?${new URLSearchParams({ workspace: workspaceId, q, limit: String(limit) })}`,
+        ),
     },
     settings: {
       /** Global and per-Device buckets; device wins for device-scoped keys. */

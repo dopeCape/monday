@@ -23,10 +23,12 @@ import type {
   ContentRef,
   FieldWrites,
   GroupId,
+  HeaderSearchPage,
   Id,
   Intent,
   IntentResult,
   IsoDate,
+  MessageBodiesPage,
   Person,
   Section,
   Thread,
@@ -34,7 +36,7 @@ import type {
   Workspace,
 } from "@monday/shared";
 import { FIELD_GROUP_OF, resolveWrite } from "@monday/shared";
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { CHANGES_CHANNEL, encodeNotice } from "../changes/bus.ts";
 import { CHUNK_BYTES } from "../crypto/aead.ts";
 import { type Keys, LockedError } from "../crypto/keys.ts";
@@ -48,6 +50,7 @@ import {
   changes,
   labels,
   messages,
+  PARTICIPANTS_TEXT_SQL,
   tags,
   threadLabels,
   threads,
@@ -130,6 +133,19 @@ export interface ThreadPage {
   cursor: string | null;
 }
 
+export interface SearchHeadersOptions {
+  q: string;
+  limit: number;
+}
+
+export interface ListBodiesOptions {
+  /** Inclusive lower bound on the Message date, ISO; null for no bound. */
+  after: IsoDate | null;
+  /** Exclusive upper bound, ISO; null for no bound. */
+  before: IsoDate | null;
+  limit: number;
+}
+
 export interface ThreadPatch {
   unread?: boolean;
   starred?: boolean;
@@ -196,6 +212,18 @@ export interface Mailstore extends ContentStore {
    * readMessageBody.
    */
   listThreads(workspaceId: Id, options: ListThreadsOptions): Promise<ThreadPage>;
+  /**
+   * The headers-only index (ADR 0011, research 5): the subject prefix and the
+   * participants, prefix-matched as typed, plus a substring match over the
+   * participants through pg_trgm. Nothing is decrypted; works locked.
+   */
+  searchHeaders(workspaceId: Id, options: SearchHeadersOptions): Promise<HeaderSearchPage>;
+  /**
+   * Decrypted bodies by date range, newest first, for the client Cache
+   * ("search older mail", the pre-warm Job). Throws LockedError when the root
+   * key is not in memory.
+   */
+  listBodies(workspaceId: Id, options: ListBodiesOptions): Promise<MessageBodiesPage>;
   /** New K_ws; every wrapped data key in the Workspace is re-wrapped, no ciphertext is read. */
   rotateWorkspaceKey(workspaceId: Id): Promise<{ version: number; rewrapped: number }>;
 }
@@ -214,6 +242,16 @@ export class NotFoundError extends Error {
 /** The one plaintext derivative of a subject: lowercased, whitespace collapsed, 80 chars. */
 export function subjectSearchOf(subject: string): string {
   return subject.toLowerCase().replace(/\s+/g, " ").trim().slice(0, SUBJECT_SEARCH_CHARS);
+}
+
+/** The `to_tsquery` text for what was typed: every token prefix-matched, ANDed. Empty when nothing survives. */
+export function headersTsQuery(q: string): string {
+  return q
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 0)
+    .map((t) => `${t}:*`)
+    .join(" & ");
 }
 
 function encodeCursor(lastActivity: Date, id: string): string {
@@ -913,6 +951,81 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const last = page[page.length - 1];
       const cursor = rows.length > limit && last ? encodeCursor(last.lastActivity, last.id) : null;
       return { threads: projected, cursor };
+    },
+
+    async searchHeaders(workspaceId, options) {
+      const limit = Math.max(1, Math.min(options.limit, 200));
+      const q = options.q.trim();
+      if (q === "") return { hits: [] };
+      const tsq = headersTsQuery(q);
+      const participantsText = sql.raw(PARTICIPANTS_TEXT_SQL);
+      const like = `%${q.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+      const rows = await db.execute<{
+        id: string;
+        subject_search: string;
+        participants: Person[];
+        last_activity: string;
+        rank: number;
+      }>(sql`
+        select id, subject_search, participants, last_activity,
+          ${tsq === "" ? sql`0` : sql`ts_rank_cd(search_vector, to_tsquery('simple', ${tsq}))`}
+            + case when ${participantsText} ilike ${like} then 0.1 else 0 end as rank
+        from threads
+        where workspace_id = ${workspaceId} and deleted = false
+          and (${tsq === "" ? sql`false` : sql`search_vector @@ to_tsquery('simple', ${tsq})`}
+            or ${participantsText} ilike ${like})
+        order by rank desc, last_activity desc
+        limit ${limit}`);
+      return {
+        hits: rows.map((r) => ({
+          threadId: r.id,
+          subjectSearch: r.subject_search,
+          participants: r.participants,
+          lastActivity: new Date(r.last_activity).toISOString(),
+          rank: Number(r.rank),
+        })),
+      };
+    },
+
+    async listBodies(workspaceId, options) {
+      const limit = Math.max(1, Math.min(options.limit, 1000));
+      const conditions = [eq(messages.workspaceId, workspaceId)];
+      if (options.after !== null) conditions.push(gte(messages.date, new Date(options.after)));
+      if (options.before !== null) conditions.push(lt(messages.date, new Date(options.before)));
+      const [count] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(messages)
+        .where(and(...conditions));
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.date), desc(messages.id))
+        .limit(limit + 1);
+      const page = rows.slice(0, limit);
+      const bodies: MessageBodiesPage["bodies"] = [];
+      for (const row of page) {
+        const body = JSON.parse(
+          await content.readText(singleRef(workspaceId, "body", row.bodyKey, row.bodyEnc)),
+        ) as { text: string; html: string | null };
+        const snippet = await content.readText(
+          singleRef(workspaceId, "snippet", row.snippetKey, row.snippetEnc),
+        );
+        bodies.push({
+          id: row.id,
+          threadId: row.threadId,
+          date: row.date.toISOString(),
+          text: body.text,
+          html: body.html,
+          snippet,
+        });
+      }
+      const last = page[page.length - 1];
+      return {
+        bodies,
+        cursor: rows.length > limit && last ? last.date.toISOString() : null,
+        total: Number(count?.n ?? 0),
+      };
     },
 
     async rotateWorkspaceKey(workspaceId) {

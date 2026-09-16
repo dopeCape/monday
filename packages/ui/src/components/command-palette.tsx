@@ -1,8 +1,13 @@
-// The command palette (⌘K): search, jump, or ask, over a scrim.
+// The command palette (⌘K): search, jump, or ask, over a scrim. One input;
+// sections of items, each an action, a place to go, a Thread row or a line
+// for the Agent. The keys are handled here on the input: arrows move, Enter
+// selects, Tab hands the text to the Agent, Escape closes.
+import type { Thread } from "@monday/shared";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
-import type { ChangeEvent, MouseEvent, ReactNode } from "react";
+import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { cx } from "../format.ts";
 import { Icon, type IconComponent } from "./icon.tsx";
+import { MessageRow } from "./message-row.tsx";
 import { Kbd, Mark } from "./primitives.tsx";
 
 export interface CommandItem {
@@ -12,6 +17,12 @@ export interface CommandItem {
   /** Sent to the Agent instead of run; shows the mark instead of an icon. */
   ai?: boolean | undefined;
   kbd?: string | undefined;
+  /** Rendered as a Thread row in the list's visual language. */
+  thread?: Thread | undefined;
+  /** The account label after the row, in the all-accounts view. */
+  account?: string | undefined;
+  /** A matched passage that replaces the Thread's own snippet in the row. */
+  snippet?: string | undefined;
 }
 
 export interface CommandSection {
@@ -38,6 +49,22 @@ export function Scrim({ onClose, children, className }: ScrimProps) {
   );
 }
 
+export interface CommandPaletteStrings {
+  placeholder: string;
+  move: string;
+  select: string;
+  ask: string;
+  /** Shown under the input when a section has no items, such as a search with no hits. */
+  empty?: string | undefined;
+}
+
+const DEFAULT_STRINGS: CommandPaletteStrings = {
+  placeholder: "Search, jump, or ask",
+  move: "move",
+  select: "select",
+  ask: "ask instead",
+};
+
 export interface CommandPaletteProps {
   sections: readonly CommandSection[];
   /** The highlighted item. Defaults to the first one. */
@@ -45,7 +72,17 @@ export interface CommandPaletteProps {
   query?: string | undefined;
   onQuery?: ((query: string) => void) | undefined;
   onSelect?: ((item: CommandItem) => void) | undefined;
+  /** Arrow keys: -1 up, +1 down. Without it the arrows do nothing. */
+  onMove?: ((delta: number) => void) | undefined;
+  /** Tab: hand the text to the Agent. */
+  onAsk?: ((query: string) => void) | undefined;
+  /** Enter with the active item, or with nothing active. */
+  onSubmit?: ((query: string) => void) | undefined;
   onClose?: (() => void) | undefined;
+  onHover?: ((key: string) => void) | undefined;
+  strings?: Partial<CommandPaletteStrings> | undefined;
+  /** For Thread rows' relative times. */
+  now?: Date | undefined;
   className?: string | undefined;
 }
 
@@ -55,21 +92,50 @@ export function CommandPalette({
   query,
   onQuery,
   onSelect,
+  onMove,
+  onAsk,
+  onSubmit,
   onClose,
+  onHover,
+  strings: overrides,
+  now,
   className,
 }: CommandPaletteProps) {
+  const s = { ...DEFAULT_STRINGS, ...overrides };
   const first = sections[0]?.items[0]?.key;
   const active = activeKey ?? first;
+  const activeItem = sections.flatMap((sec) => sec.items).find((it) => it.key === active);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!onMove) return;
+      e.preventDefault();
+      onMove(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeItem) onSelect?.(activeItem);
+      else onSubmit?.(query ?? "");
+    } else if (e.key === "Tab" && onAsk) {
+      e.preventDefault();
+      onAsk(query ?? "");
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onClose?.();
+    }
+  };
+
   return (
     <Scrim onClose={onClose}>
-      <div className={cx("cmdk", className)} role="dialog" aria-label="Command palette">
+      <div className={cx("cmdk", className)} role="dialog" aria-label={s.placeholder}>
         <div className="cmdk-in">
           <Icon icon={MagnifyingGlassIcon} />
           <input
             // biome-ignore lint/a11y/noAutofocus: the palette opens to take typing
             autoFocus
-            placeholder="Search, jump, or ask"
-            aria-label="Search, jump, or ask"
+            placeholder={s.placeholder}
+            aria-label={s.placeholder}
+            aria-activedescendant={active ? `cmdk-${active}` : undefined}
+            onKeyDown={onKeyDown}
             {...(onQuery
               ? {
                   value: query ?? "",
@@ -79,37 +145,59 @@ export function CommandPalette({
           />
           <Kbd>esc</Kbd>
         </div>
-        {sections.map((s) => (
-          <div key={s.label}>
-            <div className="cmdk-sec">{s.label}</div>
-            {s.items.map((it) => (
-              <div
-                key={it.key}
-                className={cx("cmdk-item", it.key === active && "on")}
-                role="option"
-                aria-selected={it.key === active}
-                tabIndex={-1}
-                onClick={() => onSelect?.(it)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") onSelect?.(it);
-                }}
-              >
-                {it.ai ? <Mark small /> : it.icon ? <Icon icon={it.icon} /> : null}
-                <span>{it.label}</span>
-                {it.kbd ? <Kbd>{it.kbd}</Kbd> : null}
-              </div>
-            ))}
+        {sections.map((sec) => (
+          <div key={sec.label}>
+            <div className="cmdk-sec">{sec.label}</div>
+            {sec.items.length === 0 && s.empty ? (
+              <div className="cmdk-empty">{s.empty}</div>
+            ) : null}
+            {sec.items.map((it) =>
+              it.thread ? (
+                <div
+                  key={it.key}
+                  id={`cmdk-${it.key}`}
+                  className={cx("cmdk-thread", it.key === active && "on")}
+                  onMouseEnter={() => onHover?.(it.key)}
+                >
+                  <MessageRow
+                    thread={it.snippet ? { ...it.thread, snippet: it.snippet } : it.thread}
+                    selected={it.key === active}
+                    now={now}
+                    account={it.account}
+                    onOpen={() => onSelect?.(it)}
+                  />
+                </div>
+              ) : (
+                <div
+                  key={it.key}
+                  id={`cmdk-${it.key}`}
+                  className={cx("cmdk-item", it.key === active && "on")}
+                  role="option"
+                  aria-selected={it.key === active}
+                  tabIndex={-1}
+                  onClick={() => onSelect?.(it)}
+                  onMouseEnter={() => onHover?.(it.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onSelect?.(it);
+                  }}
+                >
+                  {it.ai ? <Mark small /> : it.icon ? <Icon icon={it.icon} /> : null}
+                  <span>{it.label}</span>
+                  {it.kbd ? <Kbd>{it.kbd}</Kbd> : null}
+                </div>
+              ),
+            )}
           </div>
         ))}
         <div className="cmdk-foot">
           <span>
-            <Kbd>↑↓</Kbd> move
+            <Kbd>↑↓</Kbd> {s.move}
           </span>
           <span>
-            <Kbd>↵</Kbd> select
+            <Kbd>↵</Kbd> {s.select}
           </span>
           <span>
-            <Kbd>tab</Kbd> ask instead
+            <Kbd>tab</Kbd> {s.ask}
           </span>
         </div>
       </div>
