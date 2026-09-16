@@ -162,8 +162,23 @@ _Avoid_: backend, API
 A Server deployed remotely: Vercel, Netlify or a container.
 
 **Sidecar**:
-The copy of the Server bundled with and started by the client. When both run they share one database.
+The copy of the Server bundled with and started by the client. When both run they share one database; alone, it runs an embedded Postgres and does everything.
 _Avoid_: local server, embedded server
+
+**Job**:
+One idempotent, time-budgeted unit of background work in the shared jobs table, claimed with a lease by a Server that can serve its needs.
+_Avoid_: task, worker item
+
+**Heartbeat**:
+The row each running Server refreshes so the others can tell it is alive.
+
+**Cache**:
+The client's per-Workspace SQLite copy: headers for every Thread, bodies for recent and opened Threads, and a full-text index over them.
+_Avoid_: local database, mirror
+
+**Outbox**:
+The client's queue of intents made while offline, replayed in order on reconnect.
+_Avoid_: pending queue, sync queue
 
 ### Layout and appearance
 
