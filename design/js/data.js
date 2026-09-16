@@ -171,6 +171,7 @@ export const nav = {
     { key: "community", label: "Community", icon: "ph-github-logo", n: 3, smart: true, color: "var(--tag-5)" },
     { key: "press", label: "Press", icon: "ph-microphone", smart: true, color: "var(--tag-3)" },
   ],
+  calendar: [{ key: "calendar", label: "Calendar", icon: "ph-calendar-blank" }],
   automation: [
     { key: "workflows", label: "Workflows", icon: "ph-flow-arrow", n: 3, running: true },
     { key: "routing", label: "Routing", icon: "ph-git-branch" },

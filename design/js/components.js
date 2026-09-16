@@ -36,6 +36,7 @@ export function navSidebar(route) {
     <button class="nav-item" data-act="compose">${ic("ph-pencil-simple-line")}<span>New message</span><span class="kbd">C</span></button>
     <div class="nav-sec">Mail</div>
     ${main}
+    ${item({ ...nav.calendar[0], href: "#/calendar" }, route.screen === "calendar")}
     <div class="nav-sec">Groups</div>
     ${smart}
     <div class="nav-sec">Automation</div>
@@ -59,6 +60,7 @@ export function rail(route) {
     ${b("ph-receipt", "#/inbox/finance", route.folder === "finance", "Finance")}
     ${b("ph-handshake", "#/inbox/investors", route.folder === "investors", "Investors")}
     <span class="sp"></span>
+    ${b("ph-calendar-blank", "#/calendar", route.screen === "calendar", "Calendar")}
     ${b("ph-flow-arrow", "#/workflows", route.screen === "workflows", "Workflows")}
     ${b("ph-git-branch", "#/routing", route.screen === "routing", "Routing")}
     ${b("ph-gear-six", "#/settings/appearance", route.screen === "settings", "Settings")}

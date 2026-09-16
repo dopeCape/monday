@@ -4,8 +4,9 @@ import * as inbox from "./screens/inbox.js";
 import * as workflows from "./screens/workflows.js";
 import * as routing from "./screens/routing.js";
 import * as settings from "./screens/settings.js";
+import * as calendar from "./screens/calendar.js";
 
-const screens = { inbox, workflows, routing, settings };
+const screens = { inbox, workflows, routing, settings, calendar };
 const q = new URLSearchParams(location.search);
 
 export const ui = {
