@@ -1,0 +1,14 @@
+{
+  "name": "@monday/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch entry/bun.ts",
+    "start": "bun entry/bun.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "compile": "bun build --compile entry/bun.ts --outfile dist/monday-server"
+  },
+  "dependencies": { "hono": "^4.7.0", "@monday/shared": "workspace:*" },
+  "devDependencies": { "bun-types": "latest" }
+}

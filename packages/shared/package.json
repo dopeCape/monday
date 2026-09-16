@@ -1,0 +1,16 @@
+{
+  "name": "@monday/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain.ts",
+    "./settings": "./src/settings/index.ts",
+    "./config": "./src/config/index.ts",
+    "./workflow": "./src/workflow/index.ts"
+  },
+  "scripts": { "typecheck": "tsc --noEmit -p ." },
+  "dependencies": { "zod": "^4.0.0" },
+  "devDependencies": { "bun-types": "latest" }
+}

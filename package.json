@@ -3,28 +3,19 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
+    "dev": "bun run --filter @monday/desktop dev",
+    "tauri": "bun run --filter @monday/desktop tauri",
+    "server": "bun run --filter @monday/server dev",
     "design": "bun design/serve.ts",
-    "design": "vite --host 0.0.0.0 --port 8989"
-  },
-  "dependencies": {
-    "@fontsource/geist": "^5.3.0",
-    "@phosphor-icons/react": "^2.1.10",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome format --write ."
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "@tauri-apps/cli": "^2"
+    "@biomejs/biome": "^2.0.0",
+    "typescript": "~5.8.3"
   }
 }
