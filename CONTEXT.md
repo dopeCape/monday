@@ -77,6 +77,19 @@ _Avoid_: low confidence, unsorted
 The Agent's short summary of a Thread with suggested actions, shown at the top of the reader.
 _Avoid_: summary, TL;DR, AI summary
 
+### Calendar
+
+**Event**:
+One entry on a calendar, read from the Provider or from the Local calendar.
+
+**Invite**:
+A `text/calendar` request inside a Message. Rendered as an invite bar in the reader; answered through the calendar API where one exists, by reply mail otherwise.
+_Avoid_: invitation email, ICS attachment
+
+**Local calendar**:
+The calendar monday keeps in its own database for a Workspace whose Account has no calendar API and no linked CalDAV calendar.
+_Avoid_: fallback calendar, offline calendar
+
 ### The agent
 
 **Agent**:
