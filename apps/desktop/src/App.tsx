@@ -1,51 +1,35 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+// Placeholder until packages/ui lands: proves the Shell, the platform seam and the
+// sidecar connection end to end. Replaced by the real screens in the same slice.
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+import { useEffect, useState } from "react";
+import { useShell } from "./shell/Shell.tsx";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+export function App() {
+  const shell = useShell();
+  const [health, setHealth] = useState<string>("connecting");
+
+  useEffect(() => {
+    if (!shell.sidecar?.running) return;
+    shell.api
+      .health()
+      .then((h) => setHealth(h.ok ? "ok" : "unhealthy"))
+      .catch((e: Error) => setHealth(e.message));
+  }, [shell.sidecar, shell.api]);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="app" style={{ display: "grid", placeItems: "center" }}>
+      <div style={{ maxWidth: 480, fontSize: "var(--fs-md)", color: "var(--fg-muted)" }}>
+        <p style={{ color: "var(--fg)", fontWeight: 600 }}>monday</p>
+        <p>Config: {shell.config?.exists ? shell.config.path : "no file yet"}</p>
+        <p>
+          Sidecar:{" "}
+          {shell.sidecar?.running ? `port ${shell.sidecar.port}, health ${health}` : "starting"}
+        </p>
+        <p>
+          Layout: {shell.layout.nav} / {shell.layout.agent} / {shell.layout.list}, {shell.density},{" "}
+          {shell.palette}
+        </p>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    </div>
   );
 }
-
-export default App;
