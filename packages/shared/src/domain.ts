@@ -80,12 +80,29 @@ export interface Attachment {
   mediaType: string;
   /** Extracted text, present when read_attachment has run. */
   text?: string;
+  /** Content-ID of an inline part (a cid: image), without angle brackets. */
+  contentId?: string | null;
+  inline?: boolean;
+}
+
+/** How a Draft came to be; decides the headers and the quoted history (ADR 0010). */
+export type DraftKind = "new" | "reply" | "forward";
+
+/** A compose upload: an encrypted blob the Draft references by id. */
+export interface DraftAttachment {
+  blobId: Id;
+  name: string;
+  size: number;
+  mediaType: string;
 }
 
 export interface Draft {
   id: Id;
   workspaceId: Id;
   threadId: Id | null;
+  kind: DraftKind;
+  /** The Message a reply or forward answers, for In-Reply-To and References. */
+  inReplyToMessageId: Id | null;
   to: Person[];
   cc: Person[];
   bcc: Person[];
@@ -93,7 +110,46 @@ export interface Draft {
   bodyHtml: string;
   bodyText: string;
   attachmentBlobIds: Id[];
+  /** Name, size and media type per blob, so the compose surface can list them. */
+  attachments: DraftAttachment[];
+  /** "open" while editable, "scheduled" once a send Job holds it, "sent" after delivery. */
+  status: DraftStatus;
   updatedAt: IsoDate;
+  /** The Device or actor that saved it last. */
+  updatedBy: string;
+}
+
+export type DraftStatus = "open" | "scheduled" | "sent";
+
+export type ScheduledSendStatus = "scheduled" | "cancelled" | "sent" | "failed";
+
+/** Why a send Job failed, typed so the client can word it (strings.send.*). */
+export type SendError =
+  | { code: "too_large"; size: number; limit: number }
+  | { code: "no_recipients" }
+  | { code: "failed"; message: string };
+
+/** One press of Send: a send Job with a run time and an undo window (ADR 0010). */
+export interface ScheduledSend {
+  id: Id;
+  workspaceId: Id;
+  draftId: Id;
+  runAt: IsoDate;
+  status: ScheduledSendStatus;
+  cancelledAt: IsoDate | null;
+  sentAt: IsoDate | null;
+  jobId: Id | null;
+  error: SendError | null;
+  createdAt: IsoDate;
+}
+
+/** A per-Workspace description of how the user writes, built from sent mail on opt-in. */
+export interface VoiceProfile {
+  workspaceId: Id;
+  description: string;
+  excerpts: string[];
+  builtAt: IsoDate | null;
+  enabled: boolean;
 }
 
 /** A marker owned by the Provider, synced both ways. */

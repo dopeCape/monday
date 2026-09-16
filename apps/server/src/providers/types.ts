@@ -195,6 +195,13 @@ export interface SendResult {
   messageId: string | null;
 }
 
+/* ------------------------------ Drafts (ADR 0010) ------------------------------ */
+
+export interface DraftResult {
+  /** The Provider's id for the mirrored Draft. */
+  id: string;
+}
+
 /* ------------------------------ Watch ------------------------------ */
 
 export type WatchEvent =
@@ -224,6 +231,15 @@ export interface Session {
   fetchMessage(id: string): Promise<RawMessage>;
   applyChange(target: ChangeTarget, change: Change): Promise<void>;
   send(mime: Uint8Array, options?: SendOptions): Promise<SendResult>;
+  /**
+   * Mirrors a Server-owned Draft into the Provider's Drafts folder (JMAP:
+   * $draft keyword; IMAP: APPEND with \Draft) and removes the previous copy.
+   * Absent on adapters that arrive later (Gmail, Graph in slice 9): the
+   * mirror step then skips the Account.
+   */
+  putDraft?(mime: Uint8Array, previousId: string | null): Promise<DraftResult>;
+  /** Removes a mirrored Draft, after a send or a delete. Missing ids are not an error. */
+  deleteDraft?(id: string): Promise<void>;
   watch(mailboxIds: string[]): Watch;
   close(): Promise<void>;
 }

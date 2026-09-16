@@ -2,7 +2,7 @@
 // tests render the same inbox the mock does. The only place the desktop app
 // imports fixture data for mail.
 
-import type { Brief, Group, Message, SectionRule, Tag, Thread } from "@monday/shared";
+import type { Brief, Draft, Group, Message, SectionRule, Tag, Thread } from "@monday/shared";
 import * as fixtures from "@monday/ui/fixtures";
 import type { Statement } from "./driver.ts";
 
@@ -13,6 +13,7 @@ export interface SeedData {
   sections: SectionRule[];
   groups: Group[];
   briefs: Brief[];
+  drafts: Draft[];
 }
 
 export function fixtureSeed(): SeedData {
@@ -23,6 +24,7 @@ export function fixtureSeed(): SeedData {
     sections: fixtures.sections,
     groups: fixtures.groups,
     briefs: fixtures.briefs,
+    drafts: [fixtures.draft],
   };
 }
 
@@ -105,6 +107,29 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
     out.push({
       sql: "insert or replace into briefs (thread_id, bullets, actions, computed_at, stale) values (?, ?, ?, ?, ?)",
       params: [b.threadId, b.bullets, b.actions, b.computedAt, b.stale],
+    });
+  }
+  for (const d of data.drafts) {
+    out.push({
+      sql: `insert or replace into drafts (id, thread_id, kind, in_reply_to_message_id, recipients, cc, bcc, subject,
+              body_html, body_text, attachments, status, deleted, content_stale, updated_at, updated_by)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+      params: [
+        d.id,
+        d.threadId,
+        d.kind,
+        d.inReplyToMessageId,
+        d.to,
+        d.cc,
+        d.bcc,
+        d.subject,
+        d.bodyHtml,
+        d.bodyText,
+        d.attachments,
+        d.status,
+        d.updatedAt,
+        d.updatedBy,
+      ],
     });
   }
   return out;

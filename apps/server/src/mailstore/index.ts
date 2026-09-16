@@ -102,6 +102,9 @@ export interface AttachmentInput {
   bytes: Uint8Array;
   /** Extracted text, when the caller already has it. */
   text?: string;
+  /** Content-ID without angle brackets, for cid: images. */
+  contentId?: string | null;
+  inline?: boolean;
 }
 
 export interface AttachmentContent {
@@ -111,6 +114,49 @@ export interface AttachmentContent {
   size: number;
   bytes: Uint8Array;
   text: string | null;
+}
+
+/** The plaintext half of an attachment: what the reader lists before it downloads anything. */
+export interface AttachmentHeader {
+  id: Id;
+  messageId: Id;
+  name: string;
+  size: number;
+  mediaType: string;
+  contentId: string | null;
+  inline: boolean;
+}
+
+/** A Message's header projection with its attachment headers, as GET /threads/:id/messages returns it. */
+export interface MessageHeader {
+  id: Id;
+  threadId: Id;
+  from: Person;
+  to: Person[];
+  cc: Person[];
+  date: IsoDate;
+  /** Message-Id, In-Reply-To, References and the other headers routing keeps. */
+  headers: Record<string, string>;
+  hasAttachments: boolean;
+  attachments: AttachmentHeader[];
+}
+
+/** A compose upload in progress or done. */
+export interface BlobHeader {
+  id: Id;
+  workspaceId: Id;
+  name: string;
+  mediaType: string;
+  size: number;
+  chunkSize: number;
+  chunkCount: number;
+  /** Chunks received so far. */
+  received: number;
+  complete: boolean;
+}
+
+export interface BlobContent extends BlobHeader {
+  bytes: Uint8Array;
 }
 
 export interface ListThreadsOptions {
@@ -180,8 +226,31 @@ export interface Mailstore extends ContentStore {
   upsertMessage(input: MessageInput): Promise<Id>;
   readMessageBody(messageId: Id): Promise<MessageBody>;
   readThreadSubject(threadId: Id): Promise<string>;
+  /** The Messages of a Thread in date order with their attachment headers; nothing decrypted. */
+  listMessages(threadId: Id): Promise<MessageHeader[]>;
+  /** One Message's header projection, or null. */
+  findMessage(messageId: Id): Promise<MessageHeader | null>;
   putAttachment(messageId: Id, input: AttachmentInput): Promise<Id>;
   readAttachment(attachmentId: Id): Promise<AttachmentContent>;
+  /**
+   * Starts a chunked compose upload: a blob row with a fresh key and no
+   * chunks. Chunks arrive through putBlobChunk; the blob is complete once
+   * every index is in. Throws LockedError when locked.
+   */
+  startBlob(
+    workspaceId: Id,
+    input: { name: string; mediaType: string; size: number },
+  ): Promise<BlobHeader>;
+  /** Seals and stores chunk `index`; idempotent for a repeated index. */
+  putBlobChunk(blobId: Id, index: number, bytes: Uint8Array): Promise<BlobHeader>;
+  /** A whole blob in one call, for callers that already hold the bytes. */
+  putBlob(
+    workspaceId: Id,
+    input: { name: string; mediaType: string; bytes: Uint8Array },
+  ): Promise<BlobHeader>;
+  findBlob(blobId: Id): Promise<BlobHeader | null>;
+  readBlob(blobId: Id): Promise<BlobContent>;
+  deleteBlob(blobId: Id): Promise<void>;
   upsertLabel(
     workspaceId: Id,
     label: { providerId: string; name: string; role?: string | null },
@@ -203,7 +272,7 @@ export interface Mailstore extends ContentStore {
 export class NotFoundError extends Error {
   readonly status = 404;
   constructor(
-    readonly entity: "thread" | "message" | "attachment" | "workspace",
+    readonly entity: "thread" | "message" | "attachment" | "workspace" | "blob" | "draft" | "send",
     readonly id: string,
   ) {
     super(`${entity} ${id} not found`);
@@ -263,6 +332,49 @@ function projectThread(r: ThreadRow, tagIds: string[], labelIds: string[]): Thre
     hasAttachments: r.hasAttachments,
     snippet: "",
     deleted: r.deleted,
+  };
+}
+
+function projectAttachment(a: typeof attachments.$inferSelect): AttachmentHeader {
+  return {
+    id: a.id,
+    messageId: a.messageId,
+    name: a.name,
+    size: a.size,
+    mediaType: a.mediaType,
+    contentId: a.contentId,
+    inline: a.inline,
+  };
+}
+
+function projectMessage(
+  m: typeof messages.$inferSelect,
+  attachmentHeaders: AttachmentHeader[],
+): MessageHeader {
+  return {
+    id: m.id,
+    threadId: m.threadId,
+    from: m.from,
+    to: m.to,
+    cc: m.cc,
+    date: m.date.toISOString(),
+    headers: m.headers,
+    hasAttachments: m.hasAttachments,
+    attachments: attachmentHeaders,
+  };
+}
+
+function projectBlob(b: typeof blobs.$inferSelect, received: number): BlobHeader {
+  return {
+    id: b.id,
+    workspaceId: b.workspaceId,
+    name: b.name,
+    mediaType: b.mediaType,
+    size: b.size,
+    chunkSize: b.chunkSize,
+    chunkCount: b.chunkCount,
+    received,
+    complete: b.complete,
   };
 }
 
@@ -336,6 +448,30 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     return { tagIds: tagRows.map((r) => r.id), labelIds: labelRows.map((r) => r.id) };
   };
 
+  /** Opens every chunk of a blob, in order, under its key. */
+  const readBlobBytes = async (blob: typeof blobs.$inferSelect): Promise<Uint8Array> => {
+    const chunkRows = await db
+      .select({ index: blobChunks.index, data: blobChunks.data })
+      .from(blobChunks)
+      .where(eq(blobChunks.blobId, blob.id))
+      .orderBy(asc(blobChunks.index));
+    const chunks: Uint8Array[] = [];
+    for (const [position, chunk] of chunkRows.entries()) {
+      if (chunk.index !== position) throw new RangeError(`blob ${blob.id} chunk ${position}`);
+      chunks.push(chunk.data);
+    }
+    if (chunks.length !== blob.chunkCount) {
+      throw new RangeError(`blob ${blob.id} has ${chunks.length}/${blob.chunkCount} chunks`);
+    }
+    return content.readContent({
+      workspaceId: blob.workspaceId,
+      kind: "attachment",
+      key: blob.key,
+      chunks,
+      size: blob.size,
+    });
+  };
+
   /** Records a "thread" change carrying the row's current projection. */
   const recordThread = async (executor: Db | Tx, threadId: string) => {
     const row = await requireThread(executor, threadId);
@@ -352,6 +488,8 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     storeContent: content.storeContent,
     readContent: content.readContent,
     readText: content.readText,
+    createContentKey: content.createContentKey,
+    sealChunk: content.sealChunk,
 
     async recordChange(executor, change) {
       const rows = await executor
@@ -676,6 +814,44 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       );
     },
 
+    async listMessages(threadId) {
+      await requireThread(db, threadId);
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.threadId, threadId))
+        .orderBy(asc(messages.date), asc(messages.id));
+      if (rows.length === 0) return [];
+      const attachmentRows = await db
+        .select()
+        .from(attachments)
+        .where(
+          inArray(
+            attachments.messageId,
+            rows.map((r) => r.id),
+          ),
+        )
+        .orderBy(asc(attachments.createdAt), asc(attachments.id));
+      const byMessage = new Map<string, AttachmentHeader[]>();
+      for (const a of attachmentRows) {
+        const list = byMessage.get(a.messageId) ?? [];
+        list.push(projectAttachment(a));
+        byMessage.set(a.messageId, list);
+      }
+      return rows.map((r) => projectMessage(r, byMessage.get(r.id) ?? []));
+    },
+
+    async findMessage(messageId) {
+      const row = await db.query.messages.findFirst({ where: eq(messages.id, messageId) });
+      if (!row) return null;
+      const attachmentRows = await db
+        .select()
+        .from(attachments)
+        .where(eq(attachments.messageId, messageId))
+        .orderBy(asc(attachments.createdAt), asc(attachments.id));
+      return projectMessage(row, attachmentRows.map(projectAttachment));
+    },
+
     async putAttachment(messageId, input) {
       const message = await requireMessage(db, messageId);
       const workspaceId = message.workspaceId;
@@ -694,6 +870,9 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
           chunkSize: CHUNK_BYTES,
           chunkCount: blob.chunks.length,
           key: blob.key,
+          name: input.name,
+          mediaType: input.mediaType,
+          complete: true,
         });
         await tx
           .insert(blobChunks)
@@ -708,6 +887,8 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
           blobId,
           textEnc: text?.chunks[0] ?? null,
           textKey: text?.key ?? null,
+          contentId: input.contentId ?? null,
+          inline: input.inline ?? false,
         });
         await tx.update(messages).set({ hasAttachments: true }).where(eq(messages.id, messageId));
         await tx
@@ -741,26 +922,7 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       if (!row.blobId) throw new NotFoundError("attachment", attachmentId);
       const blob = await db.query.blobs.findFirst({ where: eq(blobs.id, row.blobId) });
       if (!blob) throw new NotFoundError("attachment", attachmentId);
-      const chunkRows = await db
-        .select({ index: blobChunks.index, data: blobChunks.data })
-        .from(blobChunks)
-        .where(eq(blobChunks.blobId, blob.id))
-        .orderBy(asc(blobChunks.index));
-      const chunks: Uint8Array[] = [];
-      for (const [position, chunk] of chunkRows.entries()) {
-        if (chunk.index !== position) throw new RangeError(`blob ${blob.id} chunk ${position}`);
-        chunks.push(chunk.data);
-      }
-      if (chunks.length !== blob.chunkCount) {
-        throw new RangeError(`blob ${blob.id} has ${chunks.length}/${blob.chunkCount} chunks`);
-      }
-      const bytes = await content.readContent({
-        workspaceId: row.workspaceId,
-        kind: "attachment",
-        key: blob.key,
-        chunks,
-        size: blob.size,
-      });
+      const bytes = await readBlobBytes(blob);
       const text =
         row.textEnc && row.textKey
           ? await content.readText(
@@ -775,6 +937,127 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
         bytes,
         text,
       };
+    },
+
+    async startBlob(workspaceId, input) {
+      if (!keys.isUnlocked()) throw new LockedError();
+      const size = Math.max(0, Math.floor(input.size));
+      const chunkCount = Math.max(1, Math.ceil(size / CHUNK_BYTES));
+      const id = crypto.randomUUID();
+      const key = await content.createContentKey(workspaceId);
+      await db.insert(blobs).values({
+        id,
+        workspaceId,
+        size,
+        chunkSize: CHUNK_BYTES,
+        chunkCount,
+        key,
+        name: input.name,
+        mediaType: input.mediaType,
+        complete: false,
+      });
+      return {
+        id,
+        workspaceId,
+        name: input.name,
+        mediaType: input.mediaType,
+        size,
+        chunkSize: CHUNK_BYTES,
+        chunkCount,
+        received: 0,
+        complete: false,
+      };
+    },
+
+    async putBlobChunk(blobId, index, bytes) {
+      const blob = await db.query.blobs.findFirst({ where: eq(blobs.id, blobId) });
+      if (!blob) throw new NotFoundError("blob", blobId);
+      if (!Number.isInteger(index) || index < 0 || index >= blob.chunkCount) {
+        throw new RangeError(`blob ${blobId} has no chunk ${index}`);
+      }
+      const last = index === blob.chunkCount - 1;
+      const expected = last ? blob.size - index * blob.chunkSize : blob.chunkSize;
+      if (bytes.length !== expected) {
+        throw new RangeError(`blob ${blobId} chunk ${index} must be ${expected} bytes`);
+      }
+      const data = await content.sealChunk(
+        blob.workspaceId,
+        "attachment",
+        blob.key,
+        index,
+        last,
+        bytes,
+      );
+      return db.transaction(async (tx) => {
+        await tx
+          .insert(blobChunks)
+          .values({ blobId, index, data })
+          .onConflictDoUpdate({ target: [blobChunks.blobId, blobChunks.index], set: { data } });
+        const [agg] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(blobChunks)
+          .where(eq(blobChunks.blobId, blobId));
+        const received = agg?.count ?? 0;
+        const complete = received >= blob.chunkCount;
+        if (complete && !blob.complete) {
+          await tx.update(blobs).set({ complete: true }).where(eq(blobs.id, blobId));
+        }
+        return projectBlob({ ...blob, complete }, received);
+      });
+    },
+
+    async putBlob(workspaceId, input) {
+      const blob = await content.storeContent(workspaceId, "attachment", input.bytes);
+      const id = crypto.randomUUID();
+      await db.transaction(async (tx) => {
+        await tx.insert(blobs).values({
+          id,
+          workspaceId,
+          size: blob.size,
+          chunkSize: CHUNK_BYTES,
+          chunkCount: blob.chunks.length,
+          key: blob.key,
+          name: input.name,
+          mediaType: input.mediaType,
+          complete: true,
+        });
+        await tx
+          .insert(blobChunks)
+          .values(blob.chunks.map((data, index) => ({ blobId: id, index, data })));
+      });
+      return {
+        id,
+        workspaceId,
+        name: input.name,
+        mediaType: input.mediaType,
+        size: blob.size,
+        chunkSize: CHUNK_BYTES,
+        chunkCount: blob.chunks.length,
+        received: blob.chunks.length,
+        complete: true,
+      };
+    },
+
+    async findBlob(blobId) {
+      const blob = await db.query.blobs.findFirst({ where: eq(blobs.id, blobId) });
+      if (!blob) return null;
+      const [agg] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(blobChunks)
+        .where(eq(blobChunks.blobId, blobId));
+      return projectBlob(blob, agg?.count ?? 0);
+    },
+
+    async readBlob(blobId) {
+      const blob = await db.query.blobs.findFirst({ where: eq(blobs.id, blobId) });
+      if (!blob) throw new NotFoundError("blob", blobId);
+      if (!blob.complete) throw new RangeError(`blob ${blobId} is not complete`);
+      const bytes = await readBlobBytes(blob);
+      return { ...projectBlob(blob, blob.chunkCount), bytes };
+    },
+
+    async deleteBlob(blobId) {
+      await db.delete(blobs).where(eq(blobs.id, blobId));
     },
 
     async upsertLabel(workspaceId, label) {

@@ -398,7 +398,11 @@ describe("overlays", () => {
 
   test("Compose shows the draft, the ghost completion and the agent note", () => {
     const html = render(
-      <Compose draft={fx.draft} ghost={fx.draftGhost} note={{ text: fx.draftNote }} />,
+      <Compose
+        draft={{ ...fx.draft, kind: "reply" }}
+        ghost={fx.draftGhost}
+        note={{ text: fx.draftNote }}
+      />,
     );
     expect(html).toContain('class="compose"');
     expect(html).toContain("<h2>Reply</h2>");
@@ -408,8 +412,9 @@ describe("overlays", () => {
     expect(html).toContain('class="ghost"');
     expect(html).toContain('class="c-ai"');
     expect(html).toContain("Rewrite");
-    expect(render(<Compose draft={{ ...fx.draft, threadId: null }} />)).toContain(
-      "<h2>New message</h2>",
+    expect(render(<Compose draft={fx.draft} />)).toContain("<h2>New message</h2>");
+    expect(render(<Compose draft={{ ...fx.draft, kind: "forward" }} />)).toContain(
+      "<h2>Forward</h2>",
     );
   });
 });

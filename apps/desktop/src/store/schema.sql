@@ -111,7 +111,54 @@ create table if not exists settings (
   value text not null
 );
 
+-- Drafts are Server-owned (ADR 0010); the Cache keeps every open one with
+-- its content so compose works offline. A feed row carries headers only:
+-- when it is newer than the local row and no save is pending, content_stale
+-- marks the content for a fetch on open.
+create table if not exists drafts (
+  id text primary key,
+  thread_id text,
+  kind text not null default 'new',
+  in_reply_to_message_id text,
+  recipients text not null default '[]',
+  cc text not null default '[]',
+  bcc text not null default '[]',
+  subject text not null default '',
+  body_html text not null default '',
+  body_text text not null default '',
+  attachments text not null default '[]',
+  status text not null default 'open',
+  deleted integer not null default 0,
+  content_stale integer not null default 0,
+  updated_at text not null default '',
+  updated_by text not null default ''
+);
+create index if not exists drafts_thread_idx on drafts (thread_id);
+
+-- Scheduled sends: one row per press of Send, so the Undo bar and the
+-- Scheduled view read the same rows the feed keeps current.
+create table if not exists sends (
+  id text primary key,
+  draft_id text not null,
+  run_at text not null,
+  status text not null default 'scheduled',
+  cancelled_at text,
+  sent_at text,
+  job_id text,
+  error text,
+  created_at text not null default ''
+);
+create index if not exists sends_status_idx on sends (status, run_at);
+
+-- The reply-all choice remembered per Thread (ADR 0010).
+create table if not exists reply_prefs (
+  thread_id text primary key,
+  reply_all integer not null default 0
+);
+
 -- The Outbox: intents made locally, replayed in order (CONTEXT.md "Outbox").
+-- `thread_id` holds the entity the intent targets: a Thread id, or a Draft id
+-- for the draft.* and send.* kinds.
 create table if not exists outbox (
   seq integer primary key autoincrement,
   thread_id text not null,

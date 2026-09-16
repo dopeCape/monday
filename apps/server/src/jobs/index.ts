@@ -56,6 +56,12 @@ export interface Jobs {
   /** Requeue a job the step wants to continue, now or after a sleep. */
   requeue(id: string, owner: string, sleepMs?: number): Promise<void>;
   sweepExpiredLeases(): Promise<number>;
+  /**
+   * Removes a job that has not started. True when a queued row was removed;
+   * false when it is running, done, failed or unknown (ADR 0010: Undo works
+   * only before the send Job runs).
+   */
+  cancel(id: string): Promise<boolean>;
   registerStep<P>(cls: string, step: Step<P>): void;
   hasStep(cls: string): boolean;
   /** Run the registered step for a claimed job and record its outcome. */
@@ -207,6 +213,14 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
         .where(expired)
         .returning({ id: jobs.id });
       return failed.length + requeued.length;
+    },
+
+    async cancel(id) {
+      const removed = await db
+        .delete(jobs)
+        .where(and(eq(jobs.id, id), eq(jobs.status, "queued")))
+        .returning({ id: jobs.id });
+      return removed.length > 0;
     },
 
     registerStep(cls, step) {

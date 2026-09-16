@@ -1,37 +1,71 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
-import { workspace } from "@monday/ui/fixtures";
-import { StrictMode, useEffect, useState } from "react";
+import { account, draftGhost, draftNote, workspace } from "@monday/ui/fixtures";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { platform } from "./platform/tauri.ts";
+import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
-import { Shell } from "./shell/Shell.tsx";
-import { StoreProvider, useStore, useStoreStatus, useSyncProgress } from "./store/index.ts";
+import { Shell, useShell } from "./shell/Shell.tsx";
+import {
+  StoreProvider,
+  useContent,
+  useStore,
+  useStoreStatus,
+  useSyncProgress,
+} from "./store/index.ts";
 
-/** The app over the Store: the inbox seam, the workspace dot and the sync line. */
+/** The app over the Store: the inbox and compose seams, the workspace dot and the sync line. */
 function Root() {
   const store = useStore();
+  const content = useContent();
+  const shell = useShell();
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
   const status = useStoreStatus();
   const progress = useSyncProgress();
-  const [inbox, setInbox] = useState<StoreInbox | null>(null);
+  const [seams, setSeams] = useState<{ inbox: StoreInbox; composer: StoreComposer } | null>(null);
   useEffect(() => {
+    if (!content) return;
     let closed = false;
-    let opened: StoreInbox | null = null;
-    void createStoreInbox(store).then((i) => {
-      if (closed) i.close();
-      else {
-        opened = i;
-        setInbox(i);
+    let opened: { inbox: StoreInbox; composer: StoreComposer } | null = null;
+    void Promise.all([
+      createStoreInbox(store, {
+        content,
+        remoteImages: () => settingsRef.current["reader.load_remote_images"],
+        log: (m) => console.warn(`[reader] ${m}`),
+      }),
+      platform().then((p) =>
+        createStoreComposer(store, content, {
+          address: account.address,
+          // The browser dev server shows the design fixture's suggestion; the Agent's arrive in slice 14.
+          suggestions: p.isTauri ? undefined : { d1: { ghost: draftGhost, note: draftNote } },
+        }),
+      ),
+    ]).then(([inbox, composer]) => {
+      if (closed) {
+        inbox.close();
+        composer.close();
+      } else {
+        opened = { inbox, composer };
+        setSeams(opened);
       }
     });
     return () => {
       closed = true;
-      opened?.close();
+      opened?.inbox.close();
+      opened?.composer.close();
     };
-  }, [store]);
-  if (!inbox) return null;
+  }, [store, content]);
+  if (!seams) return null;
   return (
-    <App inbox={inbox} online={status === "online" || status === "syncing"} syncing={progress} />
+    <App
+      inbox={seams.inbox}
+      composer={seams.composer}
+      online={status === "online" || status === "syncing"}
+      syncing={progress}
+    />
   );
 }
 

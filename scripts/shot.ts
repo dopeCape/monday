@@ -29,6 +29,9 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   { name: "inbox-open", app: "/?sel=e1", mock: "/app.html?chrome=0&sel=e1" },
   // The mock has no multi-select; its equivalent is the inbox with the first row on.
   { name: "inbox-multi", app: "/?multi=e1,e2,e3", mock: "/app.html?chrome=0" },
+  // Slice 8: the reader over a real body (the fixture Cache in the dev server) and compose.
+  { name: "reader-body", app: "/?sel=e2", mock: "/app.html?chrome=0&sel=e2" },
+  { name: "compose", app: "/?compose=d1", mock: "/app.html?chrome=0&overlay=compose" },
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {

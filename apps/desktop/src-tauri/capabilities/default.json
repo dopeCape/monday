@@ -6,6 +6,11 @@
   "permissions": [
     "core:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$DOWNLOAD/**" }]
+    },
+    "fs:allow-download-write",
     "shell:allow-spawn",
     "shell:allow-kill",
     {

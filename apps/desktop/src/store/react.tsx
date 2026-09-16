@@ -16,8 +16,10 @@ import { platform } from "../platform/tauri.ts";
 import { useShell } from "../shell/Shell.tsx";
 import type { SqlParam } from "./driver.ts";
 import type { Store, StoreStatus, SyncProgress } from "./store.ts";
+import type { ContentTransport } from "./transport.ts";
 
 const StoreContext = createContext<Store | null>(null);
+const ContentContext = createContext<ContentTransport | null>(null);
 
 export interface StoreProviderProps {
   workspaceId: string;
@@ -29,6 +31,7 @@ export interface StoreProviderProps {
 export function StoreProvider({ workspaceId, children, fallback = null }: StoreProviderProps) {
   const shell = useShell();
   const [store, setStore] = useState<Store | null>(null);
+  const [content, setContent] = useState<ContentTransport | null>(null);
   const caps = useRef<Capabilities | null>(null);
 
   useEffect(() => {
@@ -37,7 +40,7 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
     void (async () => {
       const p = await platform();
       if (p.isTauri) {
-        const [{ createStore }, { tauriDriver }, { apiTransport }] = await Promise.all([
+        const [{ createStore }, { tauriDriver }, { apiContent, apiTransport }] = await Promise.all([
           import("./store.ts"),
           import("./driver.ts"),
           import("./transport.ts"),
@@ -48,12 +51,15 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
           transport: apiTransport(shell.api, () => caps.current),
           log: (m) => console.warn(`[store] ${m}`),
         });
+        if (!disposed) setContent(apiContent(shell.api));
       } else {
         const [{ createFakeStore }, { wasmDriver }] = await Promise.all([
           import("./fake.ts"),
           import("./wasm-driver.ts"),
         ]);
-        opened = (await createFakeStore({ workspaceId, driver: await wasmDriver() })).store;
+        const fake = await createFakeStore({ workspaceId, driver: await wasmDriver() });
+        opened = fake.store;
+        if (!disposed) setContent(fake.content);
       }
       if (disposed) {
         await opened.close();
@@ -86,13 +92,22 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
   }, [store, shell.sidecar, shell.api]);
 
   if (!store) return <>{fallback}</>;
-  return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={store}>
+      <ContentContext.Provider value={content}>{children}</ContentContext.Provider>
+    </StoreContext.Provider>
+  );
 }
 
 export function useStore(): Store {
   const s = useContext(StoreContext);
   if (!s) throw new Error("useStore outside StoreProvider");
   return s;
+}
+
+/** The content routes for the open Store; null until the platform is known. */
+export function useContent(): ContentTransport | null {
+  return useContext(ContentContext);
 }
 
 /**

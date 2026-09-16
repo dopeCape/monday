@@ -9,7 +9,15 @@
 // data so a ciphertext read back under the wrong kind fails the tag check.
 
 import type { ContentKind, ContentRef } from "@monday/shared";
-import { CHUNK_BYTES, open, openChunked, randomKey, seal, sealChunked } from "../crypto/aead.ts";
+import {
+  CHUNK_BYTES,
+  open,
+  openChunked,
+  randomKey,
+  seal,
+  sealChunk,
+  sealChunked,
+} from "../crypto/aead.ts";
 import type { Keys } from "../crypto/keys.ts";
 
 export const CONTENT_KINDS: readonly ContentKind[] = [
@@ -40,6 +48,21 @@ export interface ContentStore {
   readContent(ref: ContentRef): Promise<Uint8Array>;
   /** readContent for text kinds. */
   readText(ref: ContentRef): Promise<string>;
+  /**
+   * A fresh data key wrapped under the Workspace key, for content that arrives
+   * chunk by chunk (a compose upload). Pair with sealChunk; readContent opens
+   * the result like any other chunked ref.
+   */
+  createContentKey(workspaceId: string): Promise<Uint8Array>;
+  /** Seals one chunk of a chunked kind under a key from createContentKey. */
+  sealChunk(
+    workspaceId: string,
+    kind: ContentKind,
+    key: Uint8Array,
+    index: number,
+    last: boolean,
+    plaintext: Uint8Array,
+  ): Promise<Uint8Array>;
 }
 
 const encoder = new TextEncoder();
@@ -71,6 +94,16 @@ export function createContentStore(keys: Keys, chunkSize: number = CHUNK_BYTES):
 
     async readText(ref) {
       return decoder.decode(await store.readContent(ref));
+    },
+
+    async createContentKey(workspaceId) {
+      return keys.wrapKey(workspaceId, randomKey());
+    },
+
+    async sealChunk(workspaceId, kind, key, index, last, plaintext) {
+      if (kind !== "attachment") throw new RangeError(`${kind} content is not chunked`);
+      const dek = await keys.unwrapKey(workspaceId, key);
+      return sealChunk(dek, index, last, plaintext, kindAad(kind));
     },
   };
   return store;

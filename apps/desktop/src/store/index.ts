@@ -8,13 +8,24 @@ export {
   createFakeStore,
   type FakeServer,
   type FakeStore,
+  fakeContent,
   fakeTransport,
 } from "./fake.ts";
 export * from "./queries.ts";
-export { StoreProvider, useLive, useStore, useStoreStatus, useSyncProgress } from "./react.tsx";
+export {
+  StoreProvider,
+  useContent,
+  useLive,
+  useStore,
+  useStoreStatus,
+  useSyncProgress,
+} from "./react.tsx";
 export { fixtureSeed, type SeedData, seedStatements } from "./seed.ts";
 export {
+  type AnyIntent,
+  type CachedMessageHeader,
   createStore,
+  type DraftStoreIntent,
   type LiveQuery,
   type Store,
   type StoreIntent,
@@ -23,4 +34,9 @@ export {
   type SyncProgress,
   type SyncResult,
 } from "./store.ts";
-export { apiTransport, type StoreTransport } from "./transport.ts";
+export {
+  apiContent,
+  apiTransport,
+  type ContentTransport,
+  type StoreTransport,
+} from "./transport.ts";

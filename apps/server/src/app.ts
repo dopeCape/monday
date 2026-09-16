@@ -3,6 +3,7 @@
 // the process-level pieces (research 22, section 2.1).
 
 import type { DeploymentMode } from "@monday/shared";
+import { inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Auth } from "./auth/index.ts";
 import {
@@ -18,9 +19,20 @@ import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
 import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
+import { type BodyState, syncMessages } from "./db/schema.ts";
+import {
+  createDrafts,
+  DraftNotOpenError,
+  type Drafts,
+  NoRecipientsError,
+  SendTooLargeError,
+} from "./drafts/index.ts";
+import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
+import type { SyncEngine } from "./providers/sync.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
+import { draftsRoutes } from "./routes/drafts.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { pairRoutes } from "./routes/pair.ts";
 import { settingsRoutes } from "./routes/settings.ts";
@@ -36,6 +48,12 @@ export interface AppOptions {
   keys?: Keys;
   /** Defaults to a Mailstore over `db` and `keys`. Tests substitute fakes here. */
   mailstore?: Mailstore;
+  /** The Jobs table, so a send schedules its Job (ADR 0010). Absent in tests that never send. */
+  jobs?: Jobs;
+  /** The sync engine, for Provider Sessions (mirror, send) and body states. */
+  sync?: SyncEngine;
+  /** Defaults to a Drafts module over `db`, `mailstore`, `jobs` and `sync`. */
+  drafts?: Drafts;
   /**
    * The in-process wake bus for the Changes feed. The entry feeds it from a
    * LISTEN connection and shares it with the WebSocket transport; defaults to a
@@ -54,7 +72,38 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   const { db, auth, mode } = options;
   const keys = options.keys ?? createKeys(db);
   const mailstore = options.mailstore ?? createMailstore(db, keys);
+  const drafts =
+    options.drafts ??
+    (() => {
+      const created = createDrafts({
+        db,
+        mailstore,
+        ...(options.sync ? { sync: options.sync } : {}),
+      });
+      if (options.jobs) created.registerSteps(options.jobs);
+      if (options.sync) {
+        options.sync.setDraftImporter(
+          (found) => created.importProviderDraft(found).then(() => {}),
+          (workspaceId) => created.knownProviderDraftIds(workspaceId),
+        );
+      }
+      return created;
+    })();
   const bus = options.changes ?? createChangeBus();
+  const bodyStates = async (messageIds: string[]) => {
+    const out = new Map<string, BodyState>();
+    if (messageIds.length === 0) return out;
+    const rows = await db
+      .select({ messageId: syncMessages.messageId, bodyState: syncMessages.bodyState })
+      .from(syncMessages)
+      .where(inArray(syncMessages.messageId, messageIds));
+    for (const r of rows) {
+      // Several Provider copies can map to one Message; fetched wins.
+      const current = out.get(r.messageId);
+      if (current !== "fetched") out.set(r.messageId, r.bodyState);
+    }
+    return out;
+  };
   const started = Date.now();
   const uptimeMs = options.uptimeMs ?? (() => Date.now() - started);
   const isLoopback: LoopbackCheck = (c) => isLoopbackAddress(options.remoteAddress?.(c));
@@ -79,7 +128,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/settings", settingsRoutes(db));
   app.route("/devices", devicesRoutes(auth));
   app.route("/", unlockRoutes(keys));
-  app.route("/", mailRoutes(mailstore));
+  app.route("/", mailRoutes(mailstore, { bodyStates }));
+  app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
@@ -87,6 +137,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     // A locked server answers 423 for anything that needs the root key.
     if (error instanceof LockedError) return c.json({ error: "locked" }, 423);
     if (error instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+    if (error instanceof NoRecipientsError) return c.json({ error: "no_recipients" }, 400);
+    if (error instanceof DraftNotOpenError) {
+      return c.json({ error: "draft_not_open", status: error.draftStatus }, 409);
+    }
+    if (error instanceof SendTooLargeError) {
+      return c.json({ error: "too_large", size: error.size, limit: error.limit }, 413);
+    }
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

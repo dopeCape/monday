@@ -2,7 +2,20 @@
 // SQLite rows (0/1, JSON text) back into domain objects. Screens import these
 // rather than writing SQL inline, so the schema has one client.
 
-import type { Brief, Group, Message, Person, Rule, SectionRule, Tag, Thread } from "@monday/shared";
+import type {
+  Brief,
+  Draft,
+  DraftAttachment,
+  Group,
+  Message,
+  Person,
+  Rule,
+  ScheduledSend,
+  SectionRule,
+  SendError,
+  Tag,
+  Thread,
+} from "@monday/shared";
 import type { Row } from "./driver.ts";
 
 const json = <T>(value: unknown, fallback: T): T => {
@@ -152,4 +165,89 @@ export function rowToBrief(r: Row): Brief {
     computedAt: text(r.computed_at),
     stale: bool(r.stale),
   };
+}
+
+/* ------------------------------ Drafts and sends (ADR 0010) ------------------------------ */
+
+/** Every open Draft, newest first. */
+export const DRAFTS_SQL =
+  "select * from drafts where deleted = 0 and status <> 'sent' order by updated_at desc, id";
+
+export const DRAFT_BY_ID_SQL = "select * from drafts where id = ?";
+
+/** Open Drafts on one Thread, so a reply resumes where it left off. */
+export const DRAFTS_OF_THREAD_SQL =
+  "select * from drafts where thread_id = ? and deleted = 0 and status = 'open' order by updated_at desc";
+
+export function rowToDraft(r: Row, workspaceId: string): Draft {
+  const kind = text(r.kind);
+  const status = text(r.status);
+  const attachments = json<DraftAttachment[]>(r.attachments, []);
+  return {
+    id: text(r.id),
+    workspaceId,
+    threadId: nullable(r.thread_id),
+    kind: kind === "reply" || kind === "forward" ? kind : "new",
+    inReplyToMessageId: nullable(r.in_reply_to_message_id),
+    to: json<Person[]>(r.recipients, []),
+    cc: json<Person[]>(r.cc, []),
+    bcc: json<Person[]>(r.bcc, []),
+    subject: text(r.subject),
+    bodyHtml: text(r.body_html),
+    bodyText: text(r.body_text),
+    attachments,
+    attachmentBlobIds: attachments.map((a) => a.blobId),
+    status: status === "scheduled" || status === "sent" ? status : "open",
+    updatedAt: text(r.updated_at),
+    updatedBy: text(r.updated_by),
+  };
+}
+
+/** Whether a Draft's content is older than its headers and must be fetched before editing. */
+export function rowDraftStale(r: Row): boolean {
+  return bool(r.content_stale);
+}
+
+/** Sends still waiting to run, soonest first. */
+export const PENDING_SENDS_SQL =
+  "select * from sends where status = 'scheduled' order by run_at, id";
+
+export const SENDS_SQL = "select * from sends order by run_at desc, id";
+
+export const SEND_BY_ID_SQL = "select * from sends where id = ?";
+
+export function rowToSend(r: Row, workspaceId: string): ScheduledSend {
+  const status = text(r.status);
+  return {
+    id: text(r.id),
+    workspaceId,
+    draftId: text(r.draft_id),
+    runAt: text(r.run_at),
+    status:
+      status === "cancelled" || status === "sent" || status === "failed" ? status : "scheduled",
+    cancelledAt: nullable(r.cancelled_at),
+    sentAt: nullable(r.sent_at),
+    jobId: nullable(r.job_id),
+    error: json<SendError | null>(r.error, null),
+    createdAt: text(r.created_at),
+  };
+}
+
+/** The reply-all choice for one Thread, or none. */
+export const REPLY_PREF_SQL = "select reply_all from reply_prefs where thread_id = ?";
+
+/**
+ * Everyone the Cache has seen on a Thread, by most recent activity, for the
+ * recipient autocomplete. One row per address; the first name seen wins.
+ */
+export const PARTICIPANTS_SQL = `
+  select json_extract(value, '$.email') as email, json_extract(value, '$.name') as name, max(t.last_activity) as last
+  from threads t, json_each(t.participants)
+  where json_extract(value, '$.email') <> ''
+  group by lower(json_extract(value, '$.email'))
+  order by last desc
+  limit 500`;
+
+export function rowToPerson(r: Row): Person {
+  return { name: text(r.name), email: text(r.email) };
 }

@@ -10,7 +10,22 @@
 // are found with a small parser over `from` and `join`, and every write path
 // names the tables it touched.
 
-import type { Actor, Change, Id, Intent, IntentArgs, IsoDate, ThreadChange } from "@monday/shared";
+import type {
+  Actor,
+  Change,
+  Draft,
+  DraftChange,
+  DraftIntent,
+  DraftIntentArgs,
+  Id,
+  Intent,
+  IntentArgs,
+  IsoDate,
+  Message,
+  SendChange,
+  ThreadChange,
+} from "@monday/shared";
+import { isDraftIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import schemaSql from "./schema.sql?raw";
@@ -29,6 +44,28 @@ export interface LiveQuery<T> {
 
 /** An intent as a screen raises it; the Store stamps time and actor. */
 export type StoreIntent = IntentArgs & { threadId: Id; actor?: Actor; at?: IsoDate };
+/** A Draft or send intent as the compose surface raises it (ADR 0010). */
+export type DraftStoreIntent = DraftIntentArgs & { draftId: Id; actor?: Actor; at?: IsoDate };
+export type AnyIntent = Intent | DraftIntent;
+
+/** A Message header with its attachment headers, as GET /threads/:id/messages returns it. */
+export interface CachedMessageHeader {
+  id: Id;
+  threadId: Id;
+  from: Message["from"];
+  to: Message["to"];
+  cc: Message["cc"];
+  date: IsoDate;
+  hasAttachments: boolean;
+  attachments: Array<{
+    id: Id;
+    name: string;
+    size: number;
+    mediaType: string;
+    contentId?: string | null;
+    inline?: boolean;
+  }>;
+}
 
 export interface SyncResult {
   /** Outbox rows the Server accepted this round (applied or not). */
@@ -54,7 +91,16 @@ export interface Store {
   query<T = Row>(sql: string, params?: SqlParam[]): Promise<T[]>;
   live<T = Row>(sql: string, params?: SqlParam[]): LiveQuery<T>;
   /** Applies locally, appends to the Outbox, returns. The network happens in sync. */
-  intent(action: StoreIntent): Promise<void>;
+  intent(action: StoreIntent | DraftStoreIntent): Promise<void>;
+  /**
+   * Content the screens fetched through the content routes, written into the
+   * Cache so live queries pick it up: Message headers with attachments, one
+   * Message's body, a Draft's full content, the reply-all choice for a Thread.
+   */
+  cacheMessages(rows: readonly CachedMessageHeader[]): Promise<void>;
+  cacheBody(messageId: Id, body: { text: string; html: string | null }): Promise<void>;
+  cacheDraft(draft: Draft): Promise<void>;
+  setReplyAll(threadId: Id, replyAll: boolean): Promise<void>;
   /** Drains the Outbox in order, then pulls the Changes feed from the cursor. Never throws. */
   sync(): Promise<SyncResult>;
   /** Connects the wake transport and syncs on each wake, reconnecting with backoff. */
@@ -146,6 +192,78 @@ export function localStatements(intent: Intent): Statement[] {
           sql: "insert or ignore into thread_tags (thread_id, tag_id) values (?, ?)",
           params: [intent.threadId, tagId],
         })),
+      ];
+  }
+}
+
+/** The Cache statements that make a Draft or send intent visible before the Server has it. */
+export function localDraftStatements(intent: DraftIntent): Statement[] {
+  switch (intent.kind) {
+    case "draft.save": {
+      const c = intent.content;
+      return [
+        {
+          sql: `insert into drafts (id, thread_id, kind, in_reply_to_message_id, recipients, cc, bcc, subject,
+                  body_html, body_text, attachments, status, deleted, content_stale, updated_at, updated_by)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 0, 0, ?, ?)
+                on conflict (id) do update set
+                  thread_id = excluded.thread_id, kind = excluded.kind,
+                  in_reply_to_message_id = excluded.in_reply_to_message_id,
+                  recipients = excluded.recipients, cc = excluded.cc, bcc = excluded.bcc,
+                  subject = excluded.subject, body_html = excluded.body_html, body_text = excluded.body_text,
+                  attachments = excluded.attachments, status = 'open', deleted = 0, content_stale = 0,
+                  updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+          params: [
+            intent.draftId,
+            c.threadId,
+            c.kind,
+            c.inReplyToMessageId,
+            c.to,
+            c.cc,
+            c.bcc,
+            c.subject,
+            c.bodyHtml,
+            c.bodyText,
+            c.attachments,
+            intent.at,
+            intent.actor,
+          ],
+        },
+      ];
+    }
+    case "draft.delete":
+      return [
+        {
+          sql: "update drafts set deleted = 1, updated_at = ? where id = ?",
+          params: [intent.at, intent.draftId],
+        },
+      ];
+    case "send.schedule": {
+      const runAt =
+        intent.runAt ??
+        new Date(Date.parse(intent.at) + (intent.delaySeconds ?? 0) * 1000).toISOString();
+      return [
+        {
+          sql: `insert into sends (id, draft_id, run_at, status, created_at) values (?, ?, ?, 'scheduled', ?)
+                on conflict (id) do update set run_at = excluded.run_at, status = 'scheduled'`,
+          params: [intent.sendId, intent.draftId, runAt, intent.at],
+        },
+        {
+          sql: "update drafts set status = 'scheduled', updated_at = ? where id = ?",
+          params: [intent.at, intent.draftId],
+        },
+      ];
+    }
+    case "send.cancel":
+      return [
+        {
+          sql: "update sends set status = 'cancelled', cancelled_at = ? where id = ? and status = 'scheduled'",
+          params: [intent.at, intent.sendId],
+        },
+        {
+          sql: "update drafts set status = 'open', updated_at = ? where id = ?",
+          params: [intent.at, intent.draftId],
+        },
       ];
   }
 }
@@ -247,21 +365,147 @@ export function changeStatements(change: Change): Statement[] {
       return links("thread_tags", "tag_id", change.payload.threadId, change.payload.ids);
     case "thread_labels":
       return links("thread_labels", "label_id", change.payload.threadId, change.payload.ids);
+    case "draft":
+      return [draftUpsert(change.payload)];
+    case "send":
+      return [sendUpsert(change.payload)];
   }
+}
+
+/**
+ * A Draft header row from the feed: headers always, content left alone. A
+ * newer header than the local row marks the content stale so the compose
+ * surface fetches it before editing.
+ */
+function draftUpsert(d: DraftChange): Statement {
+  return {
+    sql: `insert into drafts (id, thread_id, kind, in_reply_to_message_id, recipients, cc, bcc, attachments,
+            status, deleted, content_stale, updated_at, updated_by)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          on conflict (id) do update set
+            thread_id = excluded.thread_id, kind = excluded.kind,
+            in_reply_to_message_id = excluded.in_reply_to_message_id,
+            recipients = excluded.recipients, cc = excluded.cc, bcc = excluded.bcc,
+            attachments = excluded.attachments, status = excluded.status, deleted = excluded.deleted,
+            content_stale = case when excluded.updated_at > drafts.updated_at then 1 else drafts.content_stale end,
+            updated_at = max(drafts.updated_at, excluded.updated_at), updated_by = excluded.updated_by`,
+    params: [
+      d.id,
+      d.threadId,
+      d.kind,
+      d.inReplyToMessageId,
+      d.to,
+      d.cc,
+      d.bcc,
+      d.attachments,
+      d.status,
+      d.deleted,
+      d.updatedAt,
+      d.updatedBy,
+    ],
+  };
+}
+
+function sendUpsert(sd: SendChange): Statement {
+  return {
+    sql: `insert into sends (id, draft_id, run_at, status, cancelled_at, sent_at, job_id, error, created_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict (id) do update set
+            draft_id = excluded.draft_id, run_at = excluded.run_at, status = excluded.status,
+            cancelled_at = excluded.cancelled_at, sent_at = excluded.sent_at, job_id = excluded.job_id,
+            error = excluded.error, created_at = excluded.created_at`,
+    params: [
+      sd.id,
+      sd.draftId,
+      sd.runAt,
+      sd.status,
+      sd.cancelledAt,
+      sd.sentAt,
+      sd.jobId,
+      sd.error,
+      sd.createdAt,
+    ],
+  };
+}
+
+/** The Cache statements for a Draft fetched whole from GET /drafts/:id. */
+export function cachedDraftStatements(draft: Draft): Statement[] {
+  return [
+    {
+      sql: `insert into drafts (id, thread_id, kind, in_reply_to_message_id, recipients, cc, bcc, subject,
+              body_html, body_text, attachments, status, deleted, content_stale, updated_at, updated_by)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+            on conflict (id) do update set
+              thread_id = excluded.thread_id, kind = excluded.kind,
+              in_reply_to_message_id = excluded.in_reply_to_message_id,
+              recipients = excluded.recipients, cc = excluded.cc, bcc = excluded.bcc,
+              subject = excluded.subject, body_html = excluded.body_html, body_text = excluded.body_text,
+              attachments = excluded.attachments, status = excluded.status, deleted = 0, content_stale = 0,
+              updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+      params: [
+        draft.id,
+        draft.threadId,
+        draft.kind,
+        draft.inReplyToMessageId,
+        draft.to,
+        draft.cc,
+        draft.bcc,
+        draft.subject,
+        draft.bodyHtml,
+        draft.bodyText,
+        draft.attachments,
+        draft.status,
+        draft.updatedAt,
+        draft.updatedBy,
+      ],
+    },
+  ];
+}
+
+/** The Cache statements for Message headers with their attachments; bodies untouched. */
+export function cachedMessageStatements(rows: readonly CachedMessageHeader[]): Statement[] {
+  const out: Statement[] = [];
+  for (const m of rows) {
+    out.push({
+      sql: `insert into messages (id, thread_id, sender, recipients, cc, date, has_attachments)
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict (id) do update set
+              thread_id = excluded.thread_id, sender = excluded.sender, recipients = excluded.recipients,
+              cc = excluded.cc, date = excluded.date, has_attachments = excluded.has_attachments`,
+      params: [m.id, m.threadId, m.from, m.to, m.cc, m.date, m.hasAttachments],
+    });
+    out.push({ sql: "delete from attachments where message_id = ?", params: [m.id] });
+    for (const a of m.attachments) {
+      out.push({
+        sql: "insert or replace into attachments (id, message_id, name, size, media_type, text) values (?, ?, ?, ?, ?, null)",
+        params: [a.id, m.id, a.name, a.size, a.mediaType],
+      });
+    }
+  }
+  return out;
 }
 
 interface OutboxRow {
   seq: number;
   thread_id: string;
-  kind: Intent["kind"];
+  kind: AnyIntent["kind"];
   payload: string;
   at: string;
   actor: Actor;
   attempts: number;
 }
 
-function intentOf(row: OutboxRow): Intent {
+function intentOf(row: OutboxRow): AnyIntent {
   const args = JSON.parse(row.payload) as Record<string, unknown>;
+  if (isDraftIntentKind(row.kind)) {
+    return {
+      ...args,
+      kind: row.kind,
+      draftId: row.thread_id,
+      at: row.at,
+      actor: row.actor,
+    } as DraftIntent;
+  }
   return {
     ...args,
     kind: row.kind,
@@ -269,6 +513,11 @@ function intentOf(row: OutboxRow): Intent {
     at: row.at,
     actor: row.actor,
   } as Intent;
+}
+
+/** The local effect of any Outbox row. */
+function localOf(intent: AnyIntent): Statement[] {
+  return "draftId" in intent ? localDraftStatements(intent) : localStatements(intent);
 }
 
 /* ------------------------------ The Store ------------------------------ */
@@ -346,7 +595,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   let again = false;
   let closed = false;
 
-  const pendingFor = async (threadIds: Iterable<Id>): Promise<Intent[]> => {
+  const pendingFor = async (threadIds: Iterable<Id>): Promise<AnyIntent[]> => {
     const ids = [...new Set(threadIds)];
     if (ids.length === 0) return [];
     const rows = (await driver.query(
@@ -361,10 +610,14 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     for (const c of changes) statements.push(...changeStatements(c));
     // Intents still in the Outbox are the truth for their Threads until the
     // Server has them: replay their local effect over whatever the feed said.
-    const touched = changes
-      .filter((c) => c.kind === "thread" || c.kind === "thread_tags")
-      .map((c) => (c.kind === "thread" ? c.payload.id : c.payload.threadId));
-    for (const intent of await pendingFor(touched)) statements.push(...localStatements(intent));
+    const touched = changes.flatMap((c) => {
+      if (c.kind === "thread") return [c.payload.id];
+      if (c.kind === "thread_tags") return [c.payload.threadId];
+      if (c.kind === "draft") return [c.payload.id];
+      if (c.kind === "send") return [c.payload.draftId];
+      return [];
+    });
+    for (const intent of await pendingFor(touched)) statements.push(...localOf(intent));
     statements.push({
       sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
       params: [CURSOR_KEY, String(cursor)],
@@ -379,7 +632,10 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     for (const row of rows) {
       const intent = intentOf(row);
       try {
-        const answer = await transport.intent(intent);
+        const answer =
+          "draftId" in intent
+            ? await transport.draftIntent(workspaceId, intent)
+            : await transport.intent(intent);
         if (!answer.applied) log(`intent ${row.kind} on ${row.thread_id} lost: ${answer.reason}`);
         await driver.exec("delete from outbox where seq = ?", [row.seq]);
         result.pushed += 1;
@@ -567,24 +823,60 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     },
 
     async intent(action) {
-      const { threadId, actor, at, ...args } = action;
-      const intent: Intent = {
-        ...args,
-        threadId,
-        at: at ?? now().toISOString(),
-        actor: actor ?? "user",
-      } as Intent;
-      const { kind, threadId: _t, at: _a, actor: _c, ...payload } = intent;
+      const stampAt = action.at ?? now().toISOString();
+      const stampActor = action.actor ?? "user";
+      let intent: AnyIntent;
+      let entityId: Id;
+      let payload: Record<string, unknown>;
+      if ("draftId" in action) {
+        const { draftId, actor: _c, at: _a, ...args } = action;
+        intent = { ...args, draftId, at: stampAt, actor: stampActor } as DraftIntent;
+        entityId = draftId;
+        const { kind: _k, draftId: _d, at: _x, actor: _y, ...rest } = intent;
+        payload = rest;
+      } else {
+        const { threadId, actor: _c, at: _a, ...args } = action;
+        intent = { ...args, threadId, at: stampAt, actor: stampActor } as Intent;
+        entityId = threadId;
+        const { kind: _k, threadId: _t, at: _x, actor: _y, ...rest } = intent;
+        payload = rest;
+      }
       await write([
-        ...localStatements(intent),
+        ...localOf(intent),
         {
           sql: "insert into outbox (thread_id, kind, payload, at, actor) values (?, ?, ?, ?, ?)",
-          params: [threadId, kind, payload, intent.at, intent.actor],
+          params: [entityId, intent.kind, payload, intent.at, intent.actor],
         },
       ]);
       // The row is already on screen; a subscribed Store tells the Server in the
       // background, an unsubscribed one (tests, offline by choice) waits for sync().
       if (subscribed) void sync();
+    },
+
+    async cacheMessages(rows) {
+      await write(cachedMessageStatements(rows));
+    },
+
+    async cacheBody(messageId, body) {
+      await write([
+        {
+          sql: "update messages set body_text = ?, body_html = ? where id = ?",
+          params: [body.text, body.html, messageId],
+        },
+      ]);
+    },
+
+    async cacheDraft(draft) {
+      await write(cachedDraftStatements(draft));
+    },
+
+    async setReplyAll(threadId, replyAll) {
+      await write([
+        {
+          sql: "insert into reply_prefs (thread_id, reply_all) values (?, ?) on conflict (thread_id) do update set reply_all = excluded.reply_all",
+          params: [threadId, replyAll],
+        },
+      ]);
     },
 
     sync,

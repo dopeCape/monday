@@ -5,8 +5,8 @@
 // fixtureInbox() is the in-memory implementation over packages/ui fixtures.
 // Slice 6 replaces it with the Store: same interface, the screen stays.
 
-import type { Thread } from "@monday/shared";
-import { threads as fixtureThreads } from "@monday/ui/fixtures";
+import type { Message, Thread } from "@monday/shared";
+import { threads as fixtureThreads, messagesOf } from "@monday/ui/fixtures";
 
 export type UndoToken = string;
 
@@ -33,7 +33,18 @@ export interface InboxSource {
   subscribe(listener: () => void): () => void;
 }
 
-export type Inbox = InboxActions & InboxSource;
+/** What the reader needs: a Thread's Messages, their bodies on open, attachment bytes. */
+export interface ThreadReader {
+  /** The Messages the Cache holds for a Thread, in date order. Stable between changes. */
+  messages(threadId: string): readonly Message[];
+  /** Notifies when a Thread's Messages or bodies change; opening a Thread fetches what is missing. */
+  watchMessages(threadId: string, listener: () => void): () => void;
+  /** Fetches headers, attachments and bodies into the Cache (within its rules). Never throws. */
+  openThread(threadId: string): Promise<void>;
+  attachmentBytes(attachmentId: string): Promise<{ bytes: Uint8Array; mediaType: string }>;
+}
+
+export type Inbox = InboxActions & InboxSource & ThreadReader;
 
 /* ------------------------------ Fixture implementation ------------------------------ */
 
@@ -70,7 +81,31 @@ export function fixtureInbox(seed: readonly Thread[] = fixtureThreads): Inbox {
     return Promise.resolve(token);
   };
 
+  const messageListeners = new Map<string, Set<() => void>>();
+  const messageCache = new Map<string, readonly Message[]>();
+
   return {
+    messages(threadId) {
+      let list = messageCache.get(threadId);
+      if (!list) {
+        list = messagesOf(threadId);
+        messageCache.set(threadId, list);
+      }
+      return list;
+    },
+    watchMessages(threadId, listener) {
+      const set = messageListeners.get(threadId) ?? new Set();
+      set.add(listener);
+      messageListeners.set(threadId, set);
+      return () => {
+        set.delete(listener);
+      };
+    },
+    openThread: async () => {},
+    attachmentBytes: async (attachmentId) => ({
+      bytes: new TextEncoder().encode(attachmentId),
+      mediaType: "application/octet-stream",
+    }),
     threads() {
       if (!cache) {
         cache = [...rows.values()]

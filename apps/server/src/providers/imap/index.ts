@@ -18,6 +18,7 @@ import {
   type Change,
   type ChangeTarget,
   type Credentials,
+  type DraftResult,
   type Flags,
   type HostPort,
   type Mailbox,
@@ -524,6 +525,39 @@ class ImapSession implements Session {
       }
     }
     return { messageId: null };
+  }
+
+  async putDraft(mime: Uint8Array, previousId: string | null): Promise<DraftResult> {
+    const drafts = await this.pathWithRole("drafts");
+    if (!drafts) throw new ProviderError("no Drafts folder", "unsupported");
+    if (previousId) await this.deleteDraft(previousId);
+    const appended = await this.client.append(
+      drafts,
+      Buffer.from(mime),
+      ["\\Draft", "\\Seen"],
+      new Date(),
+    );
+    if (!appended || appended.uid === undefined) {
+      throw new ProviderError("APPEND returned no uid", "protocol");
+    }
+    return { id: messageIdOf(drafts, appended.uidValidity ?? "0", appended.uid) };
+  }
+
+  async deleteDraft(id: string): Promise<void> {
+    let parsed: ReturnType<typeof parseMessageId>;
+    try {
+      parsed = parseMessageId(id);
+    } catch {
+      return;
+    }
+    const lock = await this.client.getMailboxLock(parsed.path);
+    try {
+      await this.client.messageDelete([parsed.uid], { uid: true });
+    } catch {
+      // Already gone (or the folder changed): the copy is absent either way.
+    } finally {
+      lock.release();
+    }
   }
 
   watch(mailboxIds: string[]): Watch {

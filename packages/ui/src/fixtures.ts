@@ -3,7 +3,6 @@
 // Dates are local ISO strings without an offset so relative labels ("Today",
 // "Mon") come out the same in any zone when paired with NOW.
 import type {
-  RichText,
   Account,
   Brief,
   Draft,
@@ -11,6 +10,7 @@ import type {
   Message,
   Person,
   Placement,
+  RichText,
   Run,
   SectionRule,
   Tag,
@@ -1330,7 +1330,12 @@ export const draft: Draft = {
   ].join("\n\n"),
   bodyHtml: "",
   attachmentBlobIds: [],
+  attachments: [],
+  kind: "new",
+  inReplyToMessageId: null,
+  status: "open",
   updatedAt: "2026-09-16T09:58:00",
+  updatedBy: "user",
 };
 
 export const draftGhost =

@@ -1,9 +1,11 @@
 // The reader: toolbar, title, Brief, the Messages with collapsed history
 // that expands on click, and the reply box. Toolbar actions go through
 // InboxActions via the callbacks so they get the same undo toasts as the list.
+// Bodies are the Cache's (filled on open through the content routes);
+// attachments download through the opener; links open through it too.
 
 import type { Brief as BriefData, Message as MessageData, Tag, Thread } from "@monday/shared";
-import { Brief, Btn, ColHead, Mark, Message, ReplyBox } from "@monday/ui";
+import { Brief, Btn, ColHead, Mark, Message, type MessageStrings, ReplyBox } from "@monday/ui";
 import {
   ArchiveIcon,
   ClockIcon,
@@ -13,7 +15,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Picker } from "./Picker.tsx";
 
 export interface ReaderStrings {
@@ -31,6 +33,13 @@ export interface ReaderStrings {
   message: string;
   messages: string;
   briefSource: string;
+  /** "Reply to {name}" */
+  replyTo: string;
+  send: string;
+  draftReply: string;
+  attach: string;
+  replyAll: string;
+  forward: string;
 }
 
 export interface ReaderProps {
@@ -41,8 +50,13 @@ export interface ReaderProps {
   sheet: boolean;
   now: Date;
   strings: ReaderStrings;
+  messageStrings?: Partial<MessageStrings> | undefined;
   /** Hotkeys for the toolbar titles, as the UI prints them. */
   keys: { archive: string; snooze: string; delete: string; close: string };
+  /** Quoted history starts folded (a Setting). */
+  collapseQuoted?: boolean | undefined;
+  /** The reply box, once a reply is open; the mock's textarea otherwise. */
+  reply?: ReactNode | undefined;
   onClose: () => void;
   onAsk: () => void;
   onArchive: () => void;
@@ -51,6 +65,11 @@ export interface ReaderProps {
   onDelete: () => void;
   onStar: () => void;
   onToggleRead: () => void;
+  /** The user wants to answer: focus in the reply box, R, A or F, the reply-all or forward buttons. */
+  onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
+  onOpenAttachment?: ((attachmentId: string) => void) | undefined;
+  onOpenLink?: ((href: string) => void) | undefined;
+  attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
 }
 
 export function Reader({
@@ -61,7 +80,10 @@ export function Reader({
   sheet,
   now,
   strings,
+  messageStrings,
   keys,
+  collapseQuoted,
+  reply,
   onClose,
   onAsk,
   onArchive,
@@ -70,6 +92,10 @@ export function Reader({
   onDelete,
   onStar,
   onToggleRead,
+  onReply,
+  onOpenAttachment,
+  onOpenLink,
+  attachmentSrc,
 }: ReaderProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [more, setMore] = useState(false);
@@ -79,6 +105,7 @@ export function Reader({
       ? strings.message
       : strings.messages.replace("{n}", String(thread.messageCount));
   const title = (label: string, key: string) => `${label} (${key})`;
+  const recipient = last?.from.name ?? thread.participants[0]?.name ?? "";
 
   return (
     <section className={`col reader ${sheet ? "sheet" : ""}`} data-thread={thread.id}>
@@ -147,13 +174,44 @@ export function Reader({
               message={m}
               collapsed={i < messages.length - 1 && !expanded.has(m.id)}
               onExpand={(id) => setExpanded((s) => new Set(s).add(id))}
+              onOpenAttachment={onOpenAttachment}
+              onOpenLink={onOpenLink}
+              attachmentSrc={attachmentSrc}
+              collapseQuoted={collapseQuoted}
+              loading={m.bodyText === undefined && m.bodyHtml === undefined}
+              strings={messageStrings}
               now={now}
             />
           ))}
-          <ReplyBox
-            recipient={last?.from.name ?? thread.participants[0]?.name ?? ""}
-            onDraft={onAsk}
-          />
+          {reply ?? (
+            <ReplyBox
+              recipient={recipient}
+              strings={{
+                placeholder: strings.replyTo,
+                send: strings.send,
+                draft: strings.draftReply,
+                attach: strings.attach,
+                replyAll: strings.replyAll,
+                forward: strings.forward,
+              }}
+              editor={
+                <textarea
+                  placeholder={strings.replyTo.replace(
+                    "{name}",
+                    recipient.split(/\s+/)[0] ?? recipient,
+                  )}
+                  aria-label={strings.replyTo.replace("{name}", recipient)}
+                  onFocus={() => onReply?.("reply")}
+                  readOnly
+                />
+              }
+              onSend={() => onReply?.("reply")}
+              onDraft={onAsk}
+              onAttach={() => onReply?.("reply")}
+              onReplyAll={() => onReply?.("reply", true)}
+              onForward={() => onReply?.("forward")}
+            />
+          )}
         </div>
       </div>
     </section>

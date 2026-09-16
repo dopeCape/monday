@@ -31,6 +31,7 @@ import type {
   Mailbox,
   MessageSummary,
   ProviderError,
+  RawMessage,
   Session,
   SyncEvent,
   Watch,
@@ -106,10 +107,32 @@ export interface SyncAccountOptions {
 
 export type EngineChangeTarget = { threadId: string } | { messageIds: string[] };
 
+/** A Message the Provider holds in its Drafts folder that no Server Draft mirrors. */
+export interface ProviderDraft {
+  accountId: string;
+  workspaceId: string;
+  providerId: string;
+  summary: MessageSummary;
+  raw: RawMessage;
+}
+
+export type DraftImporter = (draft: ProviderDraft) => Promise<void>;
+
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
   /** Fetches one Message's body and attachments on demand (older than the window, or opened early). */
   fetchBody(messageId: string): Promise<void>;
+  /** Runs `fn` with the Account's Session (cached, reconnected on auth or network failure). */
+  withSession<T>(accountId: string, fn: (session: Session) => Promise<T>): Promise<T>;
+  /**
+   * Registers who turns Provider drafts into Server Drafts. The engine calls it
+   * once per Draft it finds in the Drafts mailbox that `knownProviderIds` did
+   * not list; the Drafts module owns the rest (ADR 0010).
+   */
+  setDraftImporter(
+    importer: DraftImporter,
+    knownProviderIds: (workspaceId: string) => Promise<Set<string>>,
+  ): void;
   /** Applies an inbox action at the Provider and mirrors it locally. Ids are Mailstore ids. */
   applyChange(accountId: string, target: EngineChangeTarget, change: Change): Promise<void>;
   /** Starts (or confirms) the push watcher for an Account in this process. */
@@ -162,6 +185,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   const sessions = new Map<string, Promise<Session>>();
   const watchers = new Map<string, Watcher>();
   let jobsRef: Jobs | null = null;
+  let draftImporter: DraftImporter | null = null;
+  let knownDraftIds: ((workspaceId: string) => Promise<Set<string>>) | null = null;
 
   /* ------------------------------ Accounts and Sessions ------------------------------ */
 
@@ -717,12 +742,74 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         name: attachment.name,
         mediaType: attachment.mediaType,
         bytes,
+        contentId: attachment.contentId,
+        inline: attachment.inline,
       });
     }
     await db
       .update(syncMessages)
       .set({ bodyState: "fetched", updatedAt: now() })
       .where(eq(syncMessages.messageId, messageId));
+  }
+
+  /**
+   * Drafts the Provider holds that no Server Draft mirrors become Server
+   * Drafts (ADR 0010: Drafts are Server-owned). Runs after the header pass so
+   * the mirror rows are current; bodies are fetched here because the Drafts
+   * mailbox is small and a Draft is useless without its text.
+   */
+  async function importDrafts(acct: AccountRow, s: Session, map: MailboxMap): Promise<number> {
+    if (!draftImporter || !knownDraftIds) return 0;
+    const draftsBox = map.mailboxes.find((m) => m.role === "drafts");
+    if (!draftsBox) return 0;
+    const known = await knownDraftIds(acct.workspaceId);
+    const rows = await db
+      .select({ providerId: syncMessages.providerId, messageId: syncMessages.messageId })
+      .from(syncMessages)
+      .where(
+        and(
+          eq(syncMessages.workspaceId, acct.workspaceId),
+          eq(syncMessages.stale, false),
+          sql`${draftsBox.id} = any(${syncMessages.mailboxIds})`,
+        ),
+      )
+      .orderBy(desc(syncMessages.date))
+      .limit(200);
+    let imported = 0;
+    for (const row of rows) {
+      if (known.has(row.providerId)) continue;
+      const message = await db.query.messages.findFirst({ where: eq(messages.id, row.messageId) });
+      if (!message) continue;
+      const raw = await s.fetchMessage(row.providerId);
+      const summary: MessageSummary = {
+        id: row.providerId,
+        threadId: null,
+        mailboxIds: [draftsBox.id],
+        flags: { seen: true, flagged: false, answered: false, draft: true, keywords: [] },
+        from: message.from,
+        to: message.to,
+        cc: message.cc,
+        subject: raw.headers.subject ?? "",
+        date: message.date.toISOString(),
+        receivedAt: message.date.toISOString(),
+        messageId: null,
+        inReplyTo: null,
+        references: [],
+        headers: message.headers,
+        size: 0,
+        hasAttachments: raw.attachments.length > 0,
+        preview: null,
+      };
+      await draftImporter({
+        accountId: acct.id,
+        workspaceId: acct.workspaceId,
+        providerId: row.providerId,
+        summary,
+        raw,
+      });
+      imported += 1;
+    }
+    return imported;
   }
 
   /* ------------------------------ Watchers ------------------------------ */
@@ -830,6 +917,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
             const bodies = await fetchBodies(acct, s, settingsNow.bodyWindowDays, deadline, report);
             if (bodies.more) report.more = true;
           }
+          if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s, map);
           if (!report.more) {
             const fresh = await loadState(acct);
             await saveState(acct, {
@@ -858,6 +946,15 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       if (!workspace) throw new Error(`workspace ${row.workspaceId} not found`);
       const acct = await account(workspace.accountId);
       await withSession(acct, (s) => storeBody(acct, s, row.providerId, messageId));
+    },
+
+    async withSession(accountId, fn) {
+      return withSession(await account(accountId), fn);
+    },
+
+    setDraftImporter(importer, known) {
+      draftImporter = importer;
+      knownDraftIds = known;
     },
 
     async applyChange(accountId, target, change) {

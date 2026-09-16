@@ -16,7 +16,15 @@ import {
   ImageIcon,
   PaperclipIcon,
 } from "@phosphor-icons/react";
-import { type ChangeEvent, Fragment, type ReactNode } from "react";
+import {
+  type ChangeEvent,
+  Fragment,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   cx,
   firstName,
@@ -127,15 +135,127 @@ function withBreaks(text: string): ReactNode[] {
   return lines.flatMap((line, i) => (i ? [<br key={keys[i]} />, line] : [line]));
 }
 
+/** The words on the body's buttons; the app passes its Settings strings. */
+export interface MessageStrings {
+  showQuoted: string;
+  hideQuoted: string;
+  showImages: string;
+  loading: string;
+}
+
+const DEFAULT_MESSAGE_STRINGS: MessageStrings = {
+  showQuoted: "Show quoted text",
+  hideQuoted: "Hide quoted text",
+  showImages: "Show images",
+  loading: "Loading",
+};
+
 export interface MessageProps {
   message: MessageData;
   /** Folded to one line with a preview. Older messages in a Thread start this way. */
   collapsed?: boolean | undefined;
   onExpand?: ((messageId: string) => void) | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
+  /** A link in the body was clicked; the app opens it through the opener plugin. */
+  onOpenLink?: ((href: string) => void) | undefined;
+  /** Resolves an inline part (an <img src="/attachments/:id">) to a URL the webview may load. */
+  attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
+  /** Quoted history starts folded (a Setting). */
+  collapseQuoted?: boolean | undefined;
+  /** Neither text nor html has arrived yet: the body shows the loading line. */
+  loading?: boolean | undefined;
+  strings?: Partial<MessageStrings> | undefined;
   /** For the relative time. Defaults to the wall clock. */
   now?: Date | undefined;
   className?: string | undefined;
+}
+
+const QUOTED_MARK = 'class="quoted"';
+const BLOCKED_MARK = "data-blocked";
+const ATTACHMENT_SRC = /^\/attachments\/([^/?#]+)/;
+
+/** Sanitised HTML from the Server, with folded history, blocked images and intercepted links. */
+function HtmlBody({
+  html,
+  collapseQuoted,
+  strings,
+  onOpenLink,
+  attachmentSrc,
+}: {
+  html: string;
+  collapseQuoted: boolean;
+  strings: MessageStrings;
+  onOpenLink: ((href: string) => void) | undefined;
+  attachmentSrc: ((attachmentId: string) => Promise<string>) | undefined;
+}) {
+  const hasQuoted = html.includes(QUOTED_MARK);
+  const hasBlocked = html.includes(BLOCKED_MARK);
+  const [quotedOpen, setQuotedOpen] = useState(!collapseQuoted);
+  const [imagesShown, setImagesShown] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = ref.current;
+    if (!root || !imagesShown) return;
+    for (const img of root.querySelectorAll<HTMLImageElement>("img[data-src]")) {
+      const src = img.dataset.src;
+      if (src) img.src = src;
+    }
+  }, [imagesShown]);
+
+  useEffect(() => {
+    const root = ref.current;
+    if (!root || !attachmentSrc) return;
+    let cancelled = false;
+    for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
+      const raw = img.getAttribute("src") ?? "";
+      const m = raw.match(ATTACHMENT_SRC);
+      if (!m?.[1]) continue;
+      img.removeAttribute("src");
+      void attachmentSrc(decodeURIComponent(m[1])).then((url) => {
+        if (!cancelled) img.src = url;
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [attachmentSrc]);
+
+  const onClick = (e: MouseEvent<HTMLDivElement>) => {
+    const target = (e.target as HTMLElement | null)?.closest?.("a[href]");
+    if (!target) return;
+    e.preventDefault();
+    const href = target.getAttribute("href");
+    if (href) onOpenLink?.(href);
+  };
+
+  return (
+    <>
+      <div
+        ref={ref}
+        className="msg-body"
+        data-quoted={hasQuoted ? (quotedOpen ? "open" : "collapsed") : undefined}
+        onClick={onClick}
+        onKeyDown={undefined}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: the Server sanitised it (apps/server/src/mail/sanitize.ts)
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {hasQuoted || (hasBlocked && !imagesShown) ? (
+        <div className="msg-more">
+          {hasQuoted ? (
+            <Btn sm onClick={() => setQuotedOpen((o) => !o)}>
+              {quotedOpen ? strings.hideQuoted : strings.showQuoted}
+            </Btn>
+          ) : null}
+          {hasBlocked && !imagesShown ? (
+            <Btn sm onClick={() => setImagesShown(true)}>
+              {strings.showImages}
+            </Btn>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export function Message({
@@ -143,9 +263,15 @@ export function Message({
   collapsed,
   onExpand,
   onOpenAttachment,
+  onOpenLink,
+  attachmentSrc,
+  collapseQuoted = true,
+  loading,
+  strings: stringOverrides,
   now,
   className,
 }: MessageProps) {
+  const strings = { ...DEFAULT_MESSAGE_STRINGS, ...(stringOverrides ?? {}) };
   const when = formatWhen(message.date, now);
   if (collapsed) {
     return (
@@ -173,11 +299,22 @@ export function Message({
         </div>
         <span className="when">{when}</span>
       </div>
-      <div className="msg-body">
-        {paragraphs(message.bodyText).map((p) => (
-          <p key={p}>{withBreaks(p)}</p>
-        ))}
-      </div>
+      {message.bodyHtml ? (
+        <HtmlBody
+          html={message.bodyHtml}
+          collapseQuoted={collapseQuoted}
+          strings={strings}
+          onOpenLink={onOpenLink}
+          attachmentSrc={attachmentSrc}
+        />
+      ) : (
+        <div className="msg-body">
+          {loading && !message.bodyText ? <p className="faint">{strings.loading}</p> : null}
+          {paragraphs(message.bodyText).map((p) => (
+            <p key={p}>{withBreaks(p)}</p>
+          ))}
+        </div>
+      )}
       {message.attachments.length ? (
         <div className="attachments">
           {message.attachments.map((a) => (
@@ -191,6 +328,25 @@ export function Message({
 
 /* ------------------------------ ReplyBox ------------------------------ */
 
+export interface ReplyBoxStrings {
+  /** "Reply to {name}"; the first name fills {name}. */
+  placeholder: string;
+  send: string;
+  draft: string;
+  attach: string;
+  replyAll: string;
+  forward: string;
+}
+
+const DEFAULT_REPLY_STRINGS: ReplyBoxStrings = {
+  placeholder: "Reply to {name}",
+  send: "Send",
+  draft: "Draft a reply",
+  attach: "Attach",
+  replyAll: "Reply all",
+  forward: "Forward",
+};
+
 export interface ReplyBoxProps {
   /** Who the reply goes to; the placeholder uses their first name. */
   recipient: string;
@@ -202,6 +358,15 @@ export interface ReplyBoxProps {
   onAttach?: (() => void) | undefined;
   onReplyAll?: (() => void) | undefined;
   onForward?: (() => void) | undefined;
+  /** The reply-all toggle is on (ADR 0010); the button shows as pressed. */
+  replyAll?: boolean | undefined;
+  /** Replaces the textarea: the rich text editor, recipients, quoted history. */
+  editor?: ReactNode | undefined;
+  /** Rendered above the bottom row: attachments, toolbar, the forward checkbox. */
+  extra?: ReactNode | undefined;
+  /** Rendered after the send button: the saved line. */
+  status?: ReactNode | undefined;
+  strings?: Partial<ReplyBoxStrings> | undefined;
   className?: string | undefined;
 }
 
@@ -214,36 +379,46 @@ export function ReplyBox({
   onAttach,
   onReplyAll,
   onForward,
+  replyAll,
+  editor,
+  extra,
+  status,
+  strings: stringOverrides,
   className,
 }: ReplyBoxProps) {
+  const strings = { ...DEFAULT_REPLY_STRINGS, ...(stringOverrides ?? {}) };
   return (
     <div className={cx("reply", className)}>
-      <textarea
-        placeholder={`Reply to ${firstName(recipient)}`}
-        {...(onChange
-          ? {
-              value: value ?? "",
-              onChange: (e: ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value),
-            }
-          : { defaultValue: value })}
-      />
+      {editor ?? (
+        <textarea
+          placeholder={strings.placeholder.replace("{name}", firstName(recipient))}
+          {...(onChange
+            ? {
+                value: value ?? "",
+                onChange: (e: ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value),
+              }
+            : { defaultValue: value })}
+        />
+      )}
+      {extra}
       <div className="reply-bottom">
         <Btn primary onClick={onSend}>
-          Send
+          {strings.send}
         </Btn>
         {onDraft ? (
           <Btn onClick={onDraft}>
-            <Mark small /> Draft a reply
+            <Mark small /> {strings.draft}
           </Btn>
         ) : null}
+        {status}
         <span className="sp" />
-        <Btn icon title="Attach" onClick={onAttach}>
+        <Btn icon title={strings.attach} onClick={onAttach}>
           <Icon icon={PaperclipIcon} />
         </Btn>
-        <Btn icon title="Reply all" onClick={onReplyAll}>
+        <Btn icon title={strings.replyAll} on={replyAll} onClick={onReplyAll}>
           <Icon icon={ArrowBendDoubleUpLeftIcon} />
         </Btn>
-        <Btn icon title="Forward" onClick={onForward}>
+        <Btn icon title={strings.forward} onClick={onForward}>
           <Icon icon={ArrowBendUpRightIcon} />
         </Btn>
       </div>

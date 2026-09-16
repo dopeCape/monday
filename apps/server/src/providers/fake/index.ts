@@ -399,6 +399,48 @@ export function createFakeProvider(
       return { messageId: id };
     },
 
+    async putDraft(mime: Uint8Array, previousId: string | null) {
+      count("putDraft");
+      const draftsBox = mailboxOfRole("drafts");
+      if (!draftsBox) throw new ProviderError("no Drafts mailbox", "unsupported");
+      if (previousId && store.has(previousId)) {
+        const s = require(previousId);
+        store.delete(previousId);
+        record(previousId, "destroyed", s.mailboxIds);
+      }
+      const parsed = await parseMime(mime);
+      counter += 1;
+      const id = `dr${String(counter).padStart(2, "0")}`;
+      const summary = summaryOf(
+        id,
+        parsed,
+        [draftsBox],
+        { ...EMPTY_FLAGS, seen: true, draft: true },
+        new Date(),
+        mime.byteLength,
+      );
+      const raw = rawMessageOf(id, parsed);
+      store.set(id, {
+        summary: { ...summary, threadId: threads ? `draft-${id}` : null },
+        flags: summary.flags,
+        mailboxIds: [draftsBox],
+        text: raw.text,
+        html: raw.html,
+        attachments: [],
+        allHeaders: raw.headers,
+      });
+      record(id, "created", [draftsBox]);
+      return { id };
+    },
+
+    async deleteDraft(id: string) {
+      count("deleteDraft");
+      const s = store.get(id);
+      if (!s) return;
+      store.delete(id);
+      record(id, "destroyed", s.mailboxIds);
+    },
+
     watch(_mailboxIds: string[]): Watch {
       count("watch");
       if (!capabilities.push) {

@@ -8,9 +8,14 @@ import type {
   AccountCapabilities,
   Actor,
   ChangeKind,
+  DraftAttachment,
+  DraftKind,
+  DraftStatus,
   FieldWrites,
   Person,
   Provider,
+  ScheduledSendStatus,
+  SendError,
 } from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -221,7 +226,12 @@ export const messages = pgTable(
   ],
 );
 
-/** A chunked, encrypted byte sequence: attachment bytes or a compose upload. */
+/**
+ * A chunked, encrypted byte sequence: attachment bytes or a compose upload.
+ * A compose upload arrives chunk by chunk (POST /blobs, PUT /blobs/:id/chunks/:i)
+ * and is `complete` once every chunk is in; name and media type are plaintext
+ * like an attachment's (research 5).
+ */
 export const blobs = pgTable("blobs", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id")
@@ -233,6 +243,9 @@ export const blobs = pgTable("blobs", {
   chunkCount: integer("chunk_count").notNull(),
   /** The blob's data key wrapped under K_ws; every chunk is under this one key. */
   key: bytea("key").notNull(),
+  name: text("name").notNull().default(""),
+  mediaType: text("media_type").notNull().default("application/octet-stream"),
+  complete: boolean("complete").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
@@ -265,6 +278,9 @@ export const attachments = pgTable(
     blobId: text("blob_id").references(() => blobs.id, { onDelete: "set null" }),
     textEnc: bytea("text_enc"),
     textKey: bytea("text_key"),
+    /** Content-ID of an inline part, without angle brackets, so cid: images resolve. */
+    contentId: text("content_id"),
+    inline: boolean("inline").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("attachments_message_idx").on(t.messageId)],
@@ -455,3 +471,86 @@ export const activity = pgTable(
   },
   (t) => [index("activity_workspace_at_idx").on(t.workspaceId, t.at)],
 );
+
+/* ------------------------------ Drafts, sends and voice (ADR 0010) ------------------------------ */
+
+/**
+ * A Draft is Server-owned and mirrored into the Provider's Drafts folder.
+ * Subject and body are content (each its own envelope); recipients, the
+ * Thread link and the blob ids are headers. `updated_by` is the Device or
+ * actor that saved it last, for last-writer-wins between Devices.
+ */
+export const drafts = pgTable(
+  "drafts",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").references(() => threads.id, { onDelete: "set null" }),
+    kind: text("kind").$type<DraftKind>().notNull().default("new"),
+    inReplyToMessageId: text("in_reply_to_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    to: jsonb("to").$type<Person[]>().notNull().default([]),
+    cc: jsonb("cc").$type<Person[]>().notNull().default([]),
+    bcc: jsonb("bcc").$type<Person[]>().notNull().default([]),
+    subjectEnc: bytea("subject_enc").notNull(),
+    subjectKey: bytea("subject_key").notNull(),
+    /** JSON {text, html} under one envelope. */
+    bodyEnc: bytea("body_enc").notNull(),
+    bodyKey: bytea("body_key").notNull(),
+    blobIds: text("blob_ids").array().notNull().default(sql`'{}'::text[]`),
+    attachments: jsonb("attachments").$type<DraftAttachment[]>().notNull().default([]),
+    /** The Provider's id for the mirrored copy; replaced on every mirror. */
+    providerDraftId: text("provider_draft_id"),
+    /** The content hash the last mirror wrote, so an unchanged Draft is not re-appended. */
+    mirroredHash: text("mirrored_hash"),
+    status: text("status").$type<DraftStatus>().notNull().default("open"),
+    deleted: boolean("deleted").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    updatedBy: text("updated_by").notNull().default("user"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("drafts_workspace_idx").on(t.workspaceId, t.deleted, t.updatedAt),
+    index("drafts_thread_idx").on(t.threadId),
+  ],
+);
+
+/** One press of Send: the Job that will deliver, and the window in which Undo cancels it. */
+export const scheduledSends = pgTable(
+  "scheduled_sends",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    draftId: text("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    runAt: timestamp("run_at", { withTimezone: true, mode: "date" }).notNull(),
+    status: text("status").$type<ScheduledSendStatus>().notNull().default("scheduled"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true, mode: "date" }),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "date" }),
+    jobId: text("job_id"),
+    error: jsonb("error").$type<SendError | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("scheduled_sends_workspace_idx").on(t.workspaceId, t.status, t.runAt),
+    index("scheduled_sends_draft_idx").on(t.draftId),
+  ],
+);
+
+/** The Voice profile: storage and routes here; building it from sent mail is slice 11. */
+export const voiceProfiles = pgTable("voice_profiles", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  description: text("description").notNull().default(""),
+  excerpts: jsonb("excerpts").$type<string[]>().notNull().default([]),
+  builtAt: timestamp("built_at", { withTimezone: true, mode: "date" }),
+  enabled: boolean("enabled").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});

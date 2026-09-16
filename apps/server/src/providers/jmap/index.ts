@@ -9,6 +9,7 @@ import { SUMMARY_HEADERS, snippetOf, textFromHtml } from "../mime.ts";
 import {
   type Change,
   type ChangeTarget,
+  type DraftResult,
   type Flags,
   type Mailbox,
   type MailboxRole,
@@ -694,6 +695,47 @@ class JmapSession implements Session {
       );
     }
     return { messageId: imported?.created?.draft?.id ?? options.draftId ?? null };
+  }
+
+  async putDraft(mime: Uint8Array, previousId: string | null): Promise<DraftResult> {
+    const drafts = await this.mailboxWithRole("drafts");
+    if (!drafts) throw new ProviderError("no Drafts mailbox", "unsupported");
+    const blob = await this.client.upload(this.accountId, mime, "message/rfc822");
+    const calls: MethodCall[] = [
+      [
+        "Email/import",
+        {
+          accountId: this.accountId,
+          emails: {
+            draft: {
+              blobId: blob.blobId,
+              mailboxIds: { [drafts]: true },
+              keywords: { $draft: true, $seen: true },
+            },
+          },
+        },
+        "import",
+      ],
+    ];
+    if (previousId) {
+      calls.push(["Email/set", { accountId: this.accountId, destroy: [previousId] }, "destroy"]);
+    }
+    const results = await this.client.batch(calls, [CORE, MAIL]);
+    const imported = results.get("import") as {
+      created?: Record<string, { id: string }>;
+      notCreated?: Record<string, { type: string }>;
+    };
+    if (imported.notCreated?.draft) {
+      throw new ProviderError(`Email/import: ${imported.notCreated.draft.type}`, "protocol");
+    }
+    const id = imported.created?.draft?.id;
+    if (!id) throw new ProviderError("Email/import returned no id", "protocol");
+    return { id };
+  }
+
+  async deleteDraft(id: string): Promise<void> {
+    // notDestroyed (already gone) is not an error: the copy is absent either way.
+    await this.client.call("Email/set", { accountId: this.accountId, destroy: [id] });
   }
 
   watch(_mailboxIds: string[]): Watch {

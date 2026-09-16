@@ -2,7 +2,17 @@
 // the Changes feed the client reads from a cursor, and the last-writer-wins rule
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
-import type { Id, IsoDate, Person, Thread } from "./domain.ts";
+import type {
+  DraftAttachment,
+  DraftKind,
+  DraftStatus,
+  Id,
+  IsoDate,
+  Person,
+  ScheduledSendStatus,
+  SendError,
+  Thread,
+} from "./domain.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -97,6 +107,55 @@ export interface IntentResult {
   reason?: string;
 }
 
+/* ------------------------------ Draft and send intents (ADR 0010) ------------------------------ */
+
+/** What the compose surface saves: everything on a Draft the user can edit. */
+export interface DraftContent {
+  threadId: Id | null;
+  kind: DraftKind;
+  inReplyToMessageId: Id | null;
+  to: Person[];
+  cc: Person[];
+  bcc: Person[];
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  attachments: DraftAttachment[];
+}
+
+/**
+ * The Outbox intents that target a Draft rather than a Thread. "send.schedule"
+ * is "schedule a send Job", never "send": an offline Send enters the undo
+ * window when it reaches the Server. The client mints the send id so a replay
+ * is idempotent and the countdown can start before the Server answers.
+ */
+export type DraftIntentArgs =
+  | { kind: "draft.save"; content: DraftContent }
+  | { kind: "draft.delete" }
+  | { kind: "send.schedule"; sendId: Id; delaySeconds?: number; runAt?: IsoDate }
+  | { kind: "send.cancel"; sendId: Id };
+
+export type DraftIntentKind = DraftIntentArgs["kind"];
+
+export const DRAFT_INTENT_KINDS: readonly DraftIntentKind[] = [
+  "draft.save",
+  "draft.delete",
+  "send.schedule",
+  "send.cancel",
+];
+
+export type DraftIntent = DraftIntentArgs & IntentStamp & { draftId: Id };
+
+export function isDraftIntentKind(kind: string): kind is DraftIntentKind {
+  return (DRAFT_INTENT_KINDS as readonly string[]).includes(kind);
+}
+
+/** What the Server answers a send.schedule with, so the countdown follows the Server clock. */
+export interface ScheduleResult extends IntentResult {
+  sendId?: Id;
+  runAt?: IsoDate;
+}
+
 /* ------------------------------ Last-writer-wins ------------------------------ */
 
 export interface FieldWrite {
@@ -127,7 +186,15 @@ export function resolveWrite(intent: IntentStamp, last: FieldWrite | null | unde
 
 /* ------------------------------ Changes feed ------------------------------ */
 
-export type ChangeKind = "thread" | "message" | "label" | "tag" | "thread_labels" | "thread_tags";
+export type ChangeKind =
+  | "thread"
+  | "message"
+  | "label"
+  | "tag"
+  | "thread_labels"
+  | "thread_tags"
+  | "draft"
+  | "send";
 
 /** Thread headers as the feed carries them: no subject, no snippet (those are content). */
 export interface ThreadChange extends Thread {
@@ -161,13 +228,43 @@ export interface ThreadLinksChange {
   ids: Id[];
 }
 
+/** Draft headers; subject and body stay behind GET /drafts/:id. */
+export interface DraftChange {
+  id: Id;
+  threadId: Id | null;
+  kind: DraftKind;
+  inReplyToMessageId: Id | null;
+  to: Person[];
+  cc: Person[];
+  bcc: Person[];
+  attachments: DraftAttachment[];
+  status: DraftStatus;
+  updatedAt: IsoDate;
+  updatedBy: string;
+  deleted: boolean;
+}
+
+export interface SendChange {
+  id: Id;
+  draftId: Id;
+  runAt: IsoDate;
+  status: ScheduledSendStatus;
+  cancelledAt: IsoDate | null;
+  sentAt: IsoDate | null;
+  jobId: Id | null;
+  error: SendError | null;
+  createdAt: IsoDate;
+}
+
 export type ChangePayload =
   | { kind: "thread"; payload: ThreadChange }
   | { kind: "message"; payload: MessageChange }
   | { kind: "label"; payload: LabelChange }
   | { kind: "tag"; payload: TagChange }
   | { kind: "thread_labels"; payload: ThreadLinksChange }
-  | { kind: "thread_tags"; payload: ThreadLinksChange };
+  | { kind: "thread_tags"; payload: ThreadLinksChange }
+  | { kind: "draft"; payload: DraftChange }
+  | { kind: "send"; payload: SendChange };
 
 export type Change = ChangePayload & {
   seq: number;

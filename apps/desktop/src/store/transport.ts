@@ -4,8 +4,16 @@
 // follows /capabilities: WebSocket for the Sidecar and the container, SSE for
 // Vercel, a timer for polling (docs/spec/architecture.md, "Deployment modes").
 
-import type { Capabilities, ChangesPage, Id, Intent, IntentResult } from "@monday/shared";
-import type { Api } from "../platform/api.ts";
+import type {
+  Capabilities,
+  ChangesPage,
+  Draft,
+  DraftIntent,
+  Id,
+  Intent,
+  IntentResult,
+} from "@monday/shared";
+import type { Api, BodyResponse, MessageHeaderResponse } from "../platform/api.ts";
 
 export interface WakeHandlers {
   onOpen(): void;
@@ -21,7 +29,26 @@ export interface WakeConnection {
 export interface StoreTransport {
   changes(workspaceId: Id, since: number, limit: number): Promise<ChangesPage>;
   intent(intent: Intent): Promise<IntentResult>;
+  /** A Draft or send intent to its route (ADR 0010). */
+  draftIntent(workspaceId: Id, intent: DraftIntent): Promise<IntentResult>;
   connect(workspaceId: Id, handlers: WakeHandlers): WakeConnection;
+}
+
+/**
+ * The content reads the reader and the compose surface make on open: Message
+ * headers with attachments, one body, one Draft. Separate from the feed so a
+ * locked or offline Server fails these without stalling sync.
+ */
+export interface ContentTransport {
+  messages(threadId: Id): Promise<MessageHeaderResponse[]>;
+  body(messageId: Id, options?: { images?: boolean }): Promise<BodyResponse>;
+  draft(draftId: Id): Promise<Draft>;
+  attachment(attachmentId: Id): Promise<{ bytes: Uint8Array; mediaType: string }>;
+  uploadBlob(
+    workspaceId: Id,
+    file: { name: string; mediaType: string; bytes: Uint8Array },
+    onProgress?: (fraction: number) => void,
+  ): Promise<{ blobId: Id }>;
 }
 
 /** How often a polling deployment is asked for changes; a Setting once slice 7 lands. */
@@ -31,11 +58,38 @@ export function apiTransport(api: Api, capabilities: () => Capabilities | null):
   return {
     changes: (workspaceId, since, limit) => api.changes.list(workspaceId, since, limit),
     intent: (intent) => api.threads.intent(intent),
+    draftIntent: (workspaceId, intent) => api.drafts.intent(workspaceId, intent),
     connect(workspaceId, handlers) {
       const realtime = capabilities()?.realtime ?? "polling";
       if (realtime === "websocket") return connectWebSocket(api, workspaceId, handlers);
       if (realtime === "sse") return connectSse(api, workspaceId, handlers);
       return connectPolling(handlers);
+    },
+  };
+}
+
+export function apiContent(api: Api): ContentTransport {
+  return {
+    messages: async (threadId) => (await api.threads.messages(threadId)).messages,
+    body: (messageId, options) => api.messages.body(messageId, options),
+    draft: (draftId) => api.drafts.get(draftId),
+    attachment: (attachmentId) => api.attachments.bytes(attachmentId),
+    async uploadBlob(workspaceId, file, onProgress) {
+      const started = await api.blobs.start(workspaceId, {
+        name: file.name,
+        mediaType: file.mediaType,
+        size: file.bytes.length,
+      });
+      onProgress?.(0);
+      for (let i = 0; i < started.chunkCount; i++) {
+        const part = file.bytes.subarray(
+          i * started.chunkSize,
+          Math.min((i + 1) * started.chunkSize, file.bytes.length),
+        );
+        await api.blobs.chunk(started.id, i, part);
+        onProgress?.((i + 1) / started.chunkCount);
+      }
+      return { blobId: started.id };
     },
   };
 }

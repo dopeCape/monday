@@ -203,6 +203,8 @@ async function main() {
     mode,
     keys,
     mailstore,
+    jobs,
+    sync,
     changes: changeBus,
     remoteAddress: (c) => {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };

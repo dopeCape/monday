@@ -13,7 +13,7 @@ export interface FixtureAttachment {
 
 export interface FixtureMessage {
   id: string;
-  mailbox: "inbox" | "archive" | "sent" | "trash";
+  mailbox: "inbox" | "archive" | "sent" | "trash" | "drafts";
   /** The Thread the generator put it in; the expected grouping for threading tests. */
   threadKey: string;
   from: Person;
@@ -36,7 +36,7 @@ export interface FixtureMessage {
 export interface FixtureMailbox {
   id: string;
   name: string;
-  role: "inbox" | "archive" | "sent" | "trash";
+  role: "inbox" | "archive" | "sent" | "trash" | "drafts";
 }
 
 export interface Fixture {
@@ -129,6 +129,7 @@ export function generateFixture(seed = 7): Fixture {
     { id: "Archive", name: "Archive", role: "archive" },
     { id: "Sent", name: "Sent", role: "sent" },
     { id: "Trash", name: "Trash", role: "trash" },
+    { id: "Drafts", name: "Drafts", role: "drafts" },
   ];
 
   const messages: FixtureMessage[] = [];

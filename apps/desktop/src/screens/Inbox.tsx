@@ -1,7 +1,8 @@
 // The inbox screen: the stream or split list, the reader, the agent dock, and
 // every triage behavior from docs/spec/inbox.md that needs no Server. Reads
 // Threads through InboxSource and acts through InboxActions (screens/inbox/
-// actions.ts); slice 6 swaps the fixture implementation for the Store.
+// actions.ts); the Store implements both. Compose (the overlay, the inline
+// reply, the undo bar) runs through the Composer seam (screens/compose).
 
 import type { Settings } from "@monday/shared";
 import {
@@ -20,7 +21,6 @@ import {
   briefOf,
   commands,
   groups,
-  messagesOf,
   NOW,
   sections,
   suggestions,
@@ -45,7 +45,13 @@ import {
   useActiveKeymap,
   useKeymap,
 } from "../keyboard/useKeymap.ts";
+import { openExternal, saveDownload } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
+import { type Composer, fixtureComposer } from "./compose/composer.ts";
+import { ReplyCompose } from "./compose/ReplyCompose.tsx";
+import { UndoBar } from "./compose/UndoBar.tsx";
+import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { Picker } from "./inbox/Picker.tsx";
@@ -72,6 +78,8 @@ export interface SyncProgress {
 export interface InboxProps {
   /** The data seam. Defaults to the in-memory fixtures. */
   inbox?: InboxData | undefined;
+  /** The compose seam. Defaults to an in-memory one. */
+  composer?: Composer | undefined;
   /** First-sync progress for the thin line at the top, or null when not syncing. */
   syncing?: SyncProgress | null | undefined;
   /** Offline flips the agent bar's placeholder; the workspace dot is the App's. */
@@ -84,6 +92,10 @@ export interface InboxProps {
   initialSelection?: readonly string[] | undefined;
   /** For tests: the collapse and toast delays in ms override the Settings. */
   timing?: { collapse?: number; toast?: number } | undefined;
+  /** Bumped by the nav's New message; each change opens a fresh compose. */
+  composeRequest?: number | undefined;
+  /** Opens compose on mount: "new", or a Draft id. Defaults to `?compose=` in the URL. */
+  initialCompose?: string | null | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -91,6 +103,25 @@ type ToastState = { text: string; token: UndoToken | null; id: number };
 type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
 
 const defaultInbox = fixtureInbox();
+const defaultComposer = fixtureComposer();
+
+/** The Messages of the open Thread, from the reader seam, fetched on open. */
+function useThreadMessages(inbox: InboxData, threadId: string | null) {
+  const subscribe = useCallback(
+    (listener: () => void) => (threadId ? inbox.watchMessages(threadId, listener) : () => {}),
+    [inbox, threadId],
+  );
+  const get = useCallback(
+    () => (threadId ? inbox.messages(threadId) : NO_MESSAGES),
+    [inbox, threadId],
+  );
+  const messages = useSyncExternalStore(subscribe, get, get);
+  useEffect(() => {
+    if (threadId) void inbox.openThread(threadId);
+  }, [inbox, threadId]);
+  return messages;
+}
+const NO_MESSAGES: readonly never[] = [];
 
 const RUNTIME_LABEL: Record<Settings["ai.local.cli"], string> = {
   "claude-code": "Claude Code",
@@ -104,12 +135,15 @@ function isMac(): boolean {
 
 export function Inbox({
   inbox = defaultInbox,
+  composer = defaultComposer,
   syncing = null,
   online = true,
   now = NOW,
   initialOpen,
   initialSelection,
   timing,
+  composeRequest = 0,
+  initialCompose,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -182,6 +216,46 @@ export function Inbox({
 
   const thread = focus ? inbox.thread(focus) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
+  const openThreadId = showReader && thread ? thread.id : null;
+  const messages = useThreadMessages(inbox, openThreadId);
+
+  /* ------------------------------ Compose ------------------------------ */
+
+  const nowFn = useCallback(() => (now === NOW ? new Date() : now), [now]);
+  const compose = useCompose({ composer, settings, now: nowFn });
+  const cs = compose.strings;
+  const openNew = compose.openNew;
+  const openDraft = compose.openDraft;
+  const lastRequest = useRef(composeRequest);
+  useEffect(() => {
+    if (composeRequest !== lastRequest.current) {
+      lastRequest.current = composeRequest;
+      openNew();
+    }
+  }, [composeRequest, openNew]);
+  const urlCompose = useMemo(
+    () =>
+      initialCompose !== undefined
+        ? initialCompose
+        : typeof location === "undefined"
+          ? null
+          : new URLSearchParams(location.search).get("compose"),
+    [initialCompose],
+  );
+  const openedFromUrl = useRef(false);
+  useEffect(() => {
+    if (!urlCompose || openedFromUrl.current) return;
+    if (urlCompose === "reply" || urlCompose === "forward") {
+      // The inline reply needs the open Thread's Messages first.
+      if (!thread || messages.length === 0) return;
+      openedFromUrl.current = true;
+      compose.startReply(thread, messages, urlCompose);
+      return;
+    }
+    openedFromUrl.current = true;
+    if (urlCompose === "new") openNew();
+    else void openDraft(urlCompose, null);
+  }, [urlCompose, openNew, openDraft, thread, messages, compose]);
 
   /* ------------------------------ Strings ------------------------------ */
 
@@ -330,12 +404,36 @@ export function Inbox({
     queueMicrotask(() => document.querySelector<HTMLInputElement>(".agent-bar input")?.focus());
   }, []);
 
-  const focusReply = useCallback(() => {
-    setReaderOpen(true);
-    queueMicrotask(() =>
-      document.querySelector<HTMLTextAreaElement>(".reader .reply textarea")?.focus(),
-    );
-  }, []);
+  const startReply = useCallback(
+    (kind: "reply" | "forward", replyAll?: boolean) => {
+      if (!thread) return;
+      setReaderOpen(true);
+      compose.startReply(thread, inbox.messages(thread.id), kind, replyAll);
+    },
+    [thread, inbox, compose],
+  );
+
+  const openAttachment = useCallback(
+    async (attachmentId: string) => {
+      const all = messages.flatMap((m) => m.attachments);
+      const meta = all.find((a) => a.id === attachmentId);
+      try {
+        const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
+        await saveDownload(meta?.name ?? attachmentId, bytes, mediaType);
+      } catch (error) {
+        compose.onError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [messages, inbox, compose],
+  );
+
+  const attachmentSrc = useCallback(
+    async (attachmentId: string) => {
+      const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
+      return URL.createObjectURL(new Blob([bytes as BlobPart], { type: mediaType }));
+    },
+    [inbox],
+  );
 
   const applyView = useCallback(
     (n: number) => {
@@ -351,7 +449,7 @@ export function Inbox({
   /* ------------------------------ Keys ------------------------------ */
 
   const pane: Pane =
-    batch || picker || paletteOpen
+    batch || picker || paletteOpen || compose.overlay
       ? "overlay"
       : agentOpen
         ? "agent"
@@ -370,6 +468,8 @@ export function Inbox({
       if (batch) setBatch(null);
       else if (picker) setPicker(null);
       else if (paletteOpen) setPaletteOpen(false);
+      else if (compose.overlay) compose.closeOverlay();
+      else if (compose.reply) compose.closeReply();
       else if (agentOpen) {
         setAgentOpen(false);
         (document.activeElement as HTMLElement | null)?.blur?.();
@@ -386,9 +486,10 @@ export function Inbox({
       setPaletteOpen(true);
     },
     "thread.move": () => !overlay && openPicker("move", acting()),
-    "compose.reply": () => !overlay && focus && focusReply(),
-    "compose.reply_all": () => !overlay && focus && focusReply(),
-    "compose.forward": () => !overlay && focus && focusReply(),
+    "compose.new": () => !overlay && compose.openNew(),
+    "compose.reply": () => !overlay && focus && startReply("reply"),
+    "compose.reply_all": () => !overlay && focus && startReply("reply", true),
+    "compose.forward": () => !overlay && focus && startReply("forward"),
     "select.toggle": () => !overlay && focus && setSelection(toggleSelected(selection, focus)),
     "select.extend_down": () => {
       if (overlay) return;
@@ -402,7 +503,11 @@ export function Inbox({
       setSelection(r.selection);
       setFocus(r.focus);
     },
-    undo: () => !overlay && void undo(),
+    undo: () => {
+      if (overlay) return;
+      if (compose.pending) void compose.undo(openThreadId);
+      else void undo();
+    },
     "agent.focus": () => !overlay && focusAgent(),
     "palette.open": () => {
       setPaletteQuery("");
@@ -552,12 +657,60 @@ export function Inbox({
       {showReader && thread ? (
         <Reader
           thread={thread}
-          messages={messagesOf(thread.id)}
+          messages={messages}
           brief={briefOf(thread.id)}
           tags={tagsOf(thread)}
           sheet={stream}
           now={now}
+          collapseQuoted={s["reader.collapse_quoted"]}
+          messageStrings={{
+            showQuoted: t("strings.reader.show_quoted"),
+            hideQuoted: t("strings.reader.hide_quoted"),
+            showImages: t("strings.reader.show_images"),
+            loading: t("strings.reader.loading"),
+          }}
+          onReply={startReply}
+          onOpenAttachment={(id) => void openAttachment(id)}
+          onOpenLink={(href) => void openExternal(href)}
+          attachmentSrc={attachmentSrc}
+          reply={
+            compose.reply && compose.reply.threadId === thread.id ? (
+              <ReplyCompose
+                key={compose.reply.draftId}
+                composer={composer}
+                draftId={compose.reply.draftId}
+                initial={compose.reply.initial}
+                recipient={
+                  messages[messages.length - 1]?.from.name ?? thread.participants[0]?.name ?? ""
+                }
+                strings={cs}
+                idleMs={compose.idleMs}
+                replyAll={compose.reply.replyAll}
+                onReplyAll={compose.setReplyAll}
+                onForward={() => startReply("forward")}
+                originalAttachments={
+                  compose.reply.kind === "forward"
+                    ? (compose.reply.last?.attachments ?? []).map((a) => ({
+                        blobId: `att:${a.id}`,
+                        name: a.name,
+                        size: a.size,
+                        mediaType: a.mediaType,
+                      }))
+                    : []
+                }
+                onDraft={focusAgent}
+                onSent={compose.onSent}
+                onError={compose.onError}
+              />
+            ) : undefined
+          }
           strings={{
+            replyTo: t("strings.compose.reply_to"),
+            send: t("strings.compose.send"),
+            draftReply: t("strings.compose.draft_reply"),
+            attach: t("strings.compose.attach"),
+            replyAll: t("strings.compose.reply_all"),
+            forward: t("strings.compose.forward"),
             close: t("strings.inbox.action.close"),
             archive: t("strings.inbox.action.archive"),
             snooze: t("strings.inbox.action.snooze"),
@@ -614,7 +767,26 @@ export function Inbox({
         </AgentDock>
       ) : null}
 
-      {toast ? (
+      {compose.pending ? (
+        <UndoBar
+          key={compose.pending.sendId}
+          runAt={compose.pending.runAt}
+          now={nowFn}
+          strings={cs.undo}
+          undoKey={key("undo")}
+          onUndo={() => void compose.undo(openThreadId)}
+          onElapsed={compose.elapsed}
+        />
+      ) : compose.notice ? (
+        <Toast
+          key={`n${compose.notice.id}`}
+          text={compose.notice.text}
+          undoLabel={t("strings.inbox.undo")}
+          undoKey={key("undo")}
+          ms={toastMs}
+          onExpire={compose.clearNotice}
+        />
+      ) : toast ? (
         <Toast
           key={toast.id}
           text={toast.text}
@@ -623,6 +795,22 @@ export function Inbox({
           ms={toastMs}
           onUndo={toast.token ? () => void undo() : undefined}
           onExpire={() => setToast((cur) => (cur?.id === toast.id ? null : cur))}
+        />
+      ) : null}
+
+      {compose.overlay ? (
+        <ComposeOverlay
+          key={compose.overlay.draftId}
+          composer={composer}
+          draftId={compose.overlay.draftId}
+          initial={compose.overlay.initial}
+          strings={cs}
+          idleMs={compose.idleMs}
+          laterPresetsHours={compose.laterPresetsHours}
+          now={nowFn}
+          onClose={compose.closeOverlay}
+          onSent={compose.onSent}
+          onError={compose.onError}
         />
       ) : null}
 

@@ -135,6 +135,7 @@ describe("sync engine over the fake Provider", () => {
     expect(state?.tier).toBe("state");
     expect(Object.keys(state?.mailboxStates ?? {}).sort()).toEqual([
       "Archive",
+      "Drafts",
       "INBOX",
       "Sent",
       "Trash",
@@ -147,6 +148,7 @@ describe("sync engine over the fake Provider", () => {
     const rows = await labelRows(db.handle.db, workspaceId);
     expect(rows.map((r) => [r.providerId, r.role]).sort()).toEqual([
       ["Archive", "archive"],
+      ["Drafts", "drafts"],
       ["INBOX", "inbox"],
       ["Sent", "sent"],
       ["Trash", "trash"],
