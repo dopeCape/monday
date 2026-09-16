@@ -24,3 +24,4 @@ notify = "8"
 notify-debouncer-mini = "0.6"
 rand = "0.9"
 thiserror = "2"
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }

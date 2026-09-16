@@ -1,7 +1,10 @@
-// The inbox screen over fixtures. Slice 6 replaces fixtures with the Store; the
-// components and layout stay. Behaviors per docs/spec/inbox.md.
+// The inbox screen over the Store (ADR 0009): sections, rows, the reader's
+// messages and Brief are live queries against the Cache; the toolbar actions
+// are intents, applied locally before the Server hears of them so a row never
+// flickers. The agent dock still shows fixture turns until slice 14.
+// Behaviors per docs/spec/inbox.md.
 
-import type { Thread } from "@monday/shared";
+import type { SectionRule, Tag, Thread } from "@monday/shared";
 import {
   AgentBar,
   AgentDock,
@@ -16,17 +19,7 @@ import {
   ReplyBox,
   SectionLabel,
 } from "@monday/ui";
-import {
-  NOW,
-  agentThread,
-  briefOf,
-  messagesOf,
-  sections,
-  suggestions,
-  tagsOf,
-  threadsIn,
-  workspace,
-} from "@monday/ui/fixtures";
+import { agentThread, NOW, suggestions, workspace } from "@monday/ui/fixtures";
 import {
   ArchiveIcon,
   ClockIcon,
@@ -36,30 +29,79 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useShell } from "../shell/Shell.tsx";
+import {
+  BRIEF_OF_THREAD_SQL,
+  INBOX_THREADS_SQL,
+  MESSAGES_OF_THREAD_SQL,
+  rowToBrief,
+  rowToMessage,
+  rowToSection,
+  rowToTag,
+  rowToThread,
+  SECTIONS_SQL,
+  TAGS_SQL,
+  THREAD_BY_ID_SQL,
+  useLive,
+  useStore,
+} from "../store/index.ts";
+
+const NO_PARAMS: never[] = [];
+
+/** Snooze until tomorrow 08:00 local; the presets become Settings in slice 7. */
+function tomorrowMorning(now: Date): string {
+  const d = new Date(now);
+  d.setDate(d.getDate() + 1);
+  d.setHours(8, 0, 0, 0);
+  return d.toISOString();
+}
 
 export function Inbox() {
   const shell = useShell();
+  const store = useStore();
   const stream = shell.layout.list === "stream";
   const initial = new URLSearchParams(location.search).get("sel");
   const [selected, setSelected] = useState<string | null>(initial ?? (stream ? null : "e1"));
   const [readerOpen, setReaderOpen] = useState(!stream || initial !== null);
   const [agentOpen, setAgentOpen] = useState(false);
 
+  const workspaceId = store.workspaceId;
+  const mapThreads = useCallback(
+    (rows: Record<string, unknown>[]) => rows.map((r) => rowToThread(r, workspaceId)),
+    [workspaceId],
+  );
+  const mapSections = useCallback(
+    (rows: Record<string, unknown>[]) => rows.map((r) => rowToSection(r, workspaceId)),
+    [workspaceId],
+  );
+  const mapTags = useCallback(
+    (rows: Record<string, unknown>[]) => rows.map((r) => rowToTag(r, workspaceId)),
+    [workspaceId],
+  );
+  const threads = useLive(INBOX_THREADS_SQL, NO_PARAMS, mapThreads) ?? [];
+  const sections = useLive(SECTIONS_SQL, NO_PARAMS, mapSections) ?? [];
+  const tags = useLive(TAGS_SQL, NO_PARAMS, mapTags) ?? [];
+  const tagsOf = useCallback(
+    (t: Thread): Tag[] => t.tags.flatMap((id) => tags.filter((tag) => tag.id === id)),
+    [tags],
+  );
+
+  // The selected Thread stays readable after it leaves the stream (archived, snoozed).
+  const selectedParams = useMemo(() => [selected ?? ""], [selected]);
+  const selectedRows = useLive(THREAD_BY_ID_SQL, selectedParams, mapThreads);
+  const thread = selected ? (selectedRows?.[0] ?? null) : null;
+
   const open = (id: string) => {
     setSelected(id);
     setReaderOpen(true);
   };
-  const thread = selected
-    ? (threadsIn("").find((t) => t.id === selected) ?? findThread(selected))
-    : null;
   const showReader = stream ? readerOpen && thread : true;
 
   return (
     <div className={`main inbox ${stream && showReader ? "has-sheet" : ""}`}>
       <section className="col list">
-        <ColHead title="Inbox" count={14}>
+        <ColHead title="Inbox" count={threads.length}>
           {stream ? (
             <Btn>
               <FunnelSimpleIcon /> Filter
@@ -71,10 +113,10 @@ export function Inbox() {
         </ColHead>
         <div className="col-body">
           {sections
-            .filter((s) => !s.hidden)
+            .filter((s: SectionRule) => !s.hidden)
             .sort((a, b) => a.order - b.order)
             .map((s) => {
-              const items = threadsIn(s.id);
+              const items = threads.filter((t) => t.section === s.id);
               if (items.length === 0) return null;
               return (
                 <div key={s.id}>
@@ -98,9 +140,15 @@ export function Inbox() {
       {showReader && thread ? (
         <Reader
           thread={thread}
+          tags={tagsOf(thread)}
           sheet={stream}
           onClose={() => setReaderOpen(false)}
           onAsk={() => setAgentOpen(true)}
+          onArchive={() => void store.intent({ kind: "archive", threadId: thread.id })}
+          onSnooze={() =>
+            void store.intent({ kind: "snooze", threadId: thread.id, until: tomorrowMorning(NOW) })
+          }
+          onDelete={() => void store.intent({ kind: "delete", threadId: thread.id })}
         />
       ) : null}
 
@@ -125,28 +173,28 @@ export function Inbox() {
   );
 }
 
-function findThread(id: string): Thread | null {
-  for (const s of sections) {
-    const t = threadsIn(s.id).find((x) => x.id === id);
-    if (t) return t;
-  }
-  return null;
-}
-
 function Reader({
   thread,
+  tags,
   sheet,
   onClose,
   onAsk,
+  onArchive,
+  onSnooze,
+  onDelete,
 }: {
   thread: Thread;
+  tags: Tag[];
   sheet: boolean;
   onClose: () => void;
   onAsk: () => void;
+  onArchive: () => void;
+  onSnooze: () => void;
+  onDelete: () => void;
 }) {
-  const messages = messagesOf(thread.id);
-  const brief = briefOf(thread.id);
-  const tags = tagsOf(thread);
+  const params = useMemo(() => [thread.id], [thread.id]);
+  const messages = useLive(MESSAGES_OF_THREAD_SQL, params, mapMessages) ?? [];
+  const brief = useLive(BRIEF_OF_THREAD_SQL, params, mapBriefs)?.[0];
   const last = messages[messages.length - 1];
   return (
     <section className={`col reader ${sheet ? "sheet" : ""}`}>
@@ -161,16 +209,16 @@ function Reader({
                 <span className="vr" />
               </>
             ) : null}
-            <Btn icon title="Archive (E)">
+            <Btn icon title="Archive (E)" onClick={onArchive}>
               <ArchiveIcon />
             </Btn>
-            <Btn icon title="Snooze (H)">
+            <Btn icon title="Snooze (H)" onClick={onSnooze}>
               <ClockIcon />
             </Btn>
             <Btn icon title="Move">
               <FolderSimpleIcon />
             </Btn>
-            <Btn icon title="Delete (#)">
+            <Btn icon title="Delete (#)" onClick={onDelete}>
               <TrashIcon />
             </Btn>
           </>
@@ -204,3 +252,6 @@ function Reader({
     </section>
   );
 }
+
+const mapMessages = (rows: Record<string, unknown>[]) => rows.map(rowToMessage);
+const mapBriefs = (rows: Record<string, unknown>[]) => rows.map(rowToBrief);
