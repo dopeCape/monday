@@ -12,3 +12,6 @@ apps/desktop/src-tauri/gen/schemas
 .claude/skills
 .agents
 skills-lock.json
+
+# embedded Postgres for a local sidecar run
+apps/server/data

@@ -1,0 +1,253 @@
+// Jobs: the leased step runner over the jobs table (ADR 0005, research 22).
+// Every background action is an idempotent, time-budgeted row. A Server claims
+// rows whose needs it can serve, runs the registered step inside the budget,
+// and reports done, again (more work, requeue now) or a sleep.
+
+import { and, arrayContained, eq, lt, lte, sql } from "drizzle-orm";
+import type { Db } from "../db/client.ts";
+import { type JobStatus, jobs } from "../db/schema.ts";
+
+export const JOBS_CHANNEL = "monday_jobs";
+
+export interface Job<P = unknown> {
+  id: string;
+  class: string;
+  needs: string[];
+  payload: P;
+  runAt: Date;
+  leaseUntil: Date | null;
+  leaseOwner: string | null;
+  attempts: number;
+  status: JobStatus;
+  lastError: string | null;
+}
+
+export interface StepContext {
+  /** Epoch milliseconds by which the step must return. */
+  deadline: number;
+  owner: string;
+  /** Milliseconds left before the deadline. */
+  remainingMs(): number;
+}
+
+export type StepResult = "done" | "again" | { sleepMs: number };
+export type Step<P = unknown> = (job: Job<P>, ctx: StepContext) => Promise<StepResult>;
+
+export interface EnqueueOptions {
+  runAt?: Date;
+  needs?: string[];
+  /** Supply an id to make the enqueue idempotent; a duplicate is ignored. */
+  id?: string;
+}
+
+export interface JobsOptions {
+  /** Attempts before a job is marked failed. */
+  maxAttempts?: number;
+  /** Backoff after a failed attempt, given the attempt number just made. */
+  backoffMs?: (attempt: number) => number;
+  now?: () => Date;
+}
+
+export interface Jobs {
+  enqueue(cls: string, payload: unknown, options?: EnqueueOptions): Promise<string>;
+  claim(owner: string, canServe: string[], budgetMs: number): Promise<Job | null>;
+  complete(id: string, owner: string): Promise<void>;
+  fail(id: string, owner: string, error: string): Promise<void>;
+  /** Requeue a job the step wants to continue, now or after a sleep. */
+  requeue(id: string, owner: string, sleepMs?: number): Promise<void>;
+  sweepExpiredLeases(): Promise<number>;
+  registerStep<P>(cls: string, step: Step<P>): void;
+  hasStep(cls: string): boolean;
+  /** Run the registered step for a claimed job and record its outcome. */
+  run(job: Job, budgetMs: number): Promise<StepResult | "failed">;
+  get(id: string): Promise<Job | null>;
+}
+
+export class NoStepError extends Error {
+  constructor(cls: string) {
+    super(`no step registered for job class ${cls}`);
+    this.name = "NoStepError";
+  }
+}
+
+const defaultBackoff = (attempt: number) => 1000 * 2 ** attempt;
+
+export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
+  const maxAttempts = options.maxAttempts ?? 3;
+  const backoffMs = options.backoffMs ?? defaultBackoff;
+  const now = options.now ?? (() => new Date());
+  const steps = new Map<string, Step<never>>();
+
+  const toJob = (row: typeof jobs.$inferSelect): Job => ({
+    id: row.id,
+    class: row.class,
+    needs: row.needs,
+    payload: row.payload,
+    runAt: row.runAt,
+    leaseUntil: row.leaseUntil,
+    leaseOwner: row.leaseOwner,
+    attempts: row.attempts,
+    status: row.status,
+    lastError: row.lastError,
+  });
+
+  const api: Jobs = {
+    async enqueue(cls, payload, opts = {}) {
+      const id = opts.id ?? crypto.randomUUID();
+      await db
+        .insert(jobs)
+        .values({
+          id,
+          class: cls,
+          needs: opts.needs ?? [],
+          payload: payload ?? {},
+          runAt: opts.runAt ?? now(),
+        })
+        .onConflictDoNothing({ target: jobs.id });
+      await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
+      return id;
+    },
+
+    async claim(owner, canServe, budgetMs) {
+      const at = now();
+      const leaseUntil = new Date(at.getTime() + budgetMs);
+      // One row, oldest first, skipping rows another Server is claiming right now.
+      const next = db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.status, "queued"),
+            lte(jobs.runAt, at),
+            canServe.length > 0
+              ? arrayContained(jobs.needs, canServe)
+              : sql`cardinality(${jobs.needs}) = 0`,
+          ),
+        )
+        .orderBy(jobs.runAt, jobs.createdAt)
+        .limit(1)
+        .for("update", { skipLocked: true });
+      const rows = await db
+        .update(jobs)
+        .set({
+          status: "running",
+          leaseOwner: owner,
+          leaseUntil,
+          attempts: sql`${jobs.attempts} + 1`,
+        })
+        .where(eq(jobs.id, next))
+        .returning();
+      const row = rows[0];
+      return row ? toJob(row) : null;
+    },
+
+    async complete(id, owner) {
+      await db
+        .update(jobs)
+        .set({ status: "done", leaseOwner: null, leaseUntil: null, lastError: null, attempts: 0 })
+        .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")));
+    },
+
+    async fail(id, owner, error) {
+      const current = await api.get(id);
+      if (!current || current.leaseOwner !== owner || current.status !== "running") return;
+      const exhausted = current.attempts >= maxAttempts;
+      await db
+        .update(jobs)
+        .set(
+          exhausted
+            ? { status: "failed", leaseOwner: null, leaseUntil: null, lastError: error }
+            : {
+                status: "queued",
+                leaseOwner: null,
+                leaseUntil: null,
+                lastError: error,
+                runAt: new Date(now().getTime() + backoffMs(current.attempts)),
+              },
+        )
+        .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner)));
+    },
+
+    async requeue(id, owner, sleepMs = 0) {
+      await db
+        .update(jobs)
+        .set({
+          status: "queued",
+          leaseOwner: null,
+          leaseUntil: null,
+          attempts: 0,
+          runAt: new Date(now().getTime() + Math.max(0, sleepMs)),
+        })
+        .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")));
+      if (sleepMs <= 0) await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
+    },
+
+    async sweepExpiredLeases() {
+      const at = now();
+      const expired = and(eq(jobs.status, "running"), lt(jobs.leaseUntil, at));
+      const failed = await db
+        .update(jobs)
+        .set({
+          status: "failed",
+          leaseOwner: null,
+          leaseUntil: null,
+          lastError: "lease expired",
+        })
+        .where(and(expired, sql`${jobs.attempts} >= ${maxAttempts}`))
+        .returning({ id: jobs.id });
+      const requeued = await db
+        .update(jobs)
+        .set({
+          status: "queued",
+          leaseOwner: null,
+          leaseUntil: null,
+          lastError: "lease expired",
+          runAt: at,
+        })
+        .where(expired)
+        .returning({ id: jobs.id });
+      return failed.length + requeued.length;
+    },
+
+    registerStep(cls, step) {
+      steps.set(cls, step as Step<never>);
+    },
+
+    hasStep(cls) {
+      return steps.has(cls);
+    },
+
+    async run(job, budgetMs) {
+      const step = steps.get(job.class) as Step | undefined;
+      const owner = job.leaseOwner ?? "";
+      if (!step) {
+        await api.fail(job.id, owner, new NoStepError(job.class).message);
+        return "failed";
+      }
+      const deadline = now().getTime() + budgetMs;
+      const ctx: StepContext = {
+        deadline,
+        owner,
+        remainingMs: () => Math.max(0, deadline - now().getTime()),
+      };
+      let result: StepResult;
+      try {
+        result = await step(job, ctx);
+      } catch (error) {
+        await api.fail(job.id, owner, error instanceof Error ? error.message : String(error));
+        return "failed";
+      }
+      if (result === "done") await api.complete(job.id, owner);
+      else if (result === "again") await api.requeue(job.id, owner, 0);
+      else await api.requeue(job.id, owner, result.sleepMs);
+      return result;
+    },
+
+    async get(id) {
+      const row = await db.query.jobs.findFirst({ where: eq(jobs.id, id) });
+      return row ? toJob(row) : null;
+    },
+  };
+
+  return api;
+}

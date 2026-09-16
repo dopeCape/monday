@@ -1,0 +1,4 @@
+[test]
+# The server tests start one embedded Postgres per run; this preload stops it
+# when the run ends. It costs nothing for runs that never touch the database.
+preload = ["./apps/server/test/preload.ts"]

@@ -1,0 +1,3 @@
+[test]
+# Starts one embedded Postgres for the whole run and stops it afterwards.
+preload = ["./test/preload.ts"]

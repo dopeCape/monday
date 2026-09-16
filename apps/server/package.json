@@ -7,8 +7,20 @@
     "dev": "bun --watch entry/bun.ts",
     "start": "bun entry/bun.ts",
     "typecheck": "tsc --noEmit -p .",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
     "compile": "bun build --compile entry/bun.ts --outfile dist/monday-server"
   },
-  "dependencies": { "hono": "^4.7.0", "@monday/shared": "workspace:*" },
-  "devDependencies": { "bun-types": "latest" }
+  "dependencies": {
+    "@monday/shared": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "embedded-postgres": "18.4.0-beta.17",
+    "hono": "^4.7.0",
+    "postgres": "^3.4.9",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "drizzle-kit": "^0.31.10"
+  }
 }
