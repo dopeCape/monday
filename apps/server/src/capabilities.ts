@@ -17,7 +17,7 @@ export function isDeploymentMode(value: unknown): value is DeploymentMode {
   return typeof value === "string" && (DEPLOYMENT_MODES as readonly string[]).includes(value);
 }
 
-const TABLE: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode">> = {
+const TABLE: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "unlocked">> = {
   sidecar: { realtime: "websocket", holdsConnections: true, publicUrl: false, localRuntimes: true },
   container: {
     realtime: "websocket",
@@ -29,8 +29,9 @@ const TABLE: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode">> = {
   netlify: { realtime: "polling", holdsConnections: false, publicUrl: true, localRuntimes: false },
 };
 
-export function capabilitiesFor(mode: DeploymentMode): Capabilities {
-  return { protocol: PROTOCOL_VERSION, mode, ...TABLE[mode] };
+/** `unlocked` is process state, not a mode property: whether K_root is in memory right now. */
+export function capabilitiesFor(mode: DeploymentMode, unlocked: boolean): Capabilities {
+  return { protocol: PROTOCOL_VERSION, mode, ...TABLE[mode], unlocked };
 }
 
 /** The need tags a Server in this mode can serve on its own (ADR 0005). */

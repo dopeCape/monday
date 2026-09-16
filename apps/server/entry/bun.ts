@@ -13,18 +13,26 @@
 //   MONDAY_PARENT_PID     exit when this process is gone (research 4, section 2)
 //   DATABASE_URL          pooled connection string; DATABASE_URL_UNPOOLED for LISTEN
 //   MONDAY_SERVER_ID      heartbeat id; generated if unset
+//   MONDAY_ROOT_KEY       base64 root key from the Tauri parent's keychain (Sidecar); unlocks at boot
+//   MONDAY_ROOT_KEY_FILE  path to a file holding the base64 root key, typically
+//                         $CREDENTIALS_DIRECTORY/monday-root-key under systemd (Cloud); unlocks at boot
+//   MONDAY_FEATURE_PASSPHRASE=1 with MONDAY_ROOT_PASSPHRASE and MONDAY_ROOT_SALT (base64, 16+ bytes)
+//                         derives the root key with Argon2id instead. Off by default.
+//   With none of these the server starts locked: headers only until POST /unlock.
 
 import type { DeploymentMode } from "@monday/shared";
 import { createApp } from "../src/app.ts";
 import { createAuth, randomCode } from "../src/auth/index.ts";
 import { isDeploymentMode, needsServedBy } from "../src/capabilities.ts";
+import { createKeys, decodeKey, type Keys, WrongRootKeyError } from "../src/crypto/keys.ts";
+import { deriveRootFromPassphrase, passphraseFeatureEnabled } from "../src/crypto/passphrase.ts";
 import { createDb } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
 import { cloudIsAlive } from "../src/heartbeat.ts";
 import { createJobs } from "../src/jobs/index.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
-import { migrationsFolder } from "./resources.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
+import { migrationsFolder } from "./resources.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
 const debug = process.env.MONDAY_LOG === "debug" ? log : () => {};
@@ -37,6 +45,64 @@ function resolveMode(): DeploymentMode {
     process.exit(2);
   }
   return raw;
+}
+
+/** Reads the root key the host provides, if any. Order: env, file, passphrase feature. */
+async function rootKeyFromHost(): Promise<{ key: Uint8Array; source: string } | null> {
+  const fromEnv = process.env.MONDAY_ROOT_KEY;
+  if (fromEnv) {
+    const key = decodeKey(fromEnv);
+    if (!key) throw new Error("MONDAY_ROOT_KEY is not base64");
+    return { key, source: "MONDAY_ROOT_KEY" };
+  }
+  const file = process.env.MONDAY_ROOT_KEY_FILE;
+  if (file) {
+    const text = await Bun.file(file)
+      .text()
+      .catch(() => null);
+    if (text === null) {
+      log(`MONDAY_ROOT_KEY_FILE ${file} is not readable; starting locked`);
+      return null;
+    }
+    // A recovery file has a sentence on the first line; the key is the last non-empty line.
+    const line = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .at(-1);
+    const key = line ? decodeKey(line) : null;
+    if (!key) throw new Error(`MONDAY_ROOT_KEY_FILE ${file} holds no base64 key`);
+    return { key, source: "MONDAY_ROOT_KEY_FILE" };
+  }
+  if (passphraseFeatureEnabled(process.env)) {
+    const passphrase = process.env.MONDAY_ROOT_PASSPHRASE;
+    const salt = process.env.MONDAY_ROOT_SALT ? decodeKey(process.env.MONDAY_ROOT_SALT) : null;
+    if (passphrase && salt) {
+      return { key: await deriveRootFromPassphrase(passphrase, salt), source: "passphrase" };
+    }
+    if (passphrase || salt) {
+      log("passphrase unlock needs both MONDAY_ROOT_PASSPHRASE and MONDAY_ROOT_SALT");
+    }
+  }
+  return null;
+}
+
+async function unlockAtBoot(keys: Keys): Promise<void> {
+  const provided = await rootKeyFromHost();
+  if (!provided) {
+    log("no root key provided; starting locked (headers only until POST /unlock)");
+    return;
+  }
+  try {
+    await keys.unlock(provided.key);
+    log(`unlocked at boot from ${provided.source}`);
+  } catch (error) {
+    if (error instanceof WrongRootKeyError) {
+      log(`the root key from ${provided.source} does not open this database; starting locked`);
+      return;
+    }
+    throw error;
+  }
 }
 
 async function main() {
@@ -82,6 +148,9 @@ async function main() {
   const auth = createAuth({ db: handle.db, sidecarToken, setupCode });
   if (setupCode && firstBoot) log(`setup code for the first device: ${setupCode}`);
 
+  const keys = createKeys(handle.db);
+  await unlockAtBoot(keys);
+
   const jobs = createJobs(handle.db);
   const ownNeeds = needsServedBy(mode);
   const kicker = createProcessKicker({
@@ -104,6 +173,7 @@ async function main() {
     db: handle.db,
     auth,
     mode,
+    keys,
     remoteAddress: (c) => {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };
       return server?.requestIP?.(c.req.raw)?.address ?? null;
