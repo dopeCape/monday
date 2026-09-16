@@ -23,6 +23,8 @@ export interface Platform {
   secretDelete(key: string): Promise<void>;
   sidecarInfo(): Promise<SidecarInfo>;
   onSidecarReady(cb: (info: SidecarInfo) => void): () => void;
+  /** Opens a URL in the system browser (the OAuth wizards, deep links into consoles). */
+  openExternal(url: string): Promise<void>;
   isTauri: boolean;
 }
 
@@ -33,6 +35,7 @@ function inTauri(): boolean {
 async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
   const sub = <T>(name: string, cb: (p: T) => void) => {
     let un: (() => void) | undefined;
     let cancelled = false;
@@ -55,6 +58,7 @@ async function tauriPlatform(): Promise<Platform> {
     secretDelete: (key) => invoke("secret_delete", { key }),
     sidecarInfo: () => invoke<SidecarInfo>("sidecar_info"),
     onSidecarReady: (cb) => sub<SidecarInfo>("sidecar:ready", cb),
+    openExternal: (url) => openUrl(url),
   };
 }
 
@@ -88,6 +92,9 @@ export function fakePlatform(initialConfig = ""): Platform {
     },
     sidecarInfo: async () => ({ port: 0, token: "", running: false }),
     onSidecarReady: () => () => {},
+    openExternal: async (url) => {
+      if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
+    },
   };
 }
 

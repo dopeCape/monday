@@ -8,7 +8,8 @@
     "./tokens.css": "./src/tokens.css",
     "./app.css": "./src/app.css",
     "./palettes": "./src/palettes.ts",
-    "./fixtures": "./src/fixtures.ts"
+    "./fixtures": "./src/fixtures.ts",
+    "./test-dom": "./src/test-dom.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p ."

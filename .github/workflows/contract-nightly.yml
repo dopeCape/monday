@@ -31,5 +31,14 @@ jobs:
           TEST_IMAP_ADDRESS: ${{ secrets.TEST_IMAP_ADDRESS }}
           TEST_SMTP_HOST: ${{ secrets.TEST_SMTP_HOST }}
           TEST_SMTP_PORT: ${{ secrets.TEST_SMTP_PORT }}
+          TEST_GMAIL_CLIENT_ID: ${{ secrets.TEST_GMAIL_CLIENT_ID }}
+          TEST_GMAIL_CLIENT_SECRET: ${{ secrets.TEST_GMAIL_CLIENT_SECRET }}
+          TEST_GMAIL_REFRESH_TOKEN: ${{ secrets.TEST_GMAIL_REFRESH_TOKEN }}
+          TEST_GMAIL_ADDRESS: ${{ secrets.TEST_GMAIL_ADDRESS }}
+          TEST_GMAIL_PUBSUB_TOPIC: ${{ secrets.TEST_GMAIL_PUBSUB_TOPIC }}
+          TEST_GRAPH_CLIENT_ID: ${{ secrets.TEST_GRAPH_CLIENT_ID }}
+          TEST_GRAPH_TENANT: ${{ secrets.TEST_GRAPH_TENANT }}
+          TEST_GRAPH_REFRESH_TOKEN: ${{ secrets.TEST_GRAPH_REFRESH_TOKEN }}
+          TEST_GRAPH_ADDRESS: ${{ secrets.TEST_GRAPH_ADDRESS }}
           TEST_CONTRACT_SEND: ${{ vars.TEST_CONTRACT_SEND }}
         run: bun test apps/server/test/contract

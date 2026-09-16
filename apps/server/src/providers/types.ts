@@ -24,14 +24,29 @@ export type Auth =
   | { kind: "password"; user: string; password: string }
   /** A bearer API token (Fastmail). */
   | { kind: "token"; token: string }
-  | {
-      kind: "oauth";
-      user: string;
-      issuer: "google" | "microsoft" | string;
-      accessToken: string;
-      refreshToken?: string;
-      expiresAt?: IsoDate;
-    };
+  | OAuthAuth;
+
+/**
+ * OAuth credentials: the tokens plus the self-hoster's own client registration
+ * (ADR 0008: no shared client id ships with monday), which every refresh needs.
+ */
+export interface OAuthAuth {
+  kind: "oauth";
+  user: string;
+  issuer: "google" | "microsoft" | string;
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: IsoDate;
+  client?: OAuthClient;
+}
+
+export interface OAuthClient {
+  id: string;
+  /** Google Desktop clients carry one; Entra public clients must not. */
+  secret?: string;
+  /** Entra only: a tenant id, "organizations", "consumers" or "common". */
+  tenant?: string;
+}
 
 export type Tls = "tls" | "starttls" | "none";
 
@@ -41,10 +56,12 @@ export interface HostPort {
   tls: Tls;
 }
 
-/** Where the Provider lives. Absent for adapters with a fixed endpoint (Gmail, Graph, fake). */
+/** Where the Provider lives. "none" for adapters with a fixed endpoint (Graph, fake). */
 export type Endpoint =
   | { kind: "jmap"; sessionUrl: string }
   | { kind: "imap"; imap: HostPort; smtp: HostPort }
+  /** Gmail: the Pub/Sub topic `users.watch` publishes to, or null for polling only. */
+  | { kind: "gmail"; pubsubTopic: string | null }
   | { kind: "none" };
 
 export interface Credentials {

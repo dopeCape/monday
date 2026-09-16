@@ -108,6 +108,10 @@ export type EngineChangeTarget = { threadId: string } | { messageIds: string[] }
 
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
+  /** The cached Session for an Account, connecting when needed (push Jobs use adapter extras). */
+  session(accountId: string): Promise<Session>;
+  /** Enqueues one sync for an Account, debounced like a push event. Webhooks call this. */
+  wake(accountId: string, mailboxIds?: string[]): Promise<void>;
   /** Fetches one Message's body and attachments on demand (older than the window, or opened early). */
   fetchBody(messageId: string): Promise<void>;
   /** Applies an inbox action at the Provider and mirrors it locally. Ids are Mailstore ids. */
@@ -787,6 +791,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   /* ------------------------------ The engine ------------------------------ */
 
   const engine: SyncEngine = {
+    async session(accountId) {
+      return session(await account(accountId));
+    },
+
+    async wake(accountId, mailboxIds) {
+      await enqueueSync(accountId, mailboxIds);
+    },
+
     async syncAccount(accountId, opts = {}) {
       const acct = await account(accountId);
       const report: SyncReport = {

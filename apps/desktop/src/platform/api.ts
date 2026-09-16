@@ -2,7 +2,15 @@
 // loopback when it runs, the Cloud URL otherwise. Typed routes arrive with the generated
 // client in packages/shared; until then this is the minimal fetch wrapper.
 
-import type { Capabilities, ChangesPage, Id, Intent, IntentResult } from "@monday/shared";
+import type {
+  AccountCapabilities,
+  Capabilities,
+  ChangesPage,
+  Id,
+  Intent,
+  IntentResult,
+  Provider,
+} from "@monday/shared";
 
 export interface ServerTarget {
   baseUrl: string;
@@ -99,7 +107,110 @@ export function createApi(target: () => ServerTarget | null) {
           body: JSON.stringify({ value, scope }),
         }),
     },
+    accounts: {
+      list: () => request<{ accounts: AccountView[] }>("/accounts"),
+      /** The autoconfig ladder for an address: found, needs-oauth or manual. */
+      discover: (address: string) =>
+        request<Discovery>("/accounts/discover", {
+          method: "POST",
+          body: JSON.stringify({ address }),
+        }),
+      add: (body: AddAccountBody) =>
+        request<{ account: AccountView }>("/accounts", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      remove: (id: string) =>
+        request<unknown>(`/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    },
+    oauth: {
+      /** The live check the wizard runs on every paste. */
+      validate: (provider: OAuthProvider, params: Record<string, string>) =>
+        request<ValidationResult>(
+          `/oauth/${provider}/validate?${new URLSearchParams(params).toString()}`,
+        ),
+      start: (provider: OAuthProvider, body: OAuthStartBody) =>
+        request<{ state: string; url: string; redirectUri: string }>(`/oauth/${provider}/start`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      /** Long-polls until the loopback listener has finished the sign-in. */
+      status: (provider: OAuthProvider, state: string) =>
+        request<OAuthStatus>(`/oauth/${provider}/status?${new URLSearchParams({ state })}`),
+      finish: (provider: OAuthProvider, state: string, code: string) =>
+        request<{ account: AccountView }>(`/oauth/${provider}/finish`, {
+          method: "POST",
+          body: JSON.stringify({ state, code }),
+        }),
+    },
   };
 }
+
+/* ------------------------------ Accounts and OAuth shapes ------------------------------ */
+
+export type OAuthProvider = "google" | "microsoft";
+
+export interface AccountView {
+  id: Id;
+  workspaceId: Id;
+  provider: Provider;
+  address: string;
+  displayName: string;
+  capabilities: AccountCapabilities;
+  connected: boolean;
+  lastSync: string | null;
+  lastError: string | null;
+}
+
+export interface HostPort {
+  host: string;
+  port: number;
+  tls: "tls" | "starttls" | "none";
+}
+
+export type Discovery =
+  | {
+      kind: "found";
+      source: string;
+      imap: HostPort;
+      smtp: HostPort;
+      username: string;
+      needsOAuth: OAuthProvider | null;
+    }
+  | { kind: "needs-oauth"; issuer: OAuthProvider; imap: HostPort | null; smtp: HostPort | null }
+  | { kind: "manual"; tried: string[] };
+
+export type AddAccountBody =
+  | {
+      provider: "jmap";
+      address: string;
+      auth: { kind: "token"; token: string };
+      endpoint: { kind: "jmap"; sessionUrl: string };
+    }
+  | {
+      provider: "imap";
+      address: string;
+      auth: { kind: "password"; user: string; password: string };
+      endpoint: { kind: "imap"; imap: HostPort; smtp: HostPort };
+    };
+
+export type ValidationField = "clientId" | "clientSecret" | "tenant" | "network";
+
+export type ValidationResult =
+  | { ok: true; detail: string }
+  | { ok: false; field: ValidationField; reason: string };
+
+export interface OAuthStartBody {
+  clientId: string;
+  clientSecret?: string;
+  tenant?: string;
+  path?: "api" | "imap";
+  pubsubTopic?: string | null;
+}
+
+export type OAuthStatus =
+  | { status: "pending" }
+  | { status: "done"; account: AccountView }
+  | { status: "error"; message: string };
 
 export type Api = ReturnType<typeof createApi>;

@@ -3,10 +3,10 @@
 // file registers happy-dom and renders through react-dom/client.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { PRESETS } from "@monday/shared";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
+import { dom } from "./test-dom.ts";
 import {
   applyThemeAttributes,
   presetName,
@@ -16,9 +16,9 @@ import {
   themeAttributes,
 } from "./theme.tsx";
 
-beforeAll(() => {
-  if (typeof document === "undefined") GlobalRegistrator.register();
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
+beforeAll(async () => {
+  ({ createRoot } = await dom());
 });
 
 let root: Root | null = null;

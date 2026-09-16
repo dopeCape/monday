@@ -22,6 +22,9 @@ export const PUBLIC_PATHS: readonly string[] = [
   "/pair/claim",
 ];
 
+/** Path prefixes reachable without a token: provider webhooks, verified by their own secrets. */
+export const PUBLIC_PREFIXES: readonly string[] = ["/webhooks/"];
+
 export function isLoopbackAddress(address: string | null | undefined): boolean {
   if (!address) return false;
   const a = address.replace(/^\[|\]$/g, "").toLowerCase();
@@ -49,9 +52,11 @@ export function authenticate(auth: Auth, isLoopback: LoopbackCheck): MiddlewareH
 
 export function requireAuth(
   publicPaths: readonly string[] = PUBLIC_PATHS,
+  publicPrefixes: readonly string[] = PUBLIC_PREFIXES,
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (publicPaths.includes(c.req.path)) return next();
+    if (publicPrefixes.some((prefix) => c.req.path.startsWith(prefix))) return next();
     if (!c.get("principal")) {
       return c.json({ error: "unauthorized" }, 401, {
         "www-authenticate": 'Bearer realm="monday"',

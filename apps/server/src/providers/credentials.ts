@@ -3,11 +3,11 @@
 // same envelope, key hierarchy and rotation cover them. The Account row keeps
 // only an opaque reference.
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accountCredentials, accounts } from "../db/schema.ts";
 import type { ContentStore } from "../mailstore/content.ts";
-import type { Credentials } from "./types.ts";
+import type { Credentials, OAuthAuth } from "./types.ts";
 import { ProviderError } from "./types.ts";
 
 export interface CredentialStore {
@@ -16,10 +16,16 @@ export interface CredentialStore {
   load(accountId: string): Promise<Credentials>;
   /** Forgets the credentials and clears the Account's reference. */
   clear(accountId: string): Promise<void>;
+  /**
+   * Persists refreshed OAuth tokens. The broker only knows the Auth, so the
+   * Account is found by the address and issuer the tokens belong to; every
+   * Account with those credentials (API and IMAP paths) is updated.
+   */
+  updateAuth(auth: OAuthAuth): Promise<number>;
 }
 
 export function createCredentialStore(db: Db, content: ContentStore): CredentialStore {
-  return {
+  const store: CredentialStore = {
     async store(workspaceId, accountId, credentials) {
       const ref = await content.storeContent(
         workspaceId,
@@ -66,5 +72,40 @@ export function createCredentialStore(db: Db, content: ContentStore): Credential
         await tx.update(accounts).set({ credentialsRef: null }).where(eq(accounts.id, accountId));
       });
     },
+
+    async updateAuth(auth) {
+      const rows = await db
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(sql`lower(${accounts.address}) = ${auth.user.toLowerCase()}`);
+      let updated = 0;
+      for (const row of rows) {
+        let current: Credentials;
+        try {
+          current = await store.load(row.id);
+        } catch {
+          continue;
+        }
+        if (current.auth.kind !== "oauth" || current.auth.issuer !== auth.issuer) continue;
+        // Only the tokens move; the client registration and the endpoint stay.
+        const next: Credentials = {
+          ...current,
+          auth: {
+            ...current.auth,
+            accessToken: auth.accessToken,
+            ...(auth.refreshToken ? { refreshToken: auth.refreshToken } : {}),
+            ...(auth.expiresAt ? { expiresAt: auth.expiresAt } : {}),
+          },
+        };
+        const cred = await db.query.accountCredentials.findFirst({
+          where: eq(accountCredentials.accountId, row.id),
+        });
+        if (!cred) continue;
+        await store.store(cred.workspaceId, row.id, next);
+        updated += 1;
+      }
+      return updated;
+    },
   };
+  return store;
 }
