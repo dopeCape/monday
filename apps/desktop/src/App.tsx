@@ -3,24 +3,32 @@
 
 import { AgentBar, AgentColumn, AgentThread, NavSidebar, Rail } from "@monday/ui";
 import {
-  NOW,
   agentThread,
   automationNav,
   calendarNav,
   counts,
   folders,
+  groupIcon,
   groups,
+  NOW,
   navWorkspace,
   railItems,
   railTail,
   workspace,
 } from "@monday/ui/fixtures";
 import { useState } from "react";
-import { Inbox } from "./screens/Inbox.tsx";
+import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import { Settings } from "./screens/Settings.tsx";
 import { useShell } from "./shell/Shell.tsx";
 
-export function App() {
+export interface AppProps {
+  /** Offline turns the workspace dot grey (docs/spec/inbox.md). Slice 6 feeds it. */
+  online?: boolean | undefined;
+  /** First-sync progress for the inbox's thin line, or null. Slice 6 feeds it. */
+  syncing?: SyncProgress | null | undefined;
+}
+
+export function App({ online = true, syncing = null }: AppProps) {
   const shell = useShell();
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
@@ -38,6 +46,7 @@ export function App() {
         folders={folders}
         calendar={calendarNav}
         groups={groups}
+        groupIcon={groupIcon}
         counts={counts}
         automation={automationNav}
         active={active}
@@ -68,7 +77,13 @@ export function App() {
     );
   }
   cols.push("minmax(0, 1fr)");
-  parts.push(active === "settings" ? <Settings key="screen" /> : <Inbox key="screen" />);
+  parts.push(
+    active === "settings" ? (
+      <Settings key="screen" />
+    ) : (
+      <Inbox key="screen" online={online} syncing={syncing} />
+    ),
+  );
   if (shell.layout.agent === "right") {
     cols.push("var(--agent-w)");
     parts.push(
@@ -80,7 +95,11 @@ export function App() {
   }
 
   return (
-    <div className="app" style={{ gridTemplateColumns: cols.join(" ") }}>
+    <div
+      className="app"
+      data-online={online ? "true" : "false"}
+      style={{ gridTemplateColumns: cols.join(" ") }}
+    >
       {parts}
     </div>
   );
