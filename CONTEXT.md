@@ -27,7 +27,11 @@ One email inside a Thread. The unit that is composed, sent, replied to and forwa
 _Avoid_: mail, email (when one item is meant)
 
 **Draft**:
-A Message not yet sent. Owned by the server and synced to every device.
+A Message not yet sent. Owned by the Server, synced to every Device, and mirrored into the Provider's Drafts folder.
+
+**Voice profile**:
+A per-Workspace, user-editable description of how the user writes, with excerpts, built from sent mail when the user opts in. Passed to every drafting Task.
+_Avoid_: style, persona, tone model
 
 **Label**:
 A marker that belongs to the Provider (a Gmail label, an IMAP folder), synced in both directions.
