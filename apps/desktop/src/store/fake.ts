@@ -156,6 +156,9 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
         case "delete":
           t.deleted = true;
           break;
+        case "undelete":
+          t.deleted = false;
+          break;
         case "tags":
           t.tags = [...new Set(intent.tags)];
           record({

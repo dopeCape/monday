@@ -26,6 +26,14 @@ export const INBOX_THREADS_SQL = `
   where t.archived = 0 and t.deleted = 0 and t.snoozed_until is null
   order by t.last_activity desc, t.rid desc`;
 
+/** Every Thread the Cache holds, trash included, newest first. */
+export const ALL_THREADS_SQL = `
+  select t.*,
+    (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
+    (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids
+  from threads t
+  order by t.last_activity desc, t.rid desc`;
+
 export const THREAD_BY_ID_SQL = `
   select t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
@@ -52,6 +60,14 @@ export function rowToThread(r: Row, workspaceId: string): Thread {
     hasAttachments: bool(r.has_attachments),
     snippet: text(r.snippet),
   };
+}
+
+/** The Thread plus the trash flag the domain type does not carry. */
+export function rowToCachedThread(
+  r: Row,
+  workspaceId: string,
+): { thread: Thread; deleted: boolean } {
+  return { thread: rowToThread(r, workspaceId), deleted: bool(r.deleted) };
 }
 
 export const SECTIONS_SQL = "select * from section_rules order by position, id";

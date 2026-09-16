@@ -43,6 +43,12 @@ export interface SyncResult {
 
 export type StoreStatus = "offline" | "connecting" | "online" | "syncing";
 
+/** How far a catch-up pull has got, for the thin line at the top of the inbox. */
+export interface SyncProgress {
+  done: number;
+  total: number;
+}
+
 export interface Store {
   readonly workspaceId: Id;
   query<T = Row>(sql: string, params?: SqlParam[]): Promise<T[]>;
@@ -55,6 +61,9 @@ export interface Store {
   subscribe(): () => void;
   status(): StoreStatus;
   onStatus(listener: (status: StoreStatus) => void): () => void;
+  /** Non-null while a pull spans more than one page (a first sync or a long catch-up). */
+  progress(): SyncProgress | null;
+  onProgress(listener: (progress: SyncProgress | null) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -128,6 +137,8 @@ export function localStatements(intent: Intent): Statement[] {
       return [set("group_id = ?, subgroup_id = ?", [intent.group, intent.subgroup])];
     case "delete":
       return [set("deleted = 1", [])];
+    case "undelete":
+      return [set("deleted = 0", [])];
     case "tags":
       return [
         { sql: "delete from thread_tags where thread_id = ?", params: [intent.threadId] },
@@ -314,6 +325,22 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     for (const l of statusListeners) l(s);
   };
 
+  /* Progress */
+  let progress: SyncProgress | null = null;
+  /** The newest seq the wake transport reported; bounds a pull's total. */
+  let latestSeq = 0;
+  const progressListeners = new Set<(p: SyncProgress | null) => void>();
+  const setProgress = (p: SyncProgress | null) => {
+    if (
+      p === progress ||
+      (p && progress && p.done === progress.done && p.total === progress.total)
+    ) {
+      return;
+    }
+    progress = p;
+    for (const l of progressListeners) l(p);
+  };
+
   /* Sync */
   let inflight: Promise<SyncResult> | null = null;
   let again = false;
@@ -374,15 +401,23 @@ export async function createStore(options: StoreOptions): Promise<Store> {
 
   const pullChanges = async (result: SyncResult) => {
     let cursor = await readCursor();
-    for (;;) {
-      const page = await transport.changes(workspaceId, cursor, pageSize);
-      if (page.changes.length > 0) {
-        await applyChanges(page.changes, page.cursor);
-        result.pulled += page.changes.length;
+    const start = cursor;
+    try {
+      for (;;) {
+        const page = await transport.changes(workspaceId, cursor, pageSize);
+        if (page.changes.length > 0) {
+          await applyChanges(page.changes, page.cursor);
+          result.pulled += page.changes.length;
+        }
+        cursor = page.cursor;
+        result.cursor = cursor;
+        if (page.changes.length < pageSize) break;
+        // A full page means more is coming: show how far the catch-up has got.
+        const total = Math.max(latestSeq - start, cursor - start + pageSize);
+        setProgress({ done: cursor - start, total });
       }
-      cursor = page.cursor;
-      result.cursor = cursor;
-      if (page.changes.length < pageSize) break;
+    } finally {
+      setProgress(null);
     }
   };
 
@@ -445,7 +480,8 @@ export async function createStore(options: StoreOptions): Promise<Store> {
         setStatus("online");
         void sync();
       },
-      onWake() {
+      onWake(seq) {
+        if (seq > latestSeq) latestSeq = seq;
         void sync();
       },
       onClose() {
@@ -566,6 +602,13 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     onStatus(listener) {
       statusListeners.add(listener);
       return () => statusListeners.delete(listener);
+    },
+
+    progress: () => progress,
+
+    onProgress(listener) {
+      progressListeners.add(listener);
+      return () => progressListeners.delete(listener);
     },
 
     async close() {

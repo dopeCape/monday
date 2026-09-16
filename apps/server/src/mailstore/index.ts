@@ -268,6 +268,8 @@ function intentColumns(intent: Intent): Partial<ThreadRow> {
       return { groupId: intent.group, subgroupId: intent.subgroup };
     case "delete":
       return { deleted: true };
+    case "undelete":
+      return { deleted: false };
     case "tags":
       return {};
   }

@@ -11,7 +11,7 @@ export {
   fakeTransport,
 } from "./fake.ts";
 export * from "./queries.ts";
-export { StoreProvider, useLive, useStore, useStoreStatus } from "./react.tsx";
+export { StoreProvider, useLive, useStore, useStoreStatus, useSyncProgress } from "./react.tsx";
 export { fixtureSeed, type SeedData, seedStatements } from "./seed.ts";
 export {
   createStore,
@@ -20,6 +20,7 @@ export {
   type StoreIntent,
   type StoreOptions,
   type StoreStatus,
+  type SyncProgress,
   type SyncResult,
 } from "./store.ts";
 export { apiTransport, type StoreTransport } from "./transport.ts";

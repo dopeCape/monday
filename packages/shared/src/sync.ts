@@ -34,6 +34,7 @@ export type IntentKind =
   | "unsnooze"
   | "move"
   | "delete"
+  | "undelete"
   | "tags";
 
 export const INTENT_KINDS: readonly IntentKind[] = [
@@ -47,6 +48,7 @@ export const INTENT_KINDS: readonly IntentKind[] = [
   "unsnooze",
   "move",
   "delete",
+  "undelete",
   "tags",
 ];
 
@@ -61,6 +63,7 @@ export const FIELD_GROUP_OF: Record<IntentKind, FieldGroup> = {
   unsnooze: "snoozed",
   move: "placement",
   delete: "deleted",
+  undelete: "deleted",
   tags: "tags",
 };
 
@@ -82,6 +85,7 @@ export type IntentArgs =
   | { kind: "unsnooze" }
   | { kind: "move"; group: Id | null; subgroup: Id | null }
   | { kind: "delete" }
+  | { kind: "undelete" }
   | { kind: "tags"; tags: Id[] };
 
 /** One write intent against one Thread. */

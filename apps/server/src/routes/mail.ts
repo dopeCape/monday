@@ -8,7 +8,7 @@
 // `at` (the actor's clock) and `actor`; the Mailstore applies last-writer-wins
 // per field group and answers 200 either way, with `applied: false` and a
 // reason when the row's last write beat the intent.
-//   POST /threads/:id/archive | unarchive | star | unstar | read | unread | unsnooze | delete   {at, actor}
+//   POST /threads/:id/archive | unarchive | star | unstar | read | unread | unsnooze | delete | undelete   {at, actor}
 //   POST /threads/:id/snooze    {at, actor, until}
 //   POST /threads/:id/move      {at, actor, group, subgroup?}
 //   PUT  /threads/:id/tags      {at, actor, tags: [id]}
@@ -50,6 +50,7 @@ const SIMPLE_INTENTS: readonly Exclude<IntentKind, "snooze" | "move" | "tags">[]
   "unread",
   "unsnooze",
   "delete",
+  "undelete",
 ];
 
 export function mailRoutes(mailstore: Mailstore): Hono<AppEnv> {

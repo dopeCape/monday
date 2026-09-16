@@ -197,6 +197,7 @@ describe("intents", () => {
       { kind: "unsnooze" as const },
       { kind: "move" as const, group: "g", subgroup: null },
       { kind: "delete" as const },
+      { kind: "undelete" as const },
       { kind: "tags" as const, tags: ["a", "b"] },
     ]) {
       expect(localStatements({ ...intent, ...stamp }).length).toBeGreaterThan(0);

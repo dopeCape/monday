@@ -15,7 +15,7 @@ import {
 import { platform } from "../platform/tauri.ts";
 import { useShell } from "../shell/Shell.tsx";
 import type { SqlParam } from "./driver.ts";
-import type { Store, StoreStatus } from "./store.ts";
+import type { Store, StoreStatus, SyncProgress } from "./store.ts";
 
 const StoreContext = createContext<Store | null>(null);
 
@@ -126,4 +126,12 @@ export function useStoreStatus(): StoreStatus {
   const [status, setStatus] = useState<StoreStatus>(store.status());
   useEffect(() => store.onStatus(setStatus), [store]);
   return status;
+}
+
+/** Catch-up progress, for the thin line at the top of the inbox. */
+export function useSyncProgress(): SyncProgress | null {
+  const store = useStore();
+  const [progress, setProgress] = useState<SyncProgress | null>(store.progress());
+  useEffect(() => store.onProgress(setProgress), [store]);
+  return progress;
 }
