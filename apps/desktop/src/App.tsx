@@ -18,17 +18,20 @@ import {
 } from "@monday/ui/fixtures";
 import { useState } from "react";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
+import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { Settings } from "./screens/Settings.tsx";
 import { useShell } from "./shell/Shell.tsx";
 
 export interface AppProps {
-  /** Offline turns the workspace dot grey (docs/spec/inbox.md). Slice 6 feeds it. */
+  /** The inbox's data seam; the Store's implementation in the app, fixtures in tests. */
+  inbox?: InboxData | undefined;
+  /** Offline turns the workspace dot grey (docs/spec/inbox.md). The Store feeds it. */
   online?: boolean | undefined;
-  /** First-sync progress for the inbox's thin line, or null. Slice 6 feeds it. */
+  /** First-sync progress for the inbox's thin line, or null. The Store feeds it. */
   syncing?: SyncProgress | null | undefined;
 }
 
-export function App({ online = true, syncing = null }: AppProps) {
+export function App({ inbox, online = true, syncing = null }: AppProps) {
   const shell = useShell();
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
@@ -81,7 +84,7 @@ export function App({ online = true, syncing = null }: AppProps) {
     active === "settings" ? (
       <Settings key="screen" />
     ) : (
-      <Inbox key="screen" online={online} syncing={syncing} />
+      <Inbox key="screen" inbox={inbox} online={online} syncing={syncing} />
     ),
   );
   if (shell.layout.agent === "right") {

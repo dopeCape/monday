@@ -14,10 +14,12 @@ import {
   requireAuth,
 } from "./auth/middleware.ts";
 import { capabilitiesFor } from "./capabilities.ts";
+import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
 import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
+import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { pairRoutes } from "./routes/pair.ts";
@@ -34,6 +36,14 @@ export interface AppOptions {
   keys?: Keys;
   /** Defaults to a Mailstore over `db` and `keys`. Tests substitute fakes here. */
   mailstore?: Mailstore;
+  /**
+   * The in-process wake bus for the Changes feed. The entry feeds it from a
+   * LISTEN connection and shares it with the WebSocket transport; defaults to a
+   * bus nobody feeds, which leaves SSE on its poll fallback.
+   */
+  changes?: ChangeBus;
+  /** SSE keepalive and poll intervals, for tests. */
+  sse?: { heartbeatMs?: number; pollMs?: number };
   /** Peer address of a request, when the runtime can tell. Defaults to "unknown". */
   remoteAddress?: (c: Parameters<LoopbackCheck>[0]) => string | null | undefined;
   /** Milliseconds since the process started, for /health. */
@@ -44,6 +54,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   const { db, auth, mode } = options;
   const keys = options.keys ?? createKeys(db);
   const mailstore = options.mailstore ?? createMailstore(db, keys);
+  const bus = options.changes ?? createChangeBus();
   const started = Date.now();
   const uptimeMs = options.uptimeMs ?? (() => Date.now() - started);
   const isLoopback: LoopbackCheck = (c) => isLoopbackAddress(options.remoteAddress?.(c));
@@ -69,6 +80,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/devices", devicesRoutes(auth));
   app.route("/", unlockRoutes(keys));
   app.route("/", mailRoutes(mailstore));
+  app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
   app.onError((error, c) => {
