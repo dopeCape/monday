@@ -60,7 +60,7 @@ describe("app", () => {
   });
 
   test("capabilities follow the deployment mode table", async () => {
-    const expected: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode">> = {
+    const expected: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "unlocked">> = {
       sidecar: {
         realtime: "websocket",
         holdsConnections: true,
@@ -83,7 +83,7 @@ describe("app", () => {
     };
     for (const mode of Object.keys(expected) as DeploymentMode[]) {
       const res = await build(db, mode, peer).request("/capabilities");
-      expect(await res.json()).toEqual({ protocol: 1, mode, ...expected[mode] });
+      expect(await res.json()).toEqual({ protocol: 1, mode, ...expected[mode], unlocked: false });
     }
   });
 

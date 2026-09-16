@@ -110,6 +110,41 @@ export interface Tag {
   name: string;
 }
 
+/* ------------------------------ Encrypted content ------------------------------ */
+
+/**
+ * What an encrypted object is. Everything body-derived goes under the envelope
+ * (research 5, "What is plaintext in Postgres"); the kind is bound into the
+ * ciphertext so a brief cannot be passed off as a body.
+ */
+export type ContentKind =
+  | "body"
+  | "snippet"
+  | "subject"
+  | "attachment"
+  | "attachment-text"
+  | "brief"
+  | "tag-rationale"
+  | "summary"
+  | "embedding";
+
+/**
+ * What the Mailstore persists for one encrypted object and hands back to read
+ * it: the object's data key wrapped under the Workspace key, and the ciphertext
+ * envelopes. Small kinds have one envelope; attachments are chunked, one
+ * envelope per chunk, in order. Nothing in a ContentRef is plaintext.
+ */
+export interface ContentRef {
+  workspaceId: Id;
+  kind: ContentKind;
+  /** The per-object data key, itself an envelope under the Workspace key. */
+  key: Uint8Array;
+  /** AEAD envelopes: version(1) | iv(12) | tag(16) | ciphertext. */
+  chunks: Uint8Array[];
+  /** Plaintext length in bytes. */
+  size: number;
+}
+
 /* ------------------------------ Attention and routing ------------------------------ */
 
 /** The sentence plus what monday derives from it. Used for Groups, Sections and the brief policy. */
@@ -264,6 +299,8 @@ export interface Capabilities {
   holdsConnections: boolean;
   publicUrl: boolean;
   localRuntimes: boolean;
+  /** Whether the root key is in the Server's memory. Locked servers serve headers only. */
+  unlocked: boolean;
 }
 
 export type NavKnob = "full" | "rail" | "hidden";

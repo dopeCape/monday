@@ -7,6 +7,8 @@ import postgres, { type Sql } from "postgres";
 import * as schema from "./schema.ts";
 
 export type Db = PostgresJsDatabase<typeof schema>;
+/** What a db.transaction callback receives; accepts the same queries as Db. */
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export interface DbHandle {
   db: Db;

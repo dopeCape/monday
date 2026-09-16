@@ -19,16 +19,28 @@ describe("migrations", () => {
     await db.drop();
   });
 
-  test("apply every checked-in migration and create the core tables", async () => {
+  test("apply every checked-in migration and create the core and mail tables", async () => {
     const tables = await db.handle.sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by 1
     `;
     expect(tables.map((t) => t.table_name)).toEqual([
+      "accounts",
+      "attachments",
+      "blob_chunks",
+      "blobs",
       "devices",
       "jobs",
+      "labels",
+      "messages",
       "pairing_codes",
       "servers",
       "settings",
+      "tags",
+      "thread_labels",
+      "thread_tags",
+      "threads",
+      "workspace_keys",
+      "workspaces",
     ]);
     expect(await databaseSchemaVersion(db.handle.sql)).toBe(buildSchemaVersion(loadMigrations()));
   });
