@@ -2132,6 +2132,65 @@ button.msg {
   gap: 6px;
   align-items: center;
 }
+.cmdk-empty {
+  padding: 8px 16px 10px;
+  font-size: var(--fs-sm);
+  color: var(--fg-faint);
+}
+/* a Thread row inside the palette: the list's row, narrowed to the box */
+.cmdk-thread {
+  margin: 0 6px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.cmdk-thread .row {
+  grid-template-columns: 14px 130px minmax(0, 1fr) auto 56px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.cmdk-thread .row .actions {
+  display: none;
+}
+.cmdk-thread .row:hover .time,
+.cmdk-thread .row:hover .meta {
+  visibility: visible;
+}
+
+/* =========================== SEARCH =========================== */
+.search-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--pad) 10px;
+  flex-wrap: wrap;
+}
+.search-chips .sp {
+  flex: 1;
+}
+.search-older {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px var(--pad) 4px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.search-older .btn {
+  margin-left: auto;
+}
+.search-older .bar {
+  height: 2px;
+  background: var(--accent);
+  transition: width var(--t-med) var(--ease);
+}
+.row .meta .acct {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+
 .compose {
   width: 720px;
   max-width: calc(100% - 40px);

@@ -11,14 +11,12 @@ import {
   AgentThread,
   Btn,
   ColHead,
-  CommandPalette,
   MessageRow,
   SectionLabel,
 } from "@monday/ui";
 import {
   agentThread,
   briefOf,
-  commands,
   groups,
   messagesOf,
   NOW,
@@ -37,7 +35,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { chordLabel, type KeyAction } from "../keyboard/keymaps.ts";
+import { chordLabel, isKeyAction, type KeyAction } from "../keyboard/keymaps.ts";
 import {
   type KeyContext,
   type KeyHandlers,
@@ -45,6 +43,8 @@ import {
   useActiveKeymap,
   useKeymap,
 } from "../keyboard/useKeymap.ts";
+import type { SearchModule } from "../search/index.ts";
+import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
@@ -63,6 +63,7 @@ import {
   toggleSelected,
 } from "./inbox/triage.ts";
 import { reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
+import { Palette, type PaletteCommand } from "./Palette.tsx";
 
 export interface SyncProgress {
   done: number;
@@ -84,6 +85,15 @@ export interface InboxProps {
   initialSelection?: readonly string[] | undefined;
   /** For tests: the collapse and toast delays in ms override the Settings. */
   timing?: { collapse?: number; toast?: number } | undefined;
+  /** The Cache search behind the palette; absent in fixture mode. */
+  search?: SearchModule | null | undefined;
+  workspaceId?: string | undefined;
+  /** The palette's "Go to": a screen, folder, group, view or settings page. */
+  onNavigate?: ((target: string) => void) | undefined;
+  /** The palette's "Search for ...": opens the results screen. */
+  onSearch?: ((query: string) => void) | undefined;
+  /** Text the agent bar opens with, such as a palette handoff. */
+  initialAgentText?: string | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -110,6 +120,11 @@ export function Inbox({
   initialOpen,
   initialSelection,
   timing,
+  search = null,
+  workspaceId = workspace.id,
+  onNavigate,
+  onSearch,
+  initialAgentText,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -163,9 +178,17 @@ export function Inbox({
     return multi ? multi.split(",").filter(Boolean) : [];
   });
   const [readerOpen, setReaderOpen] = useState(!stream || urlSel !== null);
-  const [agentOpen, setAgentOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(initialAgentText !== undefined);
+  const [agentText, setAgentText] = useState(initialAgentText ?? "");
+  // `?overlay=cmdk` opens the palette on mount, as the mock does, for the screenshot check.
+  const [paletteOpen, setPaletteOpen] = useState(
+    () =>
+      typeof location !== "undefined" &&
+      new URLSearchParams(location.search).get("overlay") === "cmdk",
+  );
   const [paletteQuery, setPaletteQuery] = useState("");
+  /** A palette action runs once the overlay has closed, so the key handlers see the list. */
+  const pendingAction = useRef<KeyAction | null>(null);
   const [picker, setPicker] = useState<"snooze" | "move" | "more" | null>(null);
   const [pickerIds, setPickerIds] = useState<string[]>([]);
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -330,6 +353,15 @@ export function Inbox({
     queueMicrotask(() => document.querySelector<HTMLInputElement>(".agent-bar input")?.focus());
   }, []);
 
+  /** The `agent.ask` action: the composer is slice 14, so the bar opens prefilled. */
+  const askAgent = useCallback(
+    (text: string) => {
+      setAgentText(text);
+      focusAgent();
+    },
+    [focusAgent],
+  );
+
   const focusReply = useCallback(() => {
     setReaderOpen(true);
     queueMicrotask(() =>
@@ -413,12 +445,52 @@ export function Inbox({
 
   useKeymap(handlers, ctx);
 
+  useEffect(() => {
+    if (paletteOpen || pendingAction.current === null) return;
+    const action = pendingAction.current;
+    pendingAction.current = null;
+    handlers[action]?.(ctx);
+  });
+
+  /** What a palette row does once picked. */
+  const runCommand = (command: PaletteCommand) => {
+    setPaletteOpen(false);
+    switch (command.type) {
+      case "action":
+        if (isKeyAction(command.action)) pendingAction.current = command.action;
+        else if (command.action === "compose.new") focusReply();
+        else if (command.action === "workflow.from_thread") {
+          askAgent(t("strings.palette.workflow_from_thread"));
+        }
+        break;
+      case "navigate":
+        onNavigate?.(command.target);
+        break;
+      case "open":
+        if (inbox.thread(command.threadId)) open(command.threadId);
+        else onNavigate?.(`thread:${command.threadId}`);
+        break;
+      case "search":
+        onSearch?.(command.text);
+        break;
+      case "ask":
+      case "suggest":
+        askAgent(command.text);
+        break;
+    }
+  };
+
+  const handoff = (ask: AgentAsk) => {
+    setPaletteOpen(false);
+    askAgent(ask.text);
+  };
+
   /* ------------------------------ Render ------------------------------ */
 
-  const open = (id: string) => {
+  function open(id: string) {
     setFocus(id);
     setReaderOpen(true);
-  };
+  }
   const runtime = RUNTIME_LABEL[s["ai.local.cli"]];
   const listTitle = t("strings.inbox.title");
   const headCount = selection.length
@@ -609,6 +681,8 @@ export function Inbox({
                   ? t("strings.agent.placeholder_open")
                   : t("strings.agent.placeholder")
             }
+            value={agentText}
+            onChange={setAgentText}
             onFocus={() => setAgentOpen(true)}
           />
         </AgentDock>
@@ -638,16 +712,17 @@ export function Inbox({
       ) : null}
 
       {paletteOpen ? (
-        <CommandPalette
-          sections={commands}
+        <Palette
           query={paletteQuery}
           onQuery={setPaletteQuery}
           onClose={() => setPaletteOpen(false)}
-          onSelect={(item) => {
-            setPaletteOpen(false);
-            if (item.key === "archive") request("archive", acting());
-            else if (item.key === "snooze") openPicker("snooze", acting());
-          }}
+          keymap={keymap}
+          search={search}
+          workspaceId={workspaceId}
+          recentThreads={threads.slice(0, 20)}
+          now={now}
+          onCommand={runCommand}
+          onAsk={handoff}
         />
       ) : null}
     </div>
