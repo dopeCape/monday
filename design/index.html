@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-palette="graphite" data-density="comfortable" data-layout="columns">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>monday · design</title>
+  <link rel="stylesheet" href="./css/tokens.css" />
+  <link rel="stylesheet" href="./css/app.css" />
+  <style>
+    body { overflow: auto; }
+    .hub { max-width: 1320px; margin: 0 auto; padding: 40px 32px 120px; }
+    .hub-head { display: flex; align-items: flex-end; gap: 20px; margin-bottom: 36px; }
+    .hub-head h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; margin: 0; line-height: 1.05; }
+    .hub-head p { margin: 8px 0 0; color: var(--fg-muted); max-width: 60ch; font-size: 14px; }
+    .ctl { margin-left: auto; display: flex; gap: 8px; align-items: center; flex: none; }
+    .ctl select { height: 30px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--panel); padding: 0 8px; font-size: 12px; color: var(--fg); outline: 0; }
+    .ctl label { font-size: 12px; color: var(--fg-faint); }
+    h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; margin: 48px 0 6px; }
+    h2 + p { margin: 0 0 18px; color: var(--fg-muted); font-size: 13px; max-width: 70ch; }
+    .frame { position: relative; overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); box-shadow: var(--shadow-sm); aspect-ratio: 16 / 10; }
+    .frame iframe { position: absolute; left: 0; top: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+    .frame a { position: absolute; inset: 0; }
+    .frame:hover { border-color: var(--border-strong); }
+    .big { display: grid; grid-template-columns: 1fr; gap: 28px; }
+    .big .item { display: grid; grid-template-columns: 1fr 280px; gap: 24px; align-items: start; }
+    .item h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; display: flex; gap: 8px; align-items: center; }
+    .item p { margin: 0 0 12px; color: var(--fg-muted); font-size: 13px; line-height: 1.55; }
+    .item ul { margin: 0; padding-left: 16px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.6; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .grid .item h3 { margin-top: 10px; font-size: 13px; }
+    .grid .item p { font-size: 12px; }
+    .pals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .pals .frame { aspect-ratio: 16 / 10; }
+    .pals h3 { margin: 8px 0 0; font-size: 12.5px; font-weight: 500; display: flex; }
+    .pals h3 span { color: var(--fg-faint); margin-left: auto; font-weight: 400; }
+    .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .pr { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); }
+    .pr b { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+    .pr b i { color: var(--accent); }
+    .pr p { margin: 0; color: var(--fg-muted); font-size: 12.5px; line-height: 1.55; }
+    .type { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .type .pr .sample { font-size: 26px; letter-spacing: -0.02em; font-weight: 600; margin: 4px 0 2px; }
+    .type .pr .sample.m { font-family: var(--font-mono); font-size: 16px; font-weight: 500; letter-spacing: 0; }
+    .icons { display: flex; flex-wrap: wrap; gap: 10px; font-size: 20px; color: var(--fg-muted); padding-top: 6px; }
+    .icons i { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; background: var(--sunken); }
+  </style>
+  <script>
+    try {
+      const s = { theme: "system", palette: "graphite", ...JSON.parse(localStorage.getItem("monday.design") || "{}") };
+      const r = document.documentElement;
+      r.dataset.theme = s.theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : s.theme;
+      r.dataset.palette = s.palette;
+    } catch {}
+  </script>
+</head>
+<body>
+  <div class="hub">
+    <div class="hub-head">
+      <div>
+        <h1>monday</h1>
+        <p>Design lock-in for the desktop client. Three layouts, seven palettes in light and dark, and every screen the agent touches. Click any preview to open it full size.</p>
+      </div>
+      <div class="ctl">
+        <label>Palette</label><select id="pal"></select>
+        <label>Theme</label><select id="thm"><option value="light">Light</option><option value="dark">Dark</option></select>
+        <label>Density</label><select id="den"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>
+      </div>
+    </div>
+
+    <h2>Layouts</h2>
+    <p>Same data, same components, three arrangements. The agent is always one keystroke away in all of them, the difference is how much room it gets.</p>
+    <div class="big" id="layouts"></div>
+
+    <h2>Screens</h2>
+    <p>Everything beyond the inbox. Workflows and routing are authored by talking to the agent, so those pages are about reading and adjusting, not building.</p>
+    <div class="grid" id="screens"></div>
+
+    <h2>Palettes</h2>
+    <p>Shipped color schemes. On Linux the same tokens come from <span class="mono">~/.config/monday/monday.toml</span>, so a rice can drive the client. Each palette has a light and a dark half.</p>
+    <div class="pals" id="pals"></div>
+
+    <h2>Type and icons</h2>
+    <p>Geist for the interface, Geist Mono for shortcuts and config. Phosphor icons at regular weight, fill weight only for state.</p>
+    <div class="type">
+      <div class="pr"><b>Geist Variable</b><div class="sample">Re: Senior Rust engineer role, take-home submitted</div><p>13px base, 20px titles, 26px page headings. Weight and color carry hierarchy, not size.</p></div>
+      <div class="pr"><b>Geist Mono Variable</b><div class="sample m">theme = "system"  # light | dark</div><p>Shortcuts, timestamps in tabular figures, the config file, and nothing else.</p></div>
+      <div class="pr" style="grid-column: 1 / -1"><b>Phosphor</b><div class="icons">
+        <i class="ph ph-tray"></i><i class="ph ph-star"></i><i class="ph ph-clock"></i><i class="ph ph-archive"></i><i class="ph ph-paper-plane-tilt"></i><i class="ph ph-note-pencil"></i><i class="ph ph-users-three"></i><i class="ph ph-receipt"></i><i class="ph ph-handshake"></i><i class="ph ph-flow-arrow"></i><i class="ph ph-git-branch"></i><i class="ph-fill ph-sparkle"></i><i class="ph ph-terminal-window"></i><i class="ph ph-cloud"></i><i class="ph ph-palette"></i><i class="ph ph-gear-six"></i><i class="ph ph-magnifying-glass"></i><i class="ph ph-tag"></i><i class="ph ph-paperclip"></i><i class="ph ph-arrow-bend-up-left"></i><i class="ph ph-lightning"></i><i class="ph ph-brain"></i><i class="ph ph-hand-palm"></i><i class="ph ph-microphone"></i>
+      </div></div>
+    </div>
+
+    <h2>Principles</h2>
+    <p>What every screen is held to.</p>
+    <div class="principles">
+      <div class="pr"><b><i class="ph ph-lightning"></i> Speed first</b><p>Nothing waits on the model. Briefs and tags are pre-computed on the server, the list renders from local data, and the agent streams in beside it.</p></div>
+      <div class="pr"><b><i class="ph ph-sparkle"></i> Agent is a peer, not a feature</b><p>It can do anything you can: search, draft, send, delete, forward, reroute, change a setting, write a workflow. Anything that leaves the mailbox asks first.</p></div>
+      <div class="pr"><b><i class="ph ph-text-align-left"></i> Plain language over editors</b><p>Workflows and routing rules are sentences the agent wrote. You change them by talking, and can always read the source.</p></div>
+      <div class="pr"><b><i class="ph ph-sliders-horizontal"></i> Everything is a token</b><p>Colors, density, font, layout and shortcuts are config values. A user, a rice, or the agent can set them, and the file is the truth.</p></div>
+      <div class="pr"><b><i class="ph ph-eye"></i> Quiet surfaces</b><p>Hairline borders, one accent, no glows. Color is reserved for state and tags so the mail itself is the loudest thing on screen.</p></div>
+      <div class="pr"><b><i class="ph ph-keyboard"></i> Keyboard complete</b><p>J/K to move, E to archive, / to talk to the agent, ⌘K for everything else. The mouse is optional.</p></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { palettes, layouts } from "./js/data.js";
+    const $ = s => document.querySelector(s);
+    const pal = $("#pal"), thm = $("#thm"), den = $("#den");
+    pal.innerHTML = palettes.map(p => `<option value="${p.key}">${p.label}</option>`).join("");
+    const saved = (() => { try { return JSON.parse(localStorage.getItem("monday.design") || "{}"); } catch { return {}; } })();
+    pal.value = saved.palette || "graphite";
+    thm.value = saved.theme && saved.theme !== "system" ? saved.theme : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    den.value = saved.density || "comfortable";
+
+    const base = (o = {}) => {
+      const q = new URLSearchParams({ chrome: "0", palette: pal.value, theme: thm.value, density: den.value, layout: "columns", ...o });
+      const hash = o.hash || "#/inbox";
+      delete o.hash; q.delete("hash");
+      return `./app.html?${q}${hash}`;
+    };
+    const frame = (o, full) => `<div class="frame"><iframe loading="lazy" src="${base(o)}"></iframe><a href="${full || base(o).replace("chrome=0", "chrome=1")}" target="_blank" title="Open full size"></a></div>`;
+
+    const bullets = {
+      columns: ["Nav, list, reader. Familiar in ten seconds.", "Agent bar floats over the reader and rises into a panel.", "Smart inboxes as a tree with sub-groups in the nav."],
+      "agent-left": ["Icon rail replaces the nav, agent gets a permanent column.", "Conversation history stays in view while you triage.", "Best for people who talk to the agent more than they click."],
+      stream: ["One wide list sectioned by the agent: needs reply, waiting, FYI, newsletters.", "Reader opens as a sheet, Esc returns to the stream.", "Fastest for zero-inbox sessions."],
+    };
+    $("#layouts").innerHTML = layouts.map(l => `
+      <div class="item">
+        ${frame({ layout: l.key })}
+        <div><h3>${l.label}</h3><p>${l.desc}</p><ul>${bullets[l.key].map(b => `<li>${b}</li>`).join("")}</ul></div>
+      </div>`).join("");
+
+    const screens = [
+      { t: "Agent, expanded", d: "Tool calls as cards. Search results inline, calendar event created, and a send that waits for approval.", o: { agent: "1" } },
+      { t: "Agent as a column", d: "Same conversation in the agent-left layout, including a settings change written back to the config file.", o: { layout: "agent-left", sel: "e2" } },
+      { t: "Command palette", d: "Search, actions and navigation. Tab hands the query to the agent instead.", o: { overlay: "cmdk" } },
+      { t: "Compose", d: "Ghost text completion, tone and length tools, and the agent noticing that Ravi has not replied.", o: { overlay: "compose" } },
+      { t: "Workflows", d: "Each workflow is a sentence plus a step chain. Change it by asking. Shows where it runs.", o: { hash: "#/workflows/w1" } },
+      { t: "Routing", d: "Groups and sub-groups with the plain-language rule the agent wrote, confidence, and low-confidence items to confirm.", o: { hash: "#/routing" } },
+      { t: "Settings › Appearance", d: "Theme, palette swatches, layout, density, and the live config file.", o: { hash: "#/settings/appearance" } },
+      { t: "Settings › AI and agent", d: "Local CLI (Claude Code, Codex, OpenCode) versus API key, and what runs where.", o: { hash: "#/settings/ai" } },
+      { t: "Settings › Sync server", d: "The self-hosted TypeScript service: health, webhooks, offline workflows, compose file.", o: { hash: "#/settings/server" } },
+    ];
+    $("#screens").innerHTML = screens.map(s => `<div class="item">${frame(s.o)}<h3>${s.t}</h3><p>${s.d}</p></div>`).join("");
+
+    $("#pals").innerHTML = palettes.flatMap(p => ["light", "dark"].map(t => `
+      <div>${frame({ palette: p.key, theme: t, sel: "e1" })}<h3>${p.label} <span>${t}</span></h3></div>`)).join("");
+
+    function scale() {
+      for (const f of document.querySelectorAll(".frame")) {
+        const s = f.clientWidth / 1440;
+        f.querySelector("iframe").style.transform = `scale(${s})`;
+      }
+    }
+    scale();
+    new ResizeObserver(scale).observe(document.body);
+
+    function refresh() {
+      const r = document.documentElement;
+      r.dataset.theme = thm.value; r.dataset.palette = pal.value;
+      try { localStorage.setItem("monday.design", JSON.stringify({ ...saved, theme: thm.value, palette: pal.value, density: den.value })); } catch {}
+      for (const f of document.querySelectorAll(".frame iframe")) {
+        const u = new URL(f.src, location.href);
+        if (!f.closest("#pals")) { u.searchParams.set("palette", pal.value); u.searchParams.set("theme", thm.value); }
+        u.searchParams.set("density", den.value);
+        f.src = u.toString();
+        const a = f.nextElementSibling; const au = new URL(u); au.searchParams.set("chrome", "1"); a.href = au.toString();
+      }
+    }
+    pal.onchange = thm.onchange = den.onchange = refresh;
+  </script>
+</body>
+</html>

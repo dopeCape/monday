@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-palette="graphite" data-density="comfortable" data-layout="columns">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>monday</title>
+  <link rel="stylesheet" href="./css/tokens.css" />
+  <link rel="stylesheet" href="./css/app.css" />
+  <script>
+    // Apply the persisted theme before first paint to avoid a flash.
+    try {
+      const s = { theme: "system", palette: "graphite", density: "comfortable", layout: "columns", ...JSON.parse(localStorage.getItem("monday.design") || "{}") };
+      const q = new URLSearchParams(location.search);
+      for (const k in s) if (q.get(k)) s[k] = q.get(k);
+      const r = document.documentElement;
+      r.dataset.theme = s.theme === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : s.theme;
+      r.dataset.palette = s.palette; r.dataset.density = s.density; r.dataset.layout = s.layout;
+    } catch {}
+  </script>
+</head>
+<body>
+  <div id="app" class="app"></div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
