@@ -27,7 +27,7 @@ function appearance() {
       <div class="lb">${p.label}<span>${p.by}</span></div></button>`;
   };
   return `
-    <h1>Appearance</h1><p>Every option here is also a line in your config file, and the agent can change any of it when you ask.</p>
+    <h1>Appearance</h1><p>The agent and this page save to your settings. A key set in your config file wins and shows here as pinned.</p>
     <div class="sect">
       <h3>Theme</h3>
       ${field("Mode", "Follows the system by default", `<div class="seg"><button class="${state.theme === "system" ? "on" : ""}" data-theme="system">${ic("ph-monitor")} System</button><button class="${state.theme === "light" ? "on" : ""}" data-theme="light">${ic("ph-sun")} Light</button><button class="${state.theme === "dark" ? "on" : ""}" data-theme="dark">${ic("ph-moon")} Dark</button></div>`)}
@@ -61,7 +61,7 @@ function appearance() {
       ${field("Monospace", "Used for shortcuts, code and the config file", sel("Geist Mono"))}
     </div>
     <div class="sect">
-      <h3>Config file</h3><p>On Linux this is the source of truth. Edit it by hand, generate it from your rice, or let the agent write it.</p>
+      <h3>Config file</h3><p>Yours, never written by the app unless you ask. Keys set here win over saved settings and show as pinned above.</p>
       <div class="code-head"><span class="live"></span> watching <span style="color:var(--fg)">~/.config/monday/monday.toml</span> <span class="sp"></span> reloaded 2 min ago</div>
       <div class="code">${toml}</div>
     </div>`;

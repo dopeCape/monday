@@ -321,7 +321,7 @@ export const suggestions = [
 export const agentThreadLayout = [
   { u: "hide the sidebar, sit on the right, and give invoice threads a forward-to-accounting button" },
   { a: [
-    { tool: { i: "ph-layout", t: "Changed layout", d: "nav: hidden · agent: right · wrote [layout] to monday.toml", st: "ok", stt: "Applied", acts: ["Keep", "Undo"], sets: [{ nav: "hidden", agent: "right" }, { nav: "full", agent: "bottom" }] } },
+    { tool: { i: "ph-layout", t: "Changed layout", d: "nav: hidden · agent: right · saved to your settings, synced to all devices", st: "ok", stt: "Applied", acts: ["Undo"], sets: [{ nav: "full", agent: "bottom" }] } },
     { tool: { i: "ph-plus-circle", t: "Added action to Finance › Invoices", d: "Reader toolbar: Forward to accounting → accounting@genai-labs.io", st: "ok", stt: "Applied" } },
     { tool: { i: "ph-bookmark-simple", t: "Saved as view", d: "Focus · ⌘3 · your previous layout is still ⌘1", st: "ok", stt: "Saved" } },
     { p: "Done. I can also change what the stream sections are, what a row shows, the reader toolbar, shortcuts, or add a panel from the catalog. Say <i>undo</i> at any point." },
@@ -346,7 +346,7 @@ export const commands = [
 ];
 
 export const toml = `<span class="c"># ~/.config/monday/monday.toml</span>
-<span class="c"># Reloaded live. Everything the agent changes lands here too.</span>
+<span class="c"># Reloaded live. Keys set here win over settings saved in the app.</span>
 
 <span class="h">[appearance]</span>
 <span class="k">theme</span>     = <span class="s">"system"</span>       <span class="c"># light | dark | system</span>
@@ -363,7 +363,7 @@ export const toml = `<span class="c"># ~/.config/monday/monday.toml</span>
 <span class="k">row</span>       = <span class="s">"two-line"</span>     <span class="c"># one-line | two-line | card</span>
 <span class="k">sections</span>  = [<span class="s">"needs-reply"</span>, <span class="s">"waiting"</span>, <span class="s">"fyi"</span>, <span class="s">"newsletters"</span>]
 
-<span class="h">[views.focus]</span>                     <span class="c"># saved by the agent, ⌘3</span>
+<span class="h">[views.focus]</span>                     <span class="c"># a view pinned from the file, ⌘3</span>
 <span class="k">nav</span>       = <span class="s">"hidden"</span>
 <span class="k">agent</span>     = <span class="s">"right"</span>
 

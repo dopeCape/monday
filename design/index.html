@@ -143,12 +143,12 @@
       </div>`).join("") + `
       <div class="item">
         ${frame({ nav: "hidden", agent: "right", list: "stream", thread: "layout", sel: "e7" })}
-        <div><h3>Composed by the agent <span class="tag ai">custom</span></h3><p>"Hide the sidebar, sit on the right, and give invoice threads a forward-to-accounting button."</p><ul><li>The agent changed three config values, added a reader action for one group, and saved it as a view on ⌘3.</li><li>Every step is a card with Keep and Undo. Nothing was generated as code.</li><li>nav = hidden · agent = right · list = stream</li></ul></div>
+        <div><h3>Composed by the agent <span class="tag ai">custom</span></h3><p>"Hide the sidebar, sit on the right, and give invoice threads a forward-to-accounting button."</p><ul><li>The agent changed three config values, added a reader action for one group, and saved it as a view on ⌘3.</li><li>Every step is a card with Undo. Nothing was generated as code.</li><li>nav = hidden · agent = right · list = stream</li></ul></div>
       </div>`;
 
     const screens = [
       { t: "Agent, expanded", d: "Tool calls as cards. Search results inline, calendar event created, and a send that waits for approval.", o: { open: "1" } },
-      { t: "Agent changing the UI", d: "The same composer moving panes, adding a reader action, and saving a view. Keep or Undo on each step.", o: { open: "1", thread: "layout" } },
+      { t: "Agent changing the UI", d: "The same composer moving panes, adding a reader action, and saving a view. Undo on each step.", o: { open: "1", thread: "layout" } },
       { t: "Agent as a column", d: "Same conversation in the agent-left layout, including a settings change written back to the config file.", o: { layout: "agent-left", sel: "e2" } },
       { t: "Command palette", d: "Search, actions and navigation. Tab hands the query to the agent instead.", o: { overlay: "cmdk" } },
       { t: "Compose", d: "Ghost text completion, tone and length tools, and the agent noticing that Ravi has not replied.", o: { overlay: "compose" } },

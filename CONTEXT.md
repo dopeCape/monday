@@ -146,3 +146,15 @@ _Avoid_: theme (theme means light or dark), color scheme
 
 **Density**:
 The scale of text, icons and rows: compact, comfortable or spacious.
+
+**Config file**:
+`monday.toml`, the per-machine file the user owns. Holds preferences only, wins over saved Settings, and is never written by the app unless the user asks.
+_Avoid_: settings file, rc file
+
+**Setting**:
+A preference saved by the UI or the Agent in the server database and synced to every device. Some Settings are per device.
+_Avoid_: option, preference (as a noun in code)
+
+**Pinned**:
+The state of a Setting whose key the Config file also sets, so the file value is in effect and the UI control is locked.
+_Avoid_: overridden, locked (in prose the control is locked, the Setting is pinned)
