@@ -6,15 +6,6 @@ import { parseConfig } from "./parse.ts";
 /** The example config from the design mock, with its syntax-highlighting spans removed. */
 export const mockConfig: string = (mockToml as string).replace(/<[^>]+>/g, "");
 
-/**
- * The mock as written is not valid TOML: `palette = "gruvbox"` is a string, so
- * `[appearance.palette.overrides]` redefines it as a table. This is the same
- * file with that table under its schema key, `[appearance.overrides]`.
- */
-export const mockConfigFixed = mockConfig.replace(
-  "[appearance.palette.overrides]",
-  "[appearance.overrides]",
-);
 
 function ok(text: string) {
   const result = parseConfig(text);
@@ -23,8 +14,9 @@ function ok(text: string) {
 }
 
 describe("parseConfig", () => {
-  test("the design mock as written is a syntax error with a line number", () => {
-    const result = parseConfig(mockConfig);
+  test("a table that redefines a string key is a syntax error with a line number", () => {
+    const broken = mockConfig.replace("[appearance.overrides]", "[appearance.palette.overrides]");
+    const result = parseConfig(broken);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.line).toBe(26);
@@ -32,8 +24,8 @@ describe("parseConfig", () => {
     }
   });
 
-  test("the design mock parses once its overrides table has the schema key", () => {
-    const result = ok(mockConfigFixed);
+  test("the design mock parses with known keys applied and unknown ones warned", () => {
+    const result = ok(mockConfig);
     expect(result.schema).toBe(1);
     expect(result.values["appearance.mode"]).toBe("system");
     expect(result.values["appearance.palette"]).toBe("gruvbox");
@@ -68,15 +60,12 @@ describe("parseConfig", () => {
       [
         "actions.reader.invoices",
         "ai.api.model",
-        "ai.local.cli",
         "layout.row",
         "server.run_workflows_when_offline",
       ].sort(),
     );
     for (const warning of result.warnings) expect(warning.line).not.toBeNull();
-    const cli = result.warnings.find((w) => w.key === "ai.local.cli");
-    expect(cli?.message).toContain("claude");
-    expect(result.values["ai.local.cli"]).toBeUndefined();
+    expect(result.values["ai.local.cli"]).toBe("claude-code");
   });
 
   test("an unknown key warns with its line and does not apply", () => {
