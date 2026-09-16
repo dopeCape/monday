@@ -1,14 +1,42 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+mod config;
+mod secrets;
+mod sidecar;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_shell::init())
+        .manage(sidecar::SidecarState::default())
+        .invoke_handler(tauri::generate_handler![
+            config::read_config,
+            config::write_config,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
+            sidecar::sidecar_info,
+        ])
+        .setup(|app| {
+            config::watch(app.handle().clone());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match sidecar::start(&handle).await {
+                    Ok(info) => {
+                        use tauri::Emitter;
+                        let _ = handle.emit("sidecar:ready", info);
+                    }
+                    Err(e) => eprintln!("[monday] sidecar failed to start: {e}"),
+                }
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                sidecar::stop(window.app_handle());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
