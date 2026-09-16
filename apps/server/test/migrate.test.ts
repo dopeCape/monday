@@ -19,11 +19,12 @@ describe("migrations", () => {
     await db.drop();
   });
 
-  test("apply every checked-in migration and create the core and mail tables", async () => {
+  test("apply every checked-in migration and create the core, mail and sync tables", async () => {
     const tables = await db.handle.sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by 1
     `;
     expect(tables.map((t) => t.table_name)).toEqual([
+      "account_credentials",
       "accounts",
       "attachments",
       "blob_chunks",
@@ -35,6 +36,8 @@ describe("migrations", () => {
       "pairing_codes",
       "servers",
       "settings",
+      "sync_messages",
+      "sync_state",
       "tags",
       "thread_labels",
       "thread_tags",

@@ -1,0 +1,35 @@
+# Provider contract tests against live test accounts (ADR 0009). Runs every
+# night and on demand; the secrets are the variables
+# apps/server/test/contract/README.md lists. A missing secret skips that
+# Provider rather than failing the run.
+name: contract-nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Provider contract tests
+        env:
+          TEST_JMAP_URL: ${{ secrets.TEST_JMAP_URL }}
+          TEST_JMAP_TOKEN: ${{ secrets.TEST_JMAP_TOKEN }}
+          TEST_JMAP_ADDRESS: ${{ secrets.TEST_JMAP_ADDRESS }}
+          TEST_IMAP_HOST: ${{ secrets.TEST_IMAP_HOST }}
+          TEST_IMAP_PORT: ${{ secrets.TEST_IMAP_PORT }}
+          TEST_IMAP_USER: ${{ secrets.TEST_IMAP_USER }}
+          TEST_IMAP_PASS: ${{ secrets.TEST_IMAP_PASS }}
+          TEST_IMAP_ADDRESS: ${{ secrets.TEST_IMAP_ADDRESS }}
+          TEST_SMTP_HOST: ${{ secrets.TEST_SMTP_HOST }}
+          TEST_SMTP_PORT: ${{ secrets.TEST_SMTP_PORT }}
+          TEST_CONTRACT_SEND: ${{ vars.TEST_CONTRACT_SEND }}
+        run: bun test apps/server/test/contract

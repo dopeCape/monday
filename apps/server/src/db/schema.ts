@@ -5,6 +5,7 @@
 // columns are exactly the header fields sync, threading and routing need.
 
 import type { AccountCapabilities, Person, Provider } from "@monday/shared";
+import { sql } from "drizzle-orm";
 import {
   boolean,
   customType,
@@ -253,7 +254,7 @@ export const attachments = pgTable(
   (t) => [index("attachments_message_idx").on(t.messageId)],
 );
 
-/** A Provider label or folder, synced both ways. */
+/** A Provider label or folder, synced both ways. `role` is the well-known use (inbox, sent, trash ...). */
 export const labels = pgTable(
   "labels",
   {
@@ -263,6 +264,7 @@ export const labels = pgTable(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     providerId: text("provider_id").notNull(),
     name: text("name").notNull(),
+    role: text("role"),
   },
   (t) => [unique("labels_workspace_provider").on(t.workspaceId, t.providerId)],
 );
@@ -304,4 +306,93 @@ export const threadTags = pgTable(
       .references(() => tags.id, { onDelete: "cascade" }),
   },
   (t) => [primaryKey({ columns: [t.threadId, t.tagId] })],
+);
+
+/* ------------------------------ Providers and sync ------------------------------ */
+
+/**
+ * The Account's Provider credentials as one encrypted object (kind
+ * "credential") under the Workspace envelope: the wrapped data key and the
+ * envelope. accounts.credentials_ref points at the row.
+ */
+export const accountCredentials = pgTable("account_credentials", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id")
+    .notNull()
+    .unique()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  key: bytea("key").notNull(),
+  dataEnc: bytea("data_enc").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+export type SyncTierName = "qresync" | "condstore" | "full-scan" | "state";
+
+/** Per-Account sync progress: one state token per mailbox, the tier in use, the last full and reconcile passes. */
+export const syncState = pgTable("sync_state", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  accountId: text("account_id")
+    .notNull()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  tier: text("tier").$type<SyncTierName>(),
+  /** Provider mailbox id to opaque state token. */
+  mailboxStates: jsonb("mailbox_states").$type<Record<string, string>>().notNull().default({}),
+  /** Mailboxes still paging their first pass. */
+  pending: text("pending").array().notNull().default(sql`'{}'::text[]`),
+  lastFullSync: timestamp("last_full_sync", { withTimezone: true, mode: "date" }),
+  lastReconcile: timestamp("last_reconcile", { withTimezone: true, mode: "date" }),
+  lastError: text("last_error"),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+export type BodyState = "pending" | "fetched" | "deferred";
+
+/**
+ * The engine's mirror of what the Provider holds, keyed by the Provider's
+ * message id: which mailboxes, which flags, and which Mailstore row it maps to.
+ * Several Provider ids can map to one Message (IMAP copies across folders).
+ */
+export const syncMessages = pgTable(
+  "sync_messages",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    providerId: text("provider_id").notNull(),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    /** The Provider Thread id or the engine's own key. */
+    threadKey: text("thread_key").notNull(),
+    rfcMessageId: text("rfc_message_id"),
+    /** In-Reply-To and References ids, so a parent that arrives late can claim its children. */
+    references: text("references").array().notNull().default(sql`'{}'::text[]`),
+    subjectKey: text("subject_key").notNull().default(""),
+    participants: text("participants").array().notNull().default(sql`'{}'::text[]`),
+    mailboxIds: text("mailbox_ids").array().notNull().default(sql`'{}'::text[]`),
+    seen: boolean("seen").notNull().default(false),
+    flagged: boolean("flagged").notNull().default(false),
+    date: timestamp("date", { withTimezone: true, mode: "date" }).notNull(),
+    bodyState: text("body_state").$type<BodyState>().notNull().default("pending"),
+    /** Set on a mailbox reset; cleared when the Provider yields the Message again, else dropped. */
+    stale: boolean("stale").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.providerId] }),
+    index("sync_messages_message_idx").on(t.messageId),
+    index("sync_messages_thread_idx").on(t.threadId),
+    index("sync_messages_rfc_idx").on(t.workspaceId, t.rfcMessageId),
+    index("sync_messages_references_idx").using("gin", t.references),
+    index("sync_messages_subject_idx").on(t.workspaceId, t.subjectKey, t.date),
+    index("sync_messages_body_idx").on(t.workspaceId, t.bodyState, t.date),
+  ],
 );

@@ -446,6 +446,40 @@ export const settingsSchema = {
     help: "A Thread with one Message under this many words gets no Brief.",
   }),
 
+  /* Sync (docs/spec/slices.md, slice 5) */
+  "sync.body_window_days": setting({
+    type: z.int().min(0),
+    default: 90,
+    scope: "global",
+    section: "accounts",
+    label: "Body window",
+    help: "Bodies and attachments are fetched for Messages newer than this many days during sync; older ones on open.",
+  }),
+  "sync.reconcile_minutes": setting({
+    type: z.int().min(1),
+    default: 5,
+    scope: "global",
+    section: "accounts",
+    label: "Reconcile interval",
+    help: "Minutes between full incremental passes over every folder. Push notifications are lossy; this catches what they miss.",
+  }),
+  "sync.hot_folders": setting({
+    type: z.int().min(1).max(10),
+    default: 3,
+    scope: "global",
+    section: "accounts",
+    label: "Watched folders",
+    help: "How many folders an IMAP Account keeps a live IDLE connection on, Inbox first. Each one costs a connection.",
+  }),
+  "sync.batch_size": setting({
+    type: z.int().min(10).max(1000),
+    default: 200,
+    scope: "global",
+    section: "accounts",
+    label: "Sync batch",
+    help: "Messages fetched per step during the first sync. Larger is faster; smaller shows progress sooner.",
+  }),
+
   /* Send */
   "send.delay_seconds": setting({
     type: z.int().min(0).max(600),

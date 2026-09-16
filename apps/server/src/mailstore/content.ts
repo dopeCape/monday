@@ -22,6 +22,7 @@ export const CONTENT_KINDS: readonly ContentKind[] = [
   "tag-rationale",
   "summary",
   "embedding",
+  "credential",
 ];
 
 export function isContentKind(value: unknown): value is ContentKind {

@@ -102,6 +102,8 @@ export interface ListThreadsOptions {
   cursor?: string | null;
   /** Archived Threads are out of the stream unless asked for. */
   includeArchived?: boolean;
+  /** Restrict to these Thread ids. */
+  ids?: Id[];
 }
 
 export interface ThreadPage {
@@ -110,17 +112,36 @@ export interface ThreadPage {
   cursor: string | null;
 }
 
+export interface ThreadPatch {
+  unread?: boolean;
+  starred?: boolean;
+  archived?: boolean;
+  participants?: Person[];
+  lastActivity?: IsoDate;
+}
+
 export interface Mailstore extends ContentStore {
   createWorkspace(account: Account): Promise<Workspace>;
   /** Insert or update by (workspace, provider thread id). Encrypts the subject. */
   upsertThread(input: ThreadInput): Promise<Id>;
+  /** The header projection of one Thread by its Provider id, or null. */
+  findThread(workspaceId: Id, providerThreadId: string): Promise<Thread | null>;
+  /** Header-only update; works locked. */
+  updateThread(threadId: Id, patch: ThreadPatch): Promise<void>;
+  /** Removes a Message and, when it was the last one, its Thread. */
+  deleteMessage(messageId: Id): Promise<{ threadDeleted: boolean }>;
+  /** Moves every Message and label of `fromThreadId` into `intoThreadId` and deletes the former. */
+  mergeThreads(fromThreadId: Id, intoThreadId: Id): Promise<void>;
   /** Insert or update by (workspace, provider message id). Encrypts body and snippet. */
   upsertMessage(input: MessageInput): Promise<Id>;
   readMessageBody(messageId: Id): Promise<MessageBody>;
   readThreadSubject(threadId: Id): Promise<string>;
   putAttachment(messageId: Id, input: AttachmentInput): Promise<Id>;
   readAttachment(attachmentId: Id): Promise<AttachmentContent>;
-  upsertLabel(workspaceId: Id, label: { providerId: string; name: string }): Promise<Id>;
+  upsertLabel(
+    workspaceId: Id,
+    label: { providerId: string; name: string; role?: string | null },
+  ): Promise<Id>;
   upsertTag(workspaceId: Id, name: string): Promise<Id>;
   setLabels(threadId: Id, labelIds: Id[]): Promise<void>;
   setTags(threadId: Id, tagIds: Id[]): Promise<void>;
@@ -250,6 +271,92 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const stored = rows[0]?.id;
       if (!stored) throw new Error("upsertThread returned no row");
       return stored;
+    },
+
+    async findThread(workspaceId, providerThreadId) {
+      const row = await db.query.threads.findFirst({
+        where: and(
+          eq(threads.workspaceId, workspaceId),
+          eq(threads.providerThreadId, providerThreadId),
+        ),
+      });
+      if (!row) return null;
+      const page = await store.listThreads(workspaceId, {
+        limit: 1,
+        includeArchived: true,
+        ids: [row.id],
+      });
+      return page.threads[0] ?? null;
+    },
+
+    async updateThread(threadId, patch) {
+      await requireThread(db, threadId);
+      await db
+        .update(threads)
+        .set({
+          ...(patch.unread !== undefined ? { unread: patch.unread } : {}),
+          ...(patch.starred !== undefined ? { starred: patch.starred } : {}),
+          ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
+          ...(patch.participants !== undefined ? { participants: patch.participants } : {}),
+          ...(patch.lastActivity !== undefined
+            ? { lastActivity: new Date(patch.lastActivity) }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(threads.id, threadId));
+    },
+
+    async deleteMessage(messageId) {
+      const message = await requireMessage(db, messageId);
+      return db.transaction(async (tx) => {
+        await tx.delete(messages).where(eq(messages.id, messageId));
+        const [agg] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(messages)
+          .where(eq(messages.threadId, message.threadId));
+        if ((agg?.count ?? 0) === 0) {
+          await tx.delete(threads).where(eq(threads.id, message.threadId));
+          return { threadDeleted: true };
+        }
+        await refreshThread(tx, message.threadId);
+        return { threadDeleted: false };
+      });
+    },
+
+    async mergeThreads(fromThreadId, intoThreadId) {
+      if (fromThreadId === intoThreadId) return;
+      const from = await requireThread(db, fromThreadId);
+      const into = await requireThread(db, intoThreadId);
+      await db.transaction(async (tx) => {
+        await tx
+          .update(messages)
+          .set({ threadId: intoThreadId })
+          .where(eq(messages.threadId, fromThreadId));
+        const fromLabels = await tx
+          .select({ labelId: threadLabels.labelId })
+          .from(threadLabels)
+          .where(eq(threadLabels.threadId, fromThreadId));
+        if (fromLabels.length > 0) {
+          await tx
+            .insert(threadLabels)
+            .values(fromLabels.map((l) => ({ threadId: intoThreadId, labelId: l.labelId })))
+            .onConflictDoNothing();
+        }
+        const known = new Set(into.participants.map((p) => p.email.toLowerCase()));
+        const extra = from.participants.filter((p) => !known.has(p.email.toLowerCase()));
+        await tx
+          .update(threads)
+          .set({
+            participants: [...into.participants, ...extra],
+            unread: into.unread || from.unread,
+            starred: into.starred || from.starred,
+            archived: into.archived && from.archived,
+            updatedAt: new Date(),
+          })
+          .where(eq(threads.id, intoThreadId));
+        await tx.delete(threads).where(eq(threads.id, fromThreadId));
+        await refreshThread(tx, intoThreadId);
+      });
     },
 
     async upsertMessage(input) {
@@ -406,10 +513,16 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     async upsertLabel(workspaceId, label) {
       const rows = await db
         .insert(labels)
-        .values({ id: crypto.randomUUID(), workspaceId, ...label })
+        .values({
+          id: crypto.randomUUID(),
+          workspaceId,
+          providerId: label.providerId,
+          name: label.name,
+          role: label.role ?? null,
+        })
         .onConflictDoUpdate({
           target: [labels.workspaceId, labels.providerId],
-          set: { name: label.name },
+          set: { name: label.name, ...(label.role !== undefined ? { role: label.role } : {}) },
         })
         .returning({ id: labels.id });
       const id = rows[0]?.id;
@@ -459,6 +572,10 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const conditions = [eq(threads.workspaceId, workspaceId)];
       if (!options.includeArchived) conditions.push(eq(threads.archived, false));
       if (options.section !== undefined) conditions.push(eq(threads.section, options.section));
+      if (options.ids !== undefined) {
+        if (options.ids.length === 0) return { threads: [], cursor: null };
+        conditions.push(inArray(threads.id, options.ids));
+      }
       if (options.group !== undefined) {
         conditions.push(
           or(eq(threads.groupId, options.group), eq(threads.subgroupId, options.group)) ??

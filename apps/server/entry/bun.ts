@@ -31,6 +31,10 @@ import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
 import { cloudIsAlive } from "../src/heartbeat.ts";
 import { createJobs } from "../src/jobs/index.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
+import { createMailstore } from "../src/mailstore/index.ts";
+import { createCredentialStore } from "../src/providers/credentials.ts";
+import { createProviderRegistry } from "../src/providers/index.ts";
+import { createSyncEngine } from "../src/providers/sync.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { migrationsFolder } from "./resources.ts";
 
@@ -152,6 +156,20 @@ async function main() {
   await unlockAtBoot(keys);
 
   const jobs = createJobs(handle.db);
+  // Providers: the sync, watch and reconcile steps (slice 5). Every Account
+  // with credentials gets its Jobs (idempotent ids) so a restart resumes sync.
+  const mailstore = createMailstore(handle.db, keys);
+  const sync = createSyncEngine({
+    db: handle.db,
+    mailstore,
+    providers: createProviderRegistry(),
+    credentials: createCredentialStore(handle.db, mailstore),
+    log: debug,
+  });
+  sync.registerSteps(jobs);
+  for (const row of await handle.db.query.accounts.findMany()) {
+    if (row.credentialsRef) await sync.startAccount(jobs, row.id);
+  }
   const ownNeeds = needsServedBy(mode);
   const kicker = createProcessKicker({
     jobs,
@@ -174,6 +192,7 @@ async function main() {
     auth,
     mode,
     keys,
+    mailstore,
     remoteAddress: (c) => {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };
       return server?.requestIP?.(c.req.raw)?.address ?? null;
@@ -204,6 +223,7 @@ async function main() {
     try {
       server.stop(true);
       await kicker.stop();
+      await sync.close();
       await handle.close();
       await embedded?.stop();
     } finally {

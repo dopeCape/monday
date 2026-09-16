@@ -126,7 +126,8 @@ export type ContentKind =
   | "brief"
   | "tag-rationale"
   | "summary"
-  | "embedding";
+  | "embedding"
+  | "credential";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read

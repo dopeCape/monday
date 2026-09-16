@@ -17,10 +17,14 @@
     "drizzle-orm": "^0.45.2",
     "embedded-postgres": "18.4.0-beta.17",
     "hono": "^4.7.0",
+    "imapflow": "^2.0.5",
+    "nodemailer": "^10.0.10",
+    "postal-mime": "^3.0.0",
     "postgres": "^3.4.9",
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/nodemailer": "^8.0.2",
     "bun-types": "latest",
     "drizzle-kit": "^0.31.10"
   },
