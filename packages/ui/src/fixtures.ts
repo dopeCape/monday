@@ -3,6 +3,7 @@
 // Dates are local ISO strings without an offset so relative labels ("Today",
 // "Mon") come out the same in any zone when paired with NOW.
 import type {
+  RichText,
   Account,
   Brief,
   Draft,
@@ -645,9 +646,24 @@ export function threadsIn(sectionId: string): Thread[] {
 
 /* ------------------------------ Briefs ------------------------------ */
 
+/** Fixture markup: **bold** and _italic_ become RichText runs. */
+function rich(text: string): RichText {
+  const runs: RichText = [];
+  const re = /\*\*(.+?)\*\*|_(.+?)_/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) runs.push(text.slice(last, m.index));
+    if (m[1] !== undefined) runs.push({ b: m[1] });
+    else if (m[2] !== undefined) runs.push({ i: m[2] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) runs.push(text.slice(last));
+  return runs;
+}
+
 const brief = (threadId: string, bullets: string[], actions: Brief["actions"]): Brief => ({
   threadId,
-  bullets,
+  bullets: bullets.map(rich),
   actions,
   computedAt: "2026-09-16T09:42:00",
   stale: false,
@@ -657,53 +673,83 @@ export const briefs: Brief[] = [
   brief(
     "e1",
     [
-      "Aoife submitted the take-home for the Senior Rust role. Repo plus a 2-page write-up.",
-      "She proposes a call this week, available Wed or Thu after 14:00 CET.",
-      "Routed to Hiring › Candidates. Workflow Candidate intake already posted the summary to Notion.",
+      "**Aoife submitted the take-home** for the Senior Rust role. Repo plus a 2-page write-up.",
+      "She proposes a **call this week**, available Wed or Thu after 14:00 CET.",
+      "Routed to **Hiring › Candidates**. Workflow _Candidate intake_ already posted the summary to Notion.",
     ],
     [
-      { kind: "reply", proposedLine: "Reply with Thursday 15:00" },
-      { kind: "forward", to: p.priya },
-      { kind: "calendar", eventTitle: "Aoife Brennan, take-home", start: "2026-09-17T15:00:00" },
+      {
+        kind: "reply",
+        label: "Reply with Thursday 15:00",
+        proposedLine: "Thursday 15:00 CET works for me.",
+      },
+      { kind: "forward", label: "Forward to Priya", to: p.priya },
+      {
+        kind: "calendar",
+        label: "Add to interview calendar",
+        eventTitle: "Aoife Brennan, take-home",
+        start: "2026-09-17T15:00:00",
+      },
     ],
   ),
   brief(
     "e2",
     [
-      "Two redlines: pro-rata rights capped at 1x, and a board observer seat instead of a full seat.",
-      "Kenji wants a reply by Friday to keep the closing date.",
+      "**Two redlines**: pro-rata rights capped at 1x, and a board observer seat instead of a full seat.",
+      "Kenji wants a **reply by Friday** to keep the closing date.",
       "Ravi is cc'd and has not replied yet.",
     ],
     [
-      { kind: "reply", proposedLine: "Draft acceptance of pro-rata cap" },
-      { kind: "forward", to: p.ravi },
-      { kind: "snooze", until: "2026-09-17T09:00:00" },
+      {
+        kind: "reply",
+        label: "Draft acceptance of pro-rata cap",
+        proposedLine: "Draft acceptance of pro-rata cap",
+      },
+      { kind: "forward", label: "Ask Ravi for a read", to: p.ravi },
+      { kind: "snooze", label: "Snooze until Thursday", until: "2026-09-17T09:00:00" },
     ],
   ),
   brief(
     "e3",
     [
-      "Ngozi applied for Design Engineer. Three years at a fintech building internal design tooling.",
+      "Ngozi applied for **Design Engineer**. Three years at a fintech building internal design tooling.",
       "Portfolio links to a component library and a Figma plugin.",
-      "No reply from us yet, 2 days old.",
+      "No reply from us yet, **2 days old**.",
     ],
     [
-      { kind: "reply", proposedLine: "Send screening questions" },
-      { kind: "calendar", eventTitle: "Intro call with Ngozi", start: "2026-09-18T11:00:00" },
-      { kind: "reply", proposedLine: "Decline politely" },
+      {
+        kind: "reply",
+        label: "Send screening questions",
+        proposedLine: "Send screening questions",
+      },
+      {
+        kind: "calendar",
+        label: "Schedule intro call",
+        eventTitle: "Intro call with Ngozi",
+        start: "2026-09-18T11:00:00",
+      },
+      { kind: "reply", label: "Decline politely", proposedLine: "Decline politely" },
     ],
   ),
   brief(
     "e4",
     [
-      "Round 2 of the icon set is in Figma with 1.5px strokes and squared terminals.",
-      "Mateus is waiting on your review of the 12 new glyphs.",
+      "Round 2 of the icon set is in Figma with **1.5px strokes** and squared terminals.",
+      "Mateus is waiting on **your review** of the 12 new glyphs.",
       "Invoice for round 1 is still unpaid (see Finance › Invoices).",
     ],
     [
       { kind: "open-link", url: "https://figma.com", label: "Open Figma file" },
-      { kind: "reply", proposedLine: "Reply: looks good, ship it" },
-      { kind: "reply", proposedLine: "Ask for outlined variants" },
+      {
+        kind: "reply",
+        label: "Reply: looks good, ship it",
+        proposedLine: "Reply: looks good, ship it",
+      },
+      {
+        kind: "reply",
+        label: "Ask for outlined variants",
+        proposedLine: "Ask for outlined variants",
+      },
     ],
   ),
   brief(
@@ -714,9 +760,17 @@ export const briefs: Brief[] = [
       "No date proposed yet.",
     ],
     [
-      { kind: "reply", proposedLine: "Accept and propose dates" },
-      { kind: "reply", proposedLine: "Ask for the audience size" },
-      { kind: "archive" },
+      {
+        kind: "reply",
+        label: "Accept and propose dates",
+        proposedLine: "Accept and propose dates",
+      },
+      {
+        kind: "reply",
+        label: "Ask for the audience size",
+        proposedLine: "Ask for the audience size",
+      },
+      { kind: "archive", label: "Archive" },
     ],
   ),
   brief(
@@ -727,8 +781,8 @@ export const briefs: Brief[] = [
       "Good candidate for the docs.",
     ],
     [
-      { kind: "reply", proposedLine: "Reply: yes, open a PR" },
-      { kind: "reply", proposedLine: "Ask for a screenshot" },
+      { kind: "reply", label: "Reply: yes, open a PR", proposedLine: "Reply: yes, open a PR" },
+      { kind: "reply", label: "Ask for a screenshot", proposedLine: "Ask for a screenshot" },
     ],
   ),
   brief(
@@ -740,7 +794,11 @@ export const briefs: Brief[] = [
     ],
     [
       { kind: "open-link", url: "attachment:a5", label: "Open PDF" },
-      { kind: "forward", to: { name: "Accounting", email: "accounting@genai-labs.io" } },
+      {
+        kind: "forward",
+        label: "Forward to accounting",
+        to: { name: "Accounting", email: "accounting@genai-labs.io" },
+      },
     ],
   ),
   brief(
@@ -769,7 +827,7 @@ export const briefs: Brief[] = [
       "Issue on the desktop app comeback, mentions Tauri 2.x.",
       "3 min read according to the agent.",
     ],
-    [{ kind: "archive" }],
+    [{ kind: "archive", label: "Archive" }],
   ),
   brief(
     "e11",

@@ -242,11 +242,12 @@ describe("reader", () => {
   test("Brief lists bullets and up to three action chips", () => {
     const html = render(<Brief brief={brief1} source="Claude Code, on this machine" />);
     expect(html).toContain('class="brief"');
-    expect(html).toContain("Aoife submitted the take-home");
+    expect(html).toContain("<b>Aoife submitted the take-home</b>");
+    expect(html).toContain("<i>Candidate intake</i>");
     expect(html).toContain("Claude Code, on this machine");
     expect(html).toContain("Reply with Thursday 15:00");
     expect(html).toContain("Forward to Priya");
-    expect(html).toContain("Add to calendar: Aoife Brennan, take-home");
+    expect(html).toContain("Add to interview calendar");
     expect((html.match(/class="chip"/g) ?? []).length).toBe(3);
   });
 

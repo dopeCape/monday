@@ -5,6 +5,7 @@ import type {
   BriefAction,
   Brief as BriefData,
   Message as MessageData,
+  RichText,
 } from "@monday/shared";
 import {
   ArrowBendDoubleUpLeftIcon,
@@ -15,7 +16,7 @@ import {
   ImageIcon,
   PaperclipIcon,
 } from "@phosphor-icons/react";
-import type { ChangeEvent, ReactNode } from "react";
+import { type ChangeEvent, Fragment, type ReactNode } from "react";
 import {
   cx,
   firstName,
@@ -32,20 +33,23 @@ import { Avatar, Btn, Chip, Mark } from "./primitives.tsx";
 
 /** The chip text for a suggested action. */
 export function briefActionLabel(action: BriefAction): string {
-  switch (action.kind) {
-    case "reply":
-      return action.proposedLine;
-    case "forward":
-      return `Forward to ${firstName(action.to.name)}`;
-    case "calendar":
-      return `Add to calendar: ${action.eventTitle}`;
-    case "snooze":
-      return `Snooze until ${formatWhen(action.until)}`;
-    case "archive":
-      return "Archive";
-    case "open-link":
-      return action.label;
-  }
+  return action.label;
+}
+
+function Rich({ runs }: { runs: RichText }) {
+  return (
+    <>
+      {runs.map((r, i) =>
+        typeof r === "string" ? (
+          <Fragment key={i}>{r}</Fragment>
+        ) : "b" in r ? (
+          <b key={i}>{r.b}</b>
+        ) : (
+          <i key={i}>{r.i}</i>
+        ),
+      )}
+    </>
+  );
 }
 
 export interface BriefProps {
@@ -67,8 +71,10 @@ export function Brief({ brief, source, maxActions = 3, onAction, className }: Br
         {source ? <span>{source}</span> : null}
       </div>
       <ul>
-        {brief.bullets.map((b) => (
-          <li key={b}>{b}</li>
+        {brief.bullets.map((b, i) => (
+          <li key={i}>
+            <Rich runs={b} />
+          </li>
         ))}
       </ul>
       {actions.length ? (

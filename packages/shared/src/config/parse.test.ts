@@ -6,7 +6,6 @@ import { parseConfig } from "./parse.ts";
 /** The example config from the design mock, with its syntax-highlighting spans removed. */
 export const mockConfig: string = (mockToml as string).replace(/<[^>]+>/g, "");
 
-
 function ok(text: string) {
   const result = parseConfig(text);
   if (!result.ok) throw new Error(`expected ok, got ${result.error.message}`);

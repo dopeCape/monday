@@ -10,6 +10,7 @@ import {
   Brief,
   Btn,
   ColHead,
+  Mark,
   Message,
   MessageRow,
   ReplyBox,
@@ -41,8 +42,9 @@ import { useShell } from "../shell/Shell.tsx";
 export function Inbox() {
   const shell = useShell();
   const stream = shell.layout.list === "stream";
-  const [selected, setSelected] = useState<string | null>(stream ? null : "e1");
-  const [readerOpen, setReaderOpen] = useState(!stream);
+  const initial = new URLSearchParams(location.search).get("sel");
+  const [selected, setSelected] = useState<string | null>(initial ?? (stream ? null : "e1"));
+  const [readerOpen, setReaderOpen] = useState(!stream || initial !== null);
   const [agentOpen, setAgentOpen] = useState(false);
 
   const open = (id: string) => {
@@ -144,35 +146,39 @@ function Reader({
 }) {
   const messages = messagesOf(thread.id);
   const brief = briefOf(thread.id);
+  const tags = tagsOf(thread);
   const last = messages[messages.length - 1];
   return (
     <section className={`col reader ${sheet ? "sheet" : ""}`}>
       <ColHead
         leading={
-          sheet ? (
-            <>
-              <Btn icon title="Close" onClick={onClose}>
-                <XIcon />
-              </Btn>
-              <span className="vr" />
-            </>
-          ) : null
+          <>
+            {sheet ? (
+              <>
+                <Btn icon title="Close" onClick={onClose}>
+                  <XIcon />
+                </Btn>
+                <span className="vr" />
+              </>
+            ) : null}
+            <Btn icon title="Archive (E)">
+              <ArchiveIcon />
+            </Btn>
+            <Btn icon title="Snooze (H)">
+              <ClockIcon />
+            </Btn>
+            <Btn icon title="Move">
+              <FolderSimpleIcon />
+            </Btn>
+            <Btn icon title="Delete (#)">
+              <TrashIcon />
+            </Btn>
+          </>
         }
       >
-        <Btn icon title="Archive (E)">
-          <ArchiveIcon />
+        <Btn onClick={onAsk}>
+          <Mark small /> Ask
         </Btn>
-        <Btn icon title="Snooze (H)">
-          <ClockIcon />
-        </Btn>
-        <Btn icon title="Move">
-          <FolderSimpleIcon />
-        </Btn>
-        <Btn icon title="Delete (#)">
-          <TrashIcon />
-        </Btn>
-        <span className="sp" />
-        <Btn onClick={onAsk}>Ask</Btn>
         <Btn icon title="More">
           <DotsThreeIcon />
         </Btn>
@@ -183,6 +189,7 @@ function Reader({
           <div className="subline">
             {thread.participants[0]?.name} · {thread.messageCount} message
             {thread.messageCount === 1 ? "" : "s"}
+            {tags.length ? ` · ${tags.map((t) => t.name).join(", ")}` : ""}
           </div>
           {brief ? <Brief brief={brief} source="Claude Code, on this machine" /> : null}
           {messages.map((m, i) => (

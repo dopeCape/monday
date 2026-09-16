@@ -157,21 +157,28 @@ export interface Example {
 
 export type Confidence = number;
 
+/** Light inline markup for model-written text: runs of plain, bold or italic. */
+export type RichRun = string | { b: string } | { i: string };
+export type RichText = RichRun[];
+
 export interface Brief {
   threadId: Id;
-  bullets: string[];
+  /** At most three; the first says what happened, the second what is asked, the third context. */
+  bullets: RichText[];
   actions: BriefAction[];
   computedAt: IsoDate;
   stale: boolean;
 }
 
-export type BriefAction =
+/** An action chip: the label is the Agent's wording; the payload is what runs. */
+export type BriefAction = { label: string } & (
   | { kind: "reply"; proposedLine: string }
   | { kind: "forward"; to: Person }
   | { kind: "calendar"; eventTitle: string; start: IsoDate }
   | { kind: "snooze"; until: IsoDate }
   | { kind: "archive" }
-  | { kind: "open-link"; url: string; label: string };
+  | { kind: "open-link"; url: string }
+);
 
 /* ------------------------------ The agent ------------------------------ */
 
