@@ -123,8 +123,20 @@ What starts a Workflow: a Thread arriving, an attachment, a schedule, silence af
 One action or model call inside a Workflow.
 
 **Run**:
-One execution of a Workflow with its log and outcome.
+One execution of a Workflow with its log and outcome, tied to the Workflow version it ran under.
 _Avoid_: execution, job
+
+**Placement**:
+Where a Workflow runs: on the Server with a Hosted runtime, or on a Local runtime while the client is open.
+_Avoid_: target, host
+
+**Dry run**:
+A Run over recent mail that reports what would have happened without acting. Shown before a Workflow is enabled.
+_Avoid_: simulation, test run
+
+**Budget**:
+The caps on an agent Step: tool calls, tokens and wall time. Exceeding any cap fails the Run.
+_Avoid_: limit, quota (reserved for provider quotas)
 
 ### Server and deployment
 
