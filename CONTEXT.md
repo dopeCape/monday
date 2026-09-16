@@ -40,8 +40,22 @@ _Avoid_: label, smart label, AI label
 ### Attention and routing
 
 **Section**:
-The kind of attention a Thread needs right now: Needs your reply, Waiting on you, For your information, Newsletters. Decided by the Agent, shown as the stream's headings, independent of Group.
+A heading in the stream that a Section rule fills. Shipped defaults are the kinds of attention a Thread needs: Needs your reply, Waiting on you, For your information, Newsletters. User-defined, independent of Group.
 _Avoid_: inbox type, category, bucket
+
+**Section rule**:
+The rule, in the same shape as a Routing rule, that decides which Threads a Section holds. Deterministic signals first, the model for the rest.
+
+**Predicate**:
+The structured, model-free part of a rule (senders, domains, subject patterns, list ids, headers) that runs on every Thread at no cost.
+_Avoid_: filter, matcher
+
+**Example**:
+A Thread the user confirmed or corrected into a Group or Section, kept as evidence for the rule's model prompt.
+_Avoid_: training data, sample
+
+**Confidence**:
+The score a rule gives a Thread. At or above the route threshold the Thread is placed; in the ask band it goes to Needs a decision; below, it is left alone.
 
 **Group**:
 A smart inbox that a Routing rule fills, such as Hiring or Finance. A Thread belongs to at most one Group. A Group is a lens on the Inbox, not a move out of it.
