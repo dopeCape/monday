@@ -33,7 +33,7 @@ function inTauri(): boolean {
 async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
-  const sub = <T,>(name: string, cb: (p: T) => void) => {
+  const sub = <T>(name: string, cb: (p: T) => void) => {
     let un: (() => void) | undefined;
     let cancelled = false;
     void listen<T>(name, (e) => cb(e.payload)).then((u) => {
@@ -63,7 +63,11 @@ export function fakePlatform(initialConfig = ""): Platform {
   let text = initialConfig;
   const listeners = new Set<(f: ConfigFile) => void>();
   const secrets = new Map<string, string>();
-  const file = (): ConfigFile => ({ path: "~/.config/monday/monday.toml", exists: text.length > 0, text });
+  const file = (): ConfigFile => ({
+    path: "~/.config/monday/monday.toml",
+    exists: text.length > 0,
+    text,
+  });
   return {
     isTauri: false,
     readConfig: async () => file(),

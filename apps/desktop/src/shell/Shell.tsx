@@ -78,7 +78,9 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const api = useMemo(() => {
     const target = (): ServerTarget | null =>
-      sidecar?.running ? { baseUrl: `http://127.0.0.1:${sidecar.port}`, token: sidecar.token } : null;
+      sidecar?.running
+        ? { baseUrl: `http://127.0.0.1:${sidecar.port}`, token: sidecar.token }
+        : null;
     return createApi(target);
   }, [sidecar]);
 
