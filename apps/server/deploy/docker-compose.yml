@@ -1,0 +1,53 @@
+# The sync server in your own container (docs/spec/architecture.md, "Container"):
+# one always-on Bun process beside a Postgres, sharing nothing else. Run from
+# a clone of the repository:
+#
+#   cd apps/server/deploy
+#   MONDAY_SETUP_CODE=pick-something MONDAY_PUBLIC_URL=https://mail.example docker compose up -d
+#
+# Then put the server behind HTTPS (Caddy, Traefik, your host's proxy) at
+# MONDAY_PUBLIC_URL, and connect the desktop app from Settings › Server with
+# the Cloud URL and the setup code. The container image of slice 22 replaces
+# the bind mount and the install step below.
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: monday
+      POSTGRES_USER: monday
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-monday}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monday -d monday"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  monday:
+    image: oven/bun:1
+    working_dir: /app/apps/server
+    command: sh -c "bun install --frozen-lockfile && bun run entry/bun.ts"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MONDAY_MODE: container
+      HOST: 0.0.0.0
+      PORT: "8787"
+      DATABASE_URL: postgres://monday:${POSTGRES_PASSWORD:-monday}@postgres:5432/monday
+      # A one-time code the first device pairs with (ADR 0006).
+      MONDAY_SETUP_CODE: ${MONDAY_SETUP_CODE:?set MONDAY_SETUP_CODE}
+      # The https:// origin the internet reaches this server at; push webhooks point here.
+      MONDAY_PUBLIC_URL: ${MONDAY_PUBLIC_URL:-}
+      # Only if the server should decrypt mail for Briefs and Workflows while devices are off.
+      MONDAY_ROOT_KEY: ${MONDAY_ROOT_KEY:-}
+    volumes:
+      - ../../..:/app
+    ports:
+      - "127.0.0.1:8787:8787"
+    restart: unless-stopped
+
+volumes:
+  postgres:
