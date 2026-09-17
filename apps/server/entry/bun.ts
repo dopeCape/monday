@@ -1,7 +1,8 @@
 // Bun entry: the container and the Sidecar. Reads the environment, starts the
-// embedded Postgres when the Sidecar has no DATABASE_URL, migrates, serves the
-// app on loopback with Bun.serve, runs the in-process kicker, watches the
-// parent process, and shuts down cleanly on SIGTERM.
+// embedded Postgres when the Sidecar has no DATABASE_URL and no attached
+// Cloud database, migrates, serves the app on loopback with Bun.serve, runs
+// the in-process kicker, watches the parent process, and shuts down cleanly
+// on SIGTERM.
 //
 // Environment:
 //   PORT                  0 or unset picks a free port
@@ -11,7 +12,11 @@
 //   MONDAY_SETUP_CODE     one-time code for the first Device; generated if unset
 //   MONDAY_DATA_DIR       where the embedded Postgres lives (default ./data)
 //   MONDAY_PARENT_PID     exit when this process is gone (research 4, section 2)
-//   DATABASE_URL          pooled connection string; DATABASE_URL_UNPOOLED for LISTEN
+//   DATABASE_URL          pooled connection string; DATABASE_URL_UNPOOLED for LISTEN.
+//                         Absent, a Sidecar opens the Cloud database recorded by
+//                         POST /upgrade/attach (data dir, cloud-database-url) when
+//                         there is one, else its embedded Postgres ("both" mode, ADR 0005).
+//   DATABASE_POOLED       1 or 0 to override the pooled guess from the URL
 //   MONDAY_SERVER_ID      heartbeat id; generated if unset
 //   MONDAY_ROOT_KEY       base64 root key from the Tauri parent's keychain (Sidecar); unlocks at boot
 //   MONDAY_ROOT_KEY_FILE  path to a file holding the base64 root key, typically
@@ -23,30 +28,27 @@
 //                         Gmail and Graph push subscriptions point here. Falls back to the
 //                         server.public_url Setting; absent, push-only providers are polled.
 
-import { type DeploymentMode, settingsSchema } from "@monday/shared";
-import { createAccountService } from "../src/accounts.ts";
+import { join } from "node:path";
+import type { DeploymentMode } from "@monday/shared";
 import { createApp } from "../src/app.ts";
-import { createAuth, randomCode } from "../src/auth/index.ts";
-import { isDeploymentMode, needsServedBy } from "../src/capabilities.ts";
+import { claimableNeeds, isDeploymentMode } from "../src/capabilities.ts";
 import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
-import { createKeys, decodeKey, type Keys, WrongRootKeyError } from "../src/crypto/keys.ts";
-import { deriveRootFromPassphrase, passphraseFeatureEnabled } from "../src/crypto/passphrase.ts";
-import { createDb } from "../src/db/client.ts";
+import { createDb, dbOptionsFor } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
-import { cloudIsAlive } from "../src/heartbeat.ts";
-import { createJobs } from "../src/jobs/index.ts";
+import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
-import { createMailstore } from "../src/mailstore/index.ts";
 import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
-import { createCredentialStore } from "../src/providers/credentials.ts";
-import { createProviderRegistry } from "../src/providers/index.ts";
 import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
-import { createPushManager, readPushSettings } from "../src/providers/push.ts";
-import { createSyncEngine } from "../src/providers/sync.ts";
+import { upgradeRoutes } from "../src/routes/upgrade.ts";
+import { readGlobalSetting } from "../src/settings/read.ts";
+import { createUpgrade } from "../src/upgrade/index.ts";
+import { fileAttachStore, readAttachedUrl } from "./attach.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
+import { findPgDump, pgDump } from "./pg-dump.ts";
 import { migrationsFolder } from "./resources.ts";
+import { createServices } from "./services.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
 const debug = process.env.MONDAY_LOG === "debug" ? log : () => {};
@@ -61,74 +63,25 @@ function resolveMode(): DeploymentMode {
   return raw;
 }
 
-/** Reads the root key the host provides, if any. Order: env, file, passphrase feature. */
-async function rootKeyFromHost(): Promise<{ key: Uint8Array; source: string } | null> {
-  const fromEnv = process.env.MONDAY_ROOT_KEY;
-  if (fromEnv) {
-    const key = decodeKey(fromEnv);
-    if (!key) throw new Error("MONDAY_ROOT_KEY is not base64");
-    return { key, source: "MONDAY_ROOT_KEY" };
-  }
-  const file = process.env.MONDAY_ROOT_KEY_FILE;
-  if (file) {
-    const text = await Bun.file(file)
-      .text()
-      .catch(() => null);
-    if (text === null) {
-      log(`MONDAY_ROOT_KEY_FILE ${file} is not readable; starting locked`);
-      return null;
-    }
-    // A recovery file has a sentence on the first line; the key is the last non-empty line.
-    const line = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .at(-1);
-    const key = line ? decodeKey(line) : null;
-    if (!key) throw new Error(`MONDAY_ROOT_KEY_FILE ${file} holds no base64 key`);
-    return { key, source: "MONDAY_ROOT_KEY_FILE" };
-  }
-  if (passphraseFeatureEnabled(process.env)) {
-    const passphrase = process.env.MONDAY_ROOT_PASSPHRASE;
-    const salt = process.env.MONDAY_ROOT_SALT ? decodeKey(process.env.MONDAY_ROOT_SALT) : null;
-    if (passphrase && salt) {
-      return { key: await deriveRootFromPassphrase(passphrase, salt), source: "passphrase" };
-    }
-    if (passphrase || salt) {
-      log("passphrase unlock needs both MONDAY_ROOT_PASSPHRASE and MONDAY_ROOT_SALT");
-    }
-  }
-  return null;
-}
-
-async function unlockAtBoot(keys: Keys): Promise<void> {
-  const provided = await rootKeyFromHost();
-  if (!provided) {
-    log("no root key provided; starting locked (headers only until POST /unlock)");
-    return;
-  }
-  try {
-    await keys.unlock(provided.key);
-    log(`unlocked at boot from ${provided.source}`);
-  } catch (error) {
-    if (error instanceof WrongRootKeyError) {
-      log(`the root key from ${provided.source} does not open this database; starting locked`);
-      return;
-    }
-    throw error;
-  }
-}
-
 async function main() {
   const mode = resolveMode();
   const serverId = process.env.MONDAY_SERVER_ID || `${mode}-${crypto.randomUUID().slice(0, 8)}`;
   const dataDir = process.env.MONDAY_DATA_DIR || "./data";
-  const sidecarToken = process.env.MONDAY_SIDECAR_TOKEN || null;
 
   let databaseUrl = process.env.DATABASE_URL || null;
   let unpooledUrl = process.env.DATABASE_URL_UNPOOLED || databaseUrl;
   let embedded: Awaited<ReturnType<typeof startEmbeddedPostgres>> | null = null;
+  let embeddedUrl: string | null = null;
 
+  if (!databaseUrl && mode === "sidecar") {
+    // A Cloud database attached from Settings makes this the "both" mode.
+    const attached = await readAttachedUrl(dataDir);
+    if (attached) {
+      databaseUrl = attached;
+      unpooledUrl = attached;
+      log(`using the attached Cloud database at ${new URL(attached).hostname}`);
+    }
+  }
   if (!databaseUrl) {
     if (mode !== "sidecar") {
       log(`DATABASE_URL is required in ${mode} mode`);
@@ -137,10 +90,17 @@ async function main() {
     embedded = await startEmbeddedPostgres({ dataDir, log: debug });
     databaseUrl = embedded.url;
     unpooledUrl = embedded.url;
+    embeddedUrl = embedded.url;
     log(`embedded postgres ready on port ${embedded.port} in ${embedded.startupMs} ms`);
   }
 
-  const handle = createDb(databaseUrl, { max: mode === "sidecar" ? 4 : 2 });
+  const handle = createDb(
+    databaseUrl,
+    dbOptionsFor(databaseUrl, {
+      pooledFlag: process.env.DATABASE_POOLED,
+      max: mode === "sidecar" ? 4 : 2,
+    }),
+  );
   try {
     const result = await migrate(handle.sql, { migrationsFolder: migrationsFolder() });
     if (result.applied > 0) log(`applied ${result.applied} migration(s)`);
@@ -154,79 +114,18 @@ async function main() {
     throw error;
   }
 
-  // The setup code pairs the very first Device (ADR 0006). Generated and printed
-  // at first boot when the host did not supply one.
-  const firstBoot = !(await createAuth({ db: handle.db }).hasDevices());
-  let setupCode = process.env.MONDAY_SETUP_CODE || null;
-  if (!setupCode && firstBoot) setupCode = randomCode();
-  const auth = createAuth({ db: handle.db, sidecarToken, setupCode });
-  if (setupCode && firstBoot) log(`setup code for the first device: ${setupCode}`);
-
-  const keys = createKeys(handle.db);
-  await unlockAtBoot(keys);
-
-  const jobs = createJobs(handle.db);
-  // Providers: the sync, watch and reconcile steps (slice 5) plus the push
-  // registrations (slice 9). Every Account with credentials gets its Jobs
-  // (idempotent ids) so a restart resumes sync. Refreshed OAuth tokens are
-  // written back through the credential store.
-  const mailstore = createMailstore(handle.db, keys);
-  const credentials = createCredentialStore(handle.db, mailstore);
-  const providers = createProviderRegistry({
-    oauth: {
-      onRefreshed: async (auth) => {
-        await credentials.updateAuth(auth).catch((error) => log(`token persist failed: ${error}`));
-      },
-    },
-    graph: {
-      pollMs: async () => {
-        const rows = await handle.db.query.settings.findMany();
-        const row = rows.find((r) => r.key === "sync.graph_poll_seconds" && r.scope === "global");
-        const seconds =
-          typeof row?.value === "number"
-            ? row.value
-            : settingsSchema["sync.graph_poll_seconds"].default;
-        return seconds * 1000;
-      },
-    },
-  });
-  const sync = createSyncEngine({
+  const services = await createServices({
     db: handle.db,
-    mailstore,
-    providers,
-    credentials,
-    log: debug,
-  });
-  sync.registerSteps(jobs);
-  const push = createPushManager({
-    db: handle.db,
-    engine: sync,
+    mode,
     serverId,
-    log: debug,
-    publicUrl: async () => {
-      const fromEnv = process.env.MONDAY_PUBLIC_URL?.trim();
-      if (fromEnv) return fromEnv.replace(/\/+$/, "");
-      const s = await readPushSettings(handle.db);
-      return s.publicUrl.trim() ? s.publicUrl.trim().replace(/\/+$/, "") : null;
-    },
+    env: process.env,
+    log,
+    debug,
   });
-  push.registerSteps(jobs);
-  const accountService = createAccountService({
-    db: handle.db,
-    mailstore,
-    providers,
-    credentials,
-    onAdded: async (accountId, provider) => {
-      await sync.startAccount(jobs, accountId);
-      await push.startAccount(jobs, accountId, provider);
-    },
-  });
-  for (const row of await handle.db.query.accounts.findMany()) {
-    if (!row.credentialsRef) continue;
-    await sync.startAccount(jobs, row.id);
-    await push.startAccount(jobs, row.id, row.provider);
-  }
-  const ownNeeds = needsServedBy(mode);
+  const { auth, keys, jobs, mailstore, sync, push, accounts } = services;
+  await services.startAccounts();
+
+  const timing = await readHeartbeatTiming(handle.db);
   const kicker = createProcessKicker({
     jobs,
     db: handle.db,
@@ -234,12 +133,12 @@ async function main() {
     mode,
     listenUrl: unpooledUrl ?? undefined,
     log: debug,
+    heartbeatMs: timing.intervalMs,
+    budgetMs: async () => (await readGlobalSetting(handle.db, "server.job_lease_seconds")) * 1000,
     canServe: async () => {
       // When no Cloud heartbeat is fresh, the Sidecar claims every class (ADR 0005).
-      if (mode === "sidecar" && !(await cloudIsAlive(handle.db, serverId))) {
-        return [...new Set([...ownNeeds, "needs-public-url"])];
-      }
-      return ownNeeds;
+      const stale = (await readHeartbeatTiming(handle.db)).staleMs;
+      return claimableNeeds(mode, await cloudIsAlive(handle.db, serverId, new Date(), stale));
     },
   });
 
@@ -251,6 +150,20 @@ async function main() {
     : null;
   const changesSocket = createChangesSocket({ auth, bus: changeBus, mailstore });
 
+  // The upgrade path (ADR 0008) is the Sidecar's: export, copy and attach.
+  const pgDumpBinary = mode === "sidecar" ? await findPgDump() : null;
+  const upgrade = createUpgrade({
+    mode,
+    sourceUrl: embeddedUrl ?? databaseUrl,
+    connect: (url) => createDb(url, dbOptionsFor(url, { max: 2 })),
+    migrate: (sql) => migrate(sql, { migrationsFolder: migrationsFolder() }),
+    dump: pgDumpBinary ? pgDump(pgDumpBinary) : undefined,
+    exportPath: () =>
+      join(dataDir, "export", `monday-${new Date().toISOString().replaceAll(/[:.]/g, "-")}.dump`),
+    attach: fileAttachStore(dataDir),
+    log: debug,
+  });
+
   const app = createApp({
     db: handle.db,
     auth,
@@ -260,17 +173,20 @@ async function main() {
     jobs,
     sync,
     changes: changeBus,
+    serverId,
+    staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     remoteAddress: (c) => {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };
       return server?.requestIP?.(c.req.raw)?.address ?? null;
     },
-    accounts: { accounts: accountService, discovery: defaultDiscoveryDeps },
+    accounts: { accounts, discovery: defaultDiscoveryDeps },
     oauth: {
       flow: createOAuthFlow(),
       // Only a process on the user's machine can catch the browser's loopback redirect.
       loopback: mode === "sidecar" ? createLoopbackListener() : null,
     },
     push,
+    mounts: mode === "sidecar" ? [upgradeRoutes(upgrade)] : [],
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");

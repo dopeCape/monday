@@ -1,0 +1,1 @@
+monday sync server. The API answers at /health.
