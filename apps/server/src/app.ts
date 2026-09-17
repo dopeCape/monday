@@ -3,7 +3,7 @@
 // the process-level pieces (research 22, section 2.1).
 
 import type { DeploymentMode } from "@monday/shared";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Auth } from "./auth/index.ts";
 import {
@@ -20,7 +20,7 @@ import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
 import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
-import { type BodyState, syncMessages } from "./db/schema.ts";
+import { type BodyState, syncMessages, threads } from "./db/schema.ts";
 import {
   createDrafts,
   DraftNotOpenError,
@@ -32,7 +32,9 @@ import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
 import {
   BriefNotReadyError,
   BriefOutputError,
+  ClassifyOutputError,
   createIntelligence,
+  GroupNestingError,
   type Intelligence,
   NoProviderKeyError,
 } from "./intelligence/index.ts";
@@ -48,6 +50,7 @@ import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
+import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
@@ -138,6 +141,23 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   options.sync?.setThreadObserver((workspaceId, threadId) =>
     intelligence.briefs.threadReady(workspaceId, threadId),
   );
+  // New Threads are routed on arrival, as route Jobs (slice 12).
+  if (options.sync) {
+    options.sync.setArrivalHook(async (arrival) => {
+      await intelligence.routing.onArrival(
+        arrival.workspaceId,
+        arrival.threadId,
+        arrival.lastActivity,
+      );
+    });
+  }
+  const placement = async (threadId: string) => {
+    const row = await db.query.threads.findFirst({
+      where: eq(threads.id, threadId),
+      columns: { groupId: true, subgroupId: true },
+    });
+    return row ? { group: row.groupId, subgroup: row.subgroupId } : null;
+  };
   const bus = options.changes ?? createChangeBus();
   const bodyStates = async (messageIds: string[]) => {
     const out = new Map<string, BodyState>();
@@ -189,10 +209,20 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/settings", settingsRoutes(db));
   app.route("/devices", devicesRoutes(auth));
   app.route("/", unlockRoutes(keys));
-  app.route("/", mailRoutes(mailstore, { bodyStates }));
+  app.route(
+    "/",
+    mailRoutes(mailstore, {
+      bodyStates,
+      placement,
+      // A user's move is a correction routing learns from (ADR 0005: it beats automation).
+      onMove: (intent, previous) => intelligence.routing.observeMove(intent, previous),
+      log: (m) => console.warn(`[routing] ${m}`),
+    }),
+  );
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
+  app.route("/", routingRoutes(intelligence));
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {
@@ -219,6 +249,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
     if (error instanceof BriefOutputError) return c.json({ error: "bad_output" }, 502);
     if (error instanceof BriefNotReadyError) return c.json({ error: "no_bodies" }, 409);
+    if (error instanceof ClassifyOutputError) return c.json({ error: "bad_output" }, 502);
+    if (error instanceof GroupNestingError) {
+      return c.json({ error: "group_nesting", detail: error.detail }, 400);
+    }
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

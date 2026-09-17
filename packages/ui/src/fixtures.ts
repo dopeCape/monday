@@ -5,6 +5,7 @@
 import type {
   Account,
   Brief,
+  DecisionCandidate,
   Draft,
   Group,
   Message,
@@ -174,6 +175,7 @@ const group = (
   name,
   rule: { sentence, predicate, prompt: sentence },
   threshold: null,
+  briefPolicy: null,
 });
 
 export const groups: Group[] = [
@@ -634,6 +636,68 @@ const seeds: ThreadSeed[] = [
 ];
 
 export const threads: Thread[] = seeds.map((s) => thread(s, messagesOf(s.id).length));
+
+/* ------------------------------ Needs a decision ------------------------------ */
+
+/**
+ * The two Threads the mock's Routing page holds in Needs a decision. Archived,
+ * so they stay out of the stream and its screenshots; the Cache keeps them for
+ * the queue's subject and sender.
+ */
+export const decisionThreads: Thread[] = [
+  {
+    ...thread(
+      {
+        id: "d1",
+        from: { name: "Ola Nordmann", email: "ola@nordmann.no" },
+        to: [p.me],
+        at: "2026-09-15T16:20:00",
+        unread: true,
+        subject: "Quick question about your open roles",
+        snippet: "Saw the Rust role and the community call. Which one should I write to?",
+        tags: [],
+        attachments: false,
+        section: null,
+        group: null,
+        subgroup: null,
+      },
+      1,
+    ),
+    archived: true,
+  },
+  {
+    ...thread(
+      {
+        id: "d2",
+        from: { name: "Deel", email: "no-reply@deel.com" },
+        to: [p.me],
+        at: "2026-09-15T08:05:00",
+        unread: false,
+        subject: "Contractor payment scheduled",
+        snippet: "A payment of 2,400.00 USD to Mateus Ferreira is scheduled for Friday.",
+        tags: [],
+        attachments: false,
+        section: null,
+        group: null,
+        subgroup: null,
+      },
+      1,
+    ),
+    archived: true,
+  },
+];
+
+/** Needs a decision as the mock shows it: candidates best first. */
+export const decisions: Array<{ threadId: string; candidates: DecisionCandidate[] }> = [
+  {
+    threadId: "d1",
+    candidates: [
+      { groupId: "hiring", confidence: 0.61 },
+      { groupId: "community", confidence: 0.54 },
+    ],
+  },
+  { threadId: "d2", candidates: [{ groupId: "finance", confidence: 0.66 }] },
+];
 
 export function threadById(id: string): Thread | undefined {
   return threads.find((t) => t.id === id);

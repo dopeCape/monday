@@ -7,20 +7,26 @@
 import type {
   AccountCapabilities,
   Actor,
+  BriefPolicy,
   ChangeKind,
+  DecisionCandidate,
   DraftAttachment,
   DraftKind,
   DraftStatus,
   FieldWrites,
   HostedProvider,
   Person,
+  Predicate,
   Provider,
+  RouteBy,
   ScheduledSendStatus,
+  Score,
   SendError,
   Task,
 } from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
@@ -30,6 +36,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   unique,
@@ -192,6 +199,8 @@ export const threads = pgTable(
     /** In the Provider's trash; a permanent delete removes the row. */
     deleted: boolean("deleted").notNull().default(false),
     hasAttachments: boolean("has_attachments").notNull().default(false),
+    /** List mail: any Message carries List-Id, List-Unsubscribe or Precedence bulk. Headers only. */
+    bulk: boolean("bulk").notNull().default(false),
     /**
      * Per field group, when it was last written and by whom, for last-writer-wins
      * against replayed intents (ADR 0005; packages/shared sync.ts). A group with
@@ -647,3 +656,99 @@ export const voiceProfiles = pgTable("voice_profiles", {
   enabled: boolean("enabled").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
+
+/* ------------------------------ Intelligence: routing (ADR 0004, slice 12) ------------------------------ */
+
+/**
+ * A Group (CONTEXT.md): a smart inbox a Routing rule fills, nested at most one
+ * level. The sentence and the Predicate are the user's own words and header
+ * facts, plaintext; the model prompt the route Task revises from corrections
+ * quotes mail and lives under the envelope ("rule" kind). Nothing is seeded
+ * here: onboarding seeds Groups.
+ */
+export const groups = pgTable(
+  "groups",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    parentId: text("parent_id").references((): AnyPgColumn => groups.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    sentence: text("sentence").notNull().default(""),
+    predicate: jsonb("predicate").$type<Predicate>().notNull().default({}),
+    promptEnc: bytea("prompt_enc"),
+    promptKey: bytea("prompt_key"),
+    /** Per-Group route threshold; null means the Setting. */
+    threshold: real("threshold"),
+    briefPolicy: text("brief_policy").$type<BriefPolicy>(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("groups_workspace_idx").on(t.workspaceId, t.parentId)],
+);
+
+/**
+ * An Example (CONTEXT.md): a Thread the user confirmed or corrected into a
+ * Group, or out of one. What the Routing page shows is the sender and the
+ * plaintext subject prefix, so the row carries no content.
+ */
+export const examples = pgTable(
+  "examples",
+  {
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    positive: boolean("positive").notNull(),
+    from: jsonb("from").$type<Person | null>(),
+    subject: text("subject").notNull().default(""),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.threadId, t.groupId] }),
+    index("examples_group_idx").on(t.groupId),
+  ],
+);
+
+/** Where routing put a Thread and how sure it was, with the score of every Group it weighed. */
+export const threadRoutes = pgTable(
+  "thread_routes",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    groupId: text("group_id"),
+    subgroupId: text("subgroup_id"),
+    confidence: real("confidence"),
+    subgroupConfidence: real("subgroup_confidence"),
+    by: text("by").$type<RouteBy>().notNull(),
+    scores: jsonb("scores").$type<Score[]>().notNull().default([]),
+    routedAt: timestamp("routed_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("thread_routes_group_idx").on(t.workspaceId, t.groupId)],
+);
+
+/** Needs a decision (CONTEXT.md): a Thread whose best rule was not sure enough, with its candidates. */
+export const routingDecisions = pgTable(
+  "routing_decisions",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    candidates: jsonb("candidates").$type<DecisionCandidate[]>().notNull().default([]),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("routing_decisions_workspace_idx").on(t.workspaceId, t.at)],
+);

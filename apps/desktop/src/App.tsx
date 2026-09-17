@@ -23,6 +23,8 @@ import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
+import { Routing } from "./screens/Routing.tsx";
+import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Search } from "./screens/Search.tsx";
 import { Settings } from "./screens/Settings.tsx";
 import type { SearchModule } from "./search/index.ts";
@@ -39,9 +41,13 @@ export interface AppProps {
   syncing?: SyncProgress | null | undefined;
   /** The Cache search behind the palette and the results screen (ADR 0011). */
   search?: SearchModule | null | undefined;
+  /** Groups and Needs a decision from the Store; the nav and the Routing page read them. Fixtures when absent. */
+  routing?: RoutingSource | undefined;
 }
 
 const defaultComposer = fixtureComposer();
+const noSubscribe = () => () => {};
+const noGroups = () => groups;
 
 export function App({
   inbox,
@@ -49,8 +55,15 @@ export function App({
   online = true,
   syncing = null,
   search = null,
+  routing,
 }: AppProps) {
   const shell = useShell();
+  const storeGroups = useSyncExternalStore(
+    routing?.subscribe ?? noSubscribe,
+    routing?.groups ?? noGroups,
+    routing?.groups ?? noGroups,
+  );
+  const navGroups = routing ? storeGroups : groups;
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
@@ -93,6 +106,7 @@ export function App({
       }
       if (target === "settings" || target.startsWith("settings:")) setActive("settings");
       else if (target === "search") setActive("search");
+      else if (target === "routing") setActive("routing");
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
         setActive("inbox");
@@ -118,7 +132,7 @@ export function App({
         workspace={navWorkspace}
         folders={navFolders}
         calendar={calendarNav}
-        groups={groups}
+        groups={navGroups}
         groupIcon={groupIcon}
         counts={counts}
         automation={automationNav}
@@ -155,6 +169,14 @@ export function App({
   parts.push(
     active === "settings" ? (
       <Settings key="screen" />
+    ) : active === "routing" ? (
+      <Routing
+        key="screen"
+        routing={routing}
+        inbox={inbox}
+        workspaceId={workspace.id}
+        onNavigate={navigate}
+      />
     ) : active === "scheduled" ? (
       <div key="screen" className="main inbox">
         <Scheduled composer={composer} strings={strings.scheduled} now={new Date()} />

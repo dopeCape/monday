@@ -1,8 +1,9 @@
 // Intelligence (ADR 0009): routing, sections, briefs, LangGraph, Roles and
 // the Meter behind one interface. Slice 11 shipped the Hosted runtime, the
-// shared provider keys, the Meter and the Brief Task; slice 13 adds the brief
-// policy and the background Job around it. Routing and the agent loop come
-// in their own slices and plug into the same runtime.
+// shared provider keys, the Meter and the Brief Task; slice 12 adds Routing
+// (Groups, the classify and route Tasks, Needs a decision); slice 13 adds the
+// brief policy and the background Job around it. The agent loop comes later
+// and plugs into the same runtime.
 
 import type { HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
@@ -14,6 +15,7 @@ import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
+import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import {
   type ChatModel,
   createHostedRuntime,
@@ -37,6 +39,19 @@ export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
 export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
 export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
+export type {
+  RouteJobPayload,
+  Routing,
+  RoutingCallOptions,
+  RoutingSettings,
+  Scored,
+} from "./routing/index.ts";
+export {
+  ClassifyOutputError,
+  createRouting,
+  GroupNestingError,
+  ROUTE_STEP,
+} from "./routing/index.ts";
 export type {
   ChatCall,
   ChatModel,
@@ -68,6 +83,7 @@ export interface Intelligence {
   meter: Meter;
   briefs: Briefs;
   policy: BriefPolicyRule;
+  routing: Routing;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
@@ -90,6 +106,22 @@ const POLICY_SETTING_KEYS = [
   "briefs.fyi_min_messages",
   "briefs.fyi_min_words",
   "briefs.automated_senders",
+] as const;
+
+const ROUTING_SETTING_KEYS = [
+  "routing.threshold.route",
+  "routing.threshold.ask",
+  "routing.threshold.tie_margin",
+  "routing.decisions.cap",
+  "routing.learn_from_corrections",
+  "routing.on_arrival",
+  "routing.predicate_first",
+  "routing.default_group",
+  "routing.classify.snippet_chars",
+  "routing.examples_in_prompt",
+  "routing.rerun.recent",
+  "routing.lookback_days",
+  "routing.brief_policy.default",
 ] as const;
 
 export function createIntelligence(options: IntelligenceOptions): Intelligence {
@@ -151,12 +183,41 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
 
+  const routing = createRouting({
+    db,
+    mailstore,
+    runtime,
+    now,
+    ...(options.log ? { log: options.log } : {}),
+    settings: async (): Promise<RoutingSettings> => {
+      const s = await readGlobalSettings(db, ROUTING_SETTING_KEYS);
+      return {
+        thresholds: {
+          route: s["routing.threshold.route"],
+          ask: s["routing.threshold.ask"],
+          tieMargin: s["routing.threshold.tie_margin"],
+        },
+        decisionsCap: s["routing.decisions.cap"],
+        learnFromCorrections: s["routing.learn_from_corrections"],
+        onArrival: s["routing.on_arrival"],
+        predicateFirst: s["routing.predicate_first"],
+        defaultGroup: s["routing.default_group"],
+        snippetChars: s["routing.classify.snippet_chars"],
+        examplesInPrompt: s["routing.examples_in_prompt"],
+        rerunRecent: s["routing.rerun.recent"],
+        lookbackDays: s["routing.lookback_days"],
+        briefPolicyDefault: s["routing.brief_policy.default"],
+      };
+    },
+  });
+
   return {
     runtime,
     keys,
     meter,
     briefs,
     policy,
+    routing,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(
@@ -170,6 +231,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
     registerSteps(jobs) {
       briefs.registerSteps(jobs);
+      routing.registerSteps(jobs);
     },
   };
 }

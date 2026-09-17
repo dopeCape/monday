@@ -69,7 +69,7 @@ describe("schema", () => {
     const { store } = await open();
     const fixtures = fixtureSeed();
     const [count] = await store.query<{ n: number }>("select count(*) as n from threads");
-    expect(count?.n).toBe(fixtures.threads.length);
+    expect(count?.n).toBe(fixtures.threads.length + (fixtures.decisionThreads?.length ?? 0));
     const hits = await store.query<{ id: string }>(
       "select t.id from threads_fts f join threads t on t.rid = f.rowid where threads_fts match ?",
       ["redline"],
@@ -86,7 +86,7 @@ describe("schema", () => {
     expect(inbox.map((t) => t.id)).toEqual(fixtures.threads.map((t) => t.id));
     const e1 = inbox.find((t) => t.id === "e1") as Thread;
     const seed = fixtures.threads.find((t) => t.id === "e1") as Thread;
-    expect(e1).toEqual({ ...seed, workspaceId: store.workspaceId });
+    expect(e1).toEqual({ ...seed, workspaceId: store.workspaceId, bulk: false });
   });
 });
 

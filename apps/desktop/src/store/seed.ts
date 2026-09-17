@@ -2,7 +2,16 @@
 // tests render the same inbox the mock does. The only place the desktop app
 // imports fixture data for mail.
 
-import type { Brief, Draft, Group, Message, SectionRule, Tag, Thread } from "@monday/shared";
+import type {
+  Brief,
+  DecisionCandidate,
+  Draft,
+  Group,
+  Message,
+  SectionRule,
+  Tag,
+  Thread,
+} from "@monday/shared";
 import * as fixtures from "@monday/ui/fixtures";
 import type { Statement } from "./driver.ts";
 
@@ -14,6 +23,9 @@ export interface SeedData {
   groups: Group[];
   briefs: Brief[];
   drafts: Draft[];
+  /** Needs a decision, with the (archived) Threads it names. */
+  decisions?: Array<{ threadId: string; candidates: DecisionCandidate[] }>;
+  decisionThreads?: Thread[];
 }
 
 export function fixtureSeed(): SeedData {
@@ -25,6 +37,8 @@ export function fixtureSeed(): SeedData {
     groups: fixtures.groups,
     briefs: fixtures.briefs,
     drafts: [fixtures.draft],
+    decisions: fixtures.decisions,
+    decisionThreads: fixtures.decisionThreads,
   };
 }
 
@@ -45,15 +59,23 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
   }
   for (const g of data.groups) {
     out.push({
-      sql: "insert or replace into groups (id, parent_id, name, rule, threshold) values (?, ?, ?, ?, ?)",
-      params: [g.id, g.parentId, g.name, g.rule, g.threshold],
+      sql: "insert or replace into groups (id, parent_id, name, sentence, predicate, threshold, brief_policy) values (?, ?, ?, ?, ?, ?, ?)",
+      params: [
+        g.id,
+        g.parentId,
+        g.name,
+        g.rule.sentence,
+        g.rule.predicate,
+        g.threshold,
+        g.briefPolicy,
+      ],
     });
   }
-  for (const t of data.threads) {
+  for (const t of [...data.threads, ...(data.decisionThreads ?? [])]) {
     out.push({
       sql: `insert or replace into threads (id, subject, participants, last_activity, message_count, unread, starred,
-              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, snippet, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, bulk, snippet, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         t.id,
         t.subject,
@@ -69,6 +91,7 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
         t.group,
         t.subgroup,
         t.hasAttachments,
+        t.bulk ?? false,
         t.snippet,
         at,
       ],
@@ -116,6 +139,12 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
         b.stale,
         countOf.get(b.threadId) ?? 0,
       ],
+    });
+  }
+  for (const d of data.decisions ?? []) {
+    out.push({
+      sql: "insert or replace into decisions (thread_id, candidates, at) values (?, ?, ?)",
+      params: [d.threadId, d.candidates, at],
     });
   }
   for (const d of data.drafts) {

@@ -211,6 +211,7 @@ export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[
       icon: "settings",
     });
   }
+  out.push({ target: "routing", label: t("strings.palette.nav.routing"), icon: "group" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
   return out;
 }

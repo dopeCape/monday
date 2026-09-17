@@ -74,6 +74,20 @@ const SIMPLE_INTENTS: readonly Exclude<IntentKind, "snooze" | "move" | "tags">[]
 export interface MailRouteOptions {
   /** Per Message id, whether the body is fetched, pending or deferred (the sync mirror knows). */
   bodyStates?: (messageIds: string[]) => Promise<Map<string, BodyState>>;
+  /**
+   * Called after a move intent lands, with where the Thread was. Routing
+   * learns from it (slice 12: a user move is a correction). Runs after the
+   * answer is decided; a failure is logged, never surfaced to the client.
+   */
+  onMove?: (
+    intent: Extract<Intent, { kind: "move" }>,
+    previous: { group: string | null; subgroup: string | null },
+  ) => Promise<unknown>;
+  /** Where a Thread is before a move, for `onMove`; null when unknown. */
+  placement?: (
+    threadId: string,
+  ) => Promise<{ group: string | null; subgroup: string | null } | null>;
+  log?: (message: string) => void;
 }
 
 export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {}): Hono<AppEnv> {
@@ -99,9 +113,18 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
   app.post("/threads/:id/move", async (c) => {
     const body = await parseBody(c, moveBody);
     if (!body.ok) return body.response;
-    return c.json(
-      await mailstore.applyIntent({ kind: "move", threadId: c.req.param("id"), ...body.data }),
-    );
+    const intent = { kind: "move" as const, threadId: c.req.param("id"), ...body.data };
+    const before =
+      options.onMove && options.placement ? await options.placement(intent.threadId) : null;
+    const result = await mailstore.applyIntent(intent);
+    if (result.applied && options.onMove && before) {
+      await options
+        .onMove(intent, before)
+        .catch((error) =>
+          options.log?.(`move hook: ${error instanceof Error ? error.message : String(error)}`),
+        );
+    }
+    return c.json(result);
   });
 
   app.put("/threads/:id/tags", async (c) => {

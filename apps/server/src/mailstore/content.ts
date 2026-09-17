@@ -27,6 +27,7 @@ export const CONTENT_KINDS: readonly ContentKind[] = [
   "attachment",
   "attachment-text",
   "brief",
+  "rule",
   "tag-rationale",
   "summary",
   "embedding",

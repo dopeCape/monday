@@ -1,7 +1,8 @@
 // Headless screenshot check for the desktop Inbox against the design mock.
 //
-//   bun scripts/shot.ts            compare the app against the checked-in baselines
-//   bun scripts/shot.ts --update   re-capture the baselines from design/ (needs review)
+//   bun scripts/shot.ts                 compare the app against the checked-in baselines
+//   bun scripts/shot.ts --update        re-capture the baselines from design/ (needs review)
+//   bun scripts/shot.ts --only routing  one state (with --update, re-capture only that baseline)
 //
 // Starts its own design server and Vite dev server on spare ports, renders each
 // state in headless Chrome at 1440x900, and pixel-diffs it against the mock's
@@ -21,6 +22,8 @@ const tolerance = Number(process.env.SHOT_TOLERANCE ?? "2");
 const designPort = Number(process.env.SHOT_DESIGN_PORT ?? "6979");
 const appPort = Number(process.env.SHOT_APP_PORT ?? "1479");
 const update = process.argv.includes("--update");
+const onlyAt = process.argv.indexOf("--only");
+const only = onlyAt >= 0 ? process.argv[onlyAt + 1] : null;
 const size = { width: 1440, height: 900 };
 
 /** Each state: the app URL and the mock's equivalent. */
@@ -33,6 +36,8 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   // Slice 8: the reader over a real body (the fixture Cache in the dev server) and compose.
   { name: "reader-body", app: "/?sel=e2", mock: "/app.html?chrome=0&sel=e2" },
   { name: "compose", app: "/?compose=d1", mock: "/app.html?chrome=0&overlay=compose" },
+  // Slice 12: the Routing page over the fixture Groups and the Needs a decision queue.
+  { name: "routing", app: "/?screen=routing", mock: "/app.html?chrome=0#/routing" },
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {
@@ -101,6 +106,7 @@ async function main(): Promise<number> {
 
     let failed = 0;
     for (const s of states) {
+      if (only && s.name !== only) continue;
       const expected = join(baselines, `${s.name}.png`);
       const actual = join(diffs, `${s.name}.actual.png`);
       if (update) await shoot(`http://localhost:${designPort}${s.mock}`, expected);

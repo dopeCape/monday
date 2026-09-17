@@ -11,6 +11,7 @@ export * from "./components/nav-sidebar.tsx";
 export * from "./components/primitives.tsx";
 export * from "./components/rail.tsx";
 export * from "./components/reader.tsx";
+export * from "./components/routing.tsx";
 export * from "./components/settings.tsx";
 export * from "./format.ts";
 export * from "./palettes.ts";

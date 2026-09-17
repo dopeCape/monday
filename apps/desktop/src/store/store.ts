@@ -15,10 +15,12 @@ import type {
   Brief,
   BriefChange,
   Change,
+  DecisionChange,
   Draft,
   DraftChange,
   DraftIntent,
   DraftIntentArgs,
+  GroupChange,
   Id,
   Intent,
   IntentArgs,
@@ -149,7 +151,8 @@ const CURSOR_KEY = "cursor";
 const SCHEMA_VERSION_KEY = "schema_version";
 /**
  * Bumped when a table changes shape. Version 2 gave `messages` its rowid alias
- * and the body index (slice 10); version 3 gave `briefs` its Thread version and
+ * and the body index (slice 10); version 3 gave `threads` the bulk flag,
+ * `groups` the feed's columns (slice 12) and `briefs` its Thread version and
  * content flag (slice 13). An older Cache is a copy, so it is rebuilt from the
  * feed: content tables dropped, cursor reset, Outbox and settings kept.
  */
@@ -174,6 +177,8 @@ const REBUILD_SQL = `
   drop table if exists thread_tags;
   drop table if exists thread_labels;
   drop table if exists briefs;
+  drop table if exists groups;
+  drop table if exists decisions;
   delete from meta where key = 'cursor';
 `;
 
@@ -369,8 +374,8 @@ function threadUpsert(t: ThreadChange, at: IsoDate): Statement[] {
     {
       // Subject and snippet are content: a feed row fills them only while they are empty.
       sql: `insert into threads (id, subject, participants, last_activity, message_count, unread, starred,
-              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, snippet, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, bulk, snippet, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (id) do update set
               subject = case when threads.subject = '' then excluded.subject else threads.subject end,
               participants = excluded.participants,
@@ -385,6 +390,7 @@ function threadUpsert(t: ThreadChange, at: IsoDate): Statement[] {
               group_id = excluded.group_id,
               subgroup_id = excluded.subgroup_id,
               has_attachments = excluded.has_attachments,
+              bulk = excluded.bulk,
               snippet = case when threads.snippet = '' then excluded.snippet else threads.snippet end,
               updated_at = excluded.updated_at`,
       params: [
@@ -402,6 +408,7 @@ function threadUpsert(t: ThreadChange, at: IsoDate): Statement[] {
         t.group,
         t.subgroup,
         t.hasAttachments,
+        t.bulk ?? false,
         t.snippet,
         at,
       ],
@@ -465,7 +472,36 @@ export function changeStatements(change: Change): Statement[] {
       return [sendUpsert(change.payload)];
     case "brief":
       return [briefUpsert(change.payload)];
+    case "group":
+      return [groupUpsert(change.payload)];
+    case "decision":
+      return [decisionUpsert(change.payload)];
   }
+}
+
+/** A Group row from the feed, or its removal. Sub-groups arrive as their own rows. */
+function groupUpsert(g: GroupChange): Statement {
+  if (g.deleted) return { sql: "delete from groups where id = ?", params: [g.id] };
+  return {
+    sql: `insert into groups (id, parent_id, name, sentence, predicate, threshold, brief_policy)
+          values (?, ?, ?, ?, ?, ?, ?)
+          on conflict (id) do update set
+            parent_id = excluded.parent_id, name = excluded.name, sentence = excluded.sentence,
+            predicate = excluded.predicate, threshold = excluded.threshold, brief_policy = excluded.brief_policy`,
+    params: [g.id, g.parentId, g.name, g.sentence, g.predicate, g.threshold, g.briefPolicy],
+  };
+}
+
+/** A Needs a decision entry from the feed; no candidates means the Thread left the queue. */
+function decisionUpsert(d: DecisionChange): Statement {
+  if (d.candidates.length === 0) {
+    return { sql: "delete from decisions where thread_id = ?", params: [d.threadId] };
+  }
+  return {
+    sql: `insert into decisions (thread_id, candidates, at) values (?, ?, ?)
+          on conflict (thread_id) do update set candidates = excluded.candidates, at = excluded.at`,
+    params: [d.threadId, d.candidates, d.at],
+  };
 }
 
 /**

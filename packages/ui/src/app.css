@@ -1338,6 +1338,50 @@ button.msg {
 .side-card h3 .btn {
   margin-left: auto;
 }
+.rule-edit {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 6px;
+  max-width: 68ch;
+}
+.rule-edit label,
+.rule-edit-row {
+  display: grid;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.rule-edit-row .seg {
+  justify-self: start;
+}
+.rule-edit textarea.input {
+  height: auto;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.rule-edit .acts {
+  display: flex;
+  gap: 4px;
+}
+.rule-examples {
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.routing-error {
+  margin: -16px 0 20px;
+  font-size: var(--fs-sm);
+}
+.side-card h3 .preview-acts {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.side-card h3 .preview-acts .btn {
+  margin-left: 0;
+}
 .side-card + .side-card {
   margin-top: 0;
 }
