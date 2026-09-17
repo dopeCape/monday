@@ -44,6 +44,7 @@ import { readGlobalSetting } from "../src/settings/read.ts";
 import { createUpgrade } from "../src/upgrade/index.ts";
 import { fileAttachStore, readAttachedUrl } from "./attach.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
+import { createCheckpointer } from "./checkpointer.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
 import { findPgDump, pgDump } from "./pg-dump.ts";
@@ -113,6 +114,8 @@ async function main() {
     }
     throw error;
   }
+  // LangGraph's checkpoints for paused Agent turns, set up right after our migrations.
+  const checkpointer = await createCheckpointer(databaseUrl);
 
   const services = await createServices({
     db: handle.db,
@@ -173,6 +176,7 @@ async function main() {
     jobs,
     sync,
     changes: changeBus,
+    checkpointer,
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     remoteAddress: (c) => {
@@ -216,6 +220,7 @@ async function main() {
       await kicker.stop();
       await sync.close();
       await changeListener?.stop();
+      await checkpointer.end().catch(() => {});
       await handle.close();
       await embedded?.stop();
     } finally {

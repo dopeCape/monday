@@ -40,6 +40,46 @@ export interface ChatResponse {
 /** The seam under the runtime: LangChain in production, canned answers in tests. */
 export type ChatModel = (call: ChatCall) => Promise<ChatResponse>;
 
+/* ------------------------------ The agent loop's seam ------------------------------ */
+
+/** One tool call the model asked for. Arguments are parsed JSON, never a string. */
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+/** The transcript as the loop keeps it: provider-neutral, JSON-serializable. */
+export type AgentMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string; toolCalls: AgentToolCall[] }
+  | { role: "tool"; toolCallId: string; name: string; content: string; isError?: boolean };
+
+/** A tool as the model sees it: name, description and a JSON Schema for its input. */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+/** One model step with the tools bound and the history so far. */
+export interface ConverseCall extends Omit<ChatCall, "prompt"> {
+  messages: AgentMessage[];
+  tools: ToolSpec[];
+  /** Text as it streams; the whole answer still arrives in the response. */
+  onText?: ((delta: string) => void) | undefined;
+}
+
+export interface ConverseResponse {
+  text: string;
+  toolCalls: AgentToolCall[];
+  usage: Usage;
+  model?: string;
+}
+
+/** The seam the agent loop calls: LangChain with tools bound in production, a script in tests. */
+export type ConverseModel = (call: ConverseCall) => Promise<ConverseResponse>;
+
 /** Where a provider's key comes from: the shared-key store on the Server, the keychain on a Device. */
 export type KeysResolver = (provider: HostedProvider) => Promise<string | null>;
 
@@ -70,15 +110,32 @@ export interface RunResult {
 
 export type MeterInput = Omit<MeterEntry, "id" | "createdAt">;
 
+export interface ConverseInput {
+  system: string;
+  messages: AgentMessage[];
+  tools: ToolSpec[];
+  onText?: ((delta: string) => void) | undefined;
+  maxOutputTokens?: number;
+}
+
+export interface ConverseResult extends Omit<RunResult, "output"> {
+  text: string;
+  toolCalls: AgentToolCall[];
+}
+
 export interface HostedRuntime {
   /** Resolves the model, calls it, meters the call. Throws NoProviderKeyError. */
   run(task: Task, input: RunInput, options: RunOptions): Promise<RunResult>;
+  /** One step of an agent loop: the same resolution and Meter, with tools bound. */
+  converse(task: Task, input: ConverseInput, options: RunOptions): Promise<ConverseResult>;
   /** The model a Task would run on now, under the current Settings. */
   resolve(task: Task, provider?: HostedProvider): Promise<ModelChoice>;
 }
 
 export interface HostedRuntimeOptions {
   chat: ChatModel;
+  /** Absent means converse() throws; the Server wires LangChain, tests a script. */
+  converse?: ConverseModel;
   keys: KeysResolver;
   settings: () => Promise<HostedSettings>;
   meter: { record(entry: MeterInput): Promise<MeterEntry> };
@@ -112,22 +169,45 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
     },
 
     async run(task, input, opts) {
-      const settings = await options.settings();
-      const choice = resolveTaskModel(settings, task, opts.provider);
-      const key = await options.keys(choice.provider);
-      if (!key) throw new NoProviderKeyError(choice.provider);
-      const started = now();
-      const baseUrl = endpointFor(settings, choice.provider);
-      const response = await options.chat({
-        provider: choice.provider,
-        model: choice.model,
-        effort: choice.effort,
-        maxOutputTokens: Math.max(choice.maxOutputTokens, input.maxOutputTokens ?? 0),
-        key,
-        ...(baseUrl ? { baseUrl } : {}),
+      const { call, finish } = await prepare(task, input.maxOutputTokens, opts);
+      const response = await options.chat({ ...call, system: input.system, prompt: input.prompt });
+      const metered = await finish(response);
+      return { output: response.text, ...metered };
+    },
+
+    async converse(task, input, opts) {
+      const converse = options.converse;
+      if (!converse) throw new Error("this runtime has no conversational model");
+      const { call, finish } = await prepare(task, input.maxOutputTokens, opts);
+      const response = await converse({
+        ...call,
         system: input.system,
-        prompt: input.prompt,
+        messages: input.messages,
+        tools: input.tools,
+        onText: input.onText,
       });
+      const metered = await finish(response);
+      return { text: response.text, toolCalls: response.toolCalls, ...metered };
+    },
+  };
+
+  /** What both entry points share: resolve the model, check the key, then meter what came back. */
+  async function prepare(task: Task, maxOutputTokens: number | undefined, opts: RunOptions) {
+    const settings = await options.settings();
+    const choice = resolveTaskModel(settings, task, opts.provider);
+    const key = await options.keys(choice.provider);
+    if (!key) throw new NoProviderKeyError(choice.provider);
+    const started = now();
+    const baseUrl = endpointFor(settings, choice.provider);
+    const call: Omit<ChatCall, "system" | "prompt"> = {
+      provider: choice.provider,
+      model: choice.model,
+      effort: choice.effort,
+      maxOutputTokens: Math.max(choice.maxOutputTokens, maxOutputTokens ?? 0),
+      key,
+      ...(baseUrl ? { baseUrl } : {}),
+    };
+    const finish = async (response: { usage: Usage; model?: string }) => {
       const durationMs = Math.max(0, now() - started);
       const model = response.model || choice.model;
       const usage: Usage = {
@@ -149,16 +229,10 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
         durationMs,
         jobId: opts.jobId ?? null,
       });
-      return {
-        output: response.text,
-        usage,
-        costMicros,
-        provider: choice.provider,
-        model,
-        durationMs,
-        meter,
-      };
-    },
-  };
+      return { usage, costMicros, provider: choice.provider, model, durationMs, meter };
+    };
+    return { call, finish };
+  }
+
   return runtime;
 }

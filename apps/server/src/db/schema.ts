@@ -7,6 +7,8 @@
 import type {
   AccountCapabilities,
   Actor,
+  AgentEvent,
+  ApprovalDecision,
   BriefPolicy,
   ChangeKind,
   DecisionCandidate,
@@ -19,10 +21,15 @@ import type {
   Predicate,
   Provider,
   RouteBy,
+  Runtime,
   ScheduledSendStatus,
   Score,
   SendError,
   Task,
+  Tier,
+  ToolCall,
+  ToolPreview,
+  UndoRecord,
 } from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -487,10 +494,15 @@ export const changes = pgTable(
   (t) => [index("changes_workspace_seq_idx").on(t.workspaceId, t.seq)],
 );
 
+/** Who made an Activity row: the Agent through a tool, the user, or automation (a replayed intent). */
+export type ActivityActor = Actor | "agent";
+
 /**
- * The Activity log (ADR 0002): one row per Tool call. This slice writes only its
- * first rows, the intents that lost last-writer-wins; the tool server fills in
- * approvals, results and undo pointers.
+ * The Activity log (ADR 0002): one row per Tool call, with the tier, the
+ * preview shown, who decided, the result and what Undo replays. The tool
+ * server also uses it as its ledger: a call id already recorded is not run
+ * twice when the LangGraph node re-executes after an interrupt. The sync
+ * engine's rows (intents that lost last-writer-wins) carry only the summary.
  */
 export const activity = pgTable(
   "activity",
@@ -499,12 +511,66 @@ export const activity = pgTable(
     workspaceId: text("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
-    actor: text("actor").$type<Actor>().notNull(),
+    actor: text("actor").$type<ActivityActor>().notNull(),
     tool: text("tool").notNull(),
     summary: text("summary").notNull(),
     at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    sessionId: text("session_id"),
+    /** The model's id for the call, unique within a Session. */
+    callId: text("call_id"),
+    tier: text("tier").$type<Tier>(),
+    input: jsonb("input").$type<Record<string, unknown>>(),
+    preview: jsonb("preview").$type<ToolPreview>(),
+    decision: text("decision").$type<ApprovalDecision | "auto">(),
+    status: text("status").$type<ToolCall["status"]>().notNull().default("done"),
+    result: jsonb("result"),
+    undo: jsonb("undo").$type<UndoRecord>(),
+    undoneAt: timestamp("undone_at", { withTimezone: true, mode: "date" }),
   },
-  (t) => [index("activity_workspace_at_idx").on(t.workspaceId, t.at)],
+  (t) => [
+    index("activity_workspace_at_idx").on(t.workspaceId, t.at),
+    unique("activity_session_call").on(t.sessionId, t.callId),
+  ],
+);
+
+/* ------------------------------ Agent host: Sessions (ADR 0002, ADR 0007) ------------------------------ */
+
+/**
+ * One conversation with the Agent. The LangGraph checkpoint for it lives in
+ * the checkpointer's own tables under the `langgraph` schema, keyed by this
+ * id as its thread_id; the transcript the composer replays is session_events.
+ */
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runtime: jsonb("runtime").$type<Runtime>().notNull(),
+    /** The first user turn, for the history list. */
+    title: text("title").notNull().default(""),
+    developerMode: boolean("developer_mode").notNull().default(false),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    lastActivity: timestamp("last_activity", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("sessions_workspace_idx").on(t.workspaceId, t.lastActivity)],
+);
+
+/** The persisted events of a Session, in order: user turns, answers, tool cards. */
+export const sessionEvents = pgTable(
+  "session_events",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    event: jsonb("event").$type<AgentEvent>().notNull(),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("session_events_session_idx").on(t.sessionId, t.seq)],
 );
 
 /* ------------------------------ Drafts, sends and voice (ADR 0010) ------------------------------ */

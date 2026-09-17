@@ -8,6 +8,9 @@ import type {
   ChatCall,
   ChatModel,
   ChatResponse,
+  ConverseCall,
+  ConverseModel,
+  ConverseResponse,
   HostedRuntime,
   KeysResolver,
   MeterInput,
@@ -47,6 +50,56 @@ export function createFakeChat(initial: FakeAnswer = ""): FakeChat {
   };
 }
 
+/* ------------------------------ The agent loop's fake ------------------------------ */
+
+/**
+ * One scripted step of the agent loop: what the model answers given the
+ * transcript so far. A string is a final text answer; an object may ask for
+ * tool calls. A function decides from the call (its messages and tools).
+ */
+export type FakeStep =
+  | string
+  | Partial<ConverseResponse>
+  | ((call: ConverseCall) => Partial<ConverseResponse> | string);
+
+export interface FakeConverse {
+  converse: ConverseModel;
+  calls: ConverseCall[];
+  /** Appends steps; each call consumes one. Past the script the model answers with empty text. */
+  script(...steps: FakeStep[]): void;
+}
+
+export function createFakeConverse(...steps: FakeStep[]): FakeConverse {
+  const queue: FakeStep[] = [...steps];
+  const calls: ConverseCall[] = [];
+  return {
+    calls,
+    script(...more) {
+      queue.push(...more);
+    },
+    converse: async (call) => {
+      calls.push(call);
+      const step = queue.shift();
+      const produced = typeof step === "function" ? step(call) : step;
+      const partial: Partial<ConverseResponse> =
+        typeof produced === "string" ? { text: produced } : (produced ?? { text: "" });
+      const response: ConverseResponse = {
+        text: partial.text ?? "",
+        toolCalls: partial.toolCalls ?? [],
+        usage: { ...DEFAULT_USAGE, ...partial.usage },
+        ...(partial.model ? { model: partial.model } : {}),
+      };
+      // Stream the text in two pieces so a consumer sees deltas arrive before the answer.
+      if (call.onText && response.text) {
+        const half = Math.ceil(response.text.length / 2);
+        call.onText(response.text.slice(0, half));
+        call.onText(response.text.slice(half));
+      }
+      return response;
+    },
+  };
+}
+
 /** A KeysResolver over a map; providers not in it have no key. */
 export function fakeKeys(keys: Partial<Record<HostedProvider, string>>): KeysResolver {
   return async (provider) => keys[provider] ?? null;
@@ -71,6 +124,8 @@ export function createMemoryMeter(now: () => Date = () => new Date()) {
 
 export interface FakeRuntimeOptions {
   answer?: FakeAnswer;
+  /** The agent loop's script, one step per model call. */
+  steps?: FakeStep[];
   keys?: Partial<Record<HostedProvider, string>>;
   settings?: Partial<HostedSettings>;
   now?: () => number;
@@ -84,16 +139,19 @@ export interface FakeRuntimeOptions {
 export function createFakeRuntime(options: FakeRuntimeOptions = {}): {
   runtime: HostedRuntime;
   chat: FakeChat;
+  converse: FakeConverse;
   meter: ReturnType<typeof createMemoryMeter>;
 } {
   const chat = createFakeChat(options.answer ?? "");
+  const converse = createFakeConverse(...(options.steps ?? []));
   const meter = createMemoryMeter();
   const runtime = createHostedRuntime({
     chat: chat.chat,
+    converse: converse.converse,
     keys: fakeKeys(options.keys ?? { anthropic: "sk-ant-fake" }),
     settings: async () => ({ ...defaultSettings(), ...options.settings }),
     meter,
     ...(options.now ? { now: options.now } : {}),
   });
-  return { runtime, chat, meter };
+  return { runtime, chat, converse, meter };
 }

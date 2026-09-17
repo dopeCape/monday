@@ -2,15 +2,27 @@
 // the Meter behind one interface. Slice 11 shipped the Hosted runtime, the
 // shared provider keys, the Meter and the Brief Task; slice 12 adds Routing
 // (Groups, the classify and route Tasks, Needs a decision); slice 13 adds the
-// brief policy and the background Job around it. The agent loop comes later
-// and plugs into the same runtime.
+// brief policy and the background Job around it; slice 14 adds the Agent host
+// (the tool server, Sessions, the Activity log and the LangGraph loop) over
+// the same runtime.
 
+import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
+import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
+import { accounts, workspaces } from "../db/schema.ts";
+import { createDrafts, type Drafts } from "../drafts/index.ts";
 import type { Jobs } from "../jobs/index.ts";
 import type { Mailstore } from "../mailstore/index.ts";
 import { readGlobalSettings } from "../settings/read.ts";
+import {
+  type AgentHost,
+  createActivityLog,
+  createAgentHost,
+  createServerToolHost,
+  createSessionStore,
+} from "./agent/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
@@ -18,12 +30,15 @@ import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule }
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import {
   type ChatModel,
+  type ConverseModel,
   createHostedRuntime,
   type HostedRuntime,
   type KeysResolver,
 } from "./runtime/index.ts";
-import { createLangChainChat } from "./runtime/langchain.ts";
+import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
 
+export type { AgentHost, AgentSettings, TurnResult } from "./agent/index.ts";
+export { SessionNotFoundError, TurnBusyError } from "./agent/index.ts";
 export type { BriefRequest, BriefSettings, Briefs, ThreadVersion } from "./brief.ts";
 export {
   BRIEF_STEP,
@@ -53,9 +68,14 @@ export {
   ROUTE_STEP,
 } from "./routing/index.ts";
 export type {
+  AgentMessage,
+  AgentToolCall,
   ChatCall,
   ChatModel,
   ChatResponse,
+  ConverseCall,
+  ConverseModel,
+  ConverseResponse,
   HostedRuntime,
   KeysResolver,
   RunInput,
@@ -69,10 +89,16 @@ export interface IntelligenceOptions {
   mailstore: Mailstore;
   /** The seam under the runtime; defaults to LangChain. Tests pass a fake. */
   chat?: ChatModel;
+  /** The agent loop's seam; defaults to LangChain with tools bound. Tests pass a script. */
+  converse?: ConverseModel;
   /** Where the runtime's keys come from; defaults to the shared-key store. */
   keys?: KeysResolver;
   /** The brief policy seam; defaults to the rule over Settings with the model behind it. */
   policy?: BriefPolicyRule;
+  /** The Drafts module the Agent's draft and send tools go through; defaults to one over `db`. */
+  drafts?: Drafts;
+  /** LangGraph's checkpointer; the entry passes PostgresSaver, the default keeps checkpoints in memory. */
+  checkpointer?: BaseCheckpointSaver;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -84,10 +110,19 @@ export interface Intelligence {
   briefs: Briefs;
   policy: BriefPolicyRule;
   routing: Routing;
+  agent: AgentHost;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
 }
+
+const AGENT_SETTING_KEYS = [
+  "agent.system_prompt",
+  "agent.preview_above",
+  "agent.always_ask",
+  "agent.max_steps",
+  "agent.search_limit",
+] as const;
 
 const BRIEF_SETTING_KEYS = [
   "briefs.bullets_max",
@@ -134,6 +169,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const resolveKey: KeysResolver = options.keys ?? ((provider) => keys.load(provider));
   const runtime = createHostedRuntime({
     chat: options.chat ?? createLangChainChat(),
+    converse: options.converse ?? createLangChainConverse(),
     keys: resolveKey,
     settings: hostedSettings,
     meter,
@@ -211,6 +247,34 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
 
+  const drafts = options.drafts ?? createDrafts({ db, mailstore, now });
+  const agent = createAgentHost({
+    runtime,
+    activity: createActivityLog(db, { now }),
+    sessions: createSessionStore(db, { now }),
+    hostFor: (workspaceId) => createServerToolHost({ db, mailstore, drafts, workspaceId, now }),
+    ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
+    now,
+    settings: async () => {
+      const s = await readGlobalSettings(db, AGENT_SETTING_KEYS);
+      return {
+        systemPrompt: s["agent.system_prompt"],
+        previewAbove: s["agent.preview_above"],
+        alwaysAsk: s["agent.always_ask"],
+        maxSteps: s["agent.max_steps"],
+        searchLimit: s["agent.search_limit"],
+      };
+    },
+    workspaceAddress: async (workspaceId) => {
+      const rows = await db
+        .select({ address: accounts.address })
+        .from(workspaces)
+        .innerJoin(accounts, eq(accounts.id, workspaces.accountId))
+        .where(eq(workspaces.id, workspaceId));
+      return rows[0]?.address ?? workspaceId;
+    },
+  });
+
   return {
     runtime,
     keys,
@@ -218,6 +282,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     briefs,
     policy,
     routing,
+    agent,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

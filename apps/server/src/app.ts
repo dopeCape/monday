@@ -2,6 +2,7 @@
 // here; the entry under entry/ supplies the database, the loopback test and
 // the process-level pieces (research 22, section 2.1).
 
+import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { DeploymentMode } from "@monday/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
@@ -37,12 +38,15 @@ import {
   GroupNestingError,
   type Intelligence,
   NoProviderKeyError,
+  SessionNotFoundError,
+  TurnBusyError,
 } from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
 import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
+import { agentRoutes } from "./routes/agent.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { draftsRoutes } from "./routes/drafts.ts";
@@ -77,6 +81,8 @@ export interface AppOptions {
    * built on the fake seam.
    */
   intelligence?: Intelligence;
+  /** LangGraph's checkpointer for the Agent host's paused turns; the entry passes PostgresSaver. */
+  checkpointer?: BaseCheckpointSaver;
   /**
    * The in-process wake bus for the Changes feed. The entry feeds it from a
    * LISTEN connection and shares it with the WebSocket transport; defaults to a
@@ -133,7 +139,12 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   const intelligence =
     options.intelligence ??
     (() => {
-      const created = createIntelligence({ db, mailstore });
+      const created = createIntelligence({
+        db,
+        mailstore,
+        drafts,
+        ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
+      });
       if (options.jobs) created.registerSteps(options.jobs);
       return created;
     })();
@@ -223,6 +234,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
   app.route("/", routingRoutes(intelligence));
+  app.route("/", agentRoutes(intelligence.agent));
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {
@@ -253,6 +265,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     if (error instanceof GroupNestingError) {
       return c.json({ error: "group_nesting", detail: error.detail }, 400);
     }
+    if (error instanceof SessionNotFoundError) return c.json({ error: "not_found" }, 404);
+    if (error instanceof TurnBusyError) return c.json({ error: "turn_running" }, 409);
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

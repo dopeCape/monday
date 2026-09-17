@@ -34,6 +34,7 @@ import type { ServerlessKicker } from "../src/kicker/serverless.ts";
 import { createVercelKicker } from "../src/kicker/vercel.ts";
 import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
 import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
+import { createCheckpointer } from "./checkpointer.ts";
 import { migrationsFolder } from "./resources.ts";
 import { createServices, type Services } from "./services.ts";
 
@@ -135,6 +136,8 @@ export async function bootCloud(
       ? createVercelKicker({ ...kickerOptions, cronSecret: env.CRON_SECRET })
       : createNetlifyKicker({ ...kickerOptions, waitUntil: (p) => waitUntilNow?.(p) });
   await services.startAccounts();
+  // LangGraph checkpoints for paused Agent turns, set up right after the migrations.
+  const checkpointer = await createCheckpointer(databaseUrl);
 
   const app = createApp({
     db: handle.db,
@@ -144,6 +147,7 @@ export async function bootCloud(
     mailstore: services.mailstore,
     jobs: services.jobs,
     sync: services.sync,
+    checkpointer,
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     accounts: { accounts: services.accounts, discovery: defaultDiscoveryDeps },
@@ -171,6 +175,7 @@ export async function bootCloud(
     async close() {
       await kicker?.stop();
       await services.sync.close();
+      await checkpointer.end().catch(() => {});
       await handle.close();
     },
   };
