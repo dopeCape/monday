@@ -13,6 +13,7 @@ import {
   AgentDock,
   AgentPanel,
   AgentThread,
+  AskBox,
   Attachment,
   Avatar,
   Brief,
@@ -22,9 +23,11 @@ import {
   CommandPalette,
   Compose,
   CustomSwatch,
+  DecisionRow,
   FlowChain,
   FlowEdge,
   FlowNode,
+  GroupCard,
   Icon,
   Input,
   Kbd,
@@ -32,14 +35,19 @@ import {
   Message,
   MessageRow,
   NavSidebar,
+  PageHead,
+  PreviewCard,
   palettes,
   Rail,
   ReplyBox,
   ResultsList,
+  RuleText,
+  SampleRow,
   Scrim,
   SectionLabel,
   Seg,
   SettingsField,
+  SideCard,
   Swatch,
   Switch,
   Tabs,
@@ -524,5 +532,143 @@ describe("drag region", () => {
     expect(html).toContain('<div class="col-head" data-tauri-drag-region="true">');
     expect(html).toContain('<span class="sp" data-tauri-drag-region="true">');
     expect(html).toContain('<button type="button" class="btn">Filter</button>');
+  });
+});
+
+describe("routing", () => {
+  const finance = fx.groups.find((g) => g.id === "finance");
+  if (!finance) throw new Error("fixture group finance missing");
+
+  test("PageHead carries the title, the subtitle and the actions", () => {
+    const html = render(
+      <PageHead title="Routing" subtitle="Groups and rules">
+        <Btn primary>New group</Btn>
+      </PageHead>,
+    );
+    expect(html).toContain(
+      '<div class="page-head"><div><h1>Routing</h1><p>Groups and rules</p></div>',
+    );
+    expect(html).toContain(
+      '<div class="acts"><button type="button" class="btn primary">New group</button>',
+    );
+  });
+
+  test("GroupCard shows the rule with Predicate mentions as code, the counts and the Sub-groups", () => {
+    const html = render(
+      <GroupCard
+        id={finance.id}
+        name={finance.name}
+        meta="2 unread"
+        confidence="98% confident"
+        sentence={finance.rule.sentence}
+        predicate={finance.rule.predicate}
+        subgroups={[
+          { id: "invoices", name: "Invoices", description: "Money we owe", count: 1 },
+          { id: "receipts", name: "Receipts", description: "Money already paid" },
+        ]}
+        changeRuleLabel="Change rule"
+      />,
+    );
+    expect(html).toContain('class="grp"');
+    expect(html).toContain("<b>Finance</b>");
+    expect(html).toContain('<span class="n">2 unread</span>');
+    expect(html).toContain('<span class="tag">98% confident</span>');
+    expect(html).toContain("<code>billing@</code>");
+    expect(html).toContain("<code>receipts@</code>");
+    expect(html).toContain('class="subg"');
+    expect(html).toContain('Invoices<span class="d">Money we owe</span>');
+    expect(html).toContain('<span class="tag">1</span>');
+    expect(html).not.toContain('Receipts<span class="tag"');
+  });
+
+  test("RuleText leaves a sentence with no Predicate alone", () => {
+    expect(render(<RuleText sentence="Anything from customers" />)).toContain(
+      '<div class="rule"><div>Anything from customers</div></div>',
+    );
+  });
+
+  test("SideCard, AskBox and SampleRow match the mock's markup", () => {
+    const html = render(
+      <SideCard title="Needs a decision" count={2}>
+        <SampleRow name="Ola Nordmann" subject="Quick question" tag="Hiring" />
+      </SideCard>,
+    );
+    expect(html).toContain(
+      '<div class="side-card"><h3>Needs a decision<span class="tag">2</span></h3>',
+    );
+    expect(html).toContain('class="sample"');
+    expect(html).toContain(">ON<");
+    expect(html).toContain("<span>Quick question</span>");
+    expect(html).toContain('class="tag" style="margin-left:auto;flex:none">Hiring</span>');
+    const ask = render(<AskBox placeholder="A Support inbox" help="The agent proposes a rule." />);
+    expect(ask).toContain('<div class="ask"><span class="mk sm" aria-hidden="true">m</span>');
+    expect(ask).toContain('placeholder="A Support inbox"');
+    expect(ask).toContain("The agent proposes a rule.");
+  });
+
+  test("DecisionRow offers the candidates, and an X only when there is one", () => {
+    const two = render(
+      <DecisionRow
+        threadId="d1"
+        name="Ola Nordmann"
+        subject="Quick question"
+        candidates={[
+          { id: "hiring", label: "Hiring" },
+          { id: "community", label: "Community" },
+        ]}
+        onPick={() => {}}
+        onLeave={() => {}}
+        leaveLabel="Leave"
+      />,
+    );
+    expect(two).toContain('<button type="button" class="btn sm">Hiring</button>');
+    expect(two).toContain('<button type="button" class="btn sm">Community</button>');
+    expect(two).not.toContain('aria-label="Leave"');
+    const one = render(
+      <DecisionRow
+        threadId="d2"
+        name="Deel"
+        subject="Contractor payment"
+        candidates={[{ id: "finance", label: "Finance" }]}
+        onPick={() => {}}
+        onLeave={() => {}}
+        leaveLabel="Leave"
+      />,
+    );
+    expect(one).toContain('<button type="button" class="btn sm">Finance</button>');
+    expect(one).toContain('aria-label="Leave"');
+  });
+
+  test("PreviewCard lists the moves with their targets and disables Apply when nothing would move", () => {
+    const html = render(
+      <PreviewCard
+        title="What would move"
+        summary="1 of 50 threads would move"
+        moves={[{ threadId: "t", name: "Hetzner", subject: "Invoice", target: "Finance" }]}
+        emptyLabel="Nothing would move"
+        applyLabel="Apply"
+        cancelLabel="Cancel"
+        onApply={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(html).toContain('class="side-card preview"');
+    expect(html).toContain("1 of 50 threads would move");
+    expect(html).toContain('<button type="button" class="btn sm primary">Apply</button>');
+    expect(html).toContain("Finance</span>");
+    const empty = render(
+      <PreviewCard
+        title="What would move"
+        summary=""
+        moves={[]}
+        emptyLabel="Nothing would move"
+        applyLabel="Apply"
+        cancelLabel="Cancel"
+        onApply={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(empty).toContain("Nothing would move");
+    expect(empty).toContain('class="btn sm primary" disabled=""');
   });
 });

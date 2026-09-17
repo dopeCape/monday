@@ -9,30 +9,30 @@ import type { GroupId, Section, Thread } from "../domain.ts";
 
 /** The deterministic conditions a Section rule may set. Every set one must hold. */
 export interface SectionWhen {
-  unread?: boolean;
-  starred?: boolean;
-  hasAttachments?: boolean;
+  unread?: boolean | undefined;
+  starred?: boolean | undefined;
+  hasAttachments?: boolean | undefined;
   /** List mail (List-Id, List-Unsubscribe, Precedence bulk). */
-  bulk?: boolean;
+  bulk?: boolean | undefined;
   /** At least this many Messages on the Thread. */
-  minMessages?: number;
+  minMessages?: number | undefined;
   /** Who wrote the newest Message: the mailbox owner or someone else. */
-  lastFrom?: "me" | "others";
+  lastFrom?: "me" | "others" | undefined;
   /** The Thread's Group or Sub-group is one of these ids or names. */
-  groups?: string[];
+  groups?: string[] | undefined;
   /** The Thread's Group or Sub-group is none of these. */
-  notGroups?: string[];
+  notGroups?: string[] | undefined;
   /** The Thread has no Group at all. */
-  ungrouped?: boolean;
+  ungrouped?: boolean | undefined;
 }
 
-/** One Section rule as the `sections.rules` Setting stores it. */
+/** One Section rule as the `sections.rules` Setting stores it (the schema's sectionRuleShape). */
 export interface SectionRuleSetting {
   id: Section;
   when: SectionWhen;
   /** A sentence for the `section` Task when the conditions are not enough; empty means model-free. */
-  sentence?: string;
-  hidden?: boolean;
+  sentence?: string | undefined;
+  hidden?: boolean | undefined;
 }
 
 /** What the evaluator knows about a Thread beyond its header row. */

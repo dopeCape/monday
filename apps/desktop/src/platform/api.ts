@@ -7,9 +7,12 @@ import type {
   Brief,
   Capabilities,
   ChangesPage,
+  CorrectionResult,
   Draft,
   DraftContent,
   DraftIntent,
+  GroupInput,
+  GroupView,
   HeaderSearchPage,
   HostedProvider,
   Id,
@@ -17,9 +20,14 @@ import type {
   IntentResult,
   MessageBodiesPage,
   MeterMonth,
+  ProposedMove,
   Provider,
+  RoutingApplied,
+  RoutingDecision,
+  RoutingPreview,
   ScheduledSend,
   ScheduleResult,
+  ThreadRoute,
   VoiceProfile,
 } from "@monday/shared";
 
@@ -286,6 +294,58 @@ export function createApi(target: () => ServerTarget | null) {
       get: async (threadId: Id): Promise<Brief | null> => {
         try {
           return await request<Brief>(`/threads/${encodeURIComponent(threadId)}/brief`);
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+    },
+    /** Routing (slice 12): Groups, Needs a decision, the re-run with preview. */
+    routing: {
+      /** Every Group with its Examples, counts and mean Confidence. Needs the Server unlocked for revised prompts. */
+      groups: (workspaceId: Id) =>
+        request<{ groups: GroupView[] }>(
+          `/groups?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.groups),
+      createGroup: (workspaceId: Id, input: GroupInput) =>
+        request<GroupView>("/groups", json("POST", { workspace: workspaceId, ...input })),
+      updateGroup: (groupId: Id, patch: Partial<GroupInput>) =>
+        request<GroupView>(`/groups/${encodeURIComponent(groupId)}`, json("PATCH", patch)),
+      deleteGroup: (groupId: Id) =>
+        raw(`/groups/${encodeURIComponent(groupId)}`, { method: "DELETE" }).then(() => undefined),
+      /** Needs a decision, newest first. */
+      decisions: (workspaceId: Id) =>
+        request<{ decisions: RoutingDecision[] }>(
+          `/routing/decisions?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.decisions),
+      /** The user's choice for a Thread in Needs a decision: a Group id, or null to leave it out. */
+      decide: (threadId: Id, groupId: Id | null) =>
+        request<CorrectionResult>(
+          `/routing/decisions/${encodeURIComponent(threadId)}`,
+          json("POST", { group: groupId, at: new Date().toISOString() }),
+        ),
+      /** A dry run over the newest Threads: what would move. Nothing moves. */
+      rerun: (workspaceId: Id, recent?: number) =>
+        request<RoutingPreview>(
+          "/routing/rerun",
+          json("POST", { workspace: workspaceId, ...(recent ? { recent } : {}) }),
+        ),
+      /** The second call: applies the moves a preview proposed. */
+      apply: (workspaceId: Id, moves: ProposedMove[]) =>
+        request<RoutingApplied>(
+          "/routing/rerun/apply",
+          json("POST", { workspace: workspaceId, moves }),
+        ),
+      /** Enqueues the route Job for one Thread. */
+      route: (workspaceId: Id, threadId: Id) =>
+        request<{ jobId: Id }>(
+          `/threads/${encodeURIComponent(threadId)}/route`,
+          json("POST", { workspace: workspaceId }),
+        ),
+      /** Where routing put a Thread and how sure it was, or null when never routed. */
+      routeOf: async (threadId: Id): Promise<ThreadRoute | null> => {
+        try {
+          return await request<ThreadRoute>(`/threads/${encodeURIComponent(threadId)}/route`);
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) return null;
           throw error;

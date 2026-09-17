@@ -1640,6 +1640,7 @@ export const settingsSchema = {
   "strings.palette.nav.inbox": str("appearance", "Palette: Inbox", "Inbox"),
   "strings.palette.nav.settings": str("appearance", "Palette: Settings", "Settings"),
   "strings.palette.nav.search": str("appearance", "Palette: Search", "Search"),
+  "strings.palette.nav.routing": str("appearance", "Palette: Routing", "Routing"),
   "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
   "strings.palette.nav.settings_page": str(
     "appearance",

@@ -69,7 +69,7 @@ describe("schema", () => {
     const { store } = await open();
     const fixtures = fixtureSeed();
     const [count] = await store.query<{ n: number }>("select count(*) as n from threads");
-    expect(count?.n).toBe(fixtures.threads.length);
+    expect(count?.n).toBe(fixtures.threads.length + (fixtures.decisionThreads?.length ?? 0));
     const hits = await store.query<{ id: string }>(
       "select t.id from threads_fts f join threads t on t.rid = f.rowid where threads_fts match ?",
       ["redline"],

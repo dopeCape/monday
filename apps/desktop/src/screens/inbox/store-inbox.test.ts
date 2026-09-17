@@ -3,9 +3,11 @@
 // before the Server answers, undo reverses it, and the rows never flicker.
 
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_SECTION_RULES } from "@monday/shared";
 import { threads } from "@monday/ui/fixtures";
 import { bunDriver } from "../../store/bun-driver.ts";
 import { createFakeStore, type FakeStore } from "../../store/fake.ts";
+import { fixtureSeed } from "../../store/seed.ts";
 import { createStoreInbox, type StoreInbox } from "./store-inbox.ts";
 
 const ids = () => threads.map((t) => t.id);
@@ -122,6 +124,56 @@ describe("storeInbox", () => {
     await store.sync();
     await settled(inbox, () => inbox.thread("e7")?.archived === true);
     expect(inbox.threads().map((t) => t.id)).not.toContain("e7");
+    inbox.close();
+  });
+});
+
+describe("Section rules in the Store", () => {
+  const owner = "tejas@genai-labs.io";
+  const rules = () => DEFAULT_SECTION_RULES;
+  const order = () => ["needs-reply", "waiting", "fyi", "newsletters"];
+
+  test("Threads the Server left unsectioned land by the rules over state and the newest sender; a Server Section stays", async () => {
+    const seed = fixtureSeed();
+    // Strip the fixture's Sections from a few Threads so the rules decide them.
+    seed.threads = seed.threads.map((t) =>
+      ["e1", "e4", "e10", "e7"].includes(t.id)
+        ? {
+            ...t,
+            section: null,
+            ...(t.id === "e10" ? { bulk: true } : {}),
+            ...(t.id === "e4" ? { messageCount: 5 } : {}),
+          }
+        : t,
+    );
+    const fake = await createFakeStore({ driver: bunDriver(), seed });
+    const inbox = await createStoreInbox(fake.store, { sections: { rules, order, owner } });
+    const section = (id: string) => inbox.thread(id)?.section;
+    // e1: unread, Aoife wrote last.
+    expect(section("e1")).toBe("needs-reply");
+    // e4: read, five Messages, Mateus wrote last.
+    expect(section("e4")).toBe("waiting");
+    // e10: list mail.
+    expect(section("e10")).toBe("newsletters");
+    // e7: read, one Message: for your information.
+    expect(section("e7")).toBe("fyi");
+    // e2 kept the Section the seed gave it.
+    expect(section("e2")).toBe(threads.find((t) => t.id === "e2")?.section);
+    inbox.close();
+  });
+
+  test("resection applies changed rules without waiting for the Cache", async () => {
+    const seed = fixtureSeed();
+    seed.threads = seed.threads.map((t) => (t.id === "e1" ? { ...t, section: null } : t));
+    const fake = await createFakeStore({ driver: bunDriver(), seed });
+    let current = DEFAULT_SECTION_RULES;
+    const inbox = await createStoreInbox(fake.store, {
+      sections: { rules: () => current, order, owner },
+    });
+    expect(inbox.thread("e1")?.section).toBe("needs-reply");
+    current = [{ id: "fyi", when: {} }];
+    inbox.resection();
+    expect(inbox.thread("e1")?.section).toBe("fyi");
     inbox.close();
   });
 });

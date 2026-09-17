@@ -5,8 +5,13 @@
 // The reader side keeps one live query per watched Thread and fills bodies
 // through the content routes on open, within the Cache rules (a body fetched
 // once stays; an opened Thread is read again only when a Message has none).
+// Sections are decided here, on the client, from the Section rules in
+// Settings over Thread state and Group (CONTEXT.md "Section rule"): fast,
+// local, and never waiting on the Server. A Section the Server assigned
+// (the section Task) is kept as is.
 
-import type { Message, Thread } from "@monday/shared";
+import type { Message, SectionRuleSetting, Thread } from "@monday/shared";
+import { sectionOf } from "@monday/shared";
 import {
   ALL_THREADS_SQL,
   type LiveQuery,
@@ -23,7 +28,19 @@ import type { Inbox, UndoToken } from "./actions.ts";
 type Reversal = Array<StoreIntent>;
 
 export interface StoreInbox extends Inbox {
+  /** Re-evaluates the Section rules over the cached rows, after the Settings change. */
+  resection(): void;
   close(): void;
+}
+
+/** The Section rules as the Store evaluates them: the Settings, read when rows arrive, and the owner. */
+export interface SectionSource {
+  rules: () => readonly SectionRuleSetting[];
+  order: () => readonly string[];
+  /** The mailbox owner's address, for "lastFrom". */
+  owner: string;
+  /** Group id to name, so a rule may name a Group either way. */
+  groupNames?: (() => Readonly<Record<string, string>>) | undefined;
 }
 
 export interface StoreInboxOptions {
@@ -31,6 +48,8 @@ export interface StoreInboxOptions {
   content?: ContentTransport | undefined;
   /** The reader.load_remote_images Setting, read at fetch time. */
   remoteImages?: (() => boolean) | undefined;
+  /** The Section rules; absent leaves every Thread's Section as the Cache has it. */
+  sections?: SectionSource | undefined;
   log?: ((message: string) => void) | undefined;
 }
 
@@ -92,19 +111,43 @@ export async function createStoreInbox(
     }
   };
 
+  /** The Section a row lands in: the Server's when it set one, else the rules over the row. */
+  const sectioned = (entry: ReturnType<typeof rowToCachedThread>): Thread => {
+    const rules = options.sections;
+    if (!rules || entry.thread.section !== null) return entry.thread;
+    const section = sectionOf(
+      entry.thread,
+      {
+        lastSender: entry.lastSender,
+        owner: rules.owner,
+        ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
+      },
+      rules.rules(),
+      rules.order(),
+    );
+    return section === null ? entry.thread : { ...entry.thread, section };
+  };
+
+  let lastRows: Record<string, unknown>[] = [];
+  const project = (rows: Record<string, unknown>[]) => {
+    lastRows = rows;
+    byId.clear();
+    const all = rows.map((r) => {
+      const entry = rowToCachedThread(r, store.workspaceId);
+      return { thread: sectioned(entry), deleted: entry.deleted };
+    });
+    for (const { thread } of all) byId.set(thread.id, thread);
+    stream = all
+      .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
+      .map(({ thread }) => thread);
+    for (const l of [...listeners]) l();
+  };
+
   const live = store.live<Record<string, unknown>>(ALL_THREADS_SQL);
   await new Promise<void>((resolve) => {
     let first = true;
     live.subscribe((rows) => {
-      byId.clear();
-      const all = rows.map((r) => rowToCachedThread(r, store.workspaceId));
-      for (const { thread } of all) byId.set(thread.id, thread);
-      stream = all
-        .filter(
-          ({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null,
-        )
-        .map(({ thread }) => thread);
-      for (const l of [...listeners]) l();
+      project(rows);
       if (first) {
         first = false;
         resolve();
@@ -203,6 +246,9 @@ export async function createStoreInbox(
       if (!reversal) return;
       undos.delete(token);
       for (const intent of reversal) await store.intent(intent);
+    },
+    resection() {
+      project(lastRows);
     },
     close() {
       live.close();

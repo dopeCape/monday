@@ -7,6 +7,7 @@ import { App } from "./App.tsx";
 import { platform } from "./platform/tauri.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
+import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
 import { createSearch, type FetchBodies } from "./search/index.ts";
 import { createPrewarm } from "./search/prewarm.ts";
 import { Shell, useShell } from "./shell/Shell.tsx";
@@ -30,7 +31,11 @@ function Root() {
   settingsRef.current = shell.settings;
   const status = useStoreStatus();
   const progress = useSyncProgress();
-  const [seams, setSeams] = useState<{ inbox: StoreInbox; composer: StoreComposer } | null>(null);
+  const [seams, setSeams] = useState<{
+    inbox: StoreInbox;
+    composer: StoreComposer;
+    routing: StoreRouting;
+  } | null>(null);
 
   // The bulk body route: "search older mail" and the pre-warm Job share it.
   const fetchBodies = useMemo<FetchBodies>(
@@ -85,11 +90,24 @@ function Root() {
   useEffect(() => {
     if (!content) return;
     let closed = false;
-    let opened: { inbox: StoreInbox; composer: StoreComposer } | null = null;
+    let opened: { inbox: StoreInbox; composer: StoreComposer; routing: StoreRouting } | null = null;
+    let routingSeam: StoreRouting | null = null;
     void Promise.all([
+      createStoreRouting(store).then((r) => {
+        routingSeam = r;
+        return r;
+      }),
       createStoreInbox(store, {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],
+        // The Section rules run here, on the client, over the Cache (CONTEXT.md "Section rule").
+        sections: {
+          rules: () => settingsRef.current["sections.rules"],
+          order: () => settingsRef.current["sections.order"],
+          owner: account.address,
+          groupNames: () =>
+            Object.fromEntries((routingSeam?.groups() ?? []).map((g) => [g.id, g.name])),
+        },
         log: (m) => console.warn(`[reader] ${m}`),
       }),
       platform().then((p) =>
@@ -99,12 +117,13 @@ function Root() {
           suggestions: p.isTauri ? undefined : { d1: { ghost: draftGhost, note: draftNote } },
         }),
       ),
-    ]).then(([inbox, composer]) => {
+    ]).then(([routing, inbox, composer]) => {
       if (closed) {
         inbox.close();
         composer.close();
+        routing.close();
       } else {
-        opened = { inbox, composer };
+        opened = { inbox, composer, routing };
         setSeams(opened);
       }
     });
@@ -112,13 +131,28 @@ function Root() {
       closed = true;
       opened?.inbox.close();
       opened?.composer.close();
+      opened?.routing.close();
     };
   }, [store, content]);
+
+  // Changed Section rules re-section the stream at once, without a new Cache read.
+  const sectionRules = shell.settings["sections.rules"];
+  const sectionOrder = shell.settings["sections.order"];
+  useEffect(() => {
+    settingsRef.current = {
+      ...settingsRef.current,
+      "sections.rules": sectionRules,
+      "sections.order": sectionOrder,
+    };
+    seams?.inbox.resection();
+  }, [seams, sectionRules, sectionOrder]);
+
   if (!seams) return null;
   return (
     <App
       inbox={seams.inbox}
       composer={seams.composer}
+      routing={seams.routing}
       online={status === "online" || status === "syncing"}
       syncing={progress}
       search={search}
