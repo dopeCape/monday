@@ -2,7 +2,7 @@
 // "Deployment modes"; research 22 section 2.3). The client reads this once
 // after pairing and picks its realtime transport from it.
 
-import type { Capabilities, DeploymentMode } from "@monday/shared";
+import type { Capabilities, DeploymentMode, HostedState } from "@monday/shared";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -17,7 +17,10 @@ export function isDeploymentMode(value: unknown): value is DeploymentMode {
   return typeof value === "string" && (DEPLOYMENT_MODES as readonly string[]).includes(value);
 }
 
-const TABLE: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "unlocked">> = {
+/** The mode-fixed part: everything but the process state (`unlocked`) and the runtime state (`hosted`). */
+export type ModeCapabilities = Omit<Capabilities, "protocol" | "mode" | "unlocked" | "hosted">;
+
+const TABLE: Record<DeploymentMode, ModeCapabilities> = {
   sidecar: { realtime: "websocket", holdsConnections: true, publicUrl: false, localRuntimes: true },
   container: {
     realtime: "websocket",
@@ -29,9 +32,17 @@ const TABLE: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "un
   netlify: { realtime: "polling", holdsConnections: false, publicUrl: true, localRuntimes: false },
 };
 
-/** `unlocked` is process state, not a mode property: whether K_root is in memory right now. */
-export function capabilitiesFor(mode: DeploymentMode, unlocked: boolean): Capabilities {
-  return { protocol: PROTOCOL_VERSION, mode, ...TABLE[mode], unlocked };
+/**
+ * `unlocked` is process state, not a mode property: whether K_root is in
+ * memory right now. `hosted` is Settings plus which providers have a shared
+ * key (ADR 0007).
+ */
+export function capabilitiesFor(
+  mode: DeploymentMode,
+  unlocked: boolean,
+  hosted: HostedState,
+): Capabilities {
+  return { protocol: PROTOCOL_VERSION, mode, ...TABLE[mode], unlocked, hosted };
 }
 
 /** The need tags a Server in this mode can serve on its own (ADR 0005). */

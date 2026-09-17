@@ -1,6 +1,18 @@
+export type { HostedSettingKey, HostedSettings, ModelChoice } from "./hosted.ts";
+export {
+  estimateCostMicros,
+  formatMicros,
+  HOSTED_SETTING_KEYS,
+  priceFor,
+  pricingFor,
+  resolveTaskModel,
+  rolesFor,
+} from "./hosted.ts";
 export type {
   Effort,
+  ModelPrice,
   PartialSettings,
+  Pricing,
   SettingEntry,
   SettingKey,
   SettingScope,

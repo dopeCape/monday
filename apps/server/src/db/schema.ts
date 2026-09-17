@@ -12,13 +12,16 @@ import type {
   DraftKind,
   DraftStatus,
   FieldWrites,
+  HostedProvider,
   Person,
   Provider,
   ScheduledSendStatus,
   SendError,
+  Task,
 } from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   customType,
@@ -566,7 +569,70 @@ export const scheduledSends = pgTable(
   ],
 );
 
-/** The Voice profile: storage and routes here; building it from sent mail is slice 11. */
+/* ------------------------------ Intelligence: Hosted runtime, Meter, Briefs (ADR 0007) ------------------------------ */
+
+/**
+ * A Hosted provider key the user shared with the Server ("Let the server use
+ * this key"). One row per provider, the key under the envelope as a
+ * "credential" object: wrapped under the K_ws of whichever Workspace the
+ * sharing Device was showing, which any unlocked Server can open. Keys that
+ * are not shared never reach this table; they stay in the Device keychain.
+ */
+export const providerKeys = pgTable("provider_keys", {
+  provider: text("provider").$type<HostedProvider>().primaryKey(),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  key: bytea("key").notNull(),
+  dataEnc: bytea("data_enc").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+/** The Meter: one row per Hosted model call. Cost is an estimate in USD micro-units. */
+export const meter = pgTable(
+  "meter",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    task: text("task").$type<Task>().notNull(),
+    provider: text("provider").$type<HostedProvider>().notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cachedTokens: integer("cached_tokens").notNull().default(0),
+    costMicros: bigint("cost_micros", { mode: "number" }).notNull().default(0),
+    durationMs: integer("duration_ms").notNull().default(0),
+    jobId: text("job_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("meter_workspace_at_idx").on(t.workspaceId, t.createdAt)],
+);
+
+/**
+ * A Brief per Thread (docs/spec/architecture.md, "Data model"): bullets and
+ * actions are model-written text about mail content, so each is its own
+ * envelope under the "brief" kind. Which model wrote it is a header.
+ */
+export const briefs = pgTable("briefs", {
+  threadId: text("thread_id")
+    .primaryKey()
+    .references(() => threads.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  bulletsEnc: bytea("bullets_enc").notNull(),
+  bulletsKey: bytea("bullets_key").notNull(),
+  actionsEnc: bytea("actions_enc").notNull(),
+  actionsKey: bytea("actions_key").notNull(),
+  provider: text("provider").$type<HostedProvider>().notNull(),
+  model: text("model").notNull(),
+  computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
+  stale: boolean("stale").notNull().default(false),
+});
+
+/** The Voice profile: storage and routes here; building it from sent mail is a later slice. */
 export const voiceProfiles = pgTable("voice_profiles", {
   workspaceId: text("workspace_id")
     .primaryKey()

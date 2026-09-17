@@ -4,16 +4,19 @@
 
 import type {
   AccountCapabilities,
+  Brief,
   Capabilities,
   ChangesPage,
   Draft,
   DraftContent,
   DraftIntent,
   HeaderSearchPage,
+  HostedProvider,
   Id,
   Intent,
   IntentResult,
   MessageBodiesPage,
+  MeterMonth,
   Provider,
   ScheduledSend,
   ScheduleResult,
@@ -249,6 +252,45 @@ export function createApi(target: () => ServerTarget | null) {
         request<HeaderSearchPage>(
           `/search/headers?${new URLSearchParams({ workspace: workspaceId, q, limit: String(limit) })}`,
         ),
+    },
+    /** Shared provider keys (ADR 0007): "Let the server use this key". The Server never returns a key. */
+    keys: {
+      /** Which providers hold a shared key. */
+      shared: () => request<{ shared: HostedProvider[] }>("/keys"),
+      /** Sends a key to the Server, stored under the envelope of `workspaceId`. 423 when locked. */
+      share: (workspaceId: Id, provider: HostedProvider, key: string) =>
+        request<{ provider: HostedProvider; shared: boolean }>(
+          `/keys/${provider}`,
+          json("PUT", { workspace: workspaceId, key }),
+        ),
+      /** Forgets the shared key; the Device copy in the keychain is untouched. */
+      unshare: (provider: HostedProvider) =>
+        raw(`/keys/${provider}`, { method: "DELETE" }).then(() => undefined),
+    },
+    meter: {
+      /** This month by Task and provider with cost; `month` is "YYYY-MM", default now. */
+      month: (workspaceId: Id, month?: string) => {
+        const q = new URLSearchParams({ workspace: workspaceId });
+        if (month) q.set("month", month);
+        return request<MeterMonth>(`/meter?${q}`);
+      },
+    },
+    briefs: {
+      /** Enqueues the brief Job on the Server; the Brief arrives through get once it ran. */
+      compute: (workspaceId: Id, threadId: Id) =>
+        request<{ jobId: Id }>(
+          `/threads/${encodeURIComponent(threadId)}/brief`,
+          json("POST", { workspace: workspaceId }),
+        ),
+      /** The stored Brief, or null when none yet. */
+      get: async (threadId: Id): Promise<Brief | null> => {
+        try {
+          return await request<Brief>(`/threads/${encodeURIComponent(threadId)}/brief`);
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
     },
     settings: {
       /** Global and per-Device buckets; device wins for device-scoped keys. */

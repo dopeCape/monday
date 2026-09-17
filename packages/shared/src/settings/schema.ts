@@ -8,7 +8,7 @@
 // Runtime-neutral: zod only, no Bun, no DOM, no Node.
 
 import { z } from "zod";
-import type { Density, HostedProvider, Layout, Role, Task, ThemeMode } from "../domain.ts";
+import type { Density, HostedProvider, Layout, Role, Roles, Task, ThemeMode } from "../domain.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -108,12 +108,25 @@ const hostedProvider = z.enum([
 export const HOSTED_PROVIDERS = hostedProvider.options;
 
 const role = z.enum(["main", "fast"]) satisfies z.ZodType<Role>;
-const roles = z.object({ main: z.string().min(1), fast: z.string().min(1) });
+const roles = z.object({
+  main: z.string().min(1),
+  fast: z.string().min(1),
+}) satisfies z.ZodType<Roles>;
 const effort = z.enum(["low", "medium", "high"]);
 export type Effort = z.output<typeof effort>;
 /** A Task's model choice: a Role, an optional exact model that beats the Role, and effort. */
 const taskModel = z.object({ role, model: z.string(), effort });
 export type TaskModel = z.output<typeof taskModel>;
+/** USD per million tokens: uncached input, output, and input served from a cache. */
+const modelPrice = z.object({
+  input: z.number().min(0),
+  output: z.number().min(0),
+  cached: z.number().min(0),
+});
+export type ModelPrice = z.output<typeof modelPrice>;
+/** A provider's price table by exact model id. A model missing here meters at zero cost. */
+const pricing = z.record(z.string().min(1), modelPrice);
+export type Pricing = z.output<typeof pricing>;
 
 export const TASKS: readonly Task[] = [
   "composer",
@@ -165,6 +178,44 @@ function aiTask(task: Task, r: Role, e: Effort) {
     section: "ai",
     label: `${task} model`,
     help: `Which Role the ${task} Task uses, an optional exact model that overrides the Role, and the effort level. An empty model means use the Role.`,
+  });
+}
+
+function aiShareKey(provider: HostedProvider) {
+  return setting({
+    type: z.boolean(),
+    default: false,
+    scope: "global",
+    section: "ai",
+    label: `Let the server use the ${provider} key`,
+    help: `Send the ${provider} key to the Server, stored under the envelope, so Briefs and Workflows run while every device is off. Anyone who controls the Server host can then use the key; keep it off if you do not trust the host.`,
+  });
+}
+
+/**
+ * Shipped prices in USD per million tokens. Anthropic from the claude-api
+ * reference; the others from their published price pages. The Meter is an
+ * estimate: cache writes are counted as uncached input.
+ */
+function aiPricing(provider: HostedProvider, table: Pricing) {
+  return setting({
+    type: pricing,
+    default: table,
+    scope: "global",
+    section: "ai",
+    label: `${provider} prices`,
+    help: `USD per million tokens by model id on ${provider}: input, output and cached input. The Meter multiplies these by the tokens each call reports. A model missing here meters at zero cost.`,
+  });
+}
+
+function aiEndpoint(provider: HostedProvider, url: string) {
+  return setting({
+    type: z.url(),
+    default: url,
+    scope: "global",
+    section: "ai",
+    label: `${provider} endpoint`,
+    help: `The OpenAI-compatible base URL the Hosted runtime calls for ${provider}.`,
   });
 }
 
@@ -477,6 +528,14 @@ export const settingsSchema = {
     label: "Compute in the background",
     help: "Compute Briefs under the policy before a Thread is opened. Needs a Hosted runtime; otherwise every Brief is computed on open.",
   }),
+  "briefs.input_chars_max": setting({
+    type: z.int().min(1000),
+    default: 24_000,
+    scope: "global",
+    section: "routing",
+    label: "Thread text sent for a Brief",
+    help: "The most characters of a Thread the brief Task reads, newest Messages first. Longer Threads are cut with a note.",
+  }),
   "briefs.skip_under_words": setting({
     type: z.int().min(0),
     default: 120,
@@ -750,13 +809,41 @@ export const settingsSchema = {
   "ai.task.tag": aiTask("tag", "fast", "low"),
   "ai.task.draft-in-voice": aiTask("draft-in-voice", "main", "medium"),
   "ai.task.summarize": aiTask("summarize", "fast", "low"),
-  "ai.share_key_with_server": setting({
-    type: z.boolean(),
-    default: false,
+  "ai.share_key.anthropic": aiShareKey("anthropic"),
+  "ai.share_key.gemini": aiShareKey("gemini"),
+  "ai.share_key.openai": aiShareKey("openai"),
+  "ai.share_key.kimi": aiShareKey("kimi"),
+  "ai.share_key.openrouter": aiShareKey("openrouter"),
+  "ai.pricing.anthropic": aiPricing("anthropic", {
+    "claude-opus-5": { input: 5, output: 25, cached: 0.5 },
+    "claude-sonnet-5": { input: 2, output: 10, cached: 0.2 },
+    "claude-haiku-4-5": { input: 1, output: 5, cached: 0.1 },
+  }),
+  "ai.pricing.gemini": aiPricing("gemini", {
+    "gemini-2.5-pro": { input: 1.25, output: 10, cached: 0.31 },
+    "gemini-2.5-flash": { input: 0.3, output: 2.5, cached: 0.075 },
+  }),
+  "ai.pricing.openai": aiPricing("openai", {
+    "gpt-5": { input: 1.25, output: 10, cached: 0.125 },
+    "gpt-5-mini": { input: 0.25, output: 2, cached: 0.025 },
+  }),
+  "ai.pricing.kimi": aiPricing("kimi", {
+    "kimi-k2-thinking": { input: 0.6, output: 2.5, cached: 0.15 },
+    "kimi-k2-turbo-preview": { input: 1.15, output: 8, cached: 0.15 },
+  }),
+  "ai.pricing.openrouter": aiPricing("openrouter", {
+    "anthropic/claude-sonnet-5": { input: 2, output: 10, cached: 0.2 },
+    "anthropic/claude-haiku-4.5": { input: 1, output: 5, cached: 0.1 },
+  }),
+  "ai.endpoint.kimi": aiEndpoint("kimi", "https://api.moonshot.ai/v1"),
+  "ai.endpoint.openrouter": aiEndpoint("openrouter", "https://openrouter.ai/api/v1"),
+  "ai.max_output_tokens": setting({
+    type: z.int().min(256).max(128_000),
+    default: 4096,
     scope: "global",
     section: "ai",
-    label: "Let the server use this key",
-    help: "Store the Hosted key under the envelope on the Server so Briefs and Workflows run while every device is off. The Server host can then read it.",
+    label: "Output cap",
+    help: "The most tokens one Hosted call may produce. A Task that needs more (the composer) raises it for itself.",
   }),
   "ai.developer_mode_default": setting({
     type: z.boolean(),
@@ -1442,6 +1529,27 @@ export const settingsSchema = {
   "strings.action.agent.focus": str("shortcuts", "Action: talk to the agent", "Ask monday"),
   "strings.action.palette.open": str("shortcuts", "Action: palette", "Command palette"),
   "strings.action.view": str("shortcuts", "Action: switch to a View", "Switch to view {n}"),
+  "strings.ai.no_shared_key": str(
+    "ai",
+    "Hosted call without a shared key",
+    "No {provider} key is shared with the server. Turn on Let the server use this key to run this while your devices are off.",
+  ),
+  "strings.ai.no_device_key": str(
+    "ai",
+    "Hosted call without a device key",
+    "Add a {provider} key in Settings to use the Hosted runtime on this device.",
+  ),
+  "strings.ai.bad_output": str(
+    "ai",
+    "Model answer unreadable",
+    "The model answered in a shape monday could not read. Try again.",
+  ),
+  "strings.meter.title": str("ai", "Meter heading", "This month"),
+  "strings.meter.empty": str("ai", "Meter empty", "No Hosted calls this month."),
+  "strings.meter.line": str("ai", "Meter line", "{task} on {provider}: {calls} calls, {cost}"),
+  "strings.meter.total": str("ai", "Meter total", "Estimated {cost} this month"),
+  "strings.brief.none": str("ai", "No Brief yet", "No Brief yet."),
+  "strings.brief.computing": str("ai", "Brief in progress", "monday is reading this thread."),
   "strings.about.telemetry": str("about", "Telemetry line", "monday sends no telemetry."),
 } satisfies Record<string, SettingEntry>;
 

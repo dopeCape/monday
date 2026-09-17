@@ -28,6 +28,12 @@ import {
   NoRecipientsError,
   SendTooLargeError,
 } from "./drafts/index.ts";
+import {
+  BriefOutputError,
+  createIntelligence,
+  type Intelligence,
+  NoProviderKeyError,
+} from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import type { PushManager } from "./providers/push.ts";
@@ -36,6 +42,7 @@ import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { draftsRoutes } from "./routes/drafts.ts";
+import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
@@ -59,6 +66,12 @@ export interface AppOptions {
   sync?: SyncEngine;
   /** Defaults to a Drafts module over `db`, `mailstore`, `jobs` and `sync`. */
   drafts?: Drafts;
+  /**
+   * The Hosted runtime, shared keys, Meter and Briefs (ADR 0007). Defaults to
+   * one over `db` and `mailstore` with LangChain underneath; tests pass one
+   * built on the fake seam.
+   */
+  intelligence?: Intelligence;
   /**
    * The in-process wake bus for the Changes feed. The entry feeds it from a
    * LISTEN connection and shares it with the WebSocket transport; defaults to a
@@ -100,6 +113,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       }
       return created;
     })();
+  const intelligence =
+    options.intelligence ??
+    (() => {
+      const created = createIntelligence({ db, mailstore });
+      if (options.jobs) created.registerSteps(options.jobs);
+      return created;
+    })();
   const bus = options.changes ?? createChangeBus();
   const bodyStates = async (messageIds: string[]) => {
     const out = new Map<string, BodyState>();
@@ -133,7 +153,9 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
   });
 
-  app.get("/capabilities", (c) => c.json(capabilitiesFor(mode, keys.isUnlocked())));
+  app.get("/capabilities", async (c) =>
+    c.json(capabilitiesFor(mode, keys.isUnlocked(), await intelligence.hostedState())),
+  );
 
   app.route("/pair", pairRoutes(auth));
   app.route("/settings", settingsRoutes(db));
@@ -142,6 +164,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", mailRoutes(mailstore, { bodyStates }));
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
+  app.route("/", intelligenceRoutes(intelligence));
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {
@@ -162,6 +185,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     if (error instanceof SendTooLargeError) {
       return c.json({ error: "too_large", size: error.size, limit: error.limit }, 413);
     }
+    if (error instanceof NoProviderKeyError) {
+      return c.json({ error: "no_shared_key", provider: error.provider }, 409);
+    }
+    if (error instanceof BriefOutputError) return c.json({ error: "bad_output" }, 502);
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

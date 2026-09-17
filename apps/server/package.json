@@ -12,6 +12,10 @@
     "compile": "bun build --compile entry/bun.ts --outfile dist/monday-server"
   },
   "dependencies": {
+    "@langchain/anthropic": "^1.5.10",
+    "@langchain/core": "^1.2.11",
+    "@langchain/google-genai": "^2.3.2",
+    "@langchain/openai": "^1.5.13",
     "@monday/shared": "workspace:*",
     "@noble/hashes": "^2.4.0",
     "drizzle-orm": "^0.45.2",
