@@ -224,7 +224,7 @@ export function createRouting(options: RoutingOptions): Routing {
       .select()
       .from(groups)
       .where(eq(groups.workspaceId, workspaceId))
-      .orderBy(sql`${groups.parentId} nulls first`, asc(groups.name));
+      .orderBy(sql`${groups.parentId} nulls first`, asc(groups.createdAt), asc(groups.name));
 
   /** Groups as the prompts describe them. */
   const groupTexts = async (workspaceId: Id): Promise<Array<GroupText & { row: GroupRow }>> => {

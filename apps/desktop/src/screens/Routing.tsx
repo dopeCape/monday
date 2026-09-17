@@ -14,6 +14,7 @@ import {
   Btn,
   DecisionRow,
   GroupCard,
+  Icon,
   PageHead,
   PreviewCard,
   SampleRow,
@@ -393,10 +394,10 @@ export function Routing({
         <div className="page-in">
           <PageHead title={s.title ?? "Routing"} subtitle={s.subtitle}>
             <Btn outline onClick={rerun} disabled={busy}>
-              <ArrowsClockwiseIcon /> {s.rerun ?? "Re-run on inbox"}
+              <Icon icon={ArrowsClockwiseIcon} /> {s.rerun ?? "Re-run on inbox"}
             </Btn>
             <Btn primary onClick={newGroup} disabled={busy}>
-              <PlusIcon /> {s.new_group ?? "New group"}
+              <Icon icon={PlusIcon} /> {s.new_group ?? "New group"}
             </Btn>
           </PageHead>
           {error ? <p className="faint routing-error">{error}</p> : null}

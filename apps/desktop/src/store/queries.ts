@@ -108,8 +108,8 @@ export function rowToSection(r: Row, workspaceId: string): SectionRule {
   };
 }
 
-/** Groups, top-level first, then by name. */
-export const GROUPS_SQL = "select * from groups order by parent_id is not null, name";
+/** Groups, top-level first, in the order they were made (the feed inserts in creation order). */
+export const GROUPS_SQL = "select * from groups order by parent_id is not null, rowid";
 
 export function rowToGroup(r: Row, workspaceId: string): Group {
   const sentence = text(r.sentence);
