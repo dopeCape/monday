@@ -4,8 +4,12 @@
 //   PUT    /keys/:provider               {workspace, key}             stores the key under the envelope (423 when locked)
 //   DELETE /keys/:provider               forgets the shared key
 //   GET    /meter?workspace=&month=      this month by Task and provider with cost; month "YYYY-MM", default now
-//   POST   /threads/:id/brief            {workspace}  ->  {jobId}     enqueues the brief Job
+//   POST   /threads/:id/brief            {workspace, trigger?}         asks for a Brief under the policy (slice 13):
+//                                          202 {jobId}   the brief Job is queued (trigger "user", the default, always queues)
+//                                          200 {fresh}   an open found a Brief for the current Thread version
+//                                          409 no_shared_key   this Server holds no key for the brief Task
 //   GET    /threads/:id/brief            the stored Brief, or 404
+//   DELETE /threads/:id/brief            removes the Brief; the feed says so
 
 import { HOSTED_PROVIDERS } from "@monday/shared";
 import { Hono } from "hono";
@@ -17,7 +21,10 @@ import { parseBody } from "./validate.ts";
 
 const provider = z.enum(HOSTED_PROVIDERS);
 const putKeyBody = z.object({ workspace: z.string().min(1), key: z.string().min(1).max(4000) });
-const workspaceBody = z.object({ workspace: z.string().min(1) });
+const briefBody = z.object({
+  workspace: z.string().min(1),
+  trigger: z.enum(["sync", "open", "user"]).default("user"),
+});
 
 export interface IntelligenceRoutesOptions {
   now?: () => Date;
@@ -57,16 +64,28 @@ export function intelligenceRoutes(
   });
 
   app.post("/threads/:id/brief", async (c) => {
-    const body = await parseBody(c, workspaceBody);
+    const body = await parseBody(c, briefBody);
     if (!body.ok) return body.response;
-    const jobId = await intelligence.briefs.enqueue(body.data.workspace, c.req.param("id"));
-    return c.json({ jobId }, 202);
+    const result = await intelligence.briefs.request(
+      body.data.workspace,
+      c.req.param("id"),
+      body.data.trigger,
+    );
+    if (result.status === "queued") return c.json({ jobId: result.jobId }, 202);
+    if (result.status === "fresh") return c.json({ fresh: true }, 200);
+    const choice = await intelligence.runtime.resolve("brief");
+    return c.json({ error: "no_shared_key", provider: choice.provider }, 409);
   });
 
   app.get("/threads/:id/brief", async (c) => {
     const brief = await intelligence.briefs.get(c.req.param("id"));
     if (!brief) return c.json({ error: "not_found" }, 404);
     return c.json(brief);
+  });
+
+  app.delete("/threads/:id/brief", async (c) => {
+    await intelligence.briefs.remove(c.req.param("id"));
+    return c.body(null, 204);
   });
 
   return app;

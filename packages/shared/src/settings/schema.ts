@@ -8,7 +8,17 @@
 // Runtime-neutral: zod only, no Bun, no DOM, no Node.
 
 import { z } from "zod";
-import type { Density, HostedProvider, Layout, Role, Roles, Task, ThemeMode } from "../domain.ts";
+import type {
+  BriefPolicy,
+  BriefPolicyMode,
+  Density,
+  HostedProvider,
+  Layout,
+  Role,
+  Roles,
+  Task,
+  ThemeMode,
+} from "../domain.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -95,6 +105,16 @@ const confidence = z.number().min(0).max(1);
 
 const briefPolicyDefault =
   "Needs your reply and Waiting on you always; For your information only with two or more messages, an attachment, or more than 800 words; Newsletters and automated senders never. Anything else is computed on open.";
+const briefPolicy = z.enum(["always", "on_open", "never"]) satisfies z.ZodType<BriefPolicy>;
+const briefPolicyMode = z.enum(["rule", "model"]) satisfies z.ZodType<BriefPolicyMode>;
+/** Per Group id, the policy that beats the rule for its Threads. */
+const briefPolicyGroups = z.record(z.string().min(1), briefPolicy);
+const briefPromptDefault = [
+  "Decide whether this email thread deserves a Brief before the reader opens it.",
+  "A Brief is worth computing in the background when the thread asks the reader for a reply, a decision, a review or a payment, when it comes from a person the reader works with, or when it is long enough that a summary saves real time.",
+  "It is not worth computing for newsletters, digests, notifications, receipts, automated mail, marketing, and short notes that need nothing.",
+  "Answer always for the first kind, on_open for mail that only deserves a Brief once the reader opens it, and never for mail that should not get one at all.",
+].join(" ");
 
 const runtimeMode = z.enum(["local", "hosted"]);
 const localCli = z.enum(["claude-code", "codex", "opencode"]);
@@ -496,13 +516,78 @@ export const settingsSchema = {
     label: "Brief policy",
     help: "The rule sentence that decides which Threads get a Brief in the background. Same shape as a Section rule.",
   }),
-  "briefs.prompt": setting({
-    type: z.string(),
-    default: "",
+  "briefs.policy_mode": setting({
+    type: briefPolicyMode,
+    default: "rule",
     scope: "global",
     section: "routing",
-    label: "Custom Brief prompt",
-    help: "Optional. Lets the model judge importance itself instead of the policy sentence. Empty means off.",
+    label: "Who decides",
+    help: "rule: the policy over Thread state and headers, with the per-Group overrides. model: a cheap call on the fast Role reads the Thread and decides with the prompt below.",
+  }),
+  "briefs.policy_default": setting({
+    type: briefPolicy,
+    default: "on_open",
+    scope: "global",
+    section: "routing",
+    label: "Everything else",
+    help: "The policy for a Thread the rule does not place: always (in the background), on_open, or never.",
+  }),
+  "briefs.policy_groups": setting({
+    type: briefPolicyGroups,
+    default: {},
+    scope: "global",
+    section: "routing",
+    label: "Per-Group policy",
+    help: "A Group id to always, on_open or never. Beats the rule for Threads in that Group; a Sub-group's entry beats its parent's.",
+  }),
+  "briefs.prompt": setting({
+    type: z.string().min(1),
+    default: briefPromptDefault,
+    scope: "global",
+    section: "routing",
+    label: "Model prompt",
+    help: "What deserves a Brief, in your words. Used when the policy mode is model; the model answers always, on_open or never per Thread.",
+  }),
+  "briefs.background_lookback_days": setting({
+    type: z.int().min(0),
+    default: 7,
+    scope: "global",
+    section: "routing",
+    label: "Background lookback",
+    help: "Only Threads with activity within this many days get a background Brief on sync; older ones are computed on open. 0 means only new mail.",
+  }),
+  "briefs.fyi_min_messages": setting({
+    type: z.int().min(1),
+    default: 2,
+    scope: "global",
+    section: "routing",
+    label: "Background threshold: messages",
+    help: "A Thread the rule files under For your information gets a background Brief from this many Messages.",
+  }),
+  "briefs.fyi_min_words": setting({
+    type: z.int().min(0),
+    default: 800,
+    scope: "global",
+    section: "routing",
+    label: "Background threshold: words",
+    help: "A Thread the rule files under For your information gets a background Brief above this many words.",
+  }),
+  "briefs.automated_senders": setting({
+    type: z.array(z.string().min(1)),
+    default: [
+      "noreply",
+      "no-reply",
+      "donotreply",
+      "do-not-reply",
+      "notifications",
+      "notification",
+      "mailer-daemon",
+      "bounce",
+    ],
+    scope: "global",
+    section: "routing",
+    label: "Automated sender names",
+    help: "A sender whose address starts with one of these is a notification: its Brief is computed on open, never in the background.",
   }),
   "briefs.bullets_max": setting({
     type: z.int().min(1).max(5),
@@ -1107,6 +1192,17 @@ export const settingsSchema = {
   "strings.reader.messages": str("routing", "Reader message count", "{n} messages"),
   "strings.reader.message": str("routing", "Reader one message", "1 message"),
   "strings.reader.brief_source": str("routing", "Brief source line", "{runtime}, on this machine"),
+  "strings.reader.brief_updating": str("routing", "Brief stale line", "Updating"),
+  "strings.reader.brief_action.calendar_unavailable": str(
+    "routing",
+    "Brief chip: calendar not connected",
+    "Calendar is not connected yet",
+  ),
+  "strings.reader.brief_action.unavailable": str(
+    "routing",
+    "Brief chip: action unavailable",
+    "That action is not available here",
+  ),
   "strings.agent.placeholder": str("ai", "Agent bar placeholder", "Ask or tell monday"),
   "strings.agent.placeholder_open": str(
     "ai",
