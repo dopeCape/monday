@@ -5,23 +5,27 @@
 //   export   pg_dump of the embedded cluster to a file the user restores by
 //            hand (`pg_restore --no-owner --no-acl -d "$DATABASE_URL_UNPOOLED"`);
 //            the binary comes from the entry, which knows where resources live;
-//   copy     table by table over COPY from the embedded database into the
-//            target, in foreign key order, after migrating the target. Pure
-//            SQL, so it needs no binary and runs from the Sidecar itself.
+//   copy     table by table from the embedded database into the target, in
+//            foreign key order, after migrating the target: a cursor on the
+//            source and batched inserts on the target. Pure SQL, so it needs
+//            no binary and runs from the Sidecar itself.
 //
 // `attach` records the Cloud's connection string in the data directory so the
 // next Sidecar launch opens that database instead of the embedded one: the
 // "both" mode of ADR 0005, one Postgres and two workers.
 //
-// Runtime-neutral apart from node:stream, which Bun and Node both provide.
+// Runtime-neutral.
 
-import { pipeline } from "node:stream/promises";
 import type { DeploymentMode } from "@monday/shared";
 import type { Sql } from "postgres";
 import type { DbHandle } from "../db/client.ts";
 
 /** Process state and transient rows never move between databases. */
 export const SKIPPED_TABLES: readonly string[] = ["servers", "pairing_codes"];
+/** Rows per cursor page and per insert. */
+const BATCH = 200;
+
+type Row = Record<string, unknown>;
 
 export interface ExportResult {
   path: string;
@@ -99,22 +103,28 @@ interface ColumnInfo {
   table: string;
   column: string;
   serial: boolean;
+  /** The Postgres type name (information_schema udt_name), such as jsonb or bytea. */
+  udt: string;
 }
 
 interface TablePlan {
   name: string;
   columns: string[];
   serials: string[];
+  /** The select list: json and jsonb read as text so the driver passes them through untouched. */
+  select: string;
 }
 
 const quote = (ident: string) => `"${ident.replaceAll('"', '""')}"`;
 
+const JSON_TYPES = new Set(["json", "jsonb"]);
+
 /** Public tables in an order that satisfies every foreign key (parents first). */
 export async function tablePlan(sql: Sql): Promise<TablePlan[]> {
   const cols = await sql<
-    { table_name: string; column_name: string; column_default: string | null }[]
+    { table_name: string; column_name: string; column_default: string | null; udt_name: string }[]
   >`
-    select table_name, column_name, column_default
+    select table_name, column_name, column_default, udt_name
     from information_schema.columns
     where table_schema = 'public' and is_generated = 'NEVER'
     order by table_name, ordinal_position
@@ -132,6 +142,7 @@ export async function tablePlan(sql: Sql): Promise<TablePlan[]> {
       table: c.table_name,
       column: c.column_name,
       serial: (c.column_default ?? "").startsWith("nextval("),
+      udt: c.udt_name,
     });
     byTable.set(c.table_name, list);
   }
@@ -163,6 +174,13 @@ export async function tablePlan(sql: Sql): Promise<TablePlan[]> {
         name,
         columns: list.map((c) => c.column),
         serials: list.filter((c) => c.serial).map((c) => c.column),
+        select: list
+          .map((c) =>
+            JSON_TYPES.has(c.udt)
+              ? `${quote(c.column)}::text as ${quote(c.column)}`
+              : quote(c.column),
+          )
+          .join(", "),
       };
     });
 }
@@ -250,19 +268,18 @@ export function createUpgrade(options: UpgradeOptions): Upgrade {
           // Children first so nothing references a row about to go.
           for (const t of [...plan].reverse()) await tx.unsafe(`truncate ${quote(t.name)} cascade`);
           for (const t of plan) {
-            const list = t.columns.map(quote).join(", ");
-            const readable = await source.sql
-              .unsafe(`copy ${quote(t.name)} (${list}) to stdout`)
-              .readable();
-            const writable = await tx
-              .unsafe(`copy ${quote(t.name)} (${list}) from stdin`)
-              .writable();
-            await pipeline(readable, writable);
-            const [count] = await tx.unsafe(`select count(*)::text as n from ${quote(t.name)}`);
-            tables.push({
-              name: t.name,
-              rows: Number((count as { n: string } | undefined)?.n ?? 0),
-            });
+            let rows = 0;
+            // A cursor keeps memory bounded; the insert helper passes bytea,
+            // arrays, timestamps and json-as-text through as the source read them.
+            const cursor = source.sql
+              .unsafe(`select ${t.select} from ${quote(t.name)}`)
+              .cursor(BATCH);
+            for await (const batch of cursor) {
+              if (batch.length === 0) continue;
+              await tx`insert into ${tx(t.name)} ${tx(batch as Row[], ...t.columns)}`;
+              rows += batch.length;
+            }
+            tables.push({ name: t.name, rows });
             for (const col of t.serials) {
               await tx.unsafe(
                 `select setval(pg_get_serial_sequence('${t.name}', '${col}'), coalesce(max(${quote(col)}), 0) + 1, false) from ${quote(t.name)}`,
