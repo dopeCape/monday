@@ -241,11 +241,7 @@ export function createBriefPolicyRule(options: BriefPolicyRuleOptions): BriefPol
       try {
         const result = await options.runtime.run(
           "classify",
-          {
-            system: policySystemPrompt(settings),
-            prompt: policyPrompt(facts),
-            maxOutputTokens: 16,
-          },
+          { system: policySystemPrompt(settings), prompt: policyPrompt(facts) },
           { workspaceId: facts.workspaceId },
         );
         const parsed = parsePolicyOutput(result.output);
