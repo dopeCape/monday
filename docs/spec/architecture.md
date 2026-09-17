@@ -52,7 +52,7 @@ All body-derived columns are ciphertext under envelope encryption: per-message d
 - `section_rules` (workspace, name, order, rule as above)
 - `brief_policy` (workspace, rule as above, overrides, custom prompt)
 - `workflows` (workspace, document json, version, enabled, placement) and `workflow_versions`, `runs`, `run_steps`, `standing_approvals`
-- `sessions` (workspace, runtime, transcript_enc, checkpoint ref) and LangGraph checkpoint tables
+- `sessions` (workspace, runtime, title, developer mode) and `session_events` (the transcript, in order), plus the LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) under the `langgraph` schema, created and versioned by the checkpointer's own setup right after our migrations at boot
 - `activity` (workspace, actor, tool, input summary, approval, result, undo ref, ts)
 - `settings` (scope global or device, key, value json) and `devices` (token hash, name, last seen, cache key)
 - `jobs` (class, needs, payload, lease, attempts, run_at) and `heartbeats` (server id, mode, ts)
@@ -72,7 +72,7 @@ One HTTP JSON API on the Server, typed routes, a generated client in `packages/s
 - `/drafts`, `/send` (schedules a send Job), `/scheduled`.
 - `/groups`, `/sections`, `/routing/rerun`, `/routing/decisions`.
 - `/workflows`, `/workflows/:id/versions`, `/runs`, `/runs/:id/retry`, `/runs/:id/approve`.
-- `/sessions`, `/sessions/:id/turns` (streams through the changes feed), `/approvals`.
+- `/sessions`, `/sessions/:id/turns` (the turn streams its events over SSE on the POST itself), `/sessions/:id/approvals/:activityId`, `/activity`, `/activity/:id/undo`, `/agent/tools`.
 - `/calendar/events`, `/calendar/invites/:id/rsvp`.
 - `/settings`, `/devices`, `/pair`, `/credentials`.
 - `/mcp`: the external MCP transport (streamable HTTP).
