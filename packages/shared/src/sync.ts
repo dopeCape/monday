@@ -194,7 +194,8 @@ export type ChangeKind =
   | "thread_labels"
   | "thread_tags"
   | "draft"
-  | "send";
+  | "send"
+  | "brief";
 
 /** Thread headers as the feed carries them: no subject, no snippet (those are content). */
 export interface ThreadChange extends Thread {
@@ -256,6 +257,20 @@ export interface SendChange {
   createdAt: IsoDate;
 }
 
+/**
+ * A Brief's headers; bullets and actions are content and stay behind
+ * GET /threads/:id/brief. `messageCount` is the Thread version the Brief was
+ * computed for; `stale` says a newer Message has arrived since.
+ */
+export interface BriefChange {
+  threadId: Id;
+  computedAt: IsoDate;
+  stale: boolean;
+  messageCount: number;
+  /** The Brief was removed: the policy says never, or the Thread is gone. */
+  deleted: boolean;
+}
+
 export type ChangePayload =
   | { kind: "thread"; payload: ThreadChange }
   | { kind: "message"; payload: MessageChange }
@@ -264,7 +279,8 @@ export type ChangePayload =
   | { kind: "thread_labels"; payload: ThreadLinksChange }
   | { kind: "thread_tags"; payload: ThreadLinksChange }
   | { kind: "draft"; payload: DraftChange }
-  | { kind: "send"; payload: SendChange };
+  | { kind: "send"; payload: SendChange }
+  | { kind: "brief"; payload: BriefChange };
 
 export type Change = ChangePayload & {
   seq: number;

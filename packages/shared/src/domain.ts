@@ -262,6 +262,15 @@ export interface Brief {
   stale: boolean;
 }
 
+/** When a Thread gets its Brief: in the background as it arrives, when the reader opens it, or never. */
+export type BriefPolicy = "always" | "on_open" | "never";
+
+/** Who decides the brief policy: the rule over Thread state and headers, or the model with the user's prompt. */
+export type BriefPolicyMode = "rule" | "model";
+
+/** What asked for a Brief: the sync engine on arrival, the reader on open, or the user by hand. */
+export type BriefTrigger = "sync" | "open" | "user";
+
 /** An action chip: the label is the Agent's wording; the payload is what runs. */
 export type BriefAction = { label: string } & (
   | { kind: "reply"; proposedLine: string }

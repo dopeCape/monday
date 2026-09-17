@@ -118,6 +118,14 @@ export interface ProviderDraft {
 
 export type DraftImporter = (draft: ProviderDraft) => Promise<void>;
 
+/**
+ * Told once per pass about each Thread whose Messages or bodies changed and
+ * whose newest body the Server now holds, so background work over content
+ * (the brief policy, routing) starts from a Thread it can read. The engine
+ * never runs that work inline: an observer enqueues a Job and returns.
+ */
+export type ThreadObserver = (workspaceId: string, threadId: string) => Promise<void>;
+
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
   /** The cached Session for an Account, connecting when needed (push Jobs use adapter extras). */
@@ -137,6 +145,8 @@ export interface SyncEngine {
     importer: DraftImporter,
     knownProviderIds: (workspaceId: string) => Promise<Set<string>>,
   ): void;
+  /** Registers who hears about Threads whose content changed (the Briefs module). One at a time. */
+  setThreadObserver(observer: ThreadObserver | null): void;
   /** Applies an inbox action at the Provider and mirrors it locally. Ids are Mailstore ids. */
   applyChange(accountId: string, target: EngineChangeTarget, change: Change): Promise<void>;
   /** Starts (or confirms) the push watcher for an Account in this process. */
@@ -191,6 +201,44 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   let jobsRef: Jobs | null = null;
   let draftImporter: DraftImporter | null = null;
   let knownDraftIds: ((workspaceId: string) => Promise<Set<string>>) | null = null;
+  let threadObserver: ThreadObserver | null = null;
+  /** Per Account, the Threads a pass touched, drained into the observer at the end of the pass. */
+  const touched = new Map<string, Set<string>>();
+
+  const touch = (accountId: string, threadId: string) => {
+    if (!threadObserver) return;
+    let set = touched.get(accountId);
+    if (!set) {
+      set = new Set();
+      touched.set(accountId, set);
+    }
+    set.add(threadId);
+  };
+
+  /** Whether the newest live Message of a Thread has its body, so an observer can read the Thread. */
+  async function newestBodyFetched(threadId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ bodyState: syncMessages.bodyState })
+      .from(syncMessages)
+      .where(and(eq(syncMessages.threadId, threadId), eq(syncMessages.stale, false)))
+      .orderBy(desc(syncMessages.date))
+      .limit(1);
+    return row?.bodyState === "fetched";
+  }
+
+  /** Hands the pass's touched Threads to the observer, those whose newest body landed. Never throws. */
+  async function notifyTouched(acct: AccountRow): Promise<void> {
+    const set = touched.get(acct.id);
+    if (!set || !threadObserver) return;
+    touched.delete(acct.id);
+    for (const threadId of set) {
+      try {
+        if (await newestBodyFetched(threadId)) await threadObserver(acct.workspaceId, threadId);
+      } catch (error) {
+        log(`thread observer ${threadId}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+  }
 
   /* ------------------------------ Accounts and Sessions ------------------------------ */
 
@@ -479,6 +527,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       })
       .onConflictDoNothing();
     await refreshThread(threadId, map);
+    touch(acct.id, threadId);
     return "added";
   }
 
@@ -754,6 +803,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       .update(syncMessages)
       .set({ bodyState: "fetched", updatedAt: now() })
       .where(eq(syncMessages.messageId, messageId));
+    touch(acct.id, message.threadId);
   }
 
   /**
@@ -930,6 +980,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
             if (bodies.more) report.more = true;
           }
           if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s, map);
+          await notifyTouched(acct);
           if (!report.more) {
             const fresh = await loadState(acct);
             await saveState(acct, {
@@ -958,6 +1009,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       if (!workspace) throw new Error(`workspace ${row.workspaceId} not found`);
       const acct = await account(workspace.accountId);
       await withSession(acct, (s) => storeBody(acct, s, row.providerId, messageId));
+      await notifyTouched(acct);
     },
 
     async withSession(accountId, fn) {
@@ -967,6 +1019,11 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     setDraftImporter(importer, known) {
       draftImporter = importer;
       knownDraftIds = known;
+    },
+
+    setThreadObserver(observer) {
+      threadObserver = observer;
+      if (!observer) touched.clear();
     },
 
     async applyChange(accountId, target, change) {

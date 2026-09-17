@@ -613,7 +613,9 @@ export const meter = pgTable(
 /**
  * A Brief per Thread (docs/spec/architecture.md, "Data model"): bullets and
  * actions are model-written text about mail content, so each is its own
- * envelope under the "brief" kind. Which model wrote it is a header.
+ * envelope under the "brief" kind. Which model wrote it is a header, and so
+ * is the Thread version it was computed for (message count and the newest
+ * Message id): a Message arriving after that marks the Brief stale (slice 13).
  */
 export const briefs = pgTable("briefs", {
   threadId: text("thread_id")
@@ -630,6 +632,8 @@ export const briefs = pgTable("briefs", {
   model: text("model").notNull(),
   computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
   stale: boolean("stale").notNull().default(false),
+  messageCount: integer("message_count").notNull().default(0),
+  latestMessageId: text("latest_message_id").notNull().default(""),
 });
 
 /** The Voice profile: storage and routes here; building it from sent mail is a later slice. */

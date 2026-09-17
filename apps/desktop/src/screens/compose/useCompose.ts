@@ -2,7 +2,7 @@
 // which reply is open inline, the send waiting in its undo window, and the
 // notices to show. Pure orchestration over the Composer; the surfaces render it.
 
-import type { DraftContent, Message, SendError, Settings, Thread } from "@monday/shared";
+import type { DraftContent, Message, Person, SendError, Settings, Thread } from "@monday/shared";
 import { formatSize, formatWhen } from "@monday/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Composer } from "./composer.ts";
@@ -51,6 +51,8 @@ export interface ComposeController {
     messages: readonly Message[],
     kind: "reply" | "forward",
     forceReplyAll?: boolean,
+    /** From a Brief chip: the proposed opening line, or the forward recipient (slice 13). */
+    seed?: { opening?: string | undefined; to?: Person[] | undefined },
   ): void;
   closeOverlay(): void;
   closeReply(): void;
@@ -143,7 +145,13 @@ export function useCompose(o: UseComposeOptions): ComposeController {
   }, [mint, composer.address, signature, strings.reply, formatDate]);
 
   const startReply = useCallback(
-    (thread: Thread, messages: readonly Message[], kind: "reply" | "forward", force?: boolean) => {
+    (
+      thread: Thread,
+      messages: readonly Message[],
+      kind: "reply" | "forward",
+      force?: boolean,
+      seed?: { opening?: string | undefined; to?: Person[] | undefined },
+    ) => {
       const last = messages[messages.length - 1] ?? null;
       const replyAll =
         kind === "reply" && last
@@ -179,6 +187,8 @@ export function useCompose(o: UseComposeOptions): ComposeController {
           strings: strings.reply,
           formatDate,
           attachments,
+          opening: seed?.opening,
+          to: seed?.to,
         }),
       });
     },

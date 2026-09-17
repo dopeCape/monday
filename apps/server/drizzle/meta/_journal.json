@@ -50,6 +50,13 @@
       "when": 1789629517967,
       "tag": "0006_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789631336707,
+      "tag": "0009_briefs",
+      "breakpoints": true
     }
   ]
 }

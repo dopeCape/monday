@@ -1,7 +1,8 @@
 // Intelligence (ADR 0009): routing, sections, briefs, LangGraph, Roles and
-// the Meter behind one interface. This slice ships the Hosted runtime, the
-// shared provider keys, the Meter and the Brief Task; routing and the agent
-// loop come in later slices and plug into the same runtime.
+// the Meter behind one interface. Slice 11 shipped the Hosted runtime, the
+// shared provider keys, the Meter and the Brief Task; slice 13 adds the brief
+// policy and the background Job around it. Routing and the agent loop come
+// in their own slices and plug into the same runtime.
 
 import type { HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
@@ -12,6 +13,7 @@ import { readGlobalSettings } from "../settings/read.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
+import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
 import {
   type ChatModel,
   createHostedRuntime,
@@ -20,12 +22,21 @@ import {
 } from "./runtime/index.ts";
 import { createLangChainChat } from "./runtime/langchain.ts";
 
-export type { BriefSettings, Briefs } from "./brief.ts";
-export { BRIEF_STEP, BriefOutputError, parseBriefOutput, richTextOf } from "./brief.ts";
+export type { BriefRequest, BriefSettings, Briefs, ThreadVersion } from "./brief.ts";
+export {
+  BRIEF_STEP,
+  BriefNotReadyError,
+  BriefOutputError,
+  briefJobId,
+  parseBriefOutput,
+  richTextOf,
+} from "./brief.ts";
 export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
 export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
+export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
+export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
 export type {
   ChatCall,
   ChatModel,
@@ -45,7 +56,10 @@ export interface IntelligenceOptions {
   chat?: ChatModel;
   /** Where the runtime's keys come from; defaults to the shared-key store. */
   keys?: KeysResolver;
+  /** The brief policy seam; defaults to the rule over Settings with the model behind it. */
+  policy?: BriefPolicyRule;
   now?: () => Date;
+  log?: (message: string) => void;
 }
 
 export interface Intelligence {
@@ -53,6 +67,7 @@ export interface Intelligence {
   keys: ProviderKeyStore;
   meter: Meter;
   briefs: Briefs;
+  policy: BriefPolicyRule;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
@@ -64,24 +79,58 @@ const BRIEF_SETTING_KEYS = [
   "briefs.input_chars_max",
 ] as const;
 
+const POLICY_SETTING_KEYS = [
+  "briefs.policy_mode",
+  "briefs.policy_default",
+  "briefs.policy_groups",
+  "briefs.prompt",
+  "briefs.background",
+  "briefs.background_lookback_days",
+  "briefs.skip_under_words",
+  "briefs.fyi_min_messages",
+  "briefs.fyi_min_words",
+  "briefs.automated_senders",
+] as const;
+
 export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const { db, mailstore } = options;
   const now = options.now ?? (() => new Date());
+  const log = options.log ?? (() => {});
   const keys = createProviderKeyStore(db, mailstore);
   const meter = createMeter(db, { now });
   const hostedSettings = () => readGlobalSettings(db, HOSTED_SETTING_KEYS);
+  const resolveKey: KeysResolver = options.keys ?? ((provider) => keys.load(provider));
   const runtime = createHostedRuntime({
     chat: options.chat ?? createLangChainChat(),
-    keys: options.keys ?? ((provider) => keys.load(provider)),
+    keys: resolveKey,
     settings: hostedSettings,
     meter,
     now: () => now().getTime(),
   });
+  const policySettings = async (): Promise<BriefPolicySettings> => {
+    const s = await readGlobalSettings(db, POLICY_SETTING_KEYS);
+    return {
+      mode: s["briefs.policy_mode"],
+      defaultPolicy: s["briefs.policy_default"],
+      groups: s["briefs.policy_groups"],
+      prompt: s["briefs.prompt"],
+      background: s["briefs.background"],
+      lookbackDays: s["briefs.background_lookback_days"],
+      skipUnderWords: s["briefs.skip_under_words"],
+      fyiMinMessages: s["briefs.fyi_min_messages"],
+      fyiMinWords: s["briefs.fyi_min_words"],
+      automatedSenders: s["briefs.automated_senders"],
+    };
+  };
+  const policy =
+    options.policy ?? createBriefPolicyRule({ settings: policySettings, runtime, log });
   const briefs = createBriefs({
     db,
     mailstore,
     runtime,
+    policy,
     now,
+    log,
     settings: async (): Promise<BriefSettings> => {
       const s = await readGlobalSettings(db, BRIEF_SETTING_KEYS);
       return {
@@ -90,6 +139,16 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         inputCharsMax: s["briefs.input_chars_max"],
       };
     },
+    policySettings,
+    // A locked Server or one without the provider's key computes no Brief.
+    keyAvailable: async () => {
+      try {
+        const choice = await runtime.resolve("brief");
+        return (await resolveKey(choice.provider)) !== null;
+      } catch {
+        return false;
+      }
+    },
   });
 
   return {
@@ -97,6 +156,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     keys,
     meter,
     briefs,
+    policy,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

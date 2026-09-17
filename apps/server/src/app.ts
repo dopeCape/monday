@@ -30,6 +30,7 @@ import {
 } from "./drafts/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
 import {
+  BriefNotReadyError,
   BriefOutputError,
   createIntelligence,
   type Intelligence,
@@ -133,6 +134,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       if (options.jobs) created.registerSteps(options.jobs);
       return created;
     })();
+  // Threads whose bodies landed go to the brief policy through the Jobs table (slice 13).
+  options.sync?.setThreadObserver((workspaceId, threadId) =>
+    intelligence.briefs.threadReady(workspaceId, threadId),
+  );
   const bus = options.changes ?? createChangeBus();
   const bodyStates = async (messageIds: string[]) => {
     const out = new Map<string, BodyState>();
@@ -213,6 +218,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       return c.json({ error: "no_shared_key", provider: error.provider }, 409);
     }
     if (error instanceof BriefOutputError) return c.json({ error: "bad_output" }, 502);
+    if (error instanceof BriefNotReadyError) return c.json({ error: "no_bodies" }, 409);
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

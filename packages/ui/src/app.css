@@ -764,6 +764,11 @@ i.ph-bold > svg {
   margin-top: 14px;
   flex-wrap: wrap;
 }
+/* A stale Brief (a newer Message arrived) stays readable but dims until a fresh one replaces it. */
+.brief.stale ul,
+.brief.stale .brief-actions {
+  opacity: 0.55;
+}
 .msg {
   padding: 22px 0;
   border-bottom: 1px solid var(--border);

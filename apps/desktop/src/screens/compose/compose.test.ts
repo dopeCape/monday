@@ -247,6 +247,60 @@ describe("reply rules (ADR 0010)", () => {
     expect(forward.bodyHtml).toContain('<div class="quoted">');
   });
 
+  test("a Brief chip seeds a reply with its opening line, or a forward with its person, still unsent (slice 13)", () => {
+    const strings = { wrote: "On {date}, {name} wrote:", forwarded: "Forwarded message" };
+    const format = () => "Today 09:41";
+    const reply = initialContent({
+      threadId: "t1",
+      kind: "reply",
+      last: msg(),
+      subject: "Term sheet",
+      me,
+      replyAll: false,
+      signature: { html: "<p>Tejas</p>", text: "Tejas" },
+      strings,
+      formatDate: format,
+      opening: "Thursday 15:00 CET works for me.",
+    });
+    expect(reply.to).toEqual([aoife]);
+    expect(reply.bodyHtml.startsWith("<p>Thursday 15:00 CET works for me.</p><p>Tejas</p>")).toBe(
+      true,
+    );
+    expect(
+      reply.bodyText.startsWith("Thursday 15:00 CET works for me.\n\n\nTejas\n\nOn Today"),
+    ).toBe(true);
+    const forward = initialContent({
+      threadId: "t1",
+      kind: "forward",
+      last: msg(),
+      subject: "Term sheet",
+      me,
+      replyAll: false,
+      signature: { html: "", text: "" },
+      strings,
+      formatDate: format,
+      to: [ravi],
+    });
+    expect(forward.to).toEqual([ravi]);
+    expect(forward.subject).toBe("Fwd: Term sheet");
+    expect(forward.bodyHtml.startsWith("<p></p>")).toBe(true);
+    // An opening with markup stays text.
+    const escaped = initialContent({
+      threadId: null,
+      kind: "new",
+      last: null,
+      subject: "",
+      me,
+      replyAll: false,
+      signature: { html: "", text: "" },
+      strings,
+      formatDate: format,
+      opening: "<b>hi</b>",
+    });
+    expect(escaped.bodyHtml).toBe("<p>&lt;b&gt;hi&lt;/b&gt;</p>");
+    expect(escaped.bodyText).toBe("<b>hi</b>\n");
+  });
+
   test("typed recipients parse", () => {
     expect(parseRecipient("aoife@northlight.dev")).toEqual({
       name: "",

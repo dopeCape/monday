@@ -157,13 +157,24 @@ export function rowToMessage(r: Row): Message {
 
 export const BRIEF_OF_THREAD_SQL = "select * from briefs where thread_id = ?";
 
-export function rowToBrief(r: Row): Brief {
+/** Brief rows whose content is older than their headers, for the Store to warm after a pull. */
+export const BRIEFS_TO_WARM_SQL =
+  "select thread_id from briefs where content_stale = 1 order by computed_at desc limit ?";
+
+/**
+ * A Brief the reader can show, or null while the row holds headers only. A
+ * row whose content lags its headers shows the old bullets dimmed, as a
+ * stale Brief does, until the fetch replaces them.
+ */
+export function rowToBrief(r: Row): Brief | null {
+  const bullets = json<Brief["bullets"]>(r.bullets, []);
+  if (bullets.length === 0) return null;
   return {
     threadId: text(r.thread_id),
-    bullets: json<Brief["bullets"]>(r.bullets, []),
+    bullets,
     actions: json<Brief["actions"]>(r.actions, []),
     computedAt: text(r.computed_at),
-    stale: bool(r.stale),
+    stale: bool(r.stale) || bool(r.content_stale),
   };
 }
 

@@ -251,6 +251,20 @@ describe("reader", () => {
     expect((html.match(/class="chip"/g) ?? []).length).toBe(3);
   });
 
+  test("a stale Brief dims and shows the updating line in place of the source", () => {
+    const html = render(
+      <Brief
+        brief={{ ...brief1, stale: true }}
+        source="Claude Code, on this machine"
+        updating="Updating"
+      />,
+    );
+    expect(html).toContain('class="brief stale"');
+    expect(html).toContain("<span>Updating</span>");
+    expect(html).not.toContain("Claude Code, on this machine");
+    expect(html).toContain("<b>Aoife submitted the take-home</b>");
+  });
+
   test("Message renders open with avatar, paragraphs and attachments", () => {
     const html = render(<Message message={m1c} now={fx.NOW} />);
     expect(html).toContain('class="msg"');
