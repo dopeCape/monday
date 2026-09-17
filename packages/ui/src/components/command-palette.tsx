@@ -148,9 +148,7 @@ export function CommandPalette({
         {sections.map((sec) => (
           <div key={sec.label}>
             <div className="cmdk-sec">{sec.label}</div>
-            {sec.items.length === 0 && s.empty ? (
-              <div className="cmdk-empty">{s.empty}</div>
-            ) : null}
+            {sec.items.length === 0 && s.empty ? <div className="cmdk-empty">{s.empty}</div> : null}
             {sec.items.map((it) =>
               it.thread ? (
                 <div

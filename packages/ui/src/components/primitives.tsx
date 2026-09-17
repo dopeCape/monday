@@ -222,13 +222,21 @@ export interface ColHeadProps {
   className?: string | undefined;
 }
 
+/**
+ * The window has no title bar, so every column head is a drag region: the strip,
+ * its title, count and spacer move the window; the controls inside still click.
+ */
 export function ColHead({ title, count, leading, children, className }: ColHeadProps) {
   return (
-    <div className={cx("col-head", className)}>
+    <div className={cx("col-head", className)} data-tauri-drag-region>
       {leading}
-      {title ? <h2>{title}</h2> : null}
-      {count !== undefined ? <span className="count">{count}</span> : null}
-      <span className="sp" />
+      {title ? <h2 data-tauri-drag-region>{title}</h2> : null}
+      {count !== undefined ? (
+        <span className="count" data-tauri-drag-region>
+          {count}
+        </span>
+      ) : null}
+      <span className="sp" data-tauri-drag-region />
       {children}
     </div>
   );

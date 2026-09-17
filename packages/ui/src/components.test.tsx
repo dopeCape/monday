@@ -157,8 +157,8 @@ describe("primitives", () => {
         <Btn>Filter</Btn>
       </ColHead>,
     );
-    expect(html).toContain("<h2>Inbox</h2>");
-    expect(html).toContain('class="count">14<');
+    expect(html).toContain('<h2 data-tauri-drag-region="true">Inbox</h2>');
+    expect(html).toContain('class="count" data-tauri-drag-region="true">14<');
     expect(render(<SectionLabel>Needs your reply</SectionLabel>)).toContain(
       '<div class="sec">Needs your reply</div>',
     );
@@ -364,7 +364,7 @@ describe("agent", () => {
     );
     expect(panel).toContain('class="agent-dock"');
     expect(panel).toContain('class="agent-panel"');
-    expect(panel).toContain("<h2>monday</h2>");
+    expect(panel).toContain('<h2 data-tauri-drag-region="true">monday</h2>');
     expect(panel).toContain('class="agent-suggest"');
     expect(panel).toContain("Hide the sidebar");
     expect(panel).toContain("Changed layout");
@@ -405,16 +405,18 @@ describe("overlays", () => {
       />,
     );
     expect(html).toContain('class="compose"');
-    expect(html).toContain("<h2>Reply</h2>");
+    expect(html).toContain('<h2 data-tauri-drag-region="true">Reply</h2>');
     expect(html).toContain('class="pill" title="kenji.w@meridianfund.co">Kenji Watanabe<');
     expect(html).toContain('value="Re: Term sheet redline, v3"');
     expect(html).toContain("<p>Kenji,</p>");
     expect(html).toContain('class="ghost"');
     expect(html).toContain('class="c-ai"');
     expect(html).toContain("Rewrite");
-    expect(render(<Compose draft={fx.draft} />)).toContain("<h2>New message</h2>");
+    expect(render(<Compose draft={fx.draft} />)).toContain(
+      '<h2 data-tauri-drag-region="true">New message</h2>',
+    );
     expect(render(<Compose draft={{ ...fx.draft, kind: "forward" }} />)).toContain(
-      "<h2>Forward</h2>",
+      '<h2 data-tauri-drag-region="true">Forward</h2>',
     );
   });
 });
@@ -509,5 +511,18 @@ describe("copy", () => {
     }
     expect(offenders).toEqual([]);
     expect(files).toBeGreaterThan(10);
+  });
+});
+
+describe("drag region", () => {
+  test("column heads move the undecorated window; their controls do not", () => {
+    const html = render(
+      <ColHead title="Inbox" count={14}>
+        <Btn>Filter</Btn>
+      </ColHead>,
+    );
+    expect(html).toContain('<div class="col-head" data-tauri-drag-region="true">');
+    expect(html).toContain('<span class="sp" data-tauri-drag-region="true">');
+    expect(html).toContain('<button type="button" class="btn">Filter</button>');
   });
 });
