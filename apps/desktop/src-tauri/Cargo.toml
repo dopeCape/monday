@@ -24,5 +24,6 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 notify = "8"
 notify-debouncer-mini = "0.6"
 rand = "0.9"
+base64 = "0.22"
 thiserror = "2"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }

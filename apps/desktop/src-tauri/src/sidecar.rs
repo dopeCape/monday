@@ -44,7 +44,7 @@ pub async fn start(app: &AppHandle) -> Result<SidecarInfo, String> {
         .filter(|r| r.join("pg").exists())
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
 
-    let cmd = app
+    let mut cmd = app
         .shell()
         .sidecar("monday-server")
         .map_err(|e| e.to_string())?
@@ -54,6 +54,11 @@ pub async fn start(app: &AppHandle) -> Result<SidecarInfo, String> {
         .env("MONDAY_DATA_DIR", data_dir.to_string_lossy().to_string())
         .env("MONDAY_PARENT_PID", std::process::id().to_string())
         .env("MONDAY_RESOURCES_DIR", resources.to_string_lossy().to_string());
+    // The user-held root key unlocks the Sidecar at boot (research 5). Without a
+    // keychain the server starts locked and the UI offers the recovery file path.
+    if let Some(key) = crate::rootkey::load_or_create()? {
+        cmd = cmd.env("MONDAY_ROOT_KEY", key);
+    }
 
     let (mut rx, child) = cmd.spawn().map_err(|e| e.to_string())?;
     let state = app.state::<SidecarState>();

@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod rootkey;
 mod power;
 mod secrets;
 mod sidecar;
@@ -21,6 +22,8 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
             sidecar::sidecar_info,
+            rootkey::recovery_file,
+            rootkey::import_recovery_key,
             db::db_exec,
             db::db_query,
             db::db_batch,
