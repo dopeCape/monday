@@ -4,35 +4,37 @@
 // Meter's cost estimate is one formula everywhere.
 
 import type { HostedProvider, Roles, Task, Usage } from "../domain.ts";
-import type { Effort, ModelPrice, Pricing, Settings } from "./schema.ts";
+import type { Effort, ModelPrice, Pricing, SettingKey, Settings } from "./schema.ts";
 
-/** The Settings the Hosted runtime reads; a subset so callers can hand over just these. */
-export type HostedSettings = Pick<
-  Settings,
-  | "ai.hosted.provider"
-  | "ai.roles.anthropic"
-  | "ai.roles.gemini"
-  | "ai.roles.openai"
-  | "ai.roles.kimi"
-  | "ai.roles.openrouter"
-  | "ai.task.composer"
-  | "ai.task.agentic-step"
-  | "ai.task.brief"
-  | "ai.task.classify"
-  | "ai.task.route"
-  | "ai.task.section"
-  | "ai.task.tag"
-  | "ai.task.draft-in-voice"
-  | "ai.task.summarize"
-  | "ai.pricing.anthropic"
-  | "ai.pricing.gemini"
-  | "ai.pricing.openai"
-  | "ai.pricing.kimi"
-  | "ai.pricing.openrouter"
-  | "ai.endpoint.kimi"
-  | "ai.endpoint.openrouter"
-  | "ai.max_output_tokens"
->;
+/** The Settings the Hosted runtime reads, so a Server can load exactly these. */
+export const HOSTED_SETTING_KEYS = [
+  "ai.hosted.provider",
+  "ai.roles.anthropic",
+  "ai.roles.gemini",
+  "ai.roles.openai",
+  "ai.roles.kimi",
+  "ai.roles.openrouter",
+  "ai.task.composer",
+  "ai.task.agentic-step",
+  "ai.task.brief",
+  "ai.task.classify",
+  "ai.task.route",
+  "ai.task.section",
+  "ai.task.tag",
+  "ai.task.draft-in-voice",
+  "ai.task.summarize",
+  "ai.pricing.anthropic",
+  "ai.pricing.gemini",
+  "ai.pricing.openai",
+  "ai.pricing.kimi",
+  "ai.pricing.openrouter",
+  "ai.endpoint.kimi",
+  "ai.endpoint.openrouter",
+  "ai.max_output_tokens",
+] as const satisfies readonly SettingKey[];
+
+export type HostedSettingKey = (typeof HOSTED_SETTING_KEYS)[number];
+export type HostedSettings = Pick<Settings, HostedSettingKey>;
 
 /** What a Task runs on once the Settings are applied. */
 export interface ModelChoice {

@@ -528,6 +528,14 @@ export const settingsSchema = {
     label: "Compute in the background",
     help: "Compute Briefs under the policy before a Thread is opened. Needs a Hosted runtime; otherwise every Brief is computed on open.",
   }),
+  "briefs.input_chars_max": setting({
+    type: z.int().min(1000),
+    default: 24_000,
+    scope: "global",
+    section: "routing",
+    label: "Thread text sent for a Brief",
+    help: "The most characters of a Thread the brief Task reads, newest Messages first. Longer Threads are cut with a note.",
+  }),
   "briefs.skip_under_words": setting({
     type: z.int().min(0),
     default: 120,

@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { Capabilities, DeploymentMode } from "@monday/shared";
+import type { DeploymentMode, HostedState } from "@monday/shared";
+import { defaultSettings, HOSTED_PROVIDERS, rolesFor } from "@monday/shared";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
+import type { ModeCapabilities } from "../src/capabilities.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const SETUP_CODE = "424242";
@@ -60,7 +62,7 @@ describe("app", () => {
   });
 
   test("capabilities follow the deployment mode table", async () => {
-    const expected: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "unlocked">> = {
+    const expected: Record<DeploymentMode, ModeCapabilities> = {
       sidecar: {
         realtime: "websocket",
         holdsConnections: true,
@@ -81,9 +83,24 @@ describe("app", () => {
         localRuntimes: false,
       },
     };
+    // No Settings saved and no shared key: the shipped Roles and an empty share list.
+    const defaults = defaultSettings();
+    const hosted: HostedState = {
+      provider: "anthropic",
+      roles: Object.fromEntries(
+        HOSTED_PROVIDERS.map((p) => [p, rolesFor(defaults, p)]),
+      ) as HostedState["roles"],
+      sharedKeys: [],
+    };
     for (const mode of Object.keys(expected) as DeploymentMode[]) {
       const res = await build(db, mode, peer).request("/capabilities");
-      expect(await res.json()).toEqual({ protocol: 1, mode, ...expected[mode], unlocked: false });
+      expect(await res.json()).toEqual({
+        protocol: 1,
+        mode,
+        ...expected[mode],
+        unlocked: false,
+        hosted,
+      });
     }
   });
 
