@@ -105,12 +105,19 @@ create table if not exists section_rules (
   hidden integer not null default 0
 );
 
+-- Briefs (slice 13). A feed row carries headers only (computed_at, stale and
+-- the Thread version); bullets and actions are content, fetched through
+-- GET /threads/:id/brief as soon as the row lands, so the reader shows the
+-- Brief on open without a request. content_stale marks a row whose content
+-- is older than its headers; the Store warms those after every pull.
 create table if not exists briefs (
   thread_id text primary key,
   bullets text not null default '[]',
   actions text not null default '[]',
   computed_at text not null,
-  stale integer not null default 0
+  stale integer not null default 0,
+  message_count integer not null default 0,
+  content_stale integer not null default 0
 );
 
 create table if not exists settings (

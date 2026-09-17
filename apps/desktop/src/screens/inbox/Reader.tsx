@@ -4,7 +4,13 @@
 // Bodies are the Cache's (filled on open through the content routes);
 // attachments download through the opener; links open through it too.
 
-import type { Brief as BriefData, Message as MessageData, Tag, Thread } from "@monday/shared";
+import type {
+  BriefAction,
+  Brief as BriefData,
+  Message as MessageData,
+  Tag,
+  Thread,
+} from "@monday/shared";
 import { Brief, Btn, ColHead, Mark, Message, type MessageStrings, ReplyBox } from "@monday/ui";
 import {
   ArchiveIcon,
@@ -33,6 +39,8 @@ export interface ReaderStrings {
   message: string;
   messages: string;
   briefSource: string;
+  /** Shown in place of the source while a stale Brief waits for a fresh one. */
+  briefUpdating: string;
   /** "Reply to {name}" */
   replyTo: string;
   send: string;
@@ -67,6 +75,8 @@ export interface ReaderProps {
   onToggleRead: () => void;
   /** The user wants to answer: focus in the reply box, R, A or F, the reply-all or forward buttons. */
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
+  /** A Brief action chip was clicked; the screen runs it as a tool call (slice 13). */
+  onBriefAction?: ((action: BriefAction) => void) | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
@@ -93,6 +103,7 @@ export function Reader({
   onStar,
   onToggleRead,
   onReply,
+  onBriefAction,
   onOpenAttachment,
   onOpenLink,
   attachmentSrc,
@@ -167,7 +178,14 @@ export function Reader({
             {thread.participants[0]?.name} · {count}
             {tags.length ? ` · ${tags.map((t) => t.name).join(", ")}` : ""}
           </div>
-          {brief ? <Brief brief={brief} source={strings.briefSource} /> : null}
+          {brief ? (
+            <Brief
+              brief={brief}
+              source={strings.briefSource}
+              updating={strings.briefUpdating}
+              onAction={onBriefAction}
+            />
+          ) : null}
           {messages.map((m, i) => (
             <Message
               key={m.id}

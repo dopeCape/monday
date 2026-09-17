@@ -44,6 +44,8 @@ function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
       messages: inbox.messages,
       watchMessages: inbox.watchMessages,
       openThread: inbox.openThread,
+      brief: inbox.brief,
+      requestBrief: inbox.requestBrief,
       attachmentBytes: inbox.attachmentBytes,
       archive: wrap("archive"),
       unarchive: wrap("unarchive"),

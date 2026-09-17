@@ -179,20 +179,27 @@ export interface NewDraftOptions {
   formatDate: (iso: string) => string;
   /** Forward: the original attachments to carry, as uploaded blobs. */
   attachments?: DraftAttachment[];
+  /** A Brief chip's proposed opening line; the Draft starts with it, still unsent. */
+  opening?: string | undefined;
+  /** A Brief chip's forward recipient. */
+  to?: Person[] | undefined;
 }
 
 /** The content a fresh Draft starts with, per kind. */
 export function initialContent(o: NewDraftOptions): DraftContent {
+  const opening = o.opening?.trim() ?? "";
+  const openingHtml = opening ? `<p>${escapeHtml(opening)}</p>` : "<p></p>";
+  const openingText = opening ? `${opening}\n` : "";
   const empty: DraftContent = {
     threadId: o.threadId,
     kind: o.kind,
     inReplyToMessageId: o.last?.id ?? null,
-    to: [],
+    to: o.to ?? [],
     cc: [],
     bcc: [],
     subject: "",
-    bodyHtml: o.signature.html ? `<p></p>${o.signature.html}` : "",
-    bodyText: o.signature.text ? `\n\n${o.signature.text}` : "",
+    bodyHtml: o.signature.html ? `${openingHtml}${o.signature.html}` : opening ? openingHtml : "",
+    bodyText: o.signature.text ? `${openingText}\n\n${o.signature.text}` : openingText,
     attachments: o.attachments ?? [],
   };
   if (o.kind === "new" || !o.last) return empty;
@@ -201,11 +208,11 @@ export function initialContent(o: NewDraftOptions): DraftContent {
     const quoted = quotedReply(o.last, o.strings, o.formatDate);
     return {
       ...empty,
-      to,
+      to: o.to ?? to,
       cc,
       subject: replySubject(o.subject),
-      bodyHtml: `<p></p>${o.signature.html}${quoted.html}`,
-      bodyText: `${o.signature.text ? `\n\n${o.signature.text}` : ""}\n\n${quoted.text}`,
+      bodyHtml: `${openingHtml}${o.signature.html}${quoted.html}`,
+      bodyText: `${openingText}${o.signature.text ? `\n\n${o.signature.text}` : ""}\n\n${quoted.text}`,
     };
   }
   const subject = forwardSubject(o.subject);
@@ -213,8 +220,8 @@ export function initialContent(o: NewDraftOptions): DraftContent {
   return {
     ...empty,
     subject,
-    bodyHtml: `<p></p>${o.signature.html}${quoted.html}`,
-    bodyText: `${o.signature.text ? `\n\n${o.signature.text}` : ""}\n\n${quoted.text}`,
+    bodyHtml: `${openingHtml}${o.signature.html}${quoted.html}`,
+    bodyText: `${openingText}${o.signature.text ? `\n\n${o.signature.text}` : ""}\n\n${quoted.text}`,
   };
 }
 

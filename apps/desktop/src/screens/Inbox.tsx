@@ -4,7 +4,7 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { Settings } from "@monday/shared";
+import type { BriefAction, Settings } from "@monday/shared";
 import {
   AgentBar,
   AgentDock,
@@ -17,7 +17,6 @@ import {
 } from "@monday/ui";
 import {
   agentThread,
-  briefOf,
   groups,
   NOW,
   sections,
@@ -54,6 +53,7 @@ import { UndoBar } from "./compose/UndoBar.tsx";
 import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
+import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
@@ -132,6 +132,16 @@ function useThreadMessages(inbox: InboxData, threadId: string | null) {
   return messages;
 }
 const NO_MESSAGES: readonly never[] = [];
+
+/** The open Thread's Brief from the reader seam: the Cache's, before or after open. */
+function useThreadBrief(inbox: InboxData, threadId: string | null) {
+  const subscribe = useCallback(
+    (listener: () => void) => (threadId ? inbox.watchMessages(threadId, listener) : () => {}),
+    [inbox, threadId],
+  );
+  const get = useCallback(() => (threadId ? inbox.brief(threadId) : undefined), [inbox, threadId]);
+  return useSyncExternalStore(subscribe, get, get);
+}
 
 const RUNTIME_LABEL: Record<Settings["ai.local.cli"], string> = {
   "claude-code": "Claude Code",
@@ -241,6 +251,7 @@ export function Inbox({
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
   const messages = useThreadMessages(inbox, openThreadId);
+  const brief = useThreadBrief(inbox, openThreadId);
 
   /* ------------------------------ Compose ------------------------------ */
 
@@ -428,12 +439,52 @@ export function Inbox({
   }, []);
 
   const startReply = useCallback(
-    (kind: "reply" | "forward", replyAll?: boolean) => {
+    (kind: "reply" | "forward", replyAll?: boolean, seed?: ComposeSeed) => {
       if (!thread) return;
       setReaderOpen(true);
-      compose.startReply(thread, inbox.messages(thread.id), kind, replyAll);
+      compose.startReply(thread, inbox.messages(thread.id), kind, replyAll, seed);
     },
     [thread, inbox, compose],
+  );
+
+  // Action chips are tool calls (slice 13): reply and forward open compose and
+  // never send, snooze and archive apply with Undo, a link opens outside.
+  const actionRunner = useMemo(
+    () =>
+      createActionRunner({
+        inbox,
+        compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
+        openLink: (url) => openExternal(url),
+      }),
+    [inbox, startReply],
+  );
+  const runBriefAction = useCallback(
+    async (action: BriefAction) => {
+      if (!thread) return;
+      const outcome = await actionRunner.run(action, thread.id);
+      if (!outcome.ok) {
+        showToast(
+          t(
+            outcome.reason === "calendar_unavailable"
+              ? "strings.reader.brief_action.calendar_unavailable"
+              : "strings.reader.brief_action.unavailable",
+          ),
+          null,
+        );
+        return;
+      }
+      if (outcome.call.tool === "thread.archive") {
+        showToast(t("strings.inbox.toast.archived"), outcome.undo);
+      } else if (outcome.call.tool === "thread.snooze") {
+        showToast(
+          fill(t("strings.inbox.toast.snoozed"), {
+            when: formatWake(new Date(outcome.call.args.until), now),
+          }),
+          outcome.undo,
+        );
+      }
+    },
+    [thread, actionRunner, showToast, t, now],
   );
 
   const openAttachment = useCallback(
@@ -729,7 +780,7 @@ export function Inbox({
         <Reader
           thread={thread}
           messages={messages}
-          brief={briefOf(thread.id)}
+          brief={brief}
           tags={tagsOf(thread)}
           sheet={stream}
           now={now}
@@ -741,6 +792,7 @@ export function Inbox({
             loading: t("strings.reader.loading"),
           }}
           onReply={startReply}
+          onBriefAction={(action) => void runBriefAction(action)}
           onOpenAttachment={(id) => void openAttachment(id)}
           onOpenLink={(href) => void openExternal(href)}
           attachmentSrc={attachmentSrc}
@@ -796,6 +848,7 @@ export function Inbox({
             message: t("strings.reader.message"),
             messages: t("strings.reader.messages"),
             briefSource: fill(t("strings.reader.brief_source"), { runtime }),
+            briefUpdating: t("strings.reader.brief_updating"),
           }}
           keys={{
             archive: key("thread.archive"),

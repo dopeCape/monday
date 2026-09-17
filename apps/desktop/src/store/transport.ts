@@ -5,6 +5,8 @@
 // Vercel, a timer for polling (docs/spec/architecture.md, "Deployment modes").
 
 import type {
+  Brief,
+  BriefTrigger,
   Capabilities,
   ChangesPage,
   Draft,
@@ -13,7 +15,12 @@ import type {
   Intent,
   IntentResult,
 } from "@monday/shared";
-import type { Api, BodyResponse, MessageHeaderResponse } from "../platform/api.ts";
+import type {
+  Api,
+  BodyResponse,
+  BriefRequestResult,
+  MessageHeaderResponse,
+} from "../platform/api.ts";
 
 export interface WakeHandlers {
   onOpen(): void;
@@ -31,6 +38,12 @@ export interface StoreTransport {
   intent(intent: Intent): Promise<IntentResult>;
   /** A Draft or send intent to its route (ADR 0010). */
   draftIntent(workspaceId: Id, intent: DraftIntent): Promise<IntentResult>;
+  /**
+   * A Brief's content, once its feed row said one exists, so the Cache holds
+   * it before the reader opens (slice 13). Null when the Server has none.
+   * Absent on a transport with no content routes; those rows stay unwarmed.
+   */
+  brief?(threadId: Id): Promise<Brief | null>;
   connect(workspaceId: Id, handlers: WakeHandlers): WakeConnection;
 }
 
@@ -44,6 +57,13 @@ export interface ContentTransport {
   body(messageId: Id, options?: { images?: boolean }): Promise<BodyResponse>;
   draft(draftId: Id): Promise<Draft>;
   attachment(attachmentId: Id): Promise<{ bytes: Uint8Array; mediaType: string }>;
+  /**
+   * Asks the Server for a Brief under the brief policy: the reader on open
+   * (the Cache has none, or a stale one), or the user by hand. The Brief
+   * itself arrives through the feed. Rejects with 409 when the Server holds
+   * no key for the brief Task.
+   */
+  requestBrief(workspaceId: Id, threadId: Id, trigger: BriefTrigger): Promise<BriefRequestResult>;
   uploadBlob(
     workspaceId: Id,
     file: { name: string; mediaType: string; bytes: Uint8Array },
@@ -59,6 +79,7 @@ export function apiTransport(api: Api, capabilities: () => Capabilities | null):
     changes: (workspaceId, since, limit) => api.changes.list(workspaceId, since, limit),
     intent: (intent) => api.threads.intent(intent),
     draftIntent: (workspaceId, intent) => api.drafts.intent(workspaceId, intent),
+    brief: (threadId) => api.briefs.get(threadId),
     connect(workspaceId, handlers) {
       const realtime = capabilities()?.realtime ?? "polling";
       if (realtime === "websocket") return connectWebSocket(api, workspaceId, handlers);
@@ -74,6 +95,8 @@ export function apiContent(api: Api): ContentTransport {
     body: (messageId, options) => api.messages.body(messageId, options),
     draft: (draftId) => api.drafts.get(draftId),
     attachment: (attachmentId) => api.attachments.bytes(attachmentId),
+    requestBrief: (workspaceId, threadId, trigger) =>
+      api.briefs.compute(workspaceId, threadId, trigger),
     async uploadBlob(workspaceId, file, onProgress) {
       const started = await api.blobs.start(workspaceId, {
         name: file.name,

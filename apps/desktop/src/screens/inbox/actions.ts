@@ -5,8 +5,8 @@
 // fixtureInbox() is the in-memory implementation over packages/ui fixtures.
 // Slice 6 replaces it with the Store: same interface, the screen stays.
 
-import type { Message, Thread } from "@monday/shared";
-import { threads as fixtureThreads, messagesOf } from "@monday/ui/fixtures";
+import type { Brief, Message, Thread } from "@monday/shared";
+import { briefOf, threads as fixtureThreads, messagesOf } from "@monday/ui/fixtures";
 
 export type UndoToken = string;
 
@@ -33,14 +33,22 @@ export interface InboxSource {
   subscribe(listener: () => void): () => void;
 }
 
-/** What the reader needs: a Thread's Messages, their bodies on open, attachment bytes. */
+/** What the reader needs: a Thread's Messages, their bodies on open, its Brief, attachment bytes. */
 export interface ThreadReader {
   /** The Messages the Cache holds for a Thread, in date order. Stable between changes. */
   messages(threadId: string): readonly Message[];
-  /** Notifies when a Thread's Messages or bodies change; opening a Thread fetches what is missing. */
+  /** Notifies when a Thread's Messages, bodies or Brief change; opening a Thread fetches what is missing. */
   watchMessages(threadId: string, listener: () => void): () => void;
-  /** Fetches headers, attachments and bodies into the Cache (within its rules). Never throws. */
+  /**
+   * Fetches headers, attachments and bodies into the Cache (within its
+   * rules), then asks for a Brief under the brief policy when the Cache has
+   * none or a stale one (slice 13). Never throws.
+   */
   openThread(threadId: string): Promise<void>;
+  /** The Brief the Cache holds for a Thread, computed before or after open; undefined when none. */
+  brief(threadId: string): Brief | undefined;
+  /** Asks the Server for a Brief by hand ("or when the user asks"). Never throws. */
+  requestBrief(threadId: string): Promise<void>;
   attachmentBytes(attachmentId: string): Promise<{ bytes: Uint8Array; mediaType: string }>;
 }
 
@@ -102,6 +110,8 @@ export function fixtureInbox(seed: readonly Thread[] = fixtureThreads): Inbox {
       };
     },
     openThread: async () => {},
+    brief: (threadId) => briefOf(threadId),
+    requestBrief: async () => {},
     attachmentBytes: async (attachmentId) => ({
       bytes: new TextEncoder().encode(attachmentId),
       mediaType: "application/octet-stream",

@@ -64,19 +64,29 @@ export interface BriefProps {
   brief: BriefData;
   /** Who wrote it, such as "Claude Code, on this machine". */
   source?: string | undefined;
+  /** The word shown in place of the source while a stale Brief waits for a fresh one, such as "Updating". */
+  updating?: string | undefined;
   /** How many action chips to show. The mock shows three. */
   maxActions?: number | undefined;
   onAction?: ((action: BriefAction) => void) | undefined;
   className?: string | undefined;
 }
 
-export function Brief({ brief, source, maxActions = 3, onAction, className }: BriefProps) {
+export function Brief({
+  brief,
+  source,
+  updating,
+  maxActions = 3,
+  onAction,
+  className,
+}: BriefProps) {
   const actions = brief.actions.slice(0, maxActions);
+  const line = brief.stale && updating ? updating : source;
   return (
     <div className={cx("brief", brief.stale && "stale", className)}>
       <div className="brief-h">
         Brief
-        {source ? <span>{source}</span> : null}
+        {line ? <span>{line}</span> : null}
       </div>
       <ul>
         {brief.bullets.map((b, i) => (

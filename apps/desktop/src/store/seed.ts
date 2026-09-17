@@ -104,10 +104,18 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
       });
     }
   }
+  const countOf = new Map(data.threads.map((t) => [t.id, t.messageCount]));
   for (const b of data.briefs) {
     out.push({
-      sql: "insert or replace into briefs (thread_id, bullets, actions, computed_at, stale) values (?, ?, ?, ?, ?)",
-      params: [b.threadId, b.bullets, b.actions, b.computedAt, b.stale],
+      sql: "insert or replace into briefs (thread_id, bullets, actions, computed_at, stale, message_count, content_stale) values (?, ?, ?, ?, ?, ?, 0)",
+      params: [
+        b.threadId,
+        b.bullets,
+        b.actions,
+        b.computedAt,
+        b.stale,
+        countOf.get(b.threadId) ?? 0,
+      ],
     });
   }
   for (const d of data.drafts) {

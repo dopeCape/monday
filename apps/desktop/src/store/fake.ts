@@ -5,6 +5,8 @@
 
 import type {
   Actor,
+  Brief,
+  BriefTrigger,
   Change,
   ChangesPage,
   Draft,
@@ -42,11 +44,29 @@ export interface ServerWrite {
   >;
 }
 
+/** A Brief the fake Server holds, with the Thread version it was computed for. */
+export interface ServerBrief extends Brief {
+  messageCount: number;
+}
+
 export interface FakeServer {
   /** While true every request fails like a dropped connection. */
   offline: boolean;
   threads: Map<Id, ServerThread>;
   changes: Change[];
+  briefs: Map<Id, ServerBrief>;
+  /** Brief requests that arrived (the reader on open, the user by hand), in order. */
+  briefRequests: Array<{ threadId: Id; trigger: BriefTrigger }>;
+  /**
+   * What a Brief request does, in place of the brief Job: tests script it
+   * (compute at once, or never). By default a request queues nothing.
+   */
+  onBriefRequest: ((threadId: Id, trigger: BriefTrigger) => void) | null;
+  /** Stores a Brief as the Job would and records the feed row. */
+  putBrief(brief: Brief, messageCount?: number): void;
+  /** Marks a Brief stale, as a new Message would, and records the feed row. */
+  staleBrief(threadId: Id): void;
+  removeBrief(threadId: Id): void;
   /** How many intents arrived, in order, for assertions on replay order. */
   received: Intent[];
   /** Draft and send intents that arrived, in order. */
@@ -77,10 +97,17 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
   const sockets = new Set<WakeHandlers>();
   const draftsById = new Map<Id, Draft>();
   const sendsById = new Map<Id, ScheduledSend>();
+  const briefsById = new Map<Id, ServerBrief>();
   let seq = 0;
 
   if (seed) {
     for (const t of seed.threads) threads.set(t.id, { ...t, deleted: false, writes: {} });
+    for (const b of seed.briefs) {
+      briefsById.set(b.threadId, {
+        ...b,
+        messageCount: threads.get(b.threadId)?.messageCount ?? 0,
+      });
+    }
   }
 
   const record = (change: Omit<Change, "seq" | "workspaceId" | "at">): number => {
@@ -143,17 +170,56 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
       },
     });
   const recordSend = (sd: ScheduledSend) => record({ kind: "send", entityId: sd.id, payload: sd });
+  const recordBrief = (b: ServerBrief, deleted = false) =>
+    record({
+      kind: "brief",
+      entityId: b.threadId,
+      payload: {
+        threadId: b.threadId,
+        computedAt: b.computedAt,
+        stale: b.stale,
+        messageCount: b.messageCount,
+        deleted,
+      },
+    });
 
   const server: FakeServer = {
     offline: false,
     threads,
     changes,
+    briefs: briefsById,
+    briefRequests: [],
+    onBriefRequest: null,
     received: [],
     receivedDrafts: [],
     drafts: draftsById,
     sends: sendsById,
     delaySeconds: 30,
     record,
+
+    putBrief(brief, messageCount) {
+      const stored: ServerBrief = {
+        ...brief,
+        messageCount: messageCount ?? threads.get(brief.threadId)?.messageCount ?? 0,
+      };
+      briefsById.set(brief.threadId, stored);
+      recordBrief(stored);
+    },
+
+    staleBrief(threadId) {
+      const existing = briefsById.get(threadId);
+      if (!existing || existing.stale) return;
+      const stale: ServerBrief = { ...existing, stale: true };
+      briefsById.set(threadId, stale);
+      recordBrief(stale);
+    },
+
+    removeBrief(threadId) {
+      const existing = briefsById.get(threadId);
+      if (!existing) return;
+      briefsById.delete(threadId);
+      recordBrief({ ...existing, computedAt: new Date().toISOString() }, true);
+    },
 
     applyDraftIntent(intent) {
       server.receivedDrafts.push(intent);
@@ -386,6 +452,13 @@ export function fakeTransport(server: FakeServer): StoreTransport {
       if (server.offline) throw offline();
       return server.applyDraftIntent(intent);
     },
+    async brief(threadId) {
+      if (server.offline) throw offline();
+      const b = server.briefs.get(threadId);
+      if (!b) return null;
+      const { messageCount: _v, ...brief } = b;
+      return brief;
+    },
     connect(_workspaceId, handlers) {
       if (server.offline) {
         queueMicrotask(handlers.onClose);
@@ -454,6 +527,17 @@ export function fakeContent(server: FakeServer, seed: SeedData | null): ContentT
       const d = server.drafts.get(draftId);
       if (!d) throw new ApiError(404, "not found");
       return d;
+    },
+    async requestBrief(_workspaceId, threadId, trigger) {
+      if (server.offline) throw offline();
+      const existing = server.briefs.get(threadId);
+      const version = server.threads.get(threadId)?.messageCount ?? 0;
+      if (trigger === "open" && existing && !existing.stale && existing.messageCount === version) {
+        return { fresh: true };
+      }
+      server.briefRequests.push({ threadId, trigger });
+      server.onBriefRequest?.(threadId, trigger);
+      return { jobId: `job-${server.briefRequests.length}` };
     },
     async attachment(attachmentId) {
       if (server.offline) throw offline();

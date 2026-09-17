@@ -12,6 +12,8 @@
 
 import type {
   Actor,
+  Brief,
+  BriefChange,
   Change,
   Draft,
   DraftChange,
@@ -101,6 +103,14 @@ export interface Store {
   cacheMessages(rows: readonly CachedMessageHeader[]): Promise<void>;
   cacheBody(messageId: Id, body: { text: string; html: string | null }): Promise<void>;
   cacheDraft(draft: Draft): Promise<void>;
+  /** A Brief fetched whole; the feed's header row (if any) is filled in. */
+  cacheBrief(brief: Brief): Promise<void>;
+  /**
+   * Fetches the content of every Brief whose feed row is newer than its
+   * bullets, through the transport. Runs after each pull; screens may call it
+   * too. Returns how many landed. Never throws.
+   */
+  warmBriefs(): Promise<number>;
   setReplyAll(threadId: Id, replyAll: boolean): Promise<void>;
   /**
    * Cache-only writes that are not intents and never reach the Outbox: bodies
@@ -130,6 +140,8 @@ export interface StoreOptions {
   /** Reconnect backoff bounds; small in tests. */
   backoff?: { minMs: number; maxMs: number };
   changesPageSize?: number;
+  /** How many Briefs one pull warms at most; the rest wait for the next. */
+  briefWarmLimit?: number;
   log?: (message: string) => void;
 }
 
@@ -137,10 +149,11 @@ const CURSOR_KEY = "cursor";
 const SCHEMA_VERSION_KEY = "schema_version";
 /**
  * Bumped when a table changes shape. Version 2 gave `messages` its rowid alias
- * and the body index (slice 10). An older Cache is a copy, so it is rebuilt
- * from the feed: content tables dropped, cursor reset, Outbox and settings kept.
+ * and the body index (slice 10); version 3 gave `briefs` its Thread version and
+ * content flag (slice 13). An older Cache is a copy, so it is rebuilt from the
+ * feed: content tables dropped, cursor reset, Outbox and settings kept.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const REBUILD_SQL = `
   drop trigger if exists threads_fts_ai;
@@ -450,7 +463,48 @@ export function changeStatements(change: Change): Statement[] {
       return [draftUpsert(change.payload)];
     case "send":
       return [sendUpsert(change.payload)];
+    case "brief":
+      return [briefUpsert(change.payload)];
   }
+}
+
+/**
+ * A Brief header row from the feed (slice 13): headers always, content left
+ * alone. A newer Brief than the local row marks the content stale so the
+ * Store fetches it after the pull; a stale flag on the same Brief keeps the
+ * bullets and only dims them. A removed Brief drops the row.
+ */
+function briefUpsert(b: BriefChange): Statement {
+  if (b.deleted) return { sql: "delete from briefs where thread_id = ?", params: [b.threadId] };
+  return {
+    sql: `insert into briefs (thread_id, bullets, actions, computed_at, stale, message_count, content_stale)
+          values (?, '[]', '[]', ?, ?, ?, 1)
+          on conflict (thread_id) do update set
+            stale = excluded.stale,
+            message_count = excluded.message_count,
+            content_stale = case when excluded.computed_at > briefs.computed_at then 1 else briefs.content_stale end,
+            computed_at = max(briefs.computed_at, excluded.computed_at)`,
+    params: [b.threadId, b.computedAt, b.stale, b.messageCount],
+  };
+}
+
+/**
+ * The Cache statements for a Brief fetched whole from GET /threads/:id/brief.
+ * The Thread version stays what the feed said; the content route does not
+ * carry it.
+ */
+export function cachedBriefStatements(brief: Brief): Statement[] {
+  return [
+    {
+      sql: `insert into briefs (thread_id, bullets, actions, computed_at, stale, message_count, content_stale)
+            values (?, ?, ?, ?, ?, 0, 0)
+            on conflict (thread_id) do update set
+              bullets = excluded.bullets, actions = excluded.actions,
+              computed_at = excluded.computed_at, stale = excluded.stale,
+              content_stale = 0`,
+      params: [brief.threadId, brief.bullets, brief.actions, brief.computedAt, brief.stale],
+    },
+  ];
 }
 
 /**
@@ -608,6 +662,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   const now = options.now ?? (() => new Date());
   const backoff = options.backoff ?? { minMs: 1_000, maxMs: 30_000 };
   const pageSize = options.changesPageSize ?? 500;
+  const warmLimit = options.briefWarmLimit ?? 50;
   const log = options.log ?? (() => {});
 
   await applySchema(driver);
@@ -759,12 +814,49 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     }
   };
 
+  /**
+   * Brief content follows its feed row: rows whose bullets lag their headers
+   * are fetched through the transport so the reader shows the Brief on open
+   * without a request (slice 13). A row the Server no longer has is dropped.
+   */
+  const warmBriefs = async (): Promise<number> => {
+    const fetchBrief = transport.brief;
+    if (!fetchBrief || closed) return 0;
+    let landed = 0;
+    try {
+      const rows = await driver.query(
+        "select thread_id from briefs where content_stale = 1 order by computed_at desc limit ?",
+        [warmLimit],
+      );
+      for (const row of rows) {
+        if (closed) break;
+        const threadId = String(row.thread_id);
+        try {
+          const brief = await fetchBrief.call(transport, threadId);
+          if (brief) {
+            await write(cachedBriefStatements(brief));
+            landed += 1;
+          } else {
+            await write([{ sql: "delete from briefs where thread_id = ?", params: [threadId] }]);
+          }
+        } catch (error) {
+          log(`brief ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof ApiError && !error.permanent) break;
+        }
+      }
+    } catch (error) {
+      log(`warm briefs: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return landed;
+  };
+
   const runSync = async (): Promise<SyncResult> => {
     const result: SyncResult = { pushed: 0, pulled: 0, cursor: 0, pending: 0, error: null };
     setStatus("syncing");
     try {
       await drainOutbox(result);
       await pullChanges(result);
+      await warmBriefs();
       setStatus(connection ? "online" : "offline");
     } catch (error) {
       result.error = error instanceof Error ? error : new Error(String(error));
@@ -953,6 +1045,12 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     async cacheDraft(draft) {
       await write(cachedDraftStatements(draft));
     },
+
+    async cacheBrief(brief) {
+      await write(cachedBriefStatements(brief));
+    },
+
+    warmBriefs,
 
     async setReplyAll(threadId, replyAll) {
       await write([

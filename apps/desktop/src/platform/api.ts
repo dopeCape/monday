@@ -5,6 +5,7 @@
 import type {
   AccountCapabilities,
   Brief,
+  BriefTrigger,
   Capabilities,
   ChangesPage,
   Draft,
@@ -47,6 +48,11 @@ export class ApiError extends Error {
     );
   }
 }
+
+/** What POST /threads/:id/brief answers: the queued Job, or that a fresh Brief already exists. */
+export type BriefRequestResult =
+  | { jobId: Id; fresh?: undefined }
+  | { fresh: true; jobId?: undefined };
 
 /** One Message's header with attachments and body state, as GET /threads/:id/messages returns it. */
 export interface MessageHeaderResponse {
@@ -276,11 +282,15 @@ export function createApi(target: () => ServerTarget | null) {
       },
     },
     briefs: {
-      /** Enqueues the brief Job on the Server; the Brief arrives through get once it ran. */
-      compute: (workspaceId: Id, threadId: Id) =>
-        request<{ jobId: Id }>(
+      /**
+       * Asks for a Brief under the brief policy (slice 13): "open" from the
+       * reader, "user" by hand. The Brief arrives through the Changes feed
+       * once the Job ran; an open that finds a fresh one queues nothing.
+       */
+      compute: (workspaceId: Id, threadId: Id, trigger: BriefTrigger = "user") =>
+        request<BriefRequestResult>(
           `/threads/${encodeURIComponent(threadId)}/brief`,
-          json("POST", { workspace: workspaceId }),
+          json("POST", { workspace: workspaceId, trigger }),
         ),
       /** The stored Brief, or null when none yet. */
       get: async (threadId: Id): Promise<Brief | null> => {
