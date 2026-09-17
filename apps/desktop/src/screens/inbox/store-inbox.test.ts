@@ -125,3 +125,69 @@ describe("storeInbox", () => {
     inbox.close();
   });
 });
+
+describe("storeInbox Briefs (slice 13)", () => {
+  const openWithContent = async () => {
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { content: fake.content });
+    return { ...fake, inbox };
+  };
+
+  test("the reader gets the Cache's Brief before open and opening asks the Server for nothing", async () => {
+    const { inbox, server } = await openWithContent();
+    const stop = inbox.watchMessages("e1", () => {});
+    await settled(inbox, () => inbox.brief("e1") !== undefined);
+    expect(inbox.brief("e1")?.bullets[0]?.[0]).toEqual({ b: "Aoife submitted the take-home" });
+    expect(inbox.brief("e1")).toBe(inbox.brief("e1"));
+    await inbox.openThread("e1");
+    expect(server.briefRequests).toEqual([]);
+    stop();
+    inbox.close();
+  });
+
+  test("a Thread with no Brief asks on open; the Server's answer arrives through the feed", async () => {
+    const { inbox, store, server } = await openWithContent();
+    server.onBriefRequest = (threadId) =>
+      server.putBrief({
+        threadId,
+        bullets: [["Weekly digest, nothing to do."]],
+        actions: [{ kind: "archive", label: "Archive" }],
+        computedAt: "2026-09-16T10:00:00.000Z",
+        stale: false,
+      });
+    // e11 is the fixture newsletter; the fixtures give it a Brief, the policy would not have.
+    server.removeBrief("e11");
+    await store.sync();
+    const stop = inbox.watchMessages("e11", () => {});
+    await settled(inbox, () => inbox.brief("e11") === undefined);
+    expect(await store.query("select * from briefs where thread_id = 'e11'")).toEqual([]);
+    await inbox.openThread("e11");
+    expect(server.briefRequests).toEqual([{ threadId: "e11", trigger: "open" }]);
+    await store.sync();
+    await settled(inbox, () => inbox.brief("e11") !== undefined);
+    expect(inbox.brief("e11")?.bullets).toEqual([["Weekly digest, nothing to do."]]);
+    // Opening again finds it fresh.
+    await inbox.openThread("e11");
+    expect(server.briefRequests).toHaveLength(1);
+    stop();
+    inbox.close();
+  });
+
+  test("a stale Brief asks on open, shows dimmed meanwhile, and the user can ask by hand", async () => {
+    const { inbox, store, server } = await openWithContent();
+    server.staleBrief("e2");
+    await store.sync();
+    const stop = inbox.watchMessages("e2", () => {});
+    await settled(inbox, () => inbox.brief("e2")?.stale === true);
+    expect(inbox.brief("e2")?.bullets[0]?.[0]).toEqual({ b: "Two redlines" });
+    await inbox.openThread("e2");
+    expect(server.briefRequests).toEqual([{ threadId: "e2", trigger: "open" }]);
+    await inbox.requestBrief("e2");
+    expect(server.briefRequests.at(-1)).toEqual({ threadId: "e2", trigger: "user" });
+    // An unreachable Server never throws out of the seam.
+    server.offline = true;
+    await inbox.requestBrief("e2");
+    stop();
+    inbox.close();
+  });
+});

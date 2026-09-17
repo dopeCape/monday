@@ -1,0 +1,5 @@
+[test]
+# The Briefs end-to-end test starts one embedded Postgres per run through the
+# Server's harness; this preload stops it when the run ends, as the root and
+# the Server's bunfig do. It costs nothing for runs that never touch it.
+preload = ["../server/test/preload.ts"]

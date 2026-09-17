@@ -525,8 +525,16 @@ export function createBriefs(options: BriefsOptions): Briefs {
           if (decided === "never") await api.remove(threadId);
           return "done";
         }
+        // A fresh Brief for this version stands, unless the user asked for a new one.
         const existing = await db.query.briefs.findFirst({ where: eq(briefs.threadId, threadId) });
-        if (existing && !existing.stale && sameVersion(existing, read.version)) return "done";
+        if (
+          trigger !== "user" &&
+          existing &&
+          !existing.stale &&
+          sameVersion(existing, read.version)
+        ) {
+          return "done";
+        }
         try {
           await computeFrom(read, job.id);
         } catch (error) {

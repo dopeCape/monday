@@ -179,6 +179,37 @@ describe("inline reply", () => {
   });
 });
 
+describe("Brief action chips (slice 13)", () => {
+  const chip = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>(".reader .brief-actions .chip")].find(
+      (b) => b.textContent === label,
+    ) ?? null;
+
+  test("a reply chip opens the reply seeded with the proposed line and sends nothing", async () => {
+    const { composer } = await mount({ initialOpen: "e1" });
+    await click(chip("Reply with Thursday 15:00"));
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    expect(document.querySelector(".reply .tiptap")?.textContent).toContain(
+      "Thursday 15:00 CET works for me.",
+    );
+    expect(pills(document.querySelector(".reply") ?? undefined)).toEqual(["aoife@northlight.dev"]);
+    expect(composer.sends()).toEqual([]);
+  });
+
+  test("a forward chip opens a forward addressed to the person; a calendar chip says the calendar is not connected", async () => {
+    await mount({ initialOpen: "e1" });
+    await click(chip("Forward to Priya"));
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    expect(pills(document.querySelector(".reply") ?? undefined)).toEqual(["priya@genai-labs.io"]);
+    expect(document.querySelector(".reply .quoted")).not.toBeNull();
+    await click(chip("Add to interview calendar"));
+    await until(() => document.querySelector(".toast") !== null);
+    expect(document.querySelector(".toast")?.textContent).toContain(
+      "Calendar is not connected yet",
+    );
+  });
+});
+
 describe("send and undo", () => {
   test("Send shows the countdown from the delay Setting; Undo cancels and reopens the Draft", async () => {
     const composer = fixtureComposer({ now: () => NOW, delaySeconds: 30 });
