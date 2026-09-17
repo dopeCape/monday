@@ -28,6 +28,7 @@ import {
   NoRecipientsError,
   SendTooLargeError,
 } from "./drafts/index.ts";
+import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
 import {
   BriefOutputError,
   createIntelligence,
@@ -90,6 +91,18 @@ export interface AppOptions {
   oauth?: Omit<OAuthRoutesOptions, "accounts">;
   /** Provider push webhooks (public paths, verified by their own secrets). */
   push?: PushManager;
+  /**
+   * This Server's heartbeat id, so /capabilities can report the topology
+   * (Sidecar only, Cloud, both) from the fresh heartbeats. Absent, the Server
+   * reports itself alone.
+   */
+  serverId?: string;
+  /** The stale window for heartbeats, in ms; defaults to the Setting's shipped default. */
+  staleMs?: () => Promise<number> | number;
+  /** The clock the topology is judged by; tests drive it. */
+  now?: () => Date;
+  /** Extra route groups mounted at the root: the cron tick, the upgrade routes. */
+  mounts?: Hono<AppEnv>[];
 }
 
 export function createApp(options: AppOptions): Hono<AppEnv> {
@@ -153,9 +166,19 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
   });
 
-  app.get("/capabilities", async (c) =>
-    c.json(capabilitiesFor(mode, keys.isUnlocked(), await intelligence.hostedState())),
-  );
+  app.get("/capabilities", async (c) => {
+    const topology = options.serverId
+      ? await currentTopology(
+          db,
+          { id: options.serverId, mode },
+          options.now?.() ?? new Date(),
+          await (options.staleMs?.() ?? HEARTBEAT_STALE_MS),
+        )
+      : undefined;
+    return c.json(
+      capabilitiesFor(mode, keys.isUnlocked(), await intelligence.hostedState(), topology),
+    );
+  });
 
   app.route("/pair", pairRoutes(auth));
   app.route("/settings", settingsRoutes(db));
@@ -172,6 +195,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
   }
   if (options.push) app.route("/", webhookRoutes(options.push));
+  for (const mount of options.mounts ?? []) app.route("/", mount);
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
   app.onError((error, c) => {

@@ -418,6 +418,19 @@ export interface Capabilities {
   unlocked: boolean;
   /** The Hosted runtime: provider, Roles and which providers hold a shared key (ADR 0007). */
   hosted: HostedState;
+  /** Which Servers are alive around this database right now: this one plus fresh heartbeats. */
+  topology: "sidecar" | "cloud" | "both";
+  /** What the live Servers can do together (deployment.ts). */
+  features: {
+    realtime: "websocket" | "sse" | "polling";
+    holdsConnections: boolean;
+    pushWebhooks: boolean;
+    scheduledSendsWhileClosed: boolean;
+    backgroundJobs: boolean;
+    localRuntimes: boolean;
+  };
+  /** Every Server with a fresh heartbeat, this one included. */
+  servers: Array<{ id: string; mode: DeploymentMode; lastSeen: IsoDate }>;
 }
 
 export type NavKnob = "full" | "rail" | "hidden";

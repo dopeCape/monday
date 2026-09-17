@@ -3034,6 +3034,73 @@ button.msg {
   font-size: var(--fs-sm);
 }
 
+/* ------------------------------ Server: the upgrade cards (ADR 0008) ------------------------------ */
+.upgrade-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .upgrade-cards {
+    grid-template-columns: 1fr;
+  }
+}
+.upgrade-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+}
+.upgrade-card > b {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.upgrade-card > span {
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.upgrade-card > span.adds {
+  color: var(--fg);
+}
+.upgrade-card .btn {
+  justify-self: start;
+  margin-top: 4px;
+}
+.env-list {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.env-list i {
+  font-style: normal;
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.env-list > div {
+  display: grid;
+  gap: 2px;
+}
+.env-list code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg);
+}
+.env-list > div:not(.req) code {
+  color: var(--fg-muted);
+}
+.env-list > div > span {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

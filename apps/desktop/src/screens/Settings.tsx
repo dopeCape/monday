@@ -1,12 +1,14 @@
 // Settings › Accounts and Appearance over the Shell. Every control comes from the
 // settings schema; a Pinned key renders locked with "set in monday.toml" (ADR 0001,
 // docs/spec/settings.md). Accounts lists what is connected and hosts the add-account
-// paths (slice 9); the remaining sections arrive in slice 17.
+// paths (slice 9); Server holds the mode, the upgrade cards and the devices
+// (slice 21); the remaining sections arrive in slice 17.
 
 import { type Density, type SettingKey, settingsSchema, type ThemeMode } from "@monday/shared";
 import { Btn, palettes, Seg, SettingsField, Swatch, Tag } from "@monday/ui";
 import {
   AtIcon,
+  CloudIcon,
   GearSixIcon,
   MonitorIcon,
   MoonIcon,
@@ -17,11 +19,13 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { AccountView } from "../platform/api.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { AddAccount } from "./settings/AddAccount.tsx";
+import { Server } from "./settings/Server.tsx";
 import { fill } from "./settings/wizard.ts";
 
 const NAV: Array<{ key: string; label: string; icon: ReactNode }> = [
   { key: "accounts", label: "Accounts", icon: <AtIcon /> },
   { key: "appearance", label: "Appearance", icon: <PaletteIcon /> },
+  { key: "server", label: "Server", icon: <CloudIcon /> },
   { key: "about", label: "About", icon: <GearSixIcon /> },
 ];
 
@@ -50,6 +54,8 @@ export function Settings({ initialSection = "appearance" }: { initialSection?: s
               <Accounts />
             ) : section === "appearance" ? (
               <Appearance />
+            ) : section === "server" ? (
+              <Server />
             ) : (
               <About />
             )}
@@ -288,7 +294,13 @@ function About() {
       <div className="sect">
         <SettingsField
           label="Server"
-          hint={shell.sidecar?.running ? `Sidecar on port ${shell.sidecar.port}` : "starting"}
+          hint={
+            shell.server?.kind === "cloud"
+              ? `Cloud at ${shell.server.target.baseUrl}`
+              : shell.sidecar?.running
+                ? `Sidecar on port ${shell.sidecar.port}`
+                : "starting"
+          }
         >
           <Btn>Check for updates</Btn>
         </SettingsField>

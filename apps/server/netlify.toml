@@ -1,0 +1,25 @@
+# Netlify deployment of the sync server (research 22, section 4). Base is
+# apps/server when deployed from the monorepo; the Deploy button sets it.
+# Bun installs at build time; the runtime is Node.js. The scheduled tick
+# (entry/netlify/tick.ts) runs every minute with a 30 s budget.
+
+[build]
+  command = "bun install --frozen-lockfile"
+  publish = "public"
+
+[build.environment]
+  BUN_VERSION = "1.3"
+  NODE_VERSION = "24"
+
+[functions]
+  directory = "entry/netlify"
+  node_bundler = "esbuild"
+  included_files = ["drizzle/**"]
+
+[template]
+  [template.environment]
+    MONDAY_MODE = "netlify"
+    DATABASE_URL = "Pooled Postgres connection string (Netlify DB, Neon -pooler, Supabase 6543)"
+    DATABASE_URL_UNPOOLED = "Direct Postgres connection string, for migrations"
+    MONDAY_SETUP_CODE = "A one-time code of your choosing; this device pairs with it once"
+    MONDAY_PUBLIC_URL = "The https:// address of this site, for push notifications"

@@ -22,8 +22,11 @@ export const PUBLIC_PATHS: readonly string[] = [
   "/pair/claim",
 ];
 
-/** Path prefixes reachable without a token: provider webhooks, verified by their own secrets. */
-export const PUBLIC_PREFIXES: readonly string[] = ["/webhooks/"];
+/**
+ * Path prefixes reachable without a token: provider webhooks and the cron
+ * tick, each verified by its own secret.
+ */
+export const PUBLIC_PREFIXES: readonly string[] = ["/webhooks/", "/cron/"];
 
 export function isLoopbackAddress(address: string | null | undefined): boolean {
   if (!address) return false;

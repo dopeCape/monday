@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { DeploymentMode, HostedState } from "@monday/shared";
+import type { Capabilities, DeploymentMode, HostedState } from "@monday/shared";
 import { defaultSettings, HOSTED_PROVIDERS, rolesFor } from "@monday/shared";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
-import type { ModeCapabilities } from "../src/capabilities.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const SETUP_CODE = "424242";
@@ -62,7 +61,8 @@ describe("app", () => {
   });
 
   test("capabilities follow the deployment mode table", async () => {
-    const expected: Record<DeploymentMode, ModeCapabilities> = {
+    type Own = Pick<Capabilities, "realtime" | "holdsConnections" | "publicUrl" | "localRuntimes">;
+    const expected: Record<DeploymentMode, Own> = {
       sidecar: {
         realtime: "websocket",
         holdsConnections: true,
@@ -94,12 +94,16 @@ describe("app", () => {
     };
     for (const mode of Object.keys(expected) as DeploymentMode[]) {
       const res = await build(db, mode, peer).request("/capabilities");
-      expect(await res.json()).toEqual({
-        protocol: 1,
-        mode,
-        ...expected[mode],
-        unlocked: false,
-        hosted,
+      const caps = (await res.json()) as Capabilities;
+      expect(caps).toMatchObject({ protocol: 1, mode, ...expected[mode], unlocked: false, hosted });
+      // Alone, a Server's topology is its own kind and its features are its own.
+      expect(caps.topology).toBe(mode === "sidecar" ? "sidecar" : "cloud");
+      const { publicUrl, ...own } = expected[mode];
+      expect(caps.features).toEqual({
+        ...own,
+        pushWebhooks: publicUrl,
+        scheduledSendsWhileClosed: mode !== "sidecar",
+        backgroundJobs: true,
       });
     }
   });

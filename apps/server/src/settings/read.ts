@@ -31,3 +31,11 @@ export async function readGlobalSettings<K extends SettingKey>(
   }
   return out as Pick<Settings, K>;
 }
+
+/** One global Setting. */
+export async function readGlobalSetting<K extends SettingKey>(
+  db: Db,
+  key: K,
+): Promise<Settings[K]> {
+  return (await readGlobalSettings(db, [key]))[key];
+}

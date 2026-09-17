@@ -28,6 +28,13 @@ import {
   useState,
 } from "react";
 import { type Api, createApi, type ServerTarget } from "../platform/api.ts";
+import {
+  type CloudTarget,
+  createTargetPicker,
+  loadCloudTarget,
+  type Picked,
+  saveCloudTarget,
+} from "../platform/cloud.ts";
 import { type ConfigFile, platform, type SidecarInfo } from "../platform/tauri.ts";
 
 export interface ConfigState {
@@ -47,7 +54,15 @@ export interface ShellState {
   palette: string;
   config: ConfigState;
   sidecar: SidecarInfo | null;
+  /** The Cloud this Device paired with (ADR 0008), or null on a Sidecar-only install. */
+  cloud: CloudTarget | null;
+  /** Where requests go right now: the Sidecar or the Cloud, by preference and reachability. */
+  server: Picked | null;
   api: Api;
+  /** Records or forgets the Cloud target in the keychain; the picker follows at once. */
+  setCloud(target: CloudTarget | null): Promise<void>;
+  /** Probes both targets now and re-picks. */
+  refreshServers(): Promise<void>;
   /**
    * Change a Setting. Applies at once, then persists to the Server. Refuses a pinned
    * key: the file wins and only the user may edit it (ADR 0001).
@@ -90,8 +105,10 @@ export function Shell({ children }: { children: ReactNode }) {
     warnings: [],
     error: null,
   });
-  const [server, setServer] = useState<PartialSettings>({});
+  const [stored, setStored] = useState<PartialSettings>({});
   const [sidecar, setSidecar] = useState<SidecarInfo | null>(null);
+  const [cloud, setCloudState] = useState<CloudTarget | null>(null);
+  const [server, setServer] = useState<Picked | null>(null);
   const configRef = useRef(config);
   configRef.current = config;
 
@@ -101,6 +118,7 @@ export function Shell({ children }: { children: ReactNode }) {
       const first = await p.readConfig();
       setConfig((last) => parseFile(first, last));
       dispose.push(p.onConfigChanged((f) => setConfig((last) => parseFile(f, last))));
+      setCloudState(await loadCloudTarget(p));
       const info = await p.sidecarInfo();
       if (info.running) setSidecar(info);
       dispose.push(p.onSidecarReady(setSidecar));
@@ -111,27 +129,67 @@ export function Shell({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const api = useMemo(() => {
-    const target = (): ServerTarget | null =>
-      sidecar?.running
-        ? { baseUrl: `http://127.0.0.1:${sidecar.port}`, token: sidecar.token }
-        : null;
-    return createApi(target);
-  }, [sidecar]);
-
-  useEffect(() => {
-    if (!sidecar?.running) return;
-    api.settings
-      .all()
-      .then(({ global, device }) => setServer({ ...global, ...device } as PartialSettings))
-      .catch(() => {});
-  }, [api, sidecar]);
-
   const resolved = useMemo(
-    () => resolveSettings(config.values, server, defaultSettings()),
-    [config.values, server],
+    () => resolveSettings(config.values, stored, defaultSettings()),
+    [config.values, stored],
   );
   const settings = resolved.settings;
+
+  // A new picker (and so a new api) only when a target or the preference changes.
+  const prefer = settings["server.prefer"];
+  const picker = useMemo(() => {
+    const sidecarTarget: ServerTarget | null = sidecar?.running
+      ? { baseUrl: `http://127.0.0.1:${sidecar.port}`, token: sidecar.token }
+      : null;
+    return createTargetPicker({
+      targets: () => ({ sidecar: sidecarTarget, cloud }),
+      prefer: () => prefer,
+      probe: (t) =>
+        fetch(`${t.baseUrl}/health`)
+          .then((r) => r.ok)
+          .catch(() => false),
+    });
+  }, [sidecar, cloud, prefer]);
+
+  useEffect(() => {
+    const unsubscribe = picker.subscribe(setServer);
+    setServer(picker.current());
+    return unsubscribe;
+  }, [picker]);
+
+  const probeSeconds = settings["server.probe_seconds"];
+  useEffect(() => {
+    if (!cloud) return; // one target needs no probing; a failed request already says enough
+    const timer = setInterval(() => void picker.refresh(), probeSeconds * 1000);
+    void picker.refresh();
+    return () => clearInterval(timer);
+  }, [picker, cloud, probeSeconds]);
+
+  const api = useMemo(
+    () =>
+      createApi(() => picker.current()?.target ?? null, {
+        onUnreachable: (t) => picker.markUnreachable(t),
+      }),
+    [picker],
+  );
+
+  useEffect(() => {
+    if (!server) return;
+    api.settings
+      .all()
+      .then(({ global, device }) => setStored({ ...global, ...device } as PartialSettings))
+      .catch(() => {});
+  }, [api, server]);
+
+  const setCloud = useCallback(async (target: CloudTarget | null) => {
+    const p = await platform();
+    await saveCloudTarget(p, target);
+    setCloudState(target);
+  }, []);
+
+  const refreshServers = useCallback(async () => {
+    await picker.refresh();
+  }, [picker]);
   const nav = settings["layout.nav"];
   const agent = settings["layout.agent"];
   const list = settings["layout.list"];
@@ -171,7 +229,7 @@ export function Shell({ children }: { children: ReactNode }) {
       }
       const v = validateSetting(key, value);
       if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
-      setServer((s) => ({ ...s, [key]: value }));
+      setStored((s) => ({ ...s, [key]: value }));
       try {
         await api.settings.set(key, value, settingScope(key));
         return { ok: true };
@@ -196,10 +254,29 @@ export function Shell({ children }: { children: ReactNode }) {
       palette,
       config,
       sidecar,
+      cloud,
+      server,
       api,
+      setCloud,
+      refreshServers,
       set,
     }),
-    [settings, resolved.pinned, layout, density, mode, palette, config, sidecar, api, set],
+    [
+      settings,
+      resolved.pinned,
+      layout,
+      density,
+      mode,
+      palette,
+      config,
+      sidecar,
+      cloud,
+      server,
+      api,
+      setCloud,
+      refreshServers,
+      set,
+    ],
   );
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
@@ -211,9 +288,14 @@ export function Shell({ children }: { children: ReactNode }) {
  */
 export function StaticShell({
   settings: overrides = {},
+  shell: shellOverrides = {},
   children,
 }: {
   settings?: PartialSettings | undefined;
+  /** Connection state for a test: a scripted api, a Sidecar, a Cloud target, a spy setCloud. */
+  shell?:
+    | Partial<Pick<ShellState, "api" | "sidecar" | "cloud" | "server" | "setCloud">>
+    | undefined;
   children: ReactNode;
 }) {
   const [local, setLocal] = useState<PartialSettings>({});
@@ -245,10 +327,15 @@ export function StaticShell({
       palette: settings["appearance.palette"],
       config: { file: null, values: {}, warnings: [], error: null },
       sidecar: null,
+      cloud: null,
+      server: null,
       api,
+      setCloud: async () => {},
+      refreshServers: async () => {},
       set,
+      ...shellOverrides,
     }),
-    [settings, api, set],
+    [settings, api, set, shellOverrides],
   );
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }
