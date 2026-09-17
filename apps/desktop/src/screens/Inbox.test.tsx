@@ -3,17 +3,17 @@
 // DOM out. Mounted under a StaticShell over the fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { PartialSettings } from "@monday/shared";
+import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import { StaticShell } from "../shell/Shell.tsx";
 import { Inbox, type InboxProps } from "./Inbox.tsx";
 import { fixtureInbox, type InboxActions, type Inbox as InboxData } from "./inbox/actions.ts";
 
-beforeAll(() => {
-  if (typeof document === "undefined") GlobalRegistrator.register();
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
+beforeAll(async () => {
+  ({ createRoot } = await dom());
 });
 
 let root: Root | null = null;

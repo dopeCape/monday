@@ -12,6 +12,7 @@ import {
   isLoopbackAddress,
   type LoopbackCheck,
   PUBLIC_PATHS,
+  PUBLIC_PREFIXES,
   requireAuth,
 } from "./auth/middleware.ts";
 import { capabilitiesFor } from "./capabilities.ts";
@@ -29,14 +30,18 @@ import {
 } from "./drafts/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
+import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
+import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { draftsRoutes } from "./routes/drafts.ts";
 import { mailRoutes } from "./routes/mail.ts";
+import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
+import { webhookRoutes } from "./routes/webhooks.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -66,6 +71,12 @@ export interface AppOptions {
   remoteAddress?: (c: Parameters<LoopbackCheck>[0]) => string | null | undefined;
   /** Milliseconds since the process started, for /health. */
   uptimeMs?: () => number;
+  /** The Accounts routes; absent in tests that do not need them. */
+  accounts?: AccountRoutesOptions;
+  /** The OAuth wizard routes; needs `accounts`. */
+  oauth?: Omit<OAuthRoutesOptions, "accounts">;
+  /** Provider push webhooks (public paths, verified by their own secrets). */
+  push?: PushManager;
 }
 
 export function createApp(options: AppOptions): Hono<AppEnv> {
@@ -111,7 +122,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.use("*", authenticate(auth, isLoopback));
-  app.use("*", requireAuth(PUBLIC_PATHS));
+  app.use("*", requireAuth(PUBLIC_PATHS, PUBLIC_PREFIXES));
 
   app.get("/health", async (c) => {
     try {
@@ -131,6 +142,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", mailRoutes(mailstore, { bodyStates }));
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
+  if (options.accounts) {
+    app.route("/", accountRoutes(options.accounts));
+    if (options.oauth) {
+      app.route("/", oauthRoutes({ ...options.oauth, accounts: options.accounts.accounts }));
+    }
+  }
+  if (options.push) app.route("/", webhookRoutes(options.push));
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
   app.onError((error, c) => {

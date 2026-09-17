@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod power;
 mod secrets;
 mod sidecar;
 
@@ -24,6 +25,8 @@ pub fn run() {
             db::db_query,
             db::db_batch,
             db::db_close,
+            power::power_info,
+            power::network_info,
         ])
         .setup(|app| {
             config::watch(app.handle().clone());

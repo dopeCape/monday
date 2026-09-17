@@ -14,6 +14,8 @@ export interface MessageRowProps {
   selected?: boolean | undefined;
   /** For the relative time. Defaults to the wall clock. */
   now?: Date | undefined;
+  /** The account the Thread belongs to, shown in the all-accounts search view. */
+  account?: string | undefined;
   onOpen?: ((threadId: string) => void) | undefined;
   onArchive?: ((threadId: string) => void) | undefined;
   onSnooze?: ((threadId: string) => void) | undefined;
@@ -26,6 +28,7 @@ export function MessageRow({
   tags,
   selected,
   now,
+  account,
   onOpen,
   onArchive,
   onSnooze,
@@ -66,6 +69,7 @@ export function MessageRow({
       <span className="meta">
         {thread.hasAttachments ? <Icon icon={PaperclipIcon} /> : null}
         {label ? <span className="lbl">{label}</span> : null}
+        {account ? <span className="acct">{account}</span> : null}
       </span>
       <span className="time">{formatListTime(thread.lastActivity, now)}</span>
       <span className="actions">

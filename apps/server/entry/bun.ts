@@ -19,8 +19,12 @@
 //   MONDAY_FEATURE_PASSPHRASE=1 with MONDAY_ROOT_PASSPHRASE and MONDAY_ROOT_SALT (base64, 16+ bytes)
 //                         derives the root key with Argon2id instead. Off by default.
 //   With none of these the server starts locked: headers only until POST /unlock.
+//   MONDAY_PUBLIC_URL     the HTTPS origin the internet reaches this Server at (Cloud modes);
+//                         Gmail and Graph push subscriptions point here. Falls back to the
+//                         server.public_url Setting; absent, push-only providers are polled.
 
-import type { DeploymentMode } from "@monday/shared";
+import { type DeploymentMode, settingsSchema } from "@monday/shared";
+import { createAccountService } from "../src/accounts.ts";
 import { createApp } from "../src/app.ts";
 import { createAuth, randomCode } from "../src/auth/index.ts";
 import { isDeploymentMode, needsServedBy } from "../src/capabilities.ts";
@@ -33,11 +37,15 @@ import { cloudIsAlive } from "../src/heartbeat.ts";
 import { createJobs } from "../src/jobs/index.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
 import { createMailstore } from "../src/mailstore/index.ts";
+import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
 import { createCredentialStore } from "../src/providers/credentials.ts";
 import { createProviderRegistry } from "../src/providers/index.ts";
+import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
+import { createPushManager, readPushSettings } from "../src/providers/push.ts";
 import { createSyncEngine } from "../src/providers/sync.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { startEmbeddedPostgres } from "./embedded-postgres.ts";
+import { createLoopbackListener } from "./oauth-loopback.ts";
 import { migrationsFolder } from "./resources.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
@@ -158,19 +166,65 @@ async function main() {
   await unlockAtBoot(keys);
 
   const jobs = createJobs(handle.db);
-  // Providers: the sync, watch and reconcile steps (slice 5). Every Account
-  // with credentials gets its Jobs (idempotent ids) so a restart resumes sync.
+  // Providers: the sync, watch and reconcile steps (slice 5) plus the push
+  // registrations (slice 9). Every Account with credentials gets its Jobs
+  // (idempotent ids) so a restart resumes sync. Refreshed OAuth tokens are
+  // written back through the credential store.
   const mailstore = createMailstore(handle.db, keys);
+  const credentials = createCredentialStore(handle.db, mailstore);
+  const providers = createProviderRegistry({
+    oauth: {
+      onRefreshed: async (auth) => {
+        await credentials.updateAuth(auth).catch((error) => log(`token persist failed: ${error}`));
+      },
+    },
+    graph: {
+      pollMs: async () => {
+        const rows = await handle.db.query.settings.findMany();
+        const row = rows.find((r) => r.key === "sync.graph_poll_seconds" && r.scope === "global");
+        const seconds =
+          typeof row?.value === "number"
+            ? row.value
+            : settingsSchema["sync.graph_poll_seconds"].default;
+        return seconds * 1000;
+      },
+    },
+  });
   const sync = createSyncEngine({
     db: handle.db,
     mailstore,
-    providers: createProviderRegistry(),
-    credentials: createCredentialStore(handle.db, mailstore),
+    providers,
+    credentials,
     log: debug,
   });
   sync.registerSteps(jobs);
+  const push = createPushManager({
+    db: handle.db,
+    engine: sync,
+    serverId,
+    log: debug,
+    publicUrl: async () => {
+      const fromEnv = process.env.MONDAY_PUBLIC_URL?.trim();
+      if (fromEnv) return fromEnv.replace(/\/+$/, "");
+      const s = await readPushSettings(handle.db);
+      return s.publicUrl.trim() ? s.publicUrl.trim().replace(/\/+$/, "") : null;
+    },
+  });
+  push.registerSteps(jobs);
+  const accountService = createAccountService({
+    db: handle.db,
+    mailstore,
+    providers,
+    credentials,
+    onAdded: async (accountId, provider) => {
+      await sync.startAccount(jobs, accountId);
+      await push.startAccount(jobs, accountId, provider);
+    },
+  });
   for (const row of await handle.db.query.accounts.findMany()) {
-    if (row.credentialsRef) await sync.startAccount(jobs, row.id);
+    if (!row.credentialsRef) continue;
+    await sync.startAccount(jobs, row.id);
+    await push.startAccount(jobs, row.id, row.provider);
   }
   const ownNeeds = needsServedBy(mode);
   const kicker = createProcessKicker({
@@ -210,6 +264,13 @@ async function main() {
       const server = c.env as { requestIP?: (req: Request) => { address: string } | null };
       return server?.requestIP?.(c.req.raw)?.address ?? null;
     },
+    accounts: { accounts: accountService, discovery: defaultDiscoveryDeps },
+    oauth: {
+      flow: createOAuthFlow(),
+      // Only a process on the user's machine can catch the browser's loopback redirect.
+      loopback: mode === "sidecar" ? createLoopbackListener() : null,
+    },
+    push,
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");

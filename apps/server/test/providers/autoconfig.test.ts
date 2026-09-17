@@ -4,6 +4,7 @@ import {
   type DiscoveryDeps,
   discover,
   ispdbUrl,
+  oauthIssuerOfMx,
   parseAutoconfig,
   type SrvRecord,
 } from "../../src/providers/autoconfig.ts";
@@ -40,6 +41,7 @@ interface MockOptions {
   pages?: Record<string, string>;
   srv?: Record<string, SrvRecord[]>;
   probes?: Record<string, string[]>;
+  mx?: Record<string, string[]>;
 }
 
 function deps(options: MockOptions): DiscoveryDeps & { calls: string[] } {
@@ -57,6 +59,14 @@ function deps(options: MockOptions): DiscoveryDeps & { calls: string[] } {
       calls.push(`srv ${name}`);
       return options.srv?.[name] ?? [];
     },
+    ...(options.mx
+      ? {
+          resolveMx: async (domain: string) => {
+            calls.push(`mx ${domain}`);
+            return options.mx?.[domain] ?? [];
+          },
+        }
+      : {}),
     probe: async (host, port) => {
       calls.push(`probe ${host}:${port}`);
       const caps = options.probes?.[`${host}:${port}`];
@@ -131,6 +141,31 @@ describe("autoconfig", () => {
     expect(result.kind).toBe("needs-oauth");
     if (result.kind === "needs-oauth") expect(result.issuer).toBe("microsoft");
     expect(d.calls).toEqual([]);
+  });
+
+  test("a custom domain whose MX points at Google or Microsoft goes to the OAuth wizard", async () => {
+    const google = deps({
+      mx: { "acme.test": ["aspmx.l.google.com.", "alt1.aspmx.l.google.com."] },
+    });
+    const g = await discover("pat@acme.test", google);
+    expect(g.kind).toBe("needs-oauth");
+    if (g.kind === "needs-oauth") {
+      expect(g.issuer).toBe("google");
+      expect(g.imap?.host).toBe("imap.gmail.com");
+    }
+    expect(google.calls).toEqual(["mx acme.test"]);
+    const microsoft = deps({
+      mx: { "contoso.test": ["contoso-test.mail.protection.outlook.com"] },
+    });
+    const m = await discover("pat@contoso.test", microsoft);
+    expect(m.kind === "needs-oauth" && m.issuer).toBe("microsoft");
+    expect(oauthIssuerOfMx(["mx1.fastmail.test", "in1-smtp.messagingengine.com"])).toBeNull();
+    // Another host: the ladder continues past the MX lookup.
+    const other = deps({ mx: { "nowhere.test": ["mx.nowhere.test"] } });
+    const result = await discover("a@nowhere.test", other);
+    expect(result.kind).toBe("manual");
+    expect(other.calls[0]).toBe("mx nowhere.test");
+    expect(other.calls.length).toBeGreaterThan(1);
   });
 
   test("RFC 6186 SRV records, submissions before submission", async () => {

@@ -4,6 +4,8 @@
 //   GET /threads/:id/subject                                  {subject}
 //   GET /threads/:id/messages                                 {messages: [header + attachments + bodyState]}
 //   GET /messages/:id/body                                    {text, html, snippet, display: {html, quoted, blockedImages}}
+//   GET /messages/bodies?workspace=&after=&before=&limit=     decrypted bodies by date range, newest first (423 locked)
+//   GET /search/headers?workspace=&q=&limit=                  the headers-only index (ADR 0011), no decryption
 //   GET /attachments/:id                                      the bytes, with name and media type
 // Write intents, the ones the Outbox replays (ADR 0005). Each body carries
 // `at` (the actor's clock) and `actor`; the Mailstore applies last-writer-wins
@@ -31,6 +33,19 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   cursor: z.string().min(1).optional(),
   archived: z.enum(["true", "false"]).optional(),
+});
+
+const bodiesQuery = z.object({
+  workspace: z.string().min(1),
+  after: z.iso.datetime({ offset: true }).optional(),
+  before: z.iso.datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+
+const headersQuery = z.object({
+  workspace: z.string().min(1),
+  q: z.string().max(500).default(""),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 const stamp = z.object({
@@ -128,6 +143,22 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     });
   });
 
+  // Before /messages/:id/body, so "bodies" is never read as an id.
+  app.get("/messages/bodies", async (c) => {
+    const parsed = bodiesQuery.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "invalid_query", issues: parsed.error.issues }, 400);
+    }
+    const q = parsed.data;
+    return c.json(
+      await mailstore.listBodies(q.workspace, {
+        after: q.after ?? null,
+        before: q.before ?? null,
+        limit: q.limit,
+      }),
+    );
+  });
+
   // The body as stored plus what the reader shows: sanitised HTML (or the
   // text part converted), cid: images resolved to /attachments/:id, quoted
   // history wrapped so it can be folded, remote images blocked by default.
@@ -140,6 +171,15 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
       ...body,
       display: displayBody(body, header?.attachments ?? [], { allowRemoteImages }),
     });
+  });
+
+  app.get("/search/headers", async (c) => {
+    const parsed = headersQuery.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "invalid_query", issues: parsed.error.issues }, 400);
+    }
+    const q = parsed.data;
+    return c.json(await mailstore.searchHeaders(q.workspace, { q: q.q, limit: q.limit }));
   });
 
   app.get("/attachments/:id", async (c) => {

@@ -82,8 +82,8 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
   }
   for (const m of data.messages) {
     out.push({
-      sql: `insert or replace into messages (id, thread_id, sender, recipients, cc, date, body_text, body_html, has_attachments)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `insert or replace into messages (id, thread_id, sender, recipients, cc, date, body_text, body_html, body_at, has_attachments)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         m.id,
         m.threadId,
@@ -93,6 +93,7 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
         m.date,
         m.bodyText ?? null,
         m.bodyHtml ?? null,
+        m.bodyText !== undefined ? at : null,
         m.attachments.length > 0,
       ],
     });

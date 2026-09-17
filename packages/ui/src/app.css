@@ -2132,6 +2132,65 @@ button.msg {
   gap: 6px;
   align-items: center;
 }
+.cmdk-empty {
+  padding: 8px 16px 10px;
+  font-size: var(--fs-sm);
+  color: var(--fg-faint);
+}
+/* a Thread row inside the palette: the list's row, narrowed to the box */
+.cmdk-thread {
+  margin: 0 6px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.cmdk-thread .row {
+  grid-template-columns: 14px 130px minmax(0, 1fr) auto 56px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.cmdk-thread .row .actions {
+  display: none;
+}
+.cmdk-thread .row:hover .time,
+.cmdk-thread .row:hover .meta {
+  visibility: visible;
+}
+
+/* =========================== SEARCH =========================== */
+.search-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--pad) 10px;
+  flex-wrap: wrap;
+}
+.search-chips .sp {
+  flex: 1;
+}
+.search-older {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px var(--pad) 4px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.search-older .btn {
+  margin-left: auto;
+}
+.search-older .bar {
+  height: 2px;
+  background: var(--accent);
+  transition: width var(--t-med) var(--ease);
+}
+.row .meta .acct {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+
 .compose {
   width: 720px;
   max-width: calc(100% - 40px);
@@ -2772,6 +2831,207 @@ button.msg {
 }
 .toast .count {
   font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------ Accounts and the credential wizards ------------------------------ */
+.accounts-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.account-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.account-row .lg {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 12px;
+  background: var(--sunken);
+  font-family: var(--font-mono);
+}
+.account-row b {
+  display: block;
+  font-weight: 600;
+  font-size: var(--fs-md);
+}
+.account-row span {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.wizard {
+  max-width: 62ch;
+}
+.wizard-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.wizard-head h1 {
+  margin: 0;
+}
+.wizard-progress {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.wizard-escape {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0 0 20px;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.wizard-escape:hover {
+  color: var(--fg);
+}
+.wizard-step {
+  padding: 24px 0;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 16px;
+}
+.wizard-sentence {
+  margin: 0;
+  font-size: var(--fs-lg);
+  line-height: 1.45;
+  max-width: 52ch;
+}
+.wizard-action {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.wizard-fields {
+  display: grid;
+  gap: 12px;
+}
+.wizard-field {
+  display: grid;
+  gap: 6px;
+}
+.wizard-field .wizard-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.wizard-field .help {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.wizard-field .input.ok {
+  border-color: var(--success);
+}
+.wizard-field .input.bad {
+  border-color: var(--danger);
+}
+.wizard-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  min-height: 20px;
+}
+.wizard-check.ok {
+  color: var(--success);
+}
+.wizard-check.bad {
+  color: var(--danger);
+}
+.wizard-check.checking {
+  color: var(--fg-faint);
+}
+.wizard-copy {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.wizard-copy code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  padding: 7px 10px;
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wizard-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.wizard-foot > div {
+  display: flex;
+  gap: 8px;
+}
+.wizard-figure {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  background: var(--panel);
+  max-width: 360px;
+  font-size: var(--fs-sm);
+}
+.wizard-figure .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wizard-figure .radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wizard-figure .radio i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--fg-faint);
+  display: inline-block;
+}
+.wizard-figure .radio.on i {
+  border-color: var(--fg);
+  box-shadow:
+    inset 0 0 0 3.5px var(--panel),
+    inset 0 0 0 8px var(--fg);
+}
+.wizard-figure .k {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.wizard-done {
+  display: grid;
+  gap: 6px;
+}
+.wizard-done b {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.wizard-done span {
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
 }
 
 @media (prefers-reduced-motion: reduce) {

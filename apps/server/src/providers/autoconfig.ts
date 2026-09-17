@@ -2,8 +2,11 @@
 // Thunderbird autoconfig at the domain's own URLs, then the ISPDB, then RFC
 // 6186 SRV records, then host guessing on 993, then manual entry. Domains that
 // only take XOAUTH2 (Gmail, Microsoft) come back as needsOAuth so onboarding
-// routes them to the OAuth wizards of slice 9. Every network call is
-// injectable, so the whole ladder is tested with a mocked fetch and DNS.
+// routes them to the OAuth wizards: the well-known consumer domains at once,
+// any other domain whose MX points at google.com or outlook.com after one DNS
+// lookup, and anything that advertises AUTH=XOAUTH2 with LOGINDISABLED after
+// the probe. Every network call is injectable, so the whole ladder is tested
+// with a mocked fetch and DNS.
 
 import { needsOAuth, oauthIssuerOfHost } from "./imap/auth.ts";
 import type { HostPort, Tls } from "./types.ts";
@@ -41,6 +44,8 @@ export interface DiscoveryDeps {
   fetch: (url: string) => Promise<Response>;
   /** SRV lookup; resolves to [] when the name does not exist. */
   resolveSrv: (name: string) => Promise<SrvRecord[]>;
+  /** MX lookup, exchange hosts only; resolves to [] when the name does not exist. Optional. */
+  resolveMx?: (domain: string) => Promise<string[]>;
   /** Connects over implicit TLS and reads CAPABILITY; rejects when the host is unreachable. */
   probe: (host: string, port: number) => Promise<ProbeResult>;
   timeoutMs?: number;
@@ -55,7 +60,7 @@ const KNOWN_OAUTH_DOMAINS: Record<string, OAuthIssuer> = {
   "msn.com": "microsoft",
 };
 
-const OAUTH_ENDPOINTS: Record<OAuthIssuer, { imap: HostPort; smtp: HostPort }> = {
+export const OAUTH_ENDPOINTS: Record<OAuthIssuer, { imap: HostPort; smtp: HostPort }> = {
   google: {
     imap: { host: "imap.gmail.com", port: 993, tls: "tls" },
     smtp: { host: "smtp.gmail.com", port: 465, tls: "tls" },
@@ -65,6 +70,16 @@ const OAUTH_ENDPOINTS: Record<OAuthIssuer, { imap: HostPort; smtp: HostPort }> =
     smtp: { host: "smtp.office365.com", port: 587, tls: "starttls" },
   },
 };
+
+/** Which OAuth issuer hosts a domain's mail, judging by its MX exchanges. */
+export function oauthIssuerOfMx(exchanges: string[]): OAuthIssuer | null {
+  for (const raw of exchanges) {
+    const host = raw.toLowerCase().replace(/\.$/, "");
+    if (/(^|\.)google\.com$/.test(host) || /(^|\.)googlemail\.com$/.test(host)) return "google";
+    if (/(^|\.)outlook\.com$/.test(host)) return "microsoft";
+  }
+  return null;
+}
 
 export function domainOf(address: string): string {
   const at = address.lastIndexOf("@");
@@ -221,6 +236,16 @@ export async function discover(address: string, deps: DiscoveryDeps): Promise<Di
   const known = KNOWN_OAUTH_DOMAINS[domain];
   if (known) return { kind: "needs-oauth", issuer: known, ...OAUTH_ENDPOINTS[known] };
 
+  // 0. A custom domain hosted at Google or Microsoft: the MX says so.
+  if (deps.resolveMx) {
+    tried.push(`MX ${domain}`);
+    const exchanges = await withTimeout(deps.resolveMx(domain), deps.timeoutMs ?? 5_000).catch(
+      () => [] as string[],
+    );
+    const hosted = oauthIssuerOfMx(exchanges);
+    if (hosted) return { kind: "needs-oauth", issuer: hosted, ...OAUTH_ENDPOINTS[hosted] };
+  }
+
   // 1. The domain's own autoconfig, then the ISPDB.
   for (const url of autoconfigUrls(domain, address)) {
     tried.push(url);
@@ -306,6 +331,14 @@ export async function defaultDiscoveryDeps(): Promise<DiscoveryDeps> {
       try {
         const records = await dns.resolveSrv(name);
         return records.map((r) => ({ name: r.name, port: r.port, priority: r.priority }));
+      } catch {
+        return [];
+      }
+    },
+    resolveMx: async (domain) => {
+      try {
+        const records = await dns.resolveMx(domain);
+        return records.sort((a, b) => a.priority - b.priority).map((r) => r.exchange);
       } catch {
         return [];
       }

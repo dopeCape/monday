@@ -1,20 +1,32 @@
-// Settings › Appearance over the Shell. Every control comes from the settings schema;
-// a Pinned key renders locked with "set in monday.toml" (ADR 0001, docs/spec/settings.md).
-// Other sections arrive in slice 17; this page exists so slice 2 has its "done when".
+// Settings › Accounts and Appearance over the Shell. Every control comes from the
+// settings schema; a Pinned key renders locked with "set in monday.toml" (ADR 0001,
+// docs/spec/settings.md). Accounts lists what is connected and hosts the add-account
+// paths (slice 9); the remaining sections arrive in slice 17.
 
 import { type Density, type SettingKey, settingsSchema, type ThemeMode } from "@monday/shared";
 import { Btn, palettes, Seg, SettingsField, Swatch, Tag } from "@monday/ui";
-import { GearSixIcon, MonitorIcon, MoonIcon, PaletteIcon, SunIcon } from "@phosphor-icons/react";
-import { type ReactNode, useState } from "react";
+import {
+  AtIcon,
+  GearSixIcon,
+  MonitorIcon,
+  MoonIcon,
+  PaletteIcon,
+  SunIcon,
+} from "@phosphor-icons/react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import type { AccountView } from "../platform/api.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { AddAccount } from "./settings/AddAccount.tsx";
+import { fill } from "./settings/wizard.ts";
 
 const NAV: Array<{ key: string; label: string; icon: ReactNode }> = [
+  { key: "accounts", label: "Accounts", icon: <AtIcon /> },
   { key: "appearance", label: "Appearance", icon: <PaletteIcon /> },
   { key: "about", label: "About", icon: <GearSixIcon /> },
 ];
 
-export function Settings() {
-  const [section, setSection] = useState("appearance");
+export function Settings({ initialSection = "appearance" }: { initialSection?: string }) {
+  const [section, setSection] = useState(initialSection);
   return (
     <div className="main page">
       <div className="settings">
@@ -33,10 +45,84 @@ export function Settings() {
           ))}
         </nav>
         <div className="settings-body">
-          <div className="settings-in">{section === "appearance" ? <Appearance /> : <About />}</div>
+          <div className="settings-in">
+            {section === "accounts" ? (
+              <Accounts />
+            ) : section === "appearance" ? (
+              <Appearance />
+            ) : (
+              <About />
+            )}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+const PROVIDER_LOGO: Record<string, string> = { gmail: "G", graph: "M", jmap: "J", imap: "@" };
+
+export function Accounts() {
+  const shell = useShell();
+  const s = shell.settings;
+  const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [adding, setAdding] = useState(false);
+  const refresh = useCallback(() => {
+    shell.api.accounts
+      .list()
+      .then((r) => setAccounts(r.accounts))
+      .catch(() => setAccounts([]));
+  }, [shell.api]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (adding) {
+    return (
+      <AddAccount
+        onCancel={() => setAdding(false)}
+        onAdded={() => {
+          refresh();
+        }}
+      />
+    );
+  }
+  return (
+    <>
+      <h1>{s["strings.accounts.title"]}</h1>
+      <p>{s["strings.accounts.intro"]}</p>
+      <div className="accounts-list">
+        {accounts.length === 0 ? <div className="note">{s["strings.accounts.empty"]}</div> : null}
+        {accounts.map((a) => (
+          <div className="account-row" key={a.id}>
+            <div className="lg">{PROVIDER_LOGO[a.provider] ?? "@"}</div>
+            <div>
+              <b>{a.address}</b>
+              <span>{a.lastError ?? a.provider}</span>
+            </div>
+            <Tag kind={a.capabilities.push ? "ok" : undefined}>
+              {a.capabilities.push ? s["strings.accounts.push"] : s["strings.accounts.polling"]}
+            </Tag>
+            <Btn
+              sm
+              onClick={() => {
+                if (!confirm(fill(s["strings.accounts.remove_confirm"], { address: a.address })))
+                  return;
+                shell.api.accounts
+                  .remove(a.id)
+                  .then(refresh)
+                  .catch(() => {});
+              }}
+            >
+              {s["strings.accounts.remove"]}
+            </Btn>
+          </div>
+        ))}
+      </div>
+      <Btn primary onClick={() => setAdding(true)}>
+        {s["strings.accounts.add"]}
+      </Btn>
+    </>
   );
 }
 

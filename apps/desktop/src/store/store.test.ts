@@ -99,6 +99,12 @@ describe("table parsing", () => {
     expect([...tablesWritten("update threads set archived = 1 where id = ?")]).toEqual([
       "threads",
       "threads_fts",
+      "threads_trgm",
+      "messages_fts",
+    ]);
+    expect([...tablesWritten("update messages set body_text = ? where id = ?")]).toEqual([
+      "messages",
+      "messages_fts",
     ]);
     expect([...tablesWritten("insert or ignore into thread_tags (a, b) values (?, ?)")]).toEqual([
       "thread_tags",

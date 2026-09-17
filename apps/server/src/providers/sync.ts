@@ -120,6 +120,10 @@ export type DraftImporter = (draft: ProviderDraft) => Promise<void>;
 
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
+  /** The cached Session for an Account, connecting when needed (push Jobs use adapter extras). */
+  session(accountId: string): Promise<Session>;
+  /** Enqueues one sync for an Account, debounced like a push event. Webhooks call this. */
+  wake(accountId: string, mailboxIds?: string[]): Promise<void>;
   /** Fetches one Message's body and attachments on demand (older than the window, or opened early). */
   fetchBody(messageId: string): Promise<void>;
   /** Runs `fn` with the Account's Session (cached, reconnected on auth or network failure). */
@@ -874,6 +878,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   /* ------------------------------ The engine ------------------------------ */
 
   const engine: SyncEngine = {
+    async session(accountId) {
+      return session(await account(accountId));
+    },
+
+    async wake(accountId, mailboxIds) {
+      await enqueueSync(accountId, mailboxIds);
+    },
+
     async syncAccount(accountId, opts = {}) {
       const acct = await account(accountId);
       const report: SyncReport = {
