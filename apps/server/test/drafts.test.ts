@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
+import { claimableNeeds } from "../src/capabilities.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
 import { activity, jobs as jobsTable } from "../src/db/schema.ts";
@@ -150,7 +151,8 @@ describe("drafts and scheduled sends", () => {
   const runDue = async (): Promise<string[]> => {
     const ran: string[] = [];
     for (let i = 0; i < 20; i++) {
-      const job = await jobs.claim("server-a", ["needs-process", "needs-public-url"], 30_000);
+      // A Sidecar with no Cloud alive serves every class, the send's needs-always-on included.
+      const job = await jobs.claim("server-a", claimableNeeds("sidecar", false), 30_000);
       if (!job) break;
       await jobs.run(job, 30_000);
       ran.push(job.class);

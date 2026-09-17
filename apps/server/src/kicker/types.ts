@@ -13,8 +13,8 @@ export interface KickerOptions {
   mode: DeploymentMode;
   /** The need tags this Server can serve right now. Evaluated before every claim. */
   canServe: () => Promise<string[]> | string[];
-  /** Milliseconds a claimed step may run before its lease expires. */
-  budgetMs?: number;
+  /** Milliseconds a claimed step may run before its lease expires (server.job_lease_seconds). */
+  budgetMs?: number | (() => Promise<number> | number);
   log?: (message: string) => void;
 }
 

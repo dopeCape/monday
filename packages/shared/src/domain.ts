@@ -358,6 +358,19 @@ export interface Capabilities {
   localRuntimes: boolean;
   /** Whether the root key is in the Server's memory. Locked servers serve headers only. */
   unlocked: boolean;
+  /** Which Servers are alive around this database right now: this one plus fresh heartbeats. */
+  topology: "sidecar" | "cloud" | "both";
+  /** What the live Servers can do together (deployment.ts). */
+  features: {
+    realtime: "websocket" | "sse" | "polling";
+    holdsConnections: boolean;
+    pushWebhooks: boolean;
+    scheduledSendsWhileClosed: boolean;
+    backgroundJobs: boolean;
+    localRuntimes: boolean;
+  };
+  /** Every Server with a fresh heartbeat, this one included. */
+  servers: Array<{ id: string; mode: DeploymentMode; lastSeen: IsoDate }>;
 }
 
 export type NavKnob = "full" | "rail" | "hidden";

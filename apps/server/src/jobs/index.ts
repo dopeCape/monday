@@ -46,6 +46,11 @@ export interface JobsOptions {
   /** Backoff after a failed attempt, given the attempt number just made. */
   backoffMs?: (attempt: number) => number;
   now?: () => Date;
+  /**
+   * Called after every enqueue and immediate requeue, beside the NOTIFY. A
+   * serverless kicker has no LISTEN connection and wakes from here instead.
+   */
+  onEnqueue?: (id: string) => void;
 }
 
 export interface Jobs {
@@ -82,6 +87,7 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
   const maxAttempts = options.maxAttempts ?? 3;
   const backoffMs = options.backoffMs ?? defaultBackoff;
   const now = options.now ?? (() => new Date());
+  const onEnqueue = options.onEnqueue ?? (() => {});
   const steps = new Map<string, Step<never>>();
 
   const toJob = (row: typeof jobs.$inferSelect): Job => ({
@@ -111,6 +117,7 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
         })
         .onConflictDoNothing({ target: jobs.id });
       await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
+      onEnqueue(id);
       return id;
     },
 
@@ -185,7 +192,10 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
           runAt: new Date(now().getTime() + Math.max(0, sleepMs)),
         })
         .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")));
-      if (sleepMs <= 0) await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
+      if (sleepMs <= 0) {
+        await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
+        onEnqueue(id);
+      }
     },
 
     async sweepExpiredLeases() {

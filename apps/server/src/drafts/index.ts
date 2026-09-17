@@ -25,7 +25,8 @@ import type {
   VoiceProfile,
 } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
+import { ALWAYS_ON_NEED } from "../capabilities.ts";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
 import {
@@ -34,7 +35,6 @@ import {
   drafts,
   messages,
   scheduledSends,
-  settings,
   syncMessages,
   voiceProfiles,
   workspaces,
@@ -44,6 +44,7 @@ import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import { composeMime, textFromHtml } from "../providers/mime.ts";
 import type { ProviderDraft, SyncEngine } from "../providers/sync.ts";
 import { normalizeMessageId, ProviderError, parseReferences } from "../providers/types.ts";
+import { readGlobalSettings } from "../settings/read.ts";
 
 export const MIRROR_STEP = "draft.mirror";
 export const DELIVER_STEP = "send.deliver";
@@ -87,7 +88,7 @@ export interface DraftsOptions {
   /** Where the Provider Session comes from; absent in tests that never mirror or send. */
   sync?: SyncEngine;
   /** The global send Settings; defaults read the settings table. */
-  settings?: () => Promise<{ delaySeconds: number }>;
+  settings?: () => Promise<SendSettings>;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -148,21 +149,15 @@ export class SendTooLargeError extends Error {
   }
 }
 
-export async function readSendSettings(db: Db): Promise<{ delaySeconds: number }> {
-  const rows = await db
-    .select({ key: settings.key, value: settings.value })
-    .from(settings)
-    .where(
-      and(
-        eq(settings.scope, "global"),
-        isNull(settings.deviceId),
-        eq(settings.key, "send.delay_seconds"),
-      ),
-    );
-  const value = rows[0]?.value;
-  return {
-    delaySeconds: typeof value === "number" ? value : settingsSchema["send.delay_seconds"].default,
-  };
+export interface SendSettings {
+  delaySeconds: number;
+  /** Tag the send Job needs-always-on so a live Cloud claims it (ADR 0005). */
+  preferCloud?: boolean;
+}
+
+export async function readSendSettings(db: Db): Promise<SendSettings> {
+  const s = await readGlobalSettings(db, ["send.delay_seconds", "send.prefer_cloud"]);
+  return { delaySeconds: s["send.delay_seconds"], preferCloud: s["send.prefer_cloud"] };
 }
 
 /** A stable hash of what a mirror writes, so an unchanged Draft is not re-appended. */
@@ -507,10 +502,12 @@ export function createDrafts(options: DraftsOptions): Drafts {
       if (row.to.length + row.cc.length + row.bcc.length === 0) {
         throw new NoRecipientsError(draftId);
       }
+      const sendSettings = await readSettings();
       const delay =
         input.delaySeconds !== undefined
           ? Math.max(0, input.delaySeconds)
-          : (await readSettings()).delaySeconds;
+          : sendSettings.delaySeconds;
+      const preferCloud = sendSettings.preferCloud ?? settingsSchema["send.prefer_cloud"].default;
       const runAt = input.at ? new Date(input.at) : new Date(now().getTime() + delay * 1000);
       const sendId = input.sendId ?? crypto.randomUUID();
       const send = await db.transaction(async (tx) => {
@@ -538,7 +535,15 @@ export function createDrafts(options: DraftsOptions): Drafts {
         await recordSend(tx, stored);
         return stored;
       });
-      if (jobsRef) await jobsRef.enqueue(DELIVER_STEP, { sendId }, { id: sendId, runAt });
+      if (jobsRef) {
+        // A live Cloud sends while every laptop is closed; the Sidecar takes the
+        // Job when no Cloud heartbeat is fresh (ADR 0005).
+        await jobsRef.enqueue(
+          DELIVER_STEP,
+          { sendId },
+          { id: sendId, runAt, needs: preferCloud ? [ALWAYS_ON_NEED] : [] },
+        );
+      }
       return { applied: true, sendId: send.id, runAt: send.runAt.toISOString() };
     },
 

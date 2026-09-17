@@ -3,10 +3,13 @@
 // and by a poll interval, plus the 30 s heartbeat writer (ADR 0005, research
 // 22 section 2.2). No Bun-only APIs here; it runs on Node too.
 
+import { settingsSchema } from "@monday/shared";
 import postgres, { type Sql } from "postgres";
 import { HEARTBEAT_INTERVAL_MS, removeHeartbeat, writeHeartbeat } from "../heartbeat.ts";
 import { JOBS_CHANNEL } from "../jobs/index.ts";
 import type { Kicker, KickerOptions } from "./types.ts";
+
+const DEFAULT_LEASE_MS = settingsSchema["server.job_lease_seconds"].default * 1000;
 
 export interface ProcessKickerOptions extends KickerOptions {
   /** Direct (unpooled) connection string for LISTEN. Omit to rely on polling only. */
@@ -26,7 +29,7 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
     mode,
     canServe,
     listenUrl,
-    budgetMs = 60_000,
+    budgetMs: budget = DEFAULT_LEASE_MS,
     pollMs = 5_000,
     sweepMs = 30_000,
     heartbeatMs = HEARTBEAT_INTERVAL_MS,
@@ -79,6 +82,7 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
           lastSweep = now;
         }
         const serve = await canServe();
+        const budgetMs = typeof budget === "function" ? await budget() : budget;
         const job = await jobs.claim(serverId, serve, budgetMs);
         if (job) {
           const result = await jobs.run(job, budgetMs);

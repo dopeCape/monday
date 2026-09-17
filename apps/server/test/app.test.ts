@@ -60,7 +60,8 @@ describe("app", () => {
   });
 
   test("capabilities follow the deployment mode table", async () => {
-    const expected: Record<DeploymentMode, Omit<Capabilities, "protocol" | "mode" | "unlocked">> = {
+    type Own = Pick<Capabilities, "realtime" | "holdsConnections" | "publicUrl" | "localRuntimes">;
+    const expected: Record<DeploymentMode, Own> = {
       sidecar: {
         realtime: "websocket",
         holdsConnections: true,
@@ -83,7 +84,17 @@ describe("app", () => {
     };
     for (const mode of Object.keys(expected) as DeploymentMode[]) {
       const res = await build(db, mode, peer).request("/capabilities");
-      expect(await res.json()).toEqual({ protocol: 1, mode, ...expected[mode], unlocked: false });
+      const caps = (await res.json()) as Capabilities;
+      expect(caps).toMatchObject({ protocol: 1, mode, ...expected[mode], unlocked: false });
+      // Alone, a Server's topology is its own kind and its features are its own.
+      expect(caps.topology).toBe(mode === "sidecar" ? "sidecar" : "cloud");
+      const { publicUrl, ...own } = expected[mode];
+      expect(caps.features).toEqual({
+        ...own,
+        pushWebhooks: publicUrl,
+        scheduledSendsWhileClosed: mode !== "sidecar",
+        backgroundJobs: true,
+      });
     }
   });
 
