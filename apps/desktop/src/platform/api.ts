@@ -6,6 +6,8 @@ import type {
   AccountCapabilities,
   Capabilities,
   ChangesPage,
+  DeploymentMode,
+  Device,
   Draft,
   DraftContent,
   DraftIntent,
@@ -82,7 +84,12 @@ export interface BlobState {
   complete: boolean;
 }
 
-export function createApi(target: () => ServerTarget | null) {
+export interface ApiOptions {
+  /** A request to this target got no answer at all; the Shell's picker moves to the other one. */
+  onUnreachable?: ((target: ServerTarget) => void) | undefined;
+}
+
+export function createApi(target: () => ServerTarget | null, options: ApiOptions = {}) {
   async function raw(path: string, init: RequestInit = {}): Promise<Response> {
     const t = target();
     if (!t) throw new ApiError(0, "No server configured");
@@ -96,6 +103,7 @@ export function createApi(target: () => ServerTarget | null) {
         },
       });
     } catch (error) {
+      options.onUnreachable?.(t);
       throw new ApiError(0, error instanceof Error ? error.message : String(error));
     }
     if (!res.ok) throw new ApiError(res.status, await res.text());
@@ -114,7 +122,9 @@ export function createApi(target: () => ServerTarget | null) {
   });
   const intentPath = (intent: Intent) => `/threads/${encodeURIComponent(intent.threadId)}`;
   return {
-    health: () => request<{ ok: boolean }>("/health"),
+    /** The target requests go to right now, for screens that show it. */
+    target,
+    health: () => request<{ ok: boolean; mode: string; uptimeMs: number }>("/health"),
     capabilities: () => request<Capabilities>("/capabilities"),
     /**
      * The URL for a wake transport that cannot set headers (WebSocket,
@@ -250,6 +260,21 @@ export function createApi(target: () => ServerTarget | null) {
           `/search/headers?${new URLSearchParams({ workspace: workspaceId, q, limit: String(limit) })}`,
         ),
     },
+    devices: {
+      list: () => request<Device[]>("/devices"),
+      revoke: (id: Id) => raw(`/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      /** Approves a pairing code another Device is showing (ADR 0006). */
+      confirm: (code: string) => request<{ ok: boolean }>("/pair/confirm", json("POST", { code })),
+    },
+    upgrade: {
+      status: () => request<UpgradeStatus>("/upgrade"),
+      export: () => request<ExportResult>("/upgrade/export", { method: "POST" }),
+      copy: (databaseUrl: string, replace = false) =>
+        request<CopyResult>("/upgrade/copy", json("POST", { databaseUrl, replace })),
+      attach: (databaseUrl: string) =>
+        request<{ restartRequired: boolean }>("/upgrade/attach", json("POST", { databaseUrl })),
+      detach: () => request<{ restartRequired: boolean }>("/upgrade/attach", { method: "DELETE" }),
+    },
     settings: {
       /** Global and per-Device buckets; device wins for device-scoped keys. */
       all: () =>
@@ -294,6 +319,27 @@ export function createApi(target: () => ServerTarget | null) {
         }),
     },
   };
+}
+
+/* ------------------------------ Upgrade shapes (ADR 0008) ------------------------------ */
+
+export interface ExportResult {
+  path: string;
+  bytes: number;
+  at: string;
+}
+
+export interface CopyResult {
+  tables: Array<{ name: string; rows: number }>;
+  elapsedMs: number;
+}
+
+export interface UpgradeStatus {
+  mode: DeploymentMode;
+  canExport: boolean;
+  lastExport: ExportResult | null;
+  attachedHost: string | null;
+  restartRequired: boolean;
 }
 
 /* ------------------------------ Accounts and OAuth shapes ------------------------------ */

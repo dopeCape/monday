@@ -73,13 +73,15 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
     };
   }, [workspaceId, shell.api]);
 
-  // The wake transport follows the Server: connect once the Sidecar is up.
+  // The wake transport follows the Server the Shell picked (the Sidecar or the
+  // Cloud): its capabilities choose WebSocket, SSE or polling, and a switch of
+  // target reconnects.
   useEffect(() => {
     if (!store) return;
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
     void (async () => {
-      if (shell.sidecar?.running) {
+      if (shell.server) {
         caps.current = await shell.api.capabilities().catch(() => null);
       }
       if (cancelled) return;
@@ -89,7 +91,7 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
       cancelled = true;
       unsubscribe?.();
     };
-  }, [store, shell.sidecar, shell.api]);
+  }, [store, shell.server, shell.api]);
 
   if (!store) return <>{fallback}</>;
   return (

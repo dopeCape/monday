@@ -152,6 +152,7 @@ describe("cloud modes and upgrade", () => {
       jobs,
       sync,
       serverId,
+      now: clock.now,
       remoteAddress: () => (mode === "sidecar" ? "127.0.0.1" : "203.0.113.7"),
     });
     return { db, jobs, drafts, sync, app };

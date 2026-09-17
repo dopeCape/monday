@@ -86,6 +86,8 @@ export interface AppOptions {
   serverId?: string;
   /** The stale window for heartbeats, in ms; defaults to the Setting's shipped default. */
   staleMs?: () => Promise<number> | number;
+  /** The clock the topology is judged by; tests drive it. */
+  now?: () => Date;
   /** Extra route groups mounted at the root: the cron tick, the upgrade routes. */
   mounts?: Hono<AppEnv>[];
 }
@@ -149,7 +151,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       ? await currentTopology(
           db,
           { id: options.serverId, mode },
-          new Date(),
+          options.now?.() ?? new Date(),
           await (options.staleMs?.() ?? HEARTBEAT_STALE_MS),
         )
       : undefined;
