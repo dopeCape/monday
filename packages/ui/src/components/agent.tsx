@@ -36,8 +36,8 @@ export interface ToolCardProps {
   title?: string | undefined;
   /** Overrides the status text. Defaults to the result when done. */
   statusLabel?: string | undefined;
-  /** What the tool is about to do, shown while it waits for approval. */
-  preview?: string | undefined;
+  /** What the tool is about to do, shown while it waits for approval: a line, or rows in the app's own language. */
+  preview?: ReactNode | undefined;
   /** Buttons under the card; the first is primary. "Send", "Edit", "Cancel". */
   actions?: readonly string[] | undefined;
   onAction?: ((action: string, call: ToolCall) => void) | undefined;
@@ -155,7 +155,14 @@ export function AgentBar({
 
 export type AgentPart =
   | { kind: "text"; text: string }
-  | { kind: "tool"; call: ToolCall; title?: string; preview?: string; actions?: readonly string[] }
+  | {
+      kind: "tool";
+      call: ToolCall;
+      title?: string;
+      statusLabel?: string;
+      preview?: ReactNode;
+      actions?: readonly string[];
+    }
   | { kind: "results"; threads: readonly Thread[] };
 
 export type AgentTurn =
@@ -203,6 +210,7 @@ export function AgentThread({
                   key={key}
                   call={part.call}
                   title={part.title}
+                  statusLabel={part.statusLabel}
                   preview={part.preview}
                   actions={part.actions}
                   onAction={onToolAction}
@@ -229,8 +237,12 @@ export interface AgentPanelProps {
   runtime?: string | undefined;
   suggestions?: readonly Suggestion[] | undefined;
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
+  /** Shows the plus button that starts a new Session. */
+  onNew?: (() => void) | undefined;
   onHistory?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
+  /** Button titles; the Settings strings in the app, the mock's words by default. */
+  labels?: { new?: string; history?: string; collapse?: string } | undefined;
   /** The AgentThread. */
   children?: ReactNode | undefined;
   className?: string | undefined;
@@ -241,18 +253,25 @@ export function AgentPanel({
   runtime,
   suggestions,
   onSuggest,
+  onNew,
   onHistory,
   onClose,
+  labels,
   children,
   className,
 }: AgentPanelProps) {
   return (
     <div className={cx("agent-panel", className)}>
       <ColHead title="monday" count={runtime}>
-        <Btn icon title="History" onClick={onHistory}>
+        {onNew ? (
+          <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>
+            <Icon icon={PlusIcon} />
+          </Btn>
+        ) : null}
+        <Btn icon title={labels?.history ?? "History"} onClick={onHistory}>
           <Icon icon={ClockCounterClockwiseIcon} />
         </Btn>
-        <Btn icon title="Collapse (Esc)" onClick={onClose}>
+        <Btn icon title={labels?.collapse ?? "Collapse (Esc)"} onClick={onClose}>
           <Icon icon={CaretDownIcon} />
         </Btn>
       </ColHead>
@@ -289,6 +308,7 @@ export interface AgentColumnProps {
   runtime?: string | undefined;
   onNew?: (() => void) | undefined;
   onHistory?: (() => void) | undefined;
+  labels?: { new?: string; history?: string } | undefined;
   /** The AgentThread, then the AgentBar. */
   children?: ReactNode | undefined;
   className?: string | undefined;
@@ -300,16 +320,17 @@ export function AgentColumn({
   runtime,
   onNew,
   onHistory,
+  labels,
   children,
   className,
 }: AgentColumnProps) {
   return (
     <section className={cx("agent-col", side, className)}>
       <ColHead title="monday" count={runtime}>
-        <Btn icon title="New conversation" onClick={onNew}>
+        <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>
           <Icon icon={PlusIcon} />
         </Btn>
-        <Btn icon title="History" onClick={onHistory}>
+        <Btn icon title={labels?.history ?? "History"} onClick={onHistory}>
           <Icon icon={ClockCounterClockwiseIcon} />
         </Btn>
       </ColHead>

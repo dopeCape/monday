@@ -42,9 +42,10 @@ export interface ActivityPatch {
   undoneAt?: string | null;
 }
 
-/** The stored row plus the undo record, which the API never returns. */
+/** The stored row plus what the API never returns: the undo record, the full result text the model read, the data. */
 export interface ActivityRow extends ActivityRecord {
   undo: UndoRecord | null;
+  resultText: string | null;
   resultData: unknown;
 }
 
@@ -62,9 +63,15 @@ export interface ActivityLog {
   latestUndoable(workspaceId: string, sessionId?: string | null): Promise<ActivityRow | null>;
 }
 
+/** The one line a card shows of a result: its first line, without a trailing colon, cut short. */
+export function resultLine(text: string): string {
+  const first = text.split("\n")[0] ?? "";
+  return first.replace(/:\s*$/, "").slice(0, 160);
+}
+
 /** The API projection: everything but the undo record and the raw result. */
 export function publicActivity(row: ActivityRow): ActivityRecord {
-  const { undo: _undo, resultData: _data, ...rest } = row;
+  const { undo: _undo, resultText: _text, resultData: _data, ...rest } = row;
   return rest;
 }
 
@@ -85,7 +92,7 @@ function project(r: Row): ActivityRow {
     inputSummary: r.summary,
     status: r.status,
     approvedBy: r.decision === "approved" ? "user" : null,
-    ...(resultText !== undefined ? { result: resultText } : {}),
+    ...(resultText !== undefined ? { result: resultLine(resultText) } : {}),
     undoable: r.undo !== null && r.undoneAt === null && r.status === "done",
     undoneAt: r.undoneAt?.toISOString() ?? null,
     actor: r.actor === "user" ? "user" : r.actor === "automation" ? "automation" : "agent",
@@ -95,6 +102,7 @@ function project(r: Row): ActivityRow {
     decision: r.decision ?? null,
     at: r.at.toISOString(),
     undo: r.undo ?? null,
+    resultText: resultText ?? null,
     resultData:
       typeof r.result === "object" && r.result !== null && "data" in r.result
         ? (r.result as { data?: unknown }).data
@@ -233,6 +241,7 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
         decision: entry.decision,
         at: now().toISOString(),
         undo: null,
+        resultText: null,
         resultData: null,
       };
       rows.push(row);
@@ -249,8 +258,9 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
       if (patch.preview !== undefined) row.preview = patch.preview;
       if (patch.summary !== undefined) row.inputSummary = patch.summary;
       if (patch.resultText !== undefined) {
+        row.resultText = patch.resultText;
         if (patch.resultText === null) delete row.result;
-        else row.result = patch.resultText;
+        else row.result = resultLine(patch.resultText);
       }
       if (patch.result !== undefined) row.resultData = patch.result;
       if (patch.undo !== undefined) row.undo = patch.undo;

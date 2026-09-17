@@ -114,10 +114,15 @@ export function toolCallOf(row: ActivityRow): ToolCall {
     decision,
     at: _t,
     undo: _u,
+    resultText: _rt,
     resultData: _r,
     ...call
   } = row;
-  return { ...call, approvedBy: decision === "approved" ? "user" : null };
+  return {
+    ...call,
+    approvedBy: decision === "approved" ? "user" : null,
+    ...(decision === "declined" ? { declined: true } : {}),
+  };
 }
 
 export function createAgentHost(options: AgentHostOptions): AgentHost {

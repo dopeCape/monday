@@ -163,7 +163,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       if (existing && existing.status !== "waiting" && existing.status !== "running") {
         return {
           activity: existing,
-          text: existing.result ?? "",
+          text: existing.resultText ?? "",
           isError: existing.status === "failed",
         };
       }
@@ -302,14 +302,14 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
           status: "failed",
           resultText: "Nothing to undo for that action.",
         });
-        return { activity: row, text: row.result ?? "", isError: true };
+        return { activity: row, text: row.resultText ?? "", isError: true };
       }
       if (target.undoneAt) {
         const row = await activity.update((await record()).id, {
           status: "failed",
           resultText: "That action was already undone.",
         });
-        return { activity: row, text: row.result ?? "", isError: true };
+        return { activity: row, text: row.resultText ?? "", isError: true };
       }
       const text = await replayUndo(host, target.undo);
       await activity.update(target.id, { undoneAt: now().toISOString() });

@@ -68,6 +68,8 @@ export interface ShellState {
    * key: the file wins and only the user may edit it (ADR 0001).
    */
   set<K extends SettingKey>(key: K, value: Settings[K]): Promise<SetResult>;
+  /** Re-reads the Server's Settings, after the Agent changed some on the Server. */
+  refresh(): Promise<void>;
 }
 
 export type SetResult =
@@ -173,13 +175,19 @@ export function Shell({ children }: { children: ReactNode }) {
     [picker],
   );
 
+  const refresh = useCallback(async () => {
+    try {
+      const { global, device } = await api.settings.all();
+      setStored({ ...global, ...device } as PartialSettings);
+    } catch {
+      // No Server yet, or offline: the Settings in hand stay.
+    }
+  }, [api]);
+
   useEffect(() => {
     if (!server) return;
-    api.settings
-      .all()
-      .then(({ global, device }) => setStored({ ...global, ...device } as PartialSettings))
-      .catch(() => {});
-  }, [api, server]);
+    void refresh();
+  }, [refresh, server]);
 
   const setCloud = useCallback(async (target: CloudTarget | null) => {
     const p = await platform();
@@ -260,6 +268,7 @@ export function Shell({ children }: { children: ReactNode }) {
       setCloud,
       refreshServers,
       set,
+      refresh,
     }),
     [
       settings,
@@ -276,6 +285,7 @@ export function Shell({ children }: { children: ReactNode }) {
       setCloud,
       refreshServers,
       set,
+      refresh,
     ],
   );
 
@@ -333,6 +343,7 @@ export function StaticShell({
       setCloud: async () => {},
       refreshServers: async () => {},
       set,
+      refresh: async () => {},
       ...shellOverrides,
     }),
     [settings, api, set, shellOverrides],
