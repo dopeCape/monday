@@ -300,7 +300,15 @@ export interface Mailstore extends ContentStore {
 export class NotFoundError extends Error {
   readonly status = 404;
   constructor(
-    readonly entity: "thread" | "message" | "attachment" | "workspace" | "blob" | "draft" | "send",
+    readonly entity:
+      | "thread"
+      | "message"
+      | "attachment"
+      | "workspace"
+      | "blob"
+      | "draft"
+      | "send"
+      | "group",
     readonly id: string,
   ) {
     super(`${entity} ${id} not found`);
@@ -369,6 +377,7 @@ function projectThread(r: ThreadRow, tagIds: string[], labelIds: string[]): Thre
     labels: labelIds,
     hasAttachments: r.hasAttachments,
     snippet: "",
+    bulk: r.bulk,
     deleted: r.deleted,
   };
 }
@@ -1371,6 +1380,8 @@ async function refreshThread(tx: Tx, threadId: string): Promise<void> {
       count: sql<number>`count(*)::int`,
       latest: sql<Date | null>`max(${messages.date})`,
       attachments: sql<boolean>`coalesce(bool_or(${messages.hasAttachments}), false)`,
+      // List mail by headers alone (List-Id, List-Unsubscribe, Precedence bulk or list).
+      bulk: sql<boolean>`coalesce(bool_or(${messages.headers} ? 'list-id' or ${messages.headers} ? 'list-unsubscribe' or lower(${messages.headers} ->> 'precedence') in ('bulk', 'list')), false)`,
     })
     .from(messages)
     .where(eq(messages.threadId, threadId));
@@ -1380,6 +1391,7 @@ async function refreshThread(tx: Tx, threadId: string): Promise<void> {
     .set({
       messageCount: agg?.count ?? 0,
       hasAttachments: agg?.attachments ?? false,
+      bulk: agg?.bulk ?? false,
       ...(latest
         ? {
             lastActivity: sql`greatest(${threads.lastActivity}, ${latest.toISOString()}::timestamptz)`,

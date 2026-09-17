@@ -4,11 +4,14 @@
 
 import type {
   Brief,
+  BriefPolicy,
+  DecisionCandidate,
   Draft,
   DraftAttachment,
   Group,
   Message,
   Person,
+  Predicate,
   Rule,
   ScheduledSend,
   SectionRule,
@@ -39,11 +42,15 @@ export const INBOX_THREADS_SQL = `
   where t.archived = 0 and t.deleted = 0 and t.snoozed_until is null
   order by t.last_activity desc, t.rid desc`;
 
-/** Every Thread the Cache holds, trash included, newest first. */
+/**
+ * Every Thread the Cache holds, trash included, newest first, with the
+ * newest Message's sender for the Section rules ("lastFrom").
+ */
 export const ALL_THREADS_SQL = `
   select t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
-    (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids
+    (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids,
+    (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender
   from threads t
   order by t.last_activity desc, t.rid desc`;
 
@@ -72,15 +79,20 @@ export function rowToThread(r: Row, workspaceId: string): Thread {
     labels: text(r.label_ids) ? text(r.label_ids).split(",") : [],
     hasAttachments: bool(r.has_attachments),
     snippet: text(r.snippet),
+    bulk: bool(r.bulk),
   };
 }
 
-/** The Thread plus the trash flag the domain type does not carry. */
+/** The Thread plus the trash flag the domain type does not carry, and the newest sender when selected. */
 export function rowToCachedThread(
   r: Row,
   workspaceId: string,
-): { thread: Thread; deleted: boolean } {
-  return { thread: rowToThread(r, workspaceId), deleted: bool(r.deleted) };
+): { thread: Thread; deleted: boolean; lastSender: string | null } {
+  return {
+    thread: rowToThread(r, workspaceId),
+    deleted: bool(r.deleted),
+    lastSender: nullable(r.last_sender),
+  };
 }
 
 export const SECTIONS_SQL = "select * from section_rules order by position, id";
@@ -96,16 +108,48 @@ export function rowToSection(r: Row, workspaceId: string): SectionRule {
   };
 }
 
-export const GROUPS_SQL = "select * from groups order by name";
+/** Groups, top-level first, then by name. */
+export const GROUPS_SQL = "select * from groups order by parent_id is not null, name";
 
 export function rowToGroup(r: Row, workspaceId: string): Group {
+  const sentence = text(r.sentence);
+  const policy = nullable(r.brief_policy);
   return {
     id: text(r.id),
     workspaceId,
     parentId: nullable(r.parent_id),
     name: text(r.name),
-    rule: json<Rule>(r.rule, { sentence: "", predicate: {}, prompt: "" }),
+    // The revised prompt is content and stays on the Server; the sentence stands in for it here.
+    rule: { sentence, predicate: json<Predicate>(r.predicate, {}), prompt: sentence },
     threshold: typeof r.threshold === "number" ? r.threshold : null,
+    briefPolicy:
+      policy === "always" || policy === "on_open" || policy === "never"
+        ? (policy as BriefPolicy)
+        : null,
+  };
+}
+
+/** Needs a decision, newest first, with the Thread's headers alongside. */
+export const DECISIONS_SQL = `
+  select d.thread_id, d.candidates, d.at, t.subject, t.participants
+  from decisions d left join threads t on t.id = d.thread_id
+  order by d.at desc, d.thread_id`;
+
+export interface CachedDecision {
+  threadId: string;
+  candidates: DecisionCandidate[];
+  at: string;
+  subject: string;
+  participants: Person[];
+}
+
+export function rowToDecision(r: Row): CachedDecision {
+  return {
+    threadId: text(r.thread_id),
+    candidates: json<DecisionCandidate[]>(r.candidates, []),
+    at: text(r.at),
+    subject: text(r.subject),
+    participants: json<Person[]>(r.participants, []),
   };
 }
 

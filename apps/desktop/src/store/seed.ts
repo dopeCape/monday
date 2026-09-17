@@ -45,15 +45,23 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
   }
   for (const g of data.groups) {
     out.push({
-      sql: "insert or replace into groups (id, parent_id, name, rule, threshold) values (?, ?, ?, ?, ?)",
-      params: [g.id, g.parentId, g.name, g.rule, g.threshold],
+      sql: "insert or replace into groups (id, parent_id, name, sentence, predicate, threshold, brief_policy) values (?, ?, ?, ?, ?, ?, ?)",
+      params: [
+        g.id,
+        g.parentId,
+        g.name,
+        g.rule.sentence,
+        g.rule.predicate,
+        g.threshold,
+        g.briefPolicy,
+      ],
     });
   }
   for (const t of data.threads) {
     out.push({
       sql: `insert or replace into threads (id, subject, participants, last_activity, message_count, unread, starred,
-              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, snippet, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, bulk, snippet, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params: [
         t.id,
         t.subject,
@@ -69,6 +77,7 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
         t.group,
         t.subgroup,
         t.hasAttachments,
+        t.bulk ?? false,
         t.snippet,
         at,
       ],

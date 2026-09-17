@@ -118,6 +118,16 @@ export interface ProviderDraft {
 
 export type DraftImporter = (draft: ProviderDraft) => Promise<void>;
 
+/** A Thread the engine just created from a new Message. Routing hooks here (slice 12). */
+export interface ThreadArrival {
+  accountId: string;
+  workspaceId: string;
+  threadId: string;
+  lastActivity: string;
+}
+
+export type ArrivalHook = (arrival: ThreadArrival) => Promise<void>;
+
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
   /** The cached Session for an Account, connecting when needed (push Jobs use adapter extras). */
@@ -137,6 +147,12 @@ export interface SyncEngine {
     importer: DraftImporter,
     knownProviderIds: (workspaceId: string) => Promise<Set<string>>,
   ): void;
+  /**
+   * Registers who hears about a new Thread. The engine calls it once per
+   * Thread it creates, after the first Message is stored; the hook enqueues
+   * work through the Jobs table, never runs a model inline. A failure is logged.
+   */
+  setArrivalHook(hook: ArrivalHook): void;
   /** Applies an inbox action at the Provider and mirrors it locally. Ids are Mailstore ids. */
   applyChange(accountId: string, target: EngineChangeTarget, change: Change): Promise<void>;
   /** Starts (or confirms) the push watcher for an Account in this process. */
@@ -191,6 +207,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   let jobsRef: Jobs | null = null;
   let draftImporter: DraftImporter | null = null;
   let knownDraftIds: ((workspaceId: string) => Promise<Set<string>>) | null = null;
+  let arrivalHook: ArrivalHook | null = null;
 
   /* ------------------------------ Accounts and Sessions ------------------------------ */
 
@@ -371,6 +388,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     let messageId: string;
     let threadId: string;
     let threadKey: string;
+    let arrived = false;
 
     // The same RFC Message-ID under another Provider id: a copy or a move
     // (IMAP folders), or the Message coming back after a reset. Adopt it.
@@ -428,6 +446,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
           unread: !summary.flags.seen,
           starred: summary.flags.flagged,
         });
+        arrived = true;
       }
       for (const child of childThreads) {
         if (child.threadId === threadId) continue;
@@ -479,6 +498,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       })
       .onConflictDoNothing();
     await refreshThread(threadId, map);
+    if (arrived && arrivalHook) {
+      await arrivalHook({
+        accountId: acct.id,
+        workspaceId,
+        threadId,
+        lastActivity: summary.date,
+      }).catch((error) => log(`arrival hook: ${error instanceof Error ? error.message : error}`));
+    }
     return "added";
   }
 
@@ -962,6 +989,10 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
     async withSession(accountId, fn) {
       return withSession(await account(accountId), fn);
+    },
+
+    setArrivalHook(hook) {
+      arrivalHook = hook;
     },
 
     setDraftImporter(importer, known) {

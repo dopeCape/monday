@@ -86,7 +86,7 @@ describe("schema", () => {
     expect(inbox.map((t) => t.id)).toEqual(fixtures.threads.map((t) => t.id));
     const e1 = inbox.find((t) => t.id === "e1") as Thread;
     const seed = fixtures.threads.find((t) => t.id === "e1") as Thread;
-    expect(e1).toEqual({ ...seed, workspaceId: store.workspaceId });
+    expect(e1).toEqual({ ...seed, workspaceId: store.workspaceId, bulk: false });
   });
 });
 

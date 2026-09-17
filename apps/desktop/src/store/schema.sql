@@ -29,6 +29,7 @@ create table if not exists threads (
   group_id text,
   subgroup_id text,
   has_attachments integer not null default 0,
+  bulk integer not null default 0,
   snippet text not null default '',
   updated_at text not null default ''
 );
@@ -89,12 +90,24 @@ create table if not exists thread_labels (
   primary key (thread_id, label_id)
 );
 
+-- Groups as the feed carries them: the sentence and the Predicate in the
+-- clear, the revised model prompt behind GET /groups (it is content).
 create table if not exists groups (
   id text primary key,
   parent_id text,
   name text not null,
-  rule text not null default '{}',
-  threshold real
+  sentence text not null default '',
+  predicate text not null default '{}',
+  threshold real,
+  brief_policy text
+);
+
+-- Needs a decision: the Threads whose best rule was not sure enough, with
+-- their candidate Groups. A feed row with no candidates removes the entry.
+create table if not exists decisions (
+  thread_id text primary key,
+  candidates text not null default '[]',
+  at text not null default ''
 );
 
 create table if not exists section_rules (

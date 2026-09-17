@@ -180,6 +180,7 @@ export function generateMailbox(options: GenerateOptions): GeneratedMailbox {
       name: "Hiring",
       rule: { sentence: "", predicate: {}, prompt: "" },
       threshold: null,
+      briefPolicy: null,
     },
     {
       id: "finance",
@@ -188,6 +189,7 @@ export function generateMailbox(options: GenerateOptions): GeneratedMailbox {
       name: "Finance",
       rule: { sentence: "", predicate: {}, prompt: "" },
       threshold: null,
+      briefPolicy: null,
     },
   ];
   const threads: Thread[] = [];

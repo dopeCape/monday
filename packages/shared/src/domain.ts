@@ -58,6 +58,8 @@ export interface Thread {
   labels: Id[];
   hasAttachments: boolean;
   snippet: string;
+  /** List mail: a List-Id, List-Unsubscribe or Precedence bulk header on any Message. Absent means unknown. */
+  bulk?: boolean;
 }
 
 export interface Message {
@@ -180,6 +182,7 @@ export type ContentKind =
   | "attachment"
   | "attachment-text"
   | "brief"
+  | "rule"
   | "tag-rationale"
   | "summary"
   | "embedding"
@@ -221,6 +224,9 @@ export interface Predicate {
   headers?: Record<string, string>;
 }
 
+/** Which Threads in a Group get a Brief in the background (docs/spec/inbox.md, "Brief policy"). */
+export type BriefPolicy = "always" | "on_open" | "never";
+
 export interface Group {
   id: GroupId;
   workspaceId: Id;
@@ -229,6 +235,8 @@ export interface Group {
   rule: Rule;
   /** Per-Group override of the route threshold; null means use the Setting. */
   threshold: number | null;
+  /** Per-Group brief policy; null means use the Setting (slice 13 consumes it). */
+  briefPolicy: BriefPolicy | null;
 }
 
 export interface SectionRule {

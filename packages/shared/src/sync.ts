@@ -6,6 +6,7 @@ import type {
   DraftAttachment,
   DraftKind,
   DraftStatus,
+  Group,
   Id,
   IsoDate,
   Person,
@@ -13,6 +14,7 @@ import type {
   SendError,
   Thread,
 } from "./domain.ts";
+import type { DecisionCandidate } from "./routing/index.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -194,7 +196,9 @@ export type ChangeKind =
   | "thread_labels"
   | "thread_tags"
   | "draft"
-  | "send";
+  | "send"
+  | "group"
+  | "decision";
 
 /** Thread headers as the feed carries them: no subject, no snippet (those are content). */
 export interface ThreadChange extends Thread {
@@ -256,6 +260,23 @@ export interface SendChange {
   createdAt: IsoDate;
 }
 
+/**
+ * A Group as the feed carries it: name, parent, sentence, Predicate, threshold
+ * and brief policy. The model prompt is content and stays behind GET /groups.
+ */
+export interface GroupChange extends Omit<Group, "rule"> {
+  sentence: string;
+  predicate: Group["rule"]["predicate"];
+  deleted: boolean;
+}
+
+/** A Thread entering or leaving Needs a decision; `candidates` is empty when it left. */
+export interface DecisionChange {
+  threadId: Id;
+  candidates: DecisionCandidate[];
+  at: IsoDate;
+}
+
 export type ChangePayload =
   | { kind: "thread"; payload: ThreadChange }
   | { kind: "message"; payload: MessageChange }
@@ -264,7 +285,9 @@ export type ChangePayload =
   | { kind: "thread_labels"; payload: ThreadLinksChange }
   | { kind: "thread_tags"; payload: ThreadLinksChange }
   | { kind: "draft"; payload: DraftChange }
-  | { kind: "send"; payload: SendChange };
+  | { kind: "send"; payload: SendChange }
+  | { kind: "group"; payload: GroupChange }
+  | { kind: "decision"; payload: DecisionChange };
 
 export type Change = ChangePayload & {
   seq: number;

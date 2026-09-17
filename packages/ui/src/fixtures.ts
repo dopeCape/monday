@@ -174,6 +174,7 @@ const group = (
   name,
   rule: { sentence, predicate, prompt: sentence },
   threshold: null,
+  briefPolicy: null,
 });
 
 export const groups: Group[] = [

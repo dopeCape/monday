@@ -29,6 +29,7 @@ export {
   isSettingKey,
   keysInSection,
   SETTING_SECTIONS,
+  sectionRuleShape,
   settingKeys,
   settingScope,
   settingSection,

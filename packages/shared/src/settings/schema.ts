@@ -8,7 +8,17 @@
 // Runtime-neutral: zod only, no Bun, no DOM, no Node.
 
 import { z } from "zod";
-import type { Density, HostedProvider, Layout, Role, Roles, Task, ThemeMode } from "../domain.ts";
+import type {
+  BriefPolicy,
+  Density,
+  HostedProvider,
+  Layout,
+  Role,
+  Roles,
+  Task,
+  ThemeMode,
+} from "../domain.ts";
+import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -141,6 +151,26 @@ export const TASKS: readonly Task[] = [
 ];
 
 const reevaluatePolicy = z.enum(["manual", "on-rule-change", "on-correction", "always"]);
+const briefPolicy = z.enum(["always", "on_open", "never"]) satisfies z.ZodType<BriefPolicy>;
+/** One Section rule: an id, deterministic conditions, an optional sentence for the section Task. */
+const sectionWhen = z.object({
+  unread: z.boolean().optional(),
+  starred: z.boolean().optional(),
+  hasAttachments: z.boolean().optional(),
+  bulk: z.boolean().optional(),
+  minMessages: z.int().min(1).optional(),
+  lastFrom: z.enum(["me", "others"]).optional(),
+  groups: z.array(z.string().min(1)).optional(),
+  notGroups: z.array(z.string().min(1)).optional(),
+  ungrouped: z.boolean().optional(),
+});
+export const sectionRuleShape = z.object({
+  id: z.string().min(1),
+  when: sectionWhen,
+  sentence: z.string().optional(),
+  hidden: z.boolean().optional(),
+});
+export type SectionRuleValue = z.output<typeof sectionRuleShape>;
 const placement = z.enum(["server", "local"]);
 const keymap = z.enum(["vim", "gmail", "natural"]);
 const direction = z.enum(["next", "previous"]);
@@ -485,6 +515,70 @@ export const settingsSchema = {
     section: "routing",
     label: "Learn from corrections",
     help: "A correction becomes an Example for the rule and may extend its Predicate.",
+  }),
+  "routing.on_arrival": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    label: "Route on arrival",
+    help: "Every new Thread is routed as it arrives, as a Job on the Server. Off leaves routing to re-runs.",
+  }),
+  "routing.predicate_first": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    label: "Predicates before the model",
+    help: "A Thread that matches exactly one Group's Predicate is placed there at full Confidence without a model call.",
+  }),
+  "routing.default_group": setting({
+    type: z.string(),
+    default: "",
+    scope: "global",
+    section: "routing",
+    label: "Default Group",
+    help: "The Group a Thread stays in when no rule is confident enough. Empty means the plain Inbox, no Group.",
+  }),
+  "routing.classify.snippet_chars": setting({
+    type: z.int().min(0).max(4000),
+    default: 300,
+    scope: "global",
+    section: "routing",
+    label: "Snippet sent to classify",
+    help: "How many characters of the newest Message the classify Task reads along with the headers.",
+  }),
+  "routing.examples_in_prompt": setting({
+    type: z.int().min(0).max(50),
+    default: 6,
+    scope: "global",
+    section: "routing",
+    label: "Examples per Group",
+    help: "The most Examples, newest first, quoted to the model for each Group.",
+  }),
+  "routing.rerun.recent": setting({
+    type: z.int().min(1).max(1000),
+    default: 50,
+    scope: "global",
+    section: "routing",
+    label: "Re-run size",
+    help: "How many of the newest Threads a re-run scores before showing what would move.",
+  }),
+  "routing.brief_policy.default": setting({
+    type: briefPolicy,
+    default: "on_open",
+    scope: "global",
+    section: "routing",
+    label: "Brief policy for Groups",
+    help: "For a Group with no policy of its own: always compute Briefs in the background, only on open, or never.",
+  }),
+  "sections.rules": setting({
+    type: z.array(sectionRuleShape),
+    default: DEFAULT_SECTION_RULES,
+    scope: "global",
+    section: "routing",
+    label: "Section rules",
+    help: "Which Threads each Section holds: conditions over Thread state and Group, checked in Section order on this device. A rule with a sentence and no conditions asks the section Task.",
   }),
 
   /* Briefs */
@@ -1118,6 +1212,58 @@ export const settingsSchema = {
   "strings.section.fyi": str("routing", "Section: for your information", "For your information"),
   "strings.section.newsletters": str("routing", "Section: newsletters", "Newsletters"),
   "strings.routing.decisions": str("routing", "Needs a decision heading", "Needs a decision"),
+  "strings.routing.title": str("routing", "Routing page title", "Routing"),
+  "strings.routing.subtitle": str(
+    "routing",
+    "Routing page subtitle",
+    "Groups, sub-groups and inbox types. Each rule is plain language the agent wrote, and it learns from every message you move.",
+  ),
+  "strings.routing.rerun": str("routing", "Re-run button", "Re-run on inbox"),
+  "strings.routing.new_group": str("routing", "New group button", "New group"),
+  "strings.routing.change_rule": str("routing", "Change rule button", "Change rule"),
+  "strings.routing.unread": str("routing", "Group unread count", "{n} unread"),
+  "strings.routing.confident": str("routing", "Group confidence", "{n}% confident"),
+  "strings.routing.examples": str("routing", "Group example count", "{n} examples"),
+  "strings.routing.ask.title": str("routing", "Ask for a group heading", "Ask for a group"),
+  "strings.routing.ask.placeholder": str(
+    "routing",
+    "Ask for a group placeholder",
+    "A Support inbox for anything from customers",
+  ),
+  "strings.routing.ask.help": str(
+    "routing",
+    "Ask for a group help",
+    "The agent proposes a rule, shows which existing mail would move, and only applies it after you say yes.",
+  ),
+  "strings.routing.recent": str("routing", "Recently routed heading", "Recently routed"),
+  "strings.routing.decisions.empty": str(
+    "routing",
+    "Needs a decision empty line",
+    "Nothing waiting on you",
+  ),
+  "strings.routing.empty": str(
+    "routing",
+    "No groups line",
+    "No groups yet. Ask for one, or let onboarding propose a few.",
+  ),
+  "strings.routing.leave": str("routing", "Leave out of every Group", "Leave"),
+  "strings.routing.preview.title": str("routing", "Re-run preview heading", "What would move"),
+  "strings.routing.preview.considered": str(
+    "routing",
+    "Re-run preview summary",
+    "{moves} of {n} threads would move",
+  ),
+  "strings.routing.preview.apply": str("routing", "Re-run apply button", "Apply"),
+  "strings.routing.preview.cancel": str("routing", "Re-run cancel button", "Cancel"),
+  "strings.routing.preview.none": str("routing", "Re-run preview empty", "Nothing would move"),
+  "strings.routing.preview.ask": str("routing", "Re-run preview ask", "Needs a decision"),
+  "strings.routing.preview.out": str("routing", "Re-run preview out", "No group"),
+  "strings.routing.no_rule": str("routing", "Group without a rule", "No rule yet"),
+  "strings.routing.hosted_needed": str(
+    "routing",
+    "Routing needs a Hosted runtime",
+    "Routing runs on the Server with a shared key. Share one under AI and agent.",
+  ),
   "strings.agent.offline": str("ai", "Agent offline line", "Offline, hosted work paused"),
   "strings.agent.unavailable": str("ai", "Local runtime unavailable", "{runtime} not available"),
   "strings.agent.ask_about_thread": str("ai", "Ask about this Thread", "About this thread"),
