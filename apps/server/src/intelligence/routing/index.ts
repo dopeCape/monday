@@ -128,8 +128,8 @@ export interface Routing {
   /** Scores and applies: a move, a Needs a decision entry, or the default Group. */
   route(threadId: Id, options?: RoutingCallOptions): Promise<ThreadRoute | null>;
   routeOf(threadId: Id): Promise<ThreadRoute | null>;
-  /** Enqueues the route Job for a Thread; idempotent per Thread. */
-  enqueue(workspaceId: Id, threadId: Id): Promise<string>;
+  /** Enqueues the route Job for a Thread. With `id`, a duplicate is ignored (the arrival path). */
+  enqueue(workspaceId: Id, threadId: Id, options?: { id?: string }): Promise<string>;
   /** The sync engine's new-Thread hook: enqueues under the Settings, or returns null. */
   onArrival(workspaceId: Id, threadId: Id, lastActivity: string): Promise<string | null>;
   decisions(workspaceId: Id): Promise<RoutingDecision[]>;
@@ -876,10 +876,10 @@ export function createRouting(options: RoutingOptions): Routing {
       };
     },
 
-    async enqueue(workspaceId, threadId) {
+    async enqueue(workspaceId, threadId, opts = {}) {
       if (!jobs) throw new Error("route Jobs need registerSteps first");
       const payload: RouteJobPayload = { workspaceId, threadId };
-      return jobs.enqueue(ROUTE_STEP, payload, { id: `${ROUTE_STEP}:${threadId}` });
+      return jobs.enqueue(ROUTE_STEP, payload, opts.id ? { id: opts.id } : {});
     },
 
     async onArrival(workspaceId, threadId, lastActivity) {
@@ -894,7 +894,8 @@ export function createRouting(options: RoutingOptions): Routing {
         .where(and(eq(groups.workspaceId, workspaceId), isNull(groups.parentId)))
         .limit(1);
       if (!any) return null;
-      return api.enqueue(workspaceId, threadId);
+      // One arrival Job per Thread: a sync that sees the Thread twice enqueues once.
+      return api.enqueue(workspaceId, threadId, { id: `${ROUTE_STEP}:${threadId}` });
     },
 
     async decisions(workspaceId) {
