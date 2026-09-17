@@ -387,6 +387,10 @@ export interface ToolCall {
   approvedBy: "user" | "standing" | null;
   result?: string;
   undoable: boolean;
+  /** Set once the call was undone; the card then shows Undone instead of Undo. */
+  undoneAt?: IsoDate | null;
+  /** The user declined the approval; nothing ran. */
+  declined?: boolean;
 }
 
 export interface ActivityEntry extends ToolCall {

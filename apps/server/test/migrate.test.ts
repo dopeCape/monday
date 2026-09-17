@@ -45,6 +45,8 @@ describe("migrations", () => {
       "routing_decisions",
       "scheduled_sends",
       "servers",
+      "session_events",
+      "sessions",
       "settings",
       "sync_messages",
       "sync_state",

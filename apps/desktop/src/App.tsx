@@ -1,23 +1,27 @@
 // Composes the shell from the layout knobs (ADR 0009): nav full, rail or hidden;
 // agent bottom, left or right; then the active screen.
 
-import { AgentBar, AgentColumn, AgentThread, NavSidebar, Rail } from "@monday/ui";
+import { NavSidebar, Rail } from "@monday/ui";
 import {
-  agentThread,
+  account,
   automationNav,
   calendarNav,
   counts,
   folders,
   groupIcon,
   groups,
-  NOW,
   navWorkspace,
   railItems,
   railTail,
   workspace,
 } from "@monday/ui/fixtures";
 import { ClockIcon } from "@phosphor-icons/react";
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
+import { type AgentClient, apiAgentClient } from "./agent/client.ts";
+import { runtimeLine } from "./agent/runtimeLine.ts";
+import { suggestionsFor } from "./agent/suggestions.ts";
+import { useAgentSession } from "./agent/useAgentSession.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
@@ -43,6 +47,14 @@ export interface AppProps {
   search?: SearchModule | null | undefined;
   /** Groups and Needs a decision from the Store; the nav and the Routing page read them. Fixtures when absent. */
   routing?: RoutingSource | undefined;
+  /**
+   * The composer's seam to the Agent host. Defaults to the Server's routes
+   * over the Shell's Api once a Server is picked; tests pass a fake, null
+   * keeps the bar inert.
+   */
+  agentClient?: AgentClient | null | undefined;
+  /** The wall clock for the composer's relative times. */
+  now?: Date | undefined;
 }
 
 const defaultComposer = fixtureComposer();
@@ -56,8 +68,11 @@ export function App({
   syncing = null,
   search = null,
   routing,
+  agentClient,
+  now: nowProp,
 }: AppProps) {
   const shell = useShell();
+  const now = nowProp ?? new Date();
   const storeGroups = useSyncExternalStore(
     routing?.subscribe ?? noSubscribe,
     routing?.groups ?? noGroups,
@@ -75,7 +90,47 @@ export function App({
   const [openThread, setOpenThread] = useState<string | null>(null);
   /** Text the agent bar opens with after a palette handoff. */
   const [agentText, setAgentText] = useState<string | undefined>(undefined);
-  const runtime = `Claude Code · ${workspace.accountId}`;
+  /** The column composers' own text; the bottom bar's lives in the Inbox. */
+  const [columnText, setColumnText] = useState("");
+  const client = useMemo(
+    () =>
+      agentClient !== undefined ? agentClient : shell.server ? apiAgentClient(shell.api) : null,
+    [agentClient, shell.server, shell.api],
+  );
+  const pinned = shell.pinned;
+  const agent = useAgentSession({
+    client,
+    workspaceId: workspace.id,
+    context: () => ({ pinned: [...pinned] }),
+    newAfterHours: shell.settings["ai.session.new_after_hours"],
+    onSettingsChanged: () => void shell.refresh(),
+  });
+  const runtime = runtimeLine(agent.session, shell.settings, account.address);
+  const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
+  const chips = useMemo(
+    () =>
+      suggestionsFor({
+        settings: shell.settings,
+        waiting: agent.waiting,
+        needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
+      }),
+    [shell.settings, agent.waiting, inbox],
+  );
+  const column = (side: "left" | "right") => (
+    <AgentComposer
+      key={`agent-${side}`}
+      agent={agent}
+      mode={side}
+      runtime={runtime}
+      strings={agentStrings}
+      suggestions={chips}
+      now={now}
+      placeholder={shell.settings["strings.agent.placeholder_open"]}
+      text={columnText}
+      onTextChange={setColumnText}
+      onOpenThread={(id) => navigate(`thread:${id}`)}
+    />
+  );
   const sends = useSyncExternalStore(composer.subscribe, composer.sends, composer.sends);
   const pending = sends.filter((s) => s.status === "scheduled").length;
   const strings = composeStrings(shell.settings);
@@ -158,12 +213,7 @@ export function App({
   }
   if (shell.layout.agent === "left") {
     cols.push("var(--agent-w)");
-    parts.push(
-      <AgentColumn key="agent-l" side="left" runtime={runtime}>
-        <AgentThread turns={agentThread} now={NOW} />
-        <AgentBar placeholder="Reply, or ask something else" />
-      </AgentColumn>,
-    );
+    parts.push(column("left"));
   }
   cols.push("minmax(0, 1fr)");
   parts.push(
@@ -220,17 +270,13 @@ export function App({
         initialAgentText={agentText}
         onNavigate={navigate}
         onSearch={openSearch}
+        agent={agent}
       />
     ),
   );
   if (shell.layout.agent === "right") {
     cols.push("var(--agent-w)");
-    parts.push(
-      <AgentColumn key="agent-r" side="right" runtime={runtime}>
-        <AgentThread turns={agentThread} now={NOW} />
-        <AgentBar placeholder="Reply, or ask something else" />
-      </AgentColumn>,
-    );
+    parts.push(column("right"));
   }
 
   return (

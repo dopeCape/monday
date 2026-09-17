@@ -9,15 +9,28 @@
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import {
-  type AIMessage,
+  AIMessage,
+  type AIMessageChunk,
+  type BaseMessage,
   HumanMessage,
   SystemMessage,
+  ToolMessage,
   type UsageMetadata,
 } from "@langchain/core/messages";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { ChatOpenAI } from "@langchain/openai";
 import type { Effort, HostedProvider, Usage } from "@monday/shared";
-import type { ChatCall, ChatModel, ChatResponse } from "./index.ts";
+import type {
+  AgentMessage,
+  AgentToolCall,
+  ChatCall,
+  ChatModel,
+  ChatResponse,
+  ConverseCall,
+  ConverseModel,
+  ConverseResponse,
+  ToolSpec,
+} from "./index.ts";
 
 /** Haiku 4.5 takes a thinking budget instead of an effort level. */
 const HAIKU_BUDGET: Record<Effort, number> = { low: 0, medium: 2048, high: 8192 };
@@ -33,7 +46,7 @@ export function anthropicTakesEffort(model: string): boolean {
   return !model.startsWith("claude-haiku");
 }
 
-export function buildModel(call: ChatCall): BaseChatModel {
+export function buildModel(call: Omit<ChatCall, "system" | "prompt">): BaseChatModel {
   switch (call.provider) {
     case "anthropic": {
       if (anthropicTakesEffort(call.model)) {
@@ -120,6 +133,92 @@ export function createLangChainChat(): ChatModel {
     const reported = answer.response_metadata?.model_name ?? answer.response_metadata?.model;
     return {
       text: textOf(answer),
+      usage: usageOf(answer),
+      ...(typeof reported === "string" && reported ? { model: reported } : {}),
+    };
+  };
+}
+
+/* ------------------------------ The agent loop's seam ------------------------------ */
+
+/** The OpenAI function shape, which every LangChain provider package accepts in bindTools. */
+export function toolDefinition(tool: ToolSpec) {
+  return {
+    type: "function" as const,
+    function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+  };
+}
+
+/** The loop's provider-neutral transcript as LangChain messages. */
+export function toLangChainMessages(system: string, messages: AgentMessage[]): BaseMessage[] {
+  const out: BaseMessage[] = [new SystemMessage(system)];
+  for (const m of messages) {
+    switch (m.role) {
+      case "user":
+        out.push(new HumanMessage(m.content));
+        break;
+      case "assistant":
+        out.push(
+          new AIMessage({
+            content: m.content,
+            tool_calls: m.toolCalls.map((c) => ({
+              id: c.id,
+              name: c.name,
+              args: c.args,
+              type: "tool_call" as const,
+            })),
+          }),
+        );
+        break;
+      case "tool":
+        out.push(
+          new ToolMessage({
+            content: m.content,
+            tool_call_id: m.toolCallId,
+            name: m.name,
+            ...(m.isError ? { status: "error" as const } : {}),
+          }),
+        );
+        break;
+    }
+  }
+  return out;
+}
+
+/** The parsed tool calls of an answer. A call whose arguments did not parse reaches the loop as an error. */
+export function toolCallsOf(message: AIMessage | AIMessageChunk): AgentToolCall[] {
+  const calls: AgentToolCall[] = [];
+  for (const c of message.tool_calls ?? []) {
+    calls.push({ id: c.id ?? crypto.randomUUID(), name: c.name, args: c.args ?? {} });
+  }
+  for (const bad of message.invalid_tool_calls ?? []) {
+    calls.push({
+      id: bad.id ?? crypto.randomUUID(),
+      name: bad.name ?? "unknown",
+      args: { __invalid: bad.error ?? "arguments did not parse", raw: bad.args ?? "" },
+    });
+  }
+  return calls;
+}
+
+export function createLangChainConverse(): ConverseModel {
+  return async (call: ConverseCall): Promise<ConverseResponse> => {
+    const base = buildModel(call);
+    if (!base.bindTools) throw new Error(`${call.provider} model cannot bind tools`);
+    const bound = base.bindTools(call.tools.map(toolDefinition));
+    const input = toLangChainMessages(call.system, call.messages);
+    let final: AIMessageChunk | null = null;
+    for await (const chunk of await bound.stream(input)) {
+      const delta = textOf(chunk as unknown as AIMessage);
+      if (delta && call.onText) call.onText(delta);
+      final = final ? final.concat(chunk) : chunk;
+    }
+    if (!final) return { text: "", toolCalls: [], usage: usageOf(new AIMessage("")) };
+    const answer = final as unknown as AIMessage;
+    const reported = answer.response_metadata?.model_name ?? answer.response_metadata?.model;
+    return {
+      text: textOf(answer),
+      toolCalls: toolCallsOf(final),
       usage: usageOf(answer),
       ...(typeof reported === "string" && reported ? { model: reported } : {}),
     };

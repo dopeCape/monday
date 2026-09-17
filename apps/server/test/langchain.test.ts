@@ -3,9 +3,16 @@
 // it. Calls against the real providers are in intelligence.live.test.ts.
 
 import { describe, expect, test } from "bun:test";
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, type ToolMessage } from "@langchain/core/messages";
 import type { ChatCall } from "../src/intelligence/runtime/index.ts";
-import { buildModel, textOf, usageOf } from "../src/intelligence/runtime/langchain.ts";
+import {
+  buildModel,
+  textOf,
+  toLangChainMessages,
+  toolCallsOf,
+  toolDefinition,
+  usageOf,
+} from "../src/intelligence/runtime/langchain.ts";
 
 const base = { key: "not-a-real-key", maxOutputTokens: 4096, system: "", prompt: "" };
 const call = (over: Partial<ChatCall> & Pick<ChatCall, "provider" | "model">): ChatCall => ({
@@ -97,5 +104,72 @@ describe("LangChain models", () => {
       cachedTokens: 0,
     });
     expect(textOf(new AIMessage("plain"))).toBe("plain");
+  });
+
+  test("the agent loop's transcript and tools cross into LangChain and its tool calls come back parsed", () => {
+    const messages = toLangChainMessages("sys", [
+      { role: "user", content: "archive old newsletters" },
+      {
+        role: "assistant",
+        content: "Looking.",
+        toolCalls: [{ id: "toolu_1", name: "search_threads", args: { section: "newsletters" } }],
+      },
+      {
+        role: "tool",
+        toolCallId: "toolu_1",
+        name: "search_threads",
+        content: "12 threads",
+        isError: true,
+      },
+    ]);
+    expect(messages.map((m) => m.getType())).toEqual(["system", "human", "ai", "tool"]);
+    const ai = messages[2] as AIMessage;
+    expect(ai.tool_calls).toEqual([
+      {
+        id: "toolu_1",
+        name: "search_threads",
+        args: { section: "newsletters" },
+        type: "tool_call",
+      },
+    ]);
+    const tool = messages[3] as ToolMessage;
+    expect(tool.tool_call_id).toBe("toolu_1");
+    expect(tool.status).toBe("error");
+
+    expect(
+      toolDefinition({ name: "undo", description: "Undo.", inputSchema: { type: "object" } }),
+    ).toEqual({
+      type: "function",
+      function: { name: "undo", description: "Undo.", parameters: { type: "object" } },
+    });
+
+    const answer = new AIMessage({
+      content: "",
+      tool_calls: [
+        { id: "a", name: "archive_threads", args: { thread_ids: ["t1"] }, type: "tool_call" },
+      ],
+      invalid_tool_calls: [
+        {
+          id: "b",
+          name: "snooze_threads",
+          args: "{not json",
+          error: "Unexpected token",
+          type: "invalid_tool_call",
+        },
+      ],
+    });
+    expect(toolCallsOf(answer)).toEqual([
+      { id: "a", name: "archive_threads", args: { thread_ids: ["t1"] } },
+      {
+        id: "b",
+        name: "snooze_threads",
+        args: { __invalid: "Unexpected token", raw: "{not json" },
+      },
+    ]);
+    // Every provider model binds the catalog's tools.
+    for (const provider of ["anthropic", "gemini", "openai", "kimi"] as const) {
+      const model = buildModel(call({ provider, model: "m" }));
+      expect(typeof model.bindTools).toBe("function");
+    }
   });
 });

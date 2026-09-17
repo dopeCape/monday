@@ -4,6 +4,9 @@
 
 import type {
   AccountCapabilities,
+  ActivityRecord,
+  AgentEvent,
+  ApprovalDecision,
   Brief,
   BriefTrigger,
   Capabilities,
@@ -30,7 +33,9 @@ import type {
   RoutingPreview,
   ScheduledSend,
   ScheduleResult,
+  SessionSummary,
   ThreadRoute,
+  TurnContext,
   VoiceProfile,
 } from "@monday/shared";
 
@@ -99,6 +104,50 @@ export interface BlobState {
   chunkCount: number;
   received: number;
   complete: boolean;
+}
+
+/**
+ * Reads a text/event-stream body and hands each `data:` payload to `onEvent`
+ * as it arrives. fetch, not EventSource, because the Device token rides in a
+ * header and the turn is a POST.
+ */
+export async function readEvents(
+  res: Response,
+  onEvent: (event: AgentEvent) => void,
+): Promise<void> {
+  const body = res.body;
+  if (!body) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const flush = (chunk: string) => {
+    buffer += chunk;
+    let at = buffer.indexOf("\n\n");
+    while (at >= 0) {
+      const block = buffer.slice(0, at);
+      buffer = buffer.slice(at + 2);
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trim())
+        .join("\n");
+      if (data) {
+        try {
+          onEvent(JSON.parse(data) as AgentEvent);
+        } catch {
+          // A malformed frame is dropped; the next one stands on its own.
+        }
+      }
+      at = buffer.indexOf("\n\n");
+    }
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    flush(decoder.decode(value, { stream: true }));
+  }
+  flush(decoder.decode());
+  if (buffer.trim()) flush("\n\n");
 }
 
 export interface ApiOptions {
@@ -386,6 +435,57 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           throw error;
         }
       },
+    },
+    /** The Agent host (ADR 0002): Sessions, turns streamed over SSE, approvals, the Activity log. */
+    agent: {
+      sessions: (workspaceId: Id) =>
+        request<{ sessions: SessionSummary[] }>(
+          `/sessions?${new URLSearchParams({ workspace: workspaceId })}`,
+        ),
+      createSession: (workspaceId: Id) =>
+        request<SessionSummary>("/sessions", json("POST", { workspace: workspaceId })),
+      session: (sessionId: Id) =>
+        request<{ session: SessionSummary; events: AgentEvent[] }>(
+          `/sessions/${encodeURIComponent(sessionId)}`,
+        ),
+      /** Sends a turn and yields its events as they stream; resolves when the turn ends or pauses. */
+      turn: async (
+        sessionId: Id,
+        text: string,
+        context: TurnContext,
+        onEvent: (event: AgentEvent) => void,
+      ) => {
+        const res = await raw(`/sessions/${encodeURIComponent(sessionId)}/turns`, {
+          ...json("POST", { text, context }),
+          headers: { "content-type": "application/json" },
+        });
+        await readEvents(res, onEvent);
+      },
+      approve: async (
+        sessionId: Id,
+        activityId: Id,
+        decision: ApprovalDecision,
+        context: TurnContext,
+        onEvent: (event: AgentEvent) => void,
+      ) => {
+        const res = await raw(
+          `/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(activityId)}`,
+          {
+            ...json("POST", { decision, context }),
+            headers: { "content-type": "application/json" },
+          },
+        );
+        await readEvents(res, onEvent);
+      },
+      activity: (workspaceId: Id, limit = 100) =>
+        request<{ activity: ActivityRecord[] }>(
+          `/activity?${new URLSearchParams({ workspace: workspaceId, limit: String(limit) })}`,
+        ),
+      undo: (activityId: Id, sessionId: Id | null) =>
+        request<ActivityRecord>(
+          `/activity/${encodeURIComponent(activityId)}/undo`,
+          json("POST", sessionId ? { session: sessionId } : {}),
+        ),
     },
     settings: {
       /** Global and per-Device buckets; device wins for device-scoped keys. */

@@ -5,25 +5,8 @@
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
 import type { BriefAction, Settings } from "@monday/shared";
-import {
-  AgentBar,
-  AgentDock,
-  AgentPanel,
-  AgentThread,
-  Btn,
-  ColHead,
-  MessageRow,
-  SectionLabel,
-} from "@monday/ui";
-import {
-  agentThread,
-  groups,
-  NOW,
-  sections,
-  suggestions,
-  tagsOf,
-  workspace,
-} from "@monday/ui/fixtures";
+import { Btn, ColHead, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
+import { account, groups, NOW, sections, tagsOf, workspace } from "@monday/ui/fixtures";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -34,6 +17,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { Composer as AgentComposer, composerStrings } from "../agent/Composer.tsx";
+import { runtimeLine } from "../agent/runtimeLine.ts";
+import { suggestionsFor } from "../agent/suggestions.ts";
+import { type AgentSession, NULL_SESSION } from "../agent/useAgentSession.ts";
 import { chordLabel, isKeyAction, type KeyAction } from "../keyboard/keymaps.ts";
 import {
   type KeyContext,
@@ -106,6 +93,8 @@ export interface InboxProps {
   onSearch?: ((query: string) => void) | undefined;
   /** Text the agent bar opens with, such as a palette handoff. */
   initialAgentText?: string | undefined;
+  /** The composer's Session (slice 14); inert without an Agent host. */
+  agent?: AgentSession | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -143,12 +132,6 @@ function useThreadBrief(inbox: InboxData, threadId: string | null) {
   return useSyncExternalStore(subscribe, get, get);
 }
 
-const RUNTIME_LABEL: Record<Settings["ai.local.cli"], string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-};
-
 function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
@@ -169,6 +152,7 @@ export function Inbox({
   onNavigate,
   onSearch,
   initialAgentText,
+  agent = NULL_SESSION,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -509,7 +493,7 @@ export function Inbox({
     [inbox],
   );
 
-  /** The `agent.ask` action: the composer is slice 14, so the bar opens prefilled. */
+  /** The `agent.ask` action: the bar opens prefilled; Enter sends it as the turn. */
   const askAgent = useCallback(
     (text: string) => {
       setAgentText(text);
@@ -646,7 +630,24 @@ export function Inbox({
     setFocus(id);
     setReaderOpen(true);
   }
-  const runtime = RUNTIME_LABEL[s["ai.local.cli"]];
+  const runtime = runtimeLine(agent.session, s, account.address);
+  const agentStrings = useMemo(() => composerStrings(s), [s]);
+  const chips = useMemo(
+    () =>
+      suggestionsFor({
+        settings: s,
+        waiting: agent.waiting,
+        needsReply: threads.filter((th) => th.section === "needs-reply"),
+      }),
+    [s, agent.waiting, threads],
+  );
+  /** A chip that names Layout knobs applies them here; the sentence still goes to the Agent. */
+  const applySuggestionLayout = (sg: Suggestion) => {
+    if (!sg.layout) return;
+    if (sg.layout.nav) void shell.set("layout.nav", sg.layout.nav);
+    if (sg.layout.agent) void shell.set("layout.agent", sg.layout.agent);
+    if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
+  };
   const listTitle = t("strings.inbox.title");
   const headCount = selection.length
     ? fill(t("strings.inbox.selected"), { n: selection.length })
@@ -868,29 +869,30 @@ export function Inbox({
       ) : null}
 
       {shell.layout.agent === "bottom" ? (
-        <AgentDock>
-          {agentOpen ? (
-            <AgentPanel
-              runtime={`${runtime} · ${workspace.accountId}`}
-              suggestions={suggestions}
-              onClose={() => setAgentOpen(false)}
-            >
-              <AgentThread turns={agentThread} now={now} />
-            </AgentPanel>
-          ) : null}
-          <AgentBar
-            placeholder={
-              !online
-                ? t("strings.agent.offline")
-                : agentOpen
-                  ? t("strings.agent.placeholder_open")
-                  : t("strings.agent.placeholder")
-            }
-            value={agentText}
-            onChange={setAgentText}
-            onFocus={() => setAgentOpen(true)}
-          />
-        </AgentDock>
+        <AgentComposer
+          agent={agent}
+          mode="bottom"
+          runtime={runtime}
+          strings={agentStrings}
+          suggestions={chips}
+          now={now}
+          open={agentOpen}
+          onOpenChange={setAgentOpen}
+          placeholder={
+            !online
+              ? t("strings.agent.offline")
+              : agentOpen
+                ? t("strings.agent.placeholder_open")
+                : t("strings.agent.placeholder")
+          }
+          text={agentText}
+          onTextChange={setAgentText}
+          onOpenThread={(id) => {
+            if (inbox.thread(id)) open(id);
+            else onNavigate?.(`thread:${id}`);
+          }}
+          onSuggest={applySuggestionLayout}
+        />
       ) : null}
 
       {compose.pending ? (
