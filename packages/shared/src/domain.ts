@@ -295,6 +295,64 @@ export type Task =
 
 export type Tier = "always-ask" | "reversible" | "read-only";
 
+/* ------------------------------ Hosted runtime and Meter (ADR 0007) ------------------------------ */
+
+/** The models a Hosted provider's two Roles resolve to. */
+export interface Roles {
+  main: string;
+  fast: string;
+}
+
+/** Token counts one model call reported. Cached tokens are the part of the input served from a cache. */
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+}
+
+/** One row of the Meter: one model call. Cost is an estimate in USD micro-units (1e-6 dollars). */
+export interface MeterEntry {
+  id: Id;
+  workspaceId: Id;
+  task: Task;
+  provider: HostedProvider;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  costMicros: number;
+  durationMs: number;
+  jobId: Id | null;
+  createdAt: IsoDate;
+}
+
+/** The Meter for one Task on one provider over a month. */
+export interface MeterLine {
+  task: Task;
+  provider: HostedProvider;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  costMicros: number;
+}
+
+export interface MeterMonth {
+  workspaceId: Id;
+  /** "YYYY-MM" in UTC. */
+  month: string;
+  lines: MeterLine[];
+  costMicros: number;
+}
+
+/** The Hosted runtime as the Server sees it: the chosen provider, its Roles, and which providers hold a shared key. */
+export interface HostedState {
+  provider: HostedProvider;
+  roles: Record<HostedProvider, Roles>;
+  /** Providers whose key the user shared with the Server ("Let the server use this key"). */
+  sharedKeys: HostedProvider[];
+}
+
 export interface Session {
   id: Id;
   workspaceId: Id;
@@ -358,6 +416,8 @@ export interface Capabilities {
   localRuntimes: boolean;
   /** Whether the root key is in the Server's memory. Locked servers serve headers only. */
   unlocked: boolean;
+  /** The Hosted runtime: provider, Roles and which providers hold a shared key (ADR 0007). */
+  hosted: HostedState;
 }
 
 export type NavKnob = "full" | "rail" | "hidden";
