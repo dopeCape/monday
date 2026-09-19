@@ -452,11 +452,17 @@ export function describeDefault(k: SettingKey, s: ShellState["settings"]): strin
       : fill(s["strings.settings.default.items"], { n: d.length });
   }
   if (d && typeof d === "object") {
-    const n = Object.keys(d).length;
+    const entries = Object.entries(d as Record<string, unknown>);
     if (shape.kind === "record") {
-      return n === 0
+      return entries.length === 0
         ? s["strings.settings.default.none"]
-        : fill(s["strings.settings.default.entries"], { n });
+        : fill(s["strings.settings.default.entries"], { n: entries.length });
+    }
+    // A small flat object (a Task's role, model and effort; a provider's Roles) reads as its pairs.
+    if (entries.length <= 4 && entries.every(([, v]) => typeof v !== "object")) {
+      return entries
+        .map(([key, v]) => `${key}: ${v === "" ? s["strings.settings.default.empty"] : String(v)}`)
+        .join(", ");
     }
     return s["strings.settings.default.custom"];
   }

@@ -1409,7 +1409,12 @@ function McpServersControl({ k }: ControlProps) {
             spellCheck={false}
             onChange={(e) => setTools(e.target.value)}
           />
-          <Btn sm disabled={!draft.name.trim() || !draft.target.trim()} onClick={add}>
+          <Btn
+            sm
+            className="mcp-add-btn"
+            disabled={!draft.name.trim() || !draft.target.trim()}
+            onClick={add}
+          >
             {s["strings.settings.mcp.add"]}
           </Btn>
         </div>

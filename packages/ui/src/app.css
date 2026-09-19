@@ -2424,7 +2424,7 @@ button.msg {
 
 /* --- the schema-rendered controls (slice 17) --- */
 .scard .input.num {
-  width: 90px;
+  width: 110px;
   text-align: right;
 }
 .scard .input.text {
@@ -2553,9 +2553,13 @@ details.advanced[open] > summary::before {
 }
 .mcp-add {
   display: grid;
-  grid-template-columns: 1fr 1.4fr 1fr 1fr auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: center;
+}
+.mcp-add-btn {
+  grid-column: 1 / -1;
+  justify-self: start;
 }
 .set-ask {
   margin-top: 12px;

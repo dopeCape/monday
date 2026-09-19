@@ -189,7 +189,6 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
   return (
     <Card
       title={s["strings.server.upgrade.title"]}
-      hint={s["strings.server.upgrade.intro"]}
       block
       attrs={{ "data-panel": "upgrade" }}
     >
