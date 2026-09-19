@@ -23,6 +23,8 @@ import type { ToolServer } from "./tools/index.ts";
 export interface HostedSessionSettings {
   systemPrompt: string;
   maxSteps: number;
+  /** Appended to the system prompt when the turn's context says the Session is onboarding. */
+  onboardingPrompt?: string | undefined;
 }
 
 export interface HostedSessionOptions {
@@ -85,7 +87,7 @@ export function createHostedSession(options: HostedSessionOptions): AgentSession
     const unbind = options.bind(threadId(), {
       workspaceId: session.workspaceId,
       sessionId: session.id,
-      system: `${settings.systemPrompt}\n\nWorkspace: ${ctx.address}. Today is ${options.now().toISOString()}.`,
+      system: `${settings.systemPrompt}${ctx.onboarding && settings.onboardingPrompt ? `\n\n${settings.onboardingPrompt}` : ""}\n\nWorkspace: ${ctx.address}. Today is ${options.now().toISOString()}.`,
       pinned: ctx.pinned ?? [],
       maxSteps: settings.maxSteps,
       tools,
@@ -117,7 +119,9 @@ export function createHostedSession(options: HostedSessionOptions): AgentSession
       const code =
         error instanceof Error && "provider" in error && error.name === "NoProviderKeyError"
           ? "no_shared_key"
-          : undefined;
+          : error instanceof Error && error.name === "AiOffError"
+            ? "ai_off"
+            : undefined;
       emit({ kind: "error", id: doneId, message, ...(code ? { code } : {}) });
       emit({ kind: "done", id: crypto.randomUUID(), waiting: null });
       return { waiting: null };

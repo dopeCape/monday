@@ -249,6 +249,8 @@ export interface TurnContext {
   threadId?: Id | null | undefined;
   /** The Session's Developer mode switch (CONTEXT.md); only a Local runtime reads it. */
   developerMode?: boolean | undefined;
+  /** This Session is the onboarding conversation (docs/spec/onboarding.md): the onboarding prompt is appended. */
+  onboarding?: boolean | undefined;
 }
 
 /* ------------------------------ AgentSession seam ------------------------------ */

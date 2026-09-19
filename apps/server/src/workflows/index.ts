@@ -13,6 +13,7 @@
 
 import type {
   ActivityRecord,
+  AiLevel,
   ApprovalDecision,
   DryRunPreview,
   DryRunStep,
@@ -122,9 +123,17 @@ export interface WorkflowsOptions {
   settings: () => Promise<WorkflowSettings>;
   now?: () => Date;
   log?: (message: string) => void;
+  /**
+   * The AI level (CONTEXT.md). Below `automate` no Workflow is triggered or
+   * scheduled; the documents and their enabled flags stay as they are and
+   * come back when the level rises. Absent means `automate`.
+   */
+  level?: () => Promise<AiLevel>;
 }
 
 export interface Workflows extends WorkflowsSeam {
+  /** A Dry run of a document that is not saved yet, over recent mail; the catalog proposals show it. */
+  dryRunInput(workspaceId: Id, input: WorkflowInput, recent?: number): Promise<DryRunPreview>;
   /** The document of one version, or null. */
   version(workflowId: Id, version: number): Promise<WorkflowInput | null>;
   /** Grants or revokes a Standing approval on one Step. */
@@ -227,6 +236,9 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
   const { db, mailstore, activity, agent } = options;
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
+  const level = options.level ?? (async (): Promise<AiLevel> => "automate");
+  /** Whether Workflows may run unasked right now (CONTEXT.md "AI level"). */
+  const automated = async () => (await level()) === "automate";
   let jobs: Jobs | null = null;
 
   /* ------------------------------ Rows and views ------------------------------ */
@@ -998,6 +1010,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
 
   const runTriggerJob = async (job: Job<TriggerJobPayload>): Promise<StepResult> => {
     const { workspaceId, threadId } = job.payload;
+    if (!(await automated())) return "done";
     await prune().catch((error) => log(`prune: ${error instanceof Error ? error.message : error}`));
     const t = await threadRow(threadId);
     if (!t) return "done";
@@ -1090,7 +1103,10 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     const doc = await document(workflowId, version);
     if (!doc) return "done";
     const at = now();
-    if (doc.trigger.kind === "schedule") {
+    const run = await automated();
+    if (!run) {
+      // Below `automate` the schedule ticks without acting, so it is still armed when the level rises.
+    } else if (doc.trigger.kind === "schedule") {
       await createRun(w, doc, { kind: "schedule", at: at.toISOString() }, null);
     } else if (doc.trigger.kind === "silence") {
       for (const t of await silentThreads(w, doc.trigger, 500)) {
@@ -1434,6 +1450,29 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       return preview;
     },
 
+    async dryRunInput(workspaceId, input, recent) {
+      const settings = await options.settings();
+      const at = now();
+      const w: WorkflowRow = {
+        id: `preview:${crypto.randomUUID()}`,
+        workspaceId,
+        name: input.name,
+        enabled: false,
+        currentVersion: 0,
+        standingApprovals: [],
+        createdAt: at,
+        updatedAt: at,
+      };
+      const sample = await dryRunThreads(w, input, recent ?? settings.dryRunRecent);
+      const out: DryRunThread[] = [];
+      if (input.trigger.kind === "schedule" || input.trigger.kind === "manual") {
+        out.push(await dryRunOne(w, input, null, settings));
+      } else {
+        for (const t of sample.threads) out.push(await dryRunOne(w, input, t, settings));
+      }
+      return { workflowId: w.id, version: 0, considered: sample.considered, threads: out };
+    },
+
     async runs(workspaceId, opts = {}) {
       const rows = await db
         .select()
@@ -1498,7 +1537,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     },
 
     async onArrival(workspaceId, threadId) {
-      if (!jobs) return null;
+      if (!jobs || !(await automated())) return null;
       const listening = await db
         .select({ id: workflowsTable.id })
         .from(workflowsTable)
@@ -1517,6 +1556,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       let stopped = false;
       const onNotice = async (workspaceId: Id, seq: number) => {
         if (!jobs) return;
+        if (!(await automated())) {
+          // The cursor still moves, so old events do not fire when the level rises.
+          cursors.set(workspaceId, Math.max(cursors.get(workspaceId) ?? seq, seq));
+          return;
+        }
         const since = cursors.get(workspaceId);
         if (since === undefined) {
           cursors.set(workspaceId, seq);

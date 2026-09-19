@@ -6,7 +6,7 @@
 // Keys come through a resolver so the same runtime serves the Server (shared
 // keys under the envelope) and a client running a Task with a Device key.
 
-import type { HostedProvider, MeterEntry, Task, Usage } from "@monday/shared";
+import type { AiLevel, HostedProvider, MeterEntry, Task, Usage } from "@monday/shared";
 import {
   type Effort,
   estimateCostMicros,
@@ -140,6 +140,22 @@ export interface HostedRuntimeOptions {
   settings: () => Promise<HostedSettings>;
   meter: { record(entry: MeterInput): Promise<MeterEntry> };
   now?: () => number;
+  /**
+   * The AI level (CONTEXT.md). At `off` every call is refused with AiOffError
+   * before a model or a key is touched: no Brief, no classify, no composer
+   * turn, no agentic Step. Absent means the level is not enforced here.
+   */
+  level?: () => Promise<AiLevel>;
+}
+
+/** The AI level is `off`: monday makes no model calls at all (docs/spec/onboarding.md). */
+export class AiOffError extends Error {
+  readonly status = 409;
+  readonly code = "ai_off";
+  constructor(readonly task: Task) {
+    super(`AI is off; the ${task} Task made no model call`);
+    this.name = "AiOffError";
+  }
 }
 
 /** The provider has no key where this runtime looks for one. */
@@ -193,6 +209,7 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
 
   /** What both entry points share: resolve the model, check the key, then meter what came back. */
   async function prepare(task: Task, maxOutputTokens: number | undefined, opts: RunOptions) {
+    if (options.level && (await options.level()) === "off") throw new AiOffError(task);
     const settings = await options.settings();
     const choice = resolveTaskModel(settings, task, opts.provider);
     const key = await options.keys(choice.provider);

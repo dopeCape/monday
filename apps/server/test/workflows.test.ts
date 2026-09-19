@@ -231,6 +231,8 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
       watchDebounceMs: 50,
     });
     intelligence = createIntelligence({
+      // These slices ran before the AI level existed; they assume the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
       chat: createFakeChat("Dear candidate, thank you for applying.").chat,

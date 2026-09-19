@@ -31,6 +31,7 @@ import {
 } from "./drafts/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
 import {
+  AiOffError,
   BriefNotReadyError,
   BriefOutputError,
   ClassifyOutputError,
@@ -269,6 +270,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     if (error instanceof NoProviderKeyError) {
       return c.json({ error: "no_shared_key", provider: error.provider }, 409);
     }
+    if (error instanceof AiOffError) return c.json({ error: "ai_off", task: error.task }, 409);
     if (error instanceof BriefOutputError) return c.json({ error: "bad_output" }, 502);
     if (error instanceof BriefNotReadyError) return c.json({ error: "no_bodies" }, 409);
     if (error instanceof ClassifyOutputError) return c.json({ error: "bad_output" }, 502);

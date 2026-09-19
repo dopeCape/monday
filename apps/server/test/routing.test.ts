@@ -284,6 +284,8 @@ describe("routing over the fixture mailbox", () => {
       call.system.startsWith("You route email threads") ? classifyAnswer(call) : reviseAnswer(call),
     );
     intelligence = createIntelligence({
+      // These slices ran before the AI level existed; they assume the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
       chat: chat.chat,

@@ -307,6 +307,8 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
     jobs = createJobs(db.handle.db, { now: () => NOW });
     chat = createFakeChat(BRIEF_ANSWER);
     intelligence = createIntelligence({
+      // These slices ran before the AI level existed; they assume the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
       chat: chat.chat,

@@ -14,6 +14,7 @@
 // row to the Changes feed with headers only; the client fetches the content.
 
 import type {
+  AiLevel,
   Brief,
   BriefAction,
   BriefChange,
@@ -61,7 +62,9 @@ export interface ThreadVersion {
 export type BriefRequest =
   | { status: "queued"; jobId: string }
   | { status: "fresh" }
-  | { status: "no_key" };
+  | { status: "no_key" }
+  /** The AI level is off: no Brief is computed, on open or otherwise. */
+  | { status: "ai_off" };
 
 export interface BriefsOptions {
   db: Db;
@@ -72,6 +75,12 @@ export interface BriefsOptions {
   policySettings: () => Promise<BriefPolicySettings>;
   /** Whether the Server holds a key for the brief Task's provider; false means no background Briefs. */
   keyAvailable?: () => Promise<boolean>;
+  /**
+   * The AI level (CONTEXT.md). `off` computes nothing; `assist` computes on
+   * open only, whatever the policy says; `automate` follows the policy.
+   * Absent means `automate`.
+   */
+  level?: () => Promise<AiLevel>;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -280,6 +289,7 @@ export function createBriefs(options: BriefsOptions): Briefs {
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
   const keyAvailable = options.keyAvailable ?? (async () => true);
+  const level = options.level ?? (async (): Promise<AiLevel> => "automate");
   let jobs: Jobs | null = null;
 
   const versionOf = async (threadId: string): Promise<ThreadVersion> => {
@@ -467,6 +477,7 @@ export function createBriefs(options: BriefsOptions): Briefs {
     },
 
     async request(workspaceId, threadId, trigger) {
+      if ((await level()) === "off") return { status: "ai_off" };
       const version = await versionOf(threadId);
       if (trigger === "open") {
         const row = await db.query.briefs.findFirst({ where: eq(briefs.threadId, threadId) });
@@ -485,6 +496,8 @@ export function createBriefs(options: BriefsOptions): Briefs {
         const version = await versionOf(threadId);
         if (version.messageCount === 0) return;
         await markStale(threadId, version);
+        // Background Briefs are an `automate` thing; below it every Brief waits for open.
+        if ((await level()) !== "automate") return;
         if (!jobs || !(await keyAvailable())) return;
         await enqueueFor(workspaceId, threadId, "sync", version);
       } catch (error) {
@@ -519,6 +532,10 @@ export function createBriefs(options: BriefsOptions): Briefs {
           if (error instanceof NotFoundError) return "done";
           throw error;
         }
+        const current = await level();
+        if (current === "off") return "done";
+        // At `assist` the policy is forced to on_open: a background trigger computes nothing.
+        if (current === "assist" && trigger === "sync") return "done";
         const decided = await policy.for(read.facts);
         const gates = await options.policySettings();
         if (!shouldCompute(decided, trigger, read.facts, gates, now())) {

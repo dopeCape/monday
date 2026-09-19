@@ -8,6 +8,7 @@
 // the Changes feed. The `route` Job kind runs one Thread on the Server.
 
 import type {
+  AiLevel,
   BriefPolicy,
   Confidence,
   CorrectionResult,
@@ -100,6 +101,14 @@ export interface RoutingOptions {
   settings: () => Promise<RoutingSettings>;
   now?: () => Date;
   log?: (message: string) => void;
+  /** The AI level (CONTEXT.md): routing on arrival only at `automate`. Absent means `automate`. */
+  level?: () => Promise<AiLevel>;
+}
+
+/** A Group that does not exist yet, scored beside the stored ones by a preview (onboarding's proposals). */
+export interface CandidateGroup extends GroupInput {
+  /** The id the preview's moves name it by; the caller maps it to the Group it creates. */
+  id: GroupId;
 }
 
 /** What the classify call decided for one Thread, before anything is applied. */
@@ -143,8 +152,15 @@ export interface Routing {
     intent: Extract<Intent, { kind: "move" }>,
     previous: { group: GroupId | null; subgroup: GroupId | null },
   ): Promise<CorrectionResult | null>;
-  /** Dry-runs routing over the newest Threads and reports what would move. */
-  preview(workspaceId: Id, options?: { recent?: number }): Promise<RoutingPreview>;
+  /**
+   * Dry-runs routing over the newest Threads and reports what would move.
+   * With `candidates`, Groups that are not stored yet are scored beside the
+   * stored ones, so a proposal shows its counts before anything is created.
+   */
+  preview(
+    workspaceId: Id,
+    options?: { recent?: number; candidates?: readonly CandidateGroup[] },
+  ): Promise<RoutingPreview>;
   /** Applies moves a preview proposed. */
   apply(workspaceId: Id, moves: readonly ProposedMove[]): Promise<RoutingApplied>;
   registerSteps(jobs: Jobs): void;
@@ -165,6 +181,7 @@ export function createRouting(options: RoutingOptions): Routing {
   const { db, mailstore, runtime } = options;
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
+  const level = options.level ?? (async (): Promise<AiLevel> => "automate");
   let jobs: Jobs | null = null;
 
   /* ------------------------------ Reading ------------------------------ */
@@ -883,6 +900,7 @@ export function createRouting(options: RoutingOptions): Routing {
     },
 
     async onArrival(workspaceId, threadId, lastActivity) {
+      if ((await level()) !== "automate") return null;
       if (!jobs) return null;
       const settings = await options.settings();
       if (!settings.onArrival) return null;
@@ -968,7 +986,32 @@ export function createRouting(options: RoutingOptions): Routing {
     async preview(workspaceId, opts = {}) {
       const settings = await options.settings();
       const recent = Math.max(1, opts.recent ?? settings.rerunRecent);
-      const all = await groupTexts(workspaceId);
+      const at = now();
+      const all = [
+        ...(await groupTexts(workspaceId)),
+        ...(opts.candidates ?? []).map((c) => ({
+          row: {
+            id: c.id,
+            workspaceId,
+            parentId: c.parentId ?? null,
+            name: c.name.trim(),
+            sentence: (c.sentence ?? "").trim(),
+            predicate: c.predicate ?? {},
+            promptEnc: null,
+            promptKey: null,
+            threshold: c.threshold ?? null,
+            briefPolicy: c.briefPolicy ?? null,
+            createdAt: at,
+            updatedAt: at,
+          } satisfies GroupRow,
+          id: c.id,
+          name: c.name.trim(),
+          sentence: (c.sentence ?? "").trim(),
+          prompt: "",
+          predicate: c.predicate ?? {},
+          examples: [],
+        })),
+      ];
       if (all.every((g) => g.row.parentId !== null)) {
         return { workspaceId, considered: 0, moves: [], calls: 0 };
       }

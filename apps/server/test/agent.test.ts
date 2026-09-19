@@ -95,6 +95,8 @@ describe("the Agent host over Postgres", () => {
     checkpointer = PostgresSaver.fromConnString(db.url, { schema: "langgraph" });
     await checkpointer.setup();
     intelligence = createIntelligence({
+      // These slices ran before the AI level existed; they assume the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
       chat: createFakeChat("").chat,
