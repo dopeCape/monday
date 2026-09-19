@@ -51,6 +51,8 @@ export interface RoutingProps {
   workspaceId?: string | undefined;
   /** Opens a Group in the inbox. */
   onNavigate?: ((target: string) => void) | undefined;
+  /** Hands "Ask for a group" to the composer with the sentence typed; without it the composer just opens. */
+  onAsk?: ((text: string) => void) | undefined;
   /** The Server side of the page; the Shell's client by default, a fake in tests. */
   api?: RoutingApi | undefined;
   /** Which Hosted providers hold a shared key; the Shell's client by default, null where no Server is. */
@@ -142,6 +144,7 @@ export function Routing({
   inbox: inboxProp,
   workspaceId: workspaceIdProp,
   onNavigate,
+  onAsk,
   api: apiOverride,
   keys: keysProp,
   groupIcon: groupIconProp,
@@ -550,7 +553,12 @@ export function Routing({
                   <AskBox
                     placeholder={s["ask.placeholder"] ?? ""}
                     help={s["ask.help"]}
-                    onSubmit={() => onNavigate?.("agent")}
+                    onSubmit={(text) => {
+                      const sentence = text.trim();
+                      if (sentence && onAsk) {
+                        onAsk(fill(s["ask.prefix"] ?? "Make a group: {sentence}", { sentence }));
+                      } else onNavigate?.("agent");
+                    }}
                   />
                 </SideCard>
               )}

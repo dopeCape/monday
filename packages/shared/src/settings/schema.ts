@@ -2210,6 +2210,11 @@ export const settingsSchema = {
     "Ask for a group placeholder",
     "A Support inbox for anything from customers",
   ),
+  "strings.routing.ask.prefix": str(
+    "routing",
+    "Ask for a group: the sentence sent to the Agent",
+    "Make a group: {sentence}",
+  ),
   "strings.routing.ask.help": str(
     "routing",
     "Ask for a group help",

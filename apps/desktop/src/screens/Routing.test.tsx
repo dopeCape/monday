@@ -220,6 +220,41 @@ describe("Routing page", () => {
     expect(el.querySelector(".side-card.preview")).toBeNull();
   });
 
+  test("Ask for a group hands the typed sentence to the composer, with the Setting's prefix", async () => {
+    const asked: string[] = [];
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <StaticShell settings={{ "ai.level": "automate" }}>
+          <Routing
+            routing={fixtureRouting()}
+            inbox={fixtureInbox(threads)}
+            api={fakeApi()}
+            keys={null}
+            onAsk={(t) => asked.push(t)}
+          />
+        </StaticShell>,
+      );
+    });
+    await act(async () => {
+      await tick();
+    });
+    const input = host.querySelector<HTMLInputElement>(".ask input");
+    if (!input) throw new Error("no ask box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "A Support inbox for anything from customers");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await tick();
+    });
+    expect(asked).toEqual(["Make a group: A Support inbox for anything from customers"]);
+  });
+
   test("Change rule opens the editor with the Predicate and Examples; Save sends the patch", async () => {
     const api = fakeApi();
     const el = await mount(api);
