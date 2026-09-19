@@ -80,6 +80,12 @@ export async function createServices(options: ServicesOptions): Promise<Services
         await credentials.updateAuth(auth).catch((error) => log(`token persist failed: ${error}`));
       },
     },
+    gmail: {
+      unitsPerMinute: () =>
+        readGlobalSetting(db, "sync.gmail_units_per_minute").catch(
+          () => settingsSchema["sync.gmail_units_per_minute"].default,
+        ),
+    },
     graph: {
       pollMs: async () => {
         const seconds = await readGlobalSetting(db, "sync.graph_poll_seconds").catch(

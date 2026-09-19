@@ -66,6 +66,12 @@ export interface GmailServer {
   refreshes: number;
   /** Answer 429 to the next n Gmail calls. */
   rateLimitNext: number;
+  /**
+   * Refuse the next n messages.get parts inside a batch with Google's per-user
+   * quota answer: a 403 whose reason is rateLimitExceeded, the way "Units per
+   * minute per user" comes back.
+   */
+  quotaRefuseParts: number;
   /** Answer 401 to the next n Gmail calls (an expired token). */
   expireNext: number;
   watches: { topicName: string; labelIds?: string[]; labelFilterBehavior?: string }[];
@@ -242,6 +248,7 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     refreshToken: "refresh-0",
     refreshes: 0,
     rateLimitNext: 0,
+    quotaRefuseParts: 0,
     expireNext: 0,
     watches: [],
     subscriptions: new Map(),
@@ -661,6 +668,13 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
         if (!request) continue;
         const id = /Content-ID:\s*<([^>]+)>/i.exec(part)?.[1] ?? "";
         const inner = new URL(`https://gmail.googleapis.com${request[2]}`);
+        if (server.quotaRefuseParts > 0 && /\/messages\/[^/]+$/.test(inner.pathname)) {
+          server.quotaRefuseParts -= 1;
+          responses.push(
+            `--batch_out\r\nContent-Type: application/http\r\nContent-ID: <response-${id}>\r\n\r\nHTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ error: { code: 403, message: "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'", errors: [{ reason: "rateLimitExceeded" }] } })}\r\n`,
+          );
+          continue;
+        }
         const response = await gmail(request[1] ?? "GET", inner, undefined, headers, log);
         responses.push(
           `--batch_out\r\nContent-Type: application/http\r\nContent-ID: <response-${id}>\r\n\r\nHTTP/1.1 ${response.status} OK\r\nContent-Type: application/json\r\n\r\n${await response.text()}\r\n`,

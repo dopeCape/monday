@@ -44,7 +44,7 @@ import {
   type PullLoop,
   pullLoop,
 } from "./pubsub.ts";
-import { GMAIL_COST, type TokenBucket } from "./quota.ts";
+import { GMAIL_COST, gmailQuotaBucket, type TokenBucket } from "./quota.ts";
 
 export { createGoogleCalendar, eventOfGoogle } from "./calendar.ts";
 export { GmailApiError, GmailClient } from "./client.ts";
@@ -244,6 +244,8 @@ export interface GmailProviderOptions {
   random?: () => number;
   /** A shared bucket for tests; by default each Session paces its own user. */
   quota?: () => TokenBucket;
+  /** The per-user per-minute ceiling the default bucket paces to (the sync.gmail_units_per_minute Setting). */
+  unitsPerMinute?: () => Promise<number>;
   simpleUploadLimit?: number;
   /** Pause after a failed Pub/Sub pull. */
   pullRetryMs?: number;
@@ -263,11 +265,20 @@ export function createGmailProvider(options: GmailProviderOptions = {}): Provide
         throw new ProviderError("Gmail needs OAuth credentials", "auth");
       }
       const topic = credentials.endpoint.kind === "gmail" ? credentials.endpoint.pubsubTopic : null;
+      const quota =
+        options.quota?.() ??
+        (options.unitsPerMinute
+          ? gmailQuotaBucket({
+              unitsPerMinute: await options.unitsPerMinute(),
+              ...(options.now ? { now: options.now } : {}),
+              ...(options.sleep ? { sleep: options.sleep } : {}),
+            })
+          : undefined);
       const client = new GmailClient({
         auth: credentials.auth,
         tokens,
         ...(options.fetch ? { fetch: options.fetch } : {}),
-        ...(options.quota ? { quota: options.quota() } : {}),
+        ...(quota ? { quota } : {}),
         ...(options.sleep ? { sleep: options.sleep } : {}),
         ...(options.now ? { now: options.now } : {}),
         ...(options.random ? { random: options.random } : {}),

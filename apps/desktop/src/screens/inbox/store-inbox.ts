@@ -186,8 +186,9 @@ export async function createStoreInbox(
     );
     const have = new Set(cached.filter((r) => r.body_text !== null).map((r) => r.id));
     let why: BodyUnavailable | null = null;
+    // A pending body is asked for too: the Server fetches it on demand.
     for (const m of headers) {
-      if (have.has(m.id) || m.bodyState === "pending") continue;
+      if (have.has(m.id)) continue;
       try {
         const body = await content.body(m.id, { images: options.remoteImages?.() ?? false });
         await store.cacheBody(m.id, { text: body.text, html: body.display.html });

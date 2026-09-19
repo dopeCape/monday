@@ -1011,6 +1011,16 @@ export const settingsSchema = {
     label: "Sync batch",
     help: "Messages fetched per step during the first sync. Larger is faster; smaller shows progress sooner.",
   }),
+  "sync.gmail_units_per_minute": setting({
+    type: z.int().min(600).max(60_000),
+    default: 6000,
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    advanced: true,
+    label: "Gmail quota",
+    help: "Quota units per minute a Gmail Account may spend, the per-user limit of your Google Cloud project (6,000 for projects made after May 2026, 15,000 before). monday paces under it and halves its pace whenever Google refuses a call.",
+  }),
   "sync.graph_poll_seconds": setting({
     type: z.int().min(30).max(600),
     default: 90,

@@ -9,9 +9,13 @@ import {
   subscriptionNameFor,
 } from "../../src/providers/gmail/index.ts";
 import {
+  BURST_SHARE,
   createTokenBucket,
   GMAIL_COST,
   gmailQuotaBucket,
+  PENALTY_FLOOR,
+  RECOVERY_STEP,
+  RECOVERY_STEP_UNITS,
 } from "../../src/providers/gmail/quota.ts";
 import { composeMime } from "../../src/providers/mime.ts";
 import { createTokenBroker, staticTokenBroker } from "../../src/providers/oauth/tokens.ts";
@@ -221,8 +225,10 @@ describe("Gmail adapter", () => {
     expect(addedOf(events)).toHaveLength(inInbox);
     const units = Object.values(server.quota).reduce((n, v) => n + v, 0);
     expect(units).toBeGreaterThan(6000);
-    // The overflow above 6000 refills at 100 units per second.
-    const expectedWait = ((units - 6000) / 6000) * 60_000;
+    // A fifth of the minute is burst; the rest refills at 80 units per second, so
+    // no rolling minute ever spends more than the 6000.
+    const burst = 6000 * BURST_SHARE;
+    const expectedWait = ((units - burst) / (6000 * (1 - BURST_SHARE))) * 60_000;
     expect(clock.slept()).toBeGreaterThanOrEqual(Math.floor(expectedWait) - 1);
     expect(server.requests.filter((r) => r.path.includes("history")).length).toBe(0);
     expect(GMAIL_COST["messages.get"]).toBe(20);
@@ -243,7 +249,44 @@ describe("Gmail adapter", () => {
     expect(bucket.available()).toBeLessThan(1);
     await expect(bucket.take(1000)).rejects.toThrow(RangeError);
     const gmail = gmailQuotaBucket({ now: clock.now, sleep: clock.sleep });
-    expect(gmail.available()).toBe(6000);
+    expect(gmail.available()).toBe(6000 * BURST_SHARE);
+    expect(gmail.rate()).toBe(6000 * (1 - BURST_SHARE));
+  });
+
+  test("a quota refusal empties the bucket and halves its pace; clean calls grow it back", async () => {
+    const clock = virtualClock();
+    const gmail = gmailQuotaBucket({ now: clock.now, sleep: clock.sleep });
+    const full = gmail.rate();
+    gmail.penalize();
+    expect(gmail.available()).toBe(0);
+    expect(gmail.rate()).toBe(full / 2);
+    for (let i = 0; i < 8; i++) gmail.penalize();
+    expect(gmail.rate()).toBe(full * PENALTY_FLOOR);
+    // Every RECOVERY_STEP_UNITS taken cleanly restores a tenth of the pace.
+    await gmail.take(RECOVERY_STEP_UNITS / 2);
+    await gmail.take(RECOVERY_STEP_UNITS / 2);
+    expect(gmail.rate()).toBeCloseTo(full * (PENALTY_FLOOR + RECOVERY_STEP), 6);
+  });
+
+  test("a 403 rate-limit part inside a batch is retried after a backoff, never dropped", async () => {
+    const server = createGmailServer(fixture);
+    const clock = virtualClock();
+    const session = await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0,
+    }).connect(credentialsFor(server));
+    // Google refuses the first three messages.get parts of the batch for quota.
+    server.quotaRefuseParts = 3;
+    const { events } = await syncAll(session, "INBOX", null, 500);
+    const inInbox = [...server.emails.values()].filter((e) => e.labelIds.includes("INBOX")).length;
+    // Every message still arrives: the refused parts were fetched again.
+    expect(addedOf(events)).toHaveLength(inInbox);
+    // The backoff ran and the bucket was told.
+    expect(clock.slept()).toBeGreaterThanOrEqual(1000);
+    expect(server.quotaRefuseParts).toBe(0);
   });
 
   test("429 backs off exponentially and 401 refreshes the token once", async () => {
