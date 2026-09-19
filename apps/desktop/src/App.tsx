@@ -90,6 +90,10 @@ export function App({
   const [openThread, setOpenThread] = useState<string | null>(null);
   /** Text the agent bar opens with after a palette handoff. */
   const [agentText, setAgentText] = useState<string | undefined>(undefined);
+  /** The Settings section the palette or the URL asked for. */
+  const [settingsSection, setSettingsSection] = useState<string | undefined>(
+    () => new URLSearchParams(location.search).get("section") ?? undefined,
+  );
   /** The column composers' own text; the bottom bar's lives in the Inbox. */
   const [columnText, setColumnText] = useState("");
   const client = useMemo(
@@ -159,8 +163,10 @@ export function App({
         }
         return;
       }
-      if (target === "settings" || target.startsWith("settings:")) setActive("settings");
-      else if (target === "search") setActive("search");
+      if (target === "settings" || target.startsWith("settings:")) {
+        if (target.startsWith("settings:")) setSettingsSection(target.slice("settings:".length));
+        setActive("settings");
+      } else if (target === "search") setActive("search");
       else if (target === "routing") setActive("routing");
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
@@ -218,7 +224,15 @@ export function App({
   cols.push("minmax(0, 1fr)");
   parts.push(
     active === "settings" ? (
-      <Settings key="screen" />
+      <Settings
+        key={`screen-${settingsSection ?? ""}`}
+        initialSection={settingsSection}
+        workspaceId={workspace.id}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
+      />
     ) : active === "routing" ? (
       <Routing
         key="screen"

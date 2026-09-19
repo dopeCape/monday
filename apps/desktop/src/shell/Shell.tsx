@@ -293,8 +293,10 @@ export function Shell({ children }: { children: ReactNode }) {
 }
 
 /**
- * A Shell over given Settings with no platform or server behind it. For tests
- * and stories: `set` applies in memory and nothing is pinned.
+ * A Shell over given Settings with no platform behind it. For tests and
+ * stories: `set` applies in memory (and writes through to a scripted api when
+ * one is given), `refresh` pulls from that api the way the real Shell does,
+ * and nothing is pinned unless the test says so.
  */
 export function StaticShell({
   settings: overrides = {},
@@ -302,9 +304,11 @@ export function StaticShell({
   children,
 }: {
   settings?: PartialSettings | undefined;
-  /** Connection state for a test: a scripted api, a Sidecar, a Cloud target, a spy setCloud. */
+  /** Connection state for a test: a scripted api, a Sidecar, a Cloud target, a spy setCloud, pinned keys, a Config file. */
   shell?:
-    | Partial<Pick<ShellState, "api" | "sidecar" | "cloud" | "server" | "setCloud">>
+    | Partial<
+        Pick<ShellState, "api" | "sidecar" | "cloud" | "server" | "setCloud" | "pinned" | "config">
+      >
     | undefined;
   children: ReactNode;
 }) {
@@ -313,20 +317,36 @@ export function StaticShell({
     () => ({ ...defaultSettings(), ...overrides, ...local }) as Settings,
     [overrides, local],
   );
-  const api = useMemo(() => createApi(() => null), []);
+  const fallbackApi = useMemo(() => createApi(() => null), []);
+  const api = shellOverrides.api ?? fallbackApi;
+  const scripted = shellOverrides.api !== undefined;
+  const pinned = shellOverrides.pinned ?? EMPTY_PINNED;
   const set = useCallback(
     async <K extends SettingKey>(key: K, value: Settings[K]): Promise<SetResult> => {
+      if (pinned.has(key)) {
+        return { ok: false, reason: "pinned", message: `${key} is set in monday.toml` };
+      }
       const v = validateSetting(key, value);
       if (!v.ok) return { ok: false, reason: "invalid", message: v.error };
       setLocal((s) => ({ ...s, [key]: value }));
+      if (scripted) await api.settings.set(key, value, settingScope(key)).catch(() => {});
       return { ok: true };
     },
-    [],
+    [api, scripted, pinned],
   );
+  const refresh = useCallback(async () => {
+    if (!scripted) return;
+    try {
+      const { global, device } = await api.settings.all();
+      setLocal((s) => ({ ...s, ...global, ...device }) as PartialSettings);
+    } catch {
+      // Offline: the Settings in hand stay.
+    }
+  }, [api, scripted]);
   const value = useMemo<ShellState>(
     () => ({
       settings,
-      pinned: new Set<SettingKey>(),
+      pinned,
       layout: {
         nav: settings["layout.nav"],
         agent: settings["layout.agent"],
@@ -339,14 +359,16 @@ export function StaticShell({
       sidecar: null,
       cloud: null,
       server: null,
-      api,
       setCloud: async () => {},
       refreshServers: async () => {},
-      set,
-      refresh: async () => {},
       ...shellOverrides,
+      api,
+      set,
+      refresh,
     }),
-    [settings, api, set, shellOverrides],
+    [settings, api, set, refresh, pinned, shellOverrides],
   );
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }
+
+const EMPTY_PINNED: ReadonlySet<SettingKey> = new Set<SettingKey>();

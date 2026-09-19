@@ -545,7 +545,6 @@ export const settingsSchema = {
     scope: "global",
     section: "routing",
     group: "Sections",
-    control: "section-order",
     renderedBy: "sections.rules",
     label: "Section order",
     help: "Section ids in the order they appear in the stream. An empty Section is not rendered.",

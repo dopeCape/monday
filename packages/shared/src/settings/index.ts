@@ -17,6 +17,7 @@ export type {
   ModelPrice,
   PartialSettings,
   Pricing,
+  SectionRuleValue,
   SettingEntry,
   SettingGroup,
   SettingKey,

@@ -1,20 +1,21 @@
-// Settings › Server (docs/spec/settings.md "Sync server"; ADR 0005, ADR 0008):
-// the current mode with health, the three upgrade cards with Deploy buttons
-// while the install is Sidecar only, the database move, the re-pairing of this
-// Device with the Cloud URL, and the Devices list. Every string is a Setting.
-// The network is the Shell's api and a pairing fetch, so tests script both.
+// Settings › Sync server, the Server panel (docs/spec/settings.md "Sync server";
+// ADR 0005, ADR 0008): the current mode with health, the three upgrade cards
+// with Deploy buttons while the install is Sidecar only, the database move and
+// the re-pairing of this Device with the Cloud URL. The schema-backed controls
+// (server.prefer, server.insecure_allowed and the rest of the Connection group)
+// and the Devices list render from the schema-driven renderer beside this
+// panel (slice 17). Every string is a Setting. The network is the Shell's api
+// and a pairing fetch, so tests script both.
 
 import {
   type Capabilities,
   type CloudPlatform,
   DEPLOYMENT_FEATURES,
-  type Device,
   deployLink,
   type EnvVar,
   type Settings,
-  settingsSchema,
 } from "@monday/shared";
-import { Btn, formatWhen, Input, Seg, SettingsField, Switch, Tag } from "@monday/ui";
+import { Btn, Input, SettingsField, Tag } from "@monday/ui";
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import {
   ApiError,
@@ -102,40 +103,20 @@ export function Server({ pairFetch, deviceName = "This device", openExternal }: 
         : s["strings.server.target.none"];
 
   return (
-    <>
-      <h1>{s["strings.server.title"]}</h1>
-      <p>{s["strings.server.intro"]}</p>
-
-      <div className="sect">
-        <SettingsField label={s["strings.server.talking_to"]} hint={target}>
-          <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
-            {healthy === false ? s["strings.server.health.down"] : modeLabel}
-          </Tag>
-          <Btn
-            sm
-            onClick={() => {
-              void shell.refreshServers().then(refresh);
-            }}
-          >
-            {s["strings.server.check"]}
-          </Btn>
-        </SettingsField>
-        {shell.cloud ? (
-          <SettingsField
-            label={settingsSchema["server.prefer"].label}
-            hint={settingsSchema["server.prefer"].help}
-          >
-            <Seg<"cloud" | "sidecar">
-              options={[
-                { value: "cloud", label: s["strings.server.prefer.cloud"] },
-                { value: "sidecar", label: s["strings.server.prefer.sidecar"] },
-              ]}
-              value={s["server.prefer"]}
-              onChange={(v) => void shell.set("server.prefer", v)}
-            />
-          </SettingsField>
-        ) : null}
-      </div>
+    <div data-panel="server">
+      <SettingsField label={s["strings.server.talking_to"]} hint={target}>
+        <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
+          {healthy === false ? s["strings.server.health.down"] : modeLabel}
+        </Tag>
+        <Btn
+          sm
+          onClick={() => {
+            void shell.refreshServers().then(refresh);
+          }}
+        >
+          {s["strings.server.check"]}
+        </Btn>
+      </SettingsField>
 
       {topology === "sidecar" && !shell.cloud ? (
         <UpgradeCards
@@ -148,21 +129,7 @@ export function Server({ pairFetch, deviceName = "This device", openExternal }: 
       {shell.sidecar?.running ? <Move upgrade={upgrade} onDone={refresh} /> : null}
 
       <Connect pairFetch={pairFetch} deviceName={deviceName} onDone={refresh} />
-
-      <Devices />
-
-      <div className="sect">
-        <SettingsField
-          label={settingsSchema["server.insecure_allowed"].label}
-          hint={settingsSchema["server.insecure_allowed"].help}
-        >
-          <Switch
-            on={s["server.insecure_allowed"]}
-            onChange={(on) => void shell.set("server.insecure_allowed", on)}
-          />
-        </SettingsField>
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -498,104 +465,6 @@ function Connect({
           {error ? <div className="wizard-check bad">{error}</div> : null}
         </div>
       )}
-    </div>
-  );
-}
-
-/* ------------------------------ Devices ------------------------------ */
-
-function Devices() {
-  const shell = useShell();
-  const s = shell.settings;
-  const [devices, setDevices] = useState<Device[] | null>(null);
-  const [code, setCode] = useState("");
-  const [approved, setApproved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    shell.api.devices
-      .list()
-      .then(setDevices)
-      .catch(() => setDevices(null));
-  }, [shell.api]);
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return (
-    <div className="sect">
-      <h3>{s["strings.server.devices.title"]}</h3>
-      <p>{s["strings.server.devices.intro"]}</p>
-      <div className="accounts-list">
-        {devices && devices.length === 0 ? (
-          <div className="note">{s["strings.server.devices.empty"]}</div>
-        ) : null}
-        {(devices ?? []).map((d) => (
-          <div className="account-row" key={d.id}>
-            <div className="lg">{d.name.slice(0, 1).toUpperCase()}</div>
-            <div>
-              <b>{d.name}</b>
-              <span>
-                {fill(s["strings.server.devices.last_seen"], { when: formatWhen(d.lastSeen) })}
-              </span>
-            </div>
-            <span />
-            <Btn
-              sm
-              onClick={() => {
-                if (!confirm(fill(s["strings.server.devices.revoke_confirm"], { name: d.name })))
-                  return;
-                shell.api.devices
-                  .revoke(d.id)
-                  .then(refresh)
-                  .catch(() => {});
-              }}
-            >
-              {s["strings.server.devices.revoke"]}
-            </Btn>
-          </div>
-        ))}
-      </div>
-      <div className="wizard-fields">
-        <Field
-          label={s["strings.server.devices.approve"]}
-          help={s["strings.server.devices.approve_help"]}
-        >
-          {(id) => (
-            <div className="wizard-action">
-              <Input
-                id={id}
-                value={code}
-                onChange={(e) => {
-                  setCode(e.target.value);
-                  setApproved(false);
-                }}
-                inputMode="numeric"
-                placeholder="000000"
-                style={{ width: 120 }}
-              />
-              <Btn
-                disabled={!/^\d{6}$/.test(code.trim())}
-                onClick={() => {
-                  setError(null);
-                  shell.api.devices
-                    .confirm(code.trim())
-                    .then(() => {
-                      setApproved(true);
-                      setCode("");
-                    })
-                    .catch((e) => setError(errorText(s, e)));
-                }}
-              >
-                {approved
-                  ? s["strings.server.devices.approved"]
-                  : s["strings.server.devices.approve"]}
-              </Btn>
-            </div>
-          )}
-        </Field>
-        {error ? <div className="wizard-check bad">{error}</div> : null}
-      </div>
     </div>
   );
 }

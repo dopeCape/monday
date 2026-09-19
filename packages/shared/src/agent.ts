@@ -15,6 +15,29 @@ import type { Actor, DraftContent, Intent, IntentArgs } from "./sync.ts";
  */
 export type ToolTier = "read" | "reversible" | "leaves_mailbox" | "destructive";
 
+/**
+ * The tools the Agent has and the tier each declares (docs/spec/agent-composer.md).
+ * The Server's catalog is the implementation and a test pins it to this list;
+ * the Settings screens render the Permissions tier list from here, so a
+ * reversible tool can be promoted to always-ask without asking the Server.
+ */
+export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
+  search_threads: "read",
+  read_thread: "read",
+  list_groups_and_sections: "read",
+  archive_threads: "reversible",
+  snooze_threads: "reversible",
+  tag_threads: "reversible",
+  move_threads: "reversible",
+  draft_message: "reversible",
+  change_setting: "reversible",
+  change_layout: "reversible",
+  trash_threads: "destructive",
+  send_draft: "leaves_mailbox",
+  forward_thread: "leaves_mailbox",
+  undo: "read",
+};
+
 /** The glossary Tier a tool tier renders as. */
 export function tierOf(tier: ToolTier): Tier {
   switch (tier) {
