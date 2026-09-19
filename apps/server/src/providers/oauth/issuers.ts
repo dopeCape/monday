@@ -27,7 +27,14 @@ export const GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 export const GOOGLE_SCOPES: Record<OAuthPath, string[]> = {
-  api: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/pubsub"],
+  api: [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/pubsub",
+    // The calendar (slice 18; research 6, "Scopes"): events on every calendar, the list, free/busy.
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.freebusy",
+  ],
   imap: ["https://mail.google.com/"],
 };
 

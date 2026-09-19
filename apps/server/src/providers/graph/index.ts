@@ -18,6 +18,7 @@ import { base64 } from "../oauth/pkce.ts";
 import { createTokenBroker, type TokenBroker } from "../oauth/tokens.ts";
 import { asyncQueue } from "../queue.ts";
 import {
+  type CalendarSession,
   type Change,
   type ChangeTarget,
   type Flags,
@@ -39,6 +40,7 @@ import {
   type Watch,
   type WatchEvent,
 } from "../types.ts";
+import { createGraphCalendar } from "./calendar.ts";
 import { GRAPH_BASE, GraphApiError, GraphClient } from "./client.ts";
 
 export { GraphApiError, GraphClient } from "./client.ts";
@@ -239,6 +241,7 @@ export class GraphSession implements Session {
   private roleIds: Map<string, string> | null = null;
   private readonly page: number;
   private readonly watches = new Set<{ stop(): void }>();
+  private calendarSession: CalendarSession | null = null;
 
   constructor(
     readonly client: GraphClient,
@@ -246,6 +249,14 @@ export class GraphSession implements Session {
     private readonly options: GraphProviderOptions,
   ) {
     this.page = options.pageSize ?? DEFAULT_PAGE;
+  }
+
+  /** Graph calendars over the same client and token (slice 18). */
+  calendar(): CalendarSession {
+    this.calendarSession ??= createGraphCalendar(this.client, this.address, {
+      ...(this.options.now ? { now: () => new Date(this.options.now?.() ?? Date.now()) } : {}),
+    });
+    return this.calendarSession;
   }
 
   get auth(): OAuthAuth {
@@ -258,8 +269,8 @@ export class GraphSession implements Session {
       labels: false,
       snooze: false,
       mute: false,
-      calendar: false,
-      meetingLink: null,
+      calendar: true,
+      meetingLink: "teams",
       syncTier: "state",
       threads: true,
       savesSentCopy: true,
