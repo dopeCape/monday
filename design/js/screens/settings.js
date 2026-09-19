@@ -67,10 +67,22 @@ function appearance() {
     </div>`;
 }
 
+const levels = [
+  { key: "off", t: "Just mail", s: "No AI at all. A fast mail client with Groups you make by hand, search, keymaps and the calendar. No provider key asked for." },
+  { key: "assist", t: "Mail with an assistant", s: "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking." },
+  { key: "automate", t: "Mail that sorts and acts for me", s: "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.", on: true },
+];
+
 function ai() {
   return `
     <h1>AI and agent</h1><p>Two ways to run the agent, tagging and workflows. Pick one, or use both and choose per workflow.</p>
     <div class="sect">
+      <h3>Level</h3>
+      <div class="choice-cards" data-count="3">${levels.map(c => `<button class="choice-card ${c.on ? "on" : ""}" data-value="${c.key}"><b>${c.t}</b><span>${c.s}</span></button>`).join("")}</div>
+      <p class="choice-note">Yours to change at any time. Moving down disables, never deletes; moving up brings everything back.</p>
+    </div>
+    <div class="sect">
+      <h3>Runtime</h3>
       <div class="mode">
         <button class="on">${ic("ph-terminal-window")}<b>Local CLI</b><span>Uses Claude Code, Codex or OpenCode already installed on this machine. Nothing leaves your laptop except what the CLI sends.</span></button>
         <button>${ic("ph-key")}<b>API key</b><span>Talks to a provider directly. Lets the sync server run workflows and tagging while this device is off.</span></button>
