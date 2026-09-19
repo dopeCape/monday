@@ -2343,6 +2343,18 @@ details.advanced[open] > summary::before {
   color: var(--success);
   display: block;
 }
+.field.bare {
+  padding: 0 0 12px;
+}
+button.prov {
+  text-align: left;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+.mode button svg {
+  display: none;
+}
 
 /* =========================== CALENDAR (prototype) =========================== */
 .cal-wrap {

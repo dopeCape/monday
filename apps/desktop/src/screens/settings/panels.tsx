@@ -466,12 +466,19 @@ registerPanel("ai", "Activity log", ActivityPanel);
 
 /* ------------------------------ Sync server ------------------------------ */
 
-/** The Server's mode with health, the upgrade cards, the database move and the Cloud connection. */
+/** The Server's mode with health. */
 export function ServerPanel(_: PanelProps) {
   const screen = useSettingsScreen();
-  return <Server {...(screen.serverProps ?? {})} />;
+  return <Server {...(screen.serverProps ?? {})} part="server" />;
 }
 registerPanel("server", "Server", ServerPanel);
+
+/** The three upgrade cards while Sidecar only, the database move and the Cloud connection (slice 21). */
+export function CloudPanel(_: PanelProps) {
+  const screen = useSettingsScreen();
+  return <Server {...(screen.serverProps ?? {})} part="cloud" />;
+}
+registerPanel("server", "Cloud", CloudPanel);
 
 /** The paired Devices with last seen, this Device marked, revoke with confirm, and pairing. */
 export function DevicesPanel(_: PanelProps) {

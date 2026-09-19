@@ -129,7 +129,7 @@ function PaletteControl({ k }: ControlProps) {
     if (text.trim()) void change(text.trim());
   });
   return (
-    <Row k={k} block hint={null} error={error}>
+    <Row k={k} bare error={error}>
       <div className="swatches">
         {palettes.map((p) => (
           <Swatch
@@ -599,7 +599,7 @@ function RuntimeModeControl({ k }: ControlProps) {
       },
     ];
   return (
-    <Row k={k} block hint={null} error={error}>
+    <Row k={k} bare error={error}>
       <div className="mode">
         {cards.map((c) => (
           <button

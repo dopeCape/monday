@@ -369,16 +369,6 @@ export const settingsSchema = {
     label: "Monospace font",
     help: "The font for code, the Config file view and raw source.",
   }),
-  "appearance.density": setting({
-    type: density,
-    default: "comfortable",
-    scope: "device",
-    section: "appearance",
-    group: "Layout",
-    label: "Density",
-    help: "The scale of text, icons and rows. Per device.",
-  }),
-
   /* Layout */
   "layout.preset": setting({
     type: layoutPreset,
@@ -396,7 +386,7 @@ export const settingsSchema = {
     scope: "global",
     section: "appearance",
     group: "Layout",
-    label: "Nav",
+    label: "Navigation",
     help: "Full sidebar, a narrow rail, or hidden.",
   }),
   "layout.agent": setting({
@@ -416,6 +406,15 @@ export const settingsSchema = {
     group: "Layout",
     label: "List",
     help: "One stream with the reader as a sheet, or a split list and reader.",
+  }),
+  "appearance.density": setting({
+    type: density,
+    default: "comfortable",
+    scope: "device",
+    section: "appearance",
+    group: "Layout",
+    label: "Density",
+    help: "The scale of text, icons and rows. Per device.",
   }),
 
   /* Views */
@@ -1827,6 +1826,26 @@ export const settingsSchema = {
     "About intro",
     "monday is free, open source and self-hostable. Desktop first, mobile later.",
   ),
+  "strings.settings.intro.appearance.palette": str(
+    "appearance",
+    "Palette group intro",
+    "Shipped palettes below, or point the config at your own. Each has a light and a dark half.",
+  ),
+  "strings.settings.intro.appearance.layout": str(
+    "appearance",
+    "Layout group intro",
+    "Everything here is a value in the config file. Presets are named combinations, and the agent can set any of it when you ask.",
+  ),
+  "strings.settings.intro.appearance.views": str(
+    "appearance",
+    "Views group intro",
+    "Saved layouts you can switch between. Ask the agent for one and it names it, sets a shortcut, and writes it to the file.",
+  ),
+  "strings.settings.intro.server.cloud": str(
+    "server",
+    "Cloud group intro",
+    "Deploy a Cloud server, copy your mail into its database, then connect this device to it.",
+  ),
   "strings.settings.advanced": str("appearance", "Advanced disclosure", "Advanced"),
   "strings.settings.per_device": str("appearance", "Per-device tag", "This device"),
   "strings.settings.changed": str("appearance", "Change toast", "{label} changed"),
@@ -2811,7 +2830,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "External MCP",
   ],
   workflows: ["Defaults", "Budget", "MCP servers"],
-  server: ["Server", "Connection", "Devices", "Storage", "Jobs"],
+  server: ["Server", "Storage", "Connection", "Cloud", "Devices", "Jobs"],
   shortcuts: ["Keymap", "After an action"],
   about: ["About"],
 };

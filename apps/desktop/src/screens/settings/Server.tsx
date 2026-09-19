@@ -65,7 +65,17 @@ function errorText(s: Settings, error: unknown): string {
   return fill(s["strings.server.error.generic"], { message });
 }
 
-export function Server({ pairFetch, deviceName = "This device", openExternal }: ServerProps) {
+export interface ServerPanelProps extends ServerProps {
+  /** "server" renders the mode line; "cloud" the upgrade cards, the database move and the connection. Both by default. */
+  part?: "server" | "cloud" | undefined;
+}
+
+export function Server({
+  pairFetch,
+  deviceName = "This device",
+  openExternal,
+  part,
+}: ServerPanelProps) {
   const shell = useShell();
   const s = shell.settings;
   const [caps, setCaps] = useState<Capabilities | null>(null);
@@ -102,23 +112,27 @@ export function Server({ pairFetch, deviceName = "This device", openExternal }: 
         ? fill(s["strings.server.target.sidecar"], { port: shell.sidecar.port })
         : s["strings.server.target.none"];
 
+  const showServer = part !== "cloud";
+  const showCloud = part !== "server";
   return (
-    <div data-panel="server">
-      <SettingsField label={s["strings.server.talking_to"]} hint={target}>
-        <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
-          {healthy === false ? s["strings.server.health.down"] : modeLabel}
-        </Tag>
-        <Btn
-          sm
-          onClick={() => {
-            void shell.refreshServers().then(refresh);
-          }}
-        >
-          {s["strings.server.check"]}
-        </Btn>
-      </SettingsField>
+    <div data-panel={part ?? "server"}>
+      {showServer ? (
+        <SettingsField label={s["strings.server.talking_to"]} hint={target}>
+          <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
+            {healthy === false ? s["strings.server.health.down"] : modeLabel}
+          </Tag>
+          <Btn
+            sm
+            onClick={() => {
+              void shell.refreshServers().then(refresh);
+            }}
+          >
+            {s["strings.server.check"]}
+          </Btn>
+        </SettingsField>
+      ) : null}
 
-      {topology === "sidecar" && !shell.cloud ? (
+      {showCloud && topology === "sidecar" && !shell.cloud ? (
         <UpgradeCards
           openExternal={
             openExternal ?? ((url) => platform().then((host) => host.openExternal(url)))
@@ -126,9 +140,11 @@ export function Server({ pairFetch, deviceName = "This device", openExternal }: 
         />
       ) : null}
 
-      {shell.sidecar?.running ? <Move upgrade={upgrade} onDone={refresh} /> : null}
+      {showCloud && shell.sidecar?.running ? <Move upgrade={upgrade} onDone={refresh} /> : null}
 
-      <Connect pairFetch={pairFetch} deviceName={deviceName} onDone={refresh} />
+      {showCloud ? (
+        <Connect pairFetch={pairFetch} deviceName={deviceName} onDone={refresh} />
+      ) : null}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
   describeSetting,
   groupsInSection,
   indexLines,
+  isSettingKey,
   lineOf,
   type SettingEntry,
   type SettingGroup,
@@ -23,8 +24,8 @@ import {
   splitKey,
   validateSetting,
 } from "@monday/shared";
-import { Btn, cx, Input, Seg, Switch, Tag } from "@monday/ui";
-import { XIcon } from "@phosphor-icons/react";
+import { Btn, cx, type IconComponent, Input, Seg, Switch, Tag } from "@monday/ui";
+import { MonitorIcon, MoonIcon, SunIcon, XIcon } from "@phosphor-icons/react";
 import {
   createContext,
   type ReactNode,
@@ -143,14 +144,22 @@ export function SettingsPage({ section }: { section: SettingSection }) {
   );
 }
 
+/** The string key of a group's intro paragraph, when the schema has one. */
+function introKey(section: SettingSection, group: string): SettingKey | null {
+  const key = `strings.settings.intro.${section}.${group.toLowerCase().replaceAll(/\s+/g, "-")}`;
+  return isSettingKey(key) ? key : null;
+}
+
 function Group({ section, group }: { section: SettingSection; group: SettingGroup }) {
   const s = useShell().settings;
   const Panel = panels[section]?.[group.name];
   const showHeading = group.keys.length > 0 || group.advanced.length > 0 || Panel;
   if (!showHeading) return null;
+  const intro = introKey(section, group.name);
   return (
     <div className="sect" data-group={group.name}>
       <h3>{group.name}</h3>
+      {intro ? <p>{String(s[intro])}</p> : null}
       {Panel ? <Panel section={section} group={group} /> : null}
       {group.keys.map((k) => (
         <SettingControl key={k} k={k} />
@@ -205,6 +214,8 @@ export interface RowProps {
   hint?: ReactNode | undefined;
   /** A wide control that sits under the label instead of beside it. */
   block?: boolean | undefined;
+  /** No label at all: the control is the whole row (the swatches, the runtime cards). */
+  bare?: boolean | undefined;
   /** A validation or save problem shown under the control. */
   error?: string | null | undefined;
   children?: ReactNode | undefined;
@@ -214,25 +225,30 @@ export interface RowProps {
  * The labelled row every control renders in: the same markup as the ui
  * package's SettingsField, plus data-setting and the Pinned lock.
  */
-export function Row({ k, label, hint, block, error, children }: RowProps) {
+export function Row({ k, label, hint, block, bare, error, children }: RowProps) {
   const shell = useShell();
   const entry = settingsSchema[k] as SettingEntry;
+  const problem = error ? (
+    <span className="err">
+      {fill(shell.settings["strings.settings.invalid"], { message: error })}
+    </span>
+  ) : null;
   return (
     <div
-      className={cx("field", block && "block")}
+      className={cx("field", (block || bare) && "block", bare && "bare")}
       data-setting={k}
       data-scope={entry.scope}
       data-pinned={shell.pinned.has(k) ? "true" : undefined}
     >
-      <div className="l">
-        <b>{label ?? entry.label}</b>
-        {hint === undefined ? <span>{entry.help}</span> : hint ? <span>{hint}</span> : null}
-        {error ? (
-          <span className="err">
-            {fill(shell.settings["strings.settings.invalid"], { message: error })}
-          </span>
-        ) : null}
-      </div>
+      {bare ? (
+        problem
+      ) : (
+        <div className="l">
+          <b>{label ?? entry.label}</b>
+          {hint === undefined ? <span>{entry.help}</span> : hint ? <span>{hint}</span> : null}
+          {problem}
+        </div>
+      )}
       <Pinned k={k}>{children}</Pinned>
     </div>
   );
@@ -331,17 +347,19 @@ export function EnumPicker({
   value,
   onChange,
   labels,
+  icons,
 }: {
   options: readonly string[];
   value: string;
   onChange: (v: string) => void;
   labels?: ((option: string) => string) | undefined;
+  icons?: Record<string, IconComponent> | undefined;
 }) {
   const label = labels ?? optionLabel;
   if (options.length <= 4) {
     return (
       <Seg
-        options={options.map((o) => ({ value: o, label: label(o) }))}
+        options={options.map((o) => ({ value: o, label: label(o), icon: icons?.[o] }))}
         value={value}
         onChange={onChange}
       />
@@ -358,12 +376,22 @@ export function EnumPicker({
   );
 }
 
+/** Icons for an enum's options, by setting key; the mode picker has them in the mock. */
+export const enumIcons: Partial<Record<SettingKey, Record<string, IconComponent>>> = {
+  "appearance.mode": { system: MonitorIcon, light: SunIcon, dark: MoonIcon },
+};
+
 function EnumControl({ k, shape }: ControlProps) {
   const { value, change, error } = useSetting(k);
   if (shape.kind !== "enum") return null;
   return (
     <Row k={k} error={error}>
-      <EnumPicker options={shape.options} value={String(value)} onChange={(v) => void change(v)} />
+      <EnumPicker
+        options={shape.options}
+        value={String(value)}
+        onChange={(v) => void change(v)}
+        icons={enumIcons[k]}
+      />
     </Row>
   );
 }
