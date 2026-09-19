@@ -9,21 +9,30 @@
     "opener:default",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$DOWNLOAD/**" }]
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        }
+      ]
     },
     "fs:allow-download-write",
-    "shell:allow-spawn",
-    "shell:allow-kill",
-    "shell:allow-stdin-write",
     {
-      "identifier": "shell:allow-execute",
+      "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "monday-server",
           "sidecar": true
         },
-        { "name": "claude-version", "cmd": "claude", "args": ["--version"] },
-        { "name": "claude-auth", "cmd": "claude", "args": ["auth", "status"] },
+        {
+          "name": "claude-version",
+          "cmd": "claude",
+          "args": ["--version"]
+        },
+        {
+          "name": "claude-auth",
+          "cmd": "claude",
+          "args": ["auth", "status"]
+        },
         {
           "name": "claude",
           "cmd": "claude",
@@ -37,28 +46,160 @@
             "--include-partial-messages",
             "--strict-mcp-config",
             "--mcp-config",
-            { "validator": "\\{\"mcpServers\":\\{\"monday\":\\{[^\\n]*\\}\\}\\}" },
+            {
+              "validator": "\\{\"mcpServers\":\\{\"monday\":\\{[^\\n]*\\}\\}\\}"
+            },
             "--setting-sources",
-            { "validator": "" },
+            {
+              "validator": ""
+            },
             "--permission-mode",
-            { "validator": "dontAsk|acceptEdits" },
+            {
+              "validator": "dontAsk|acceptEdits"
+            },
             "--allowedTools",
-            { "validator": "mcp__monday(,[A-Za-z]+)*" },
+            {
+              "validator": "mcp__monday(,[A-Za-z]+)*"
+            },
             "--tools",
-            { "validator": "|default" },
+            {
+              "validator": "|default"
+            },
             "--system-prompt",
-            { "validator": "[\\s\\S]*" },
+            {
+              "validator": "[\\s\\S]*"
+            },
             "--session-id",
-            { "validator": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" },
+            {
+              "validator": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            },
             "--no-session-persistence"
           ]
         },
-        { "name": "codex-version", "cmd": "codex", "args": ["--version"] },
-        { "name": "codex-login", "cmd": "codex", "args": ["login", "status"] },
-        { "name": "codex", "cmd": "codex", "args": ["app-server"] },
-        { "name": "opencode-version", "cmd": "opencode", "args": ["--version"] },
-        { "name": "opencode-auth", "cmd": "opencode", "args": ["auth", "list"] },
-        { "name": "opencode", "cmd": "opencode", "args": ["acp"] }
+        {
+          "name": "codex-version",
+          "cmd": "codex",
+          "args": ["--version"]
+        },
+        {
+          "name": "codex-login",
+          "cmd": "codex",
+          "args": ["login", "status"]
+        },
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": ["app-server"]
+        },
+        {
+          "name": "opencode-version",
+          "cmd": "opencode",
+          "args": ["--version"]
+        },
+        {
+          "name": "opencode-auth",
+          "cmd": "opencode",
+          "args": ["auth", "list"]
+        },
+        {
+          "name": "opencode",
+          "cmd": "opencode",
+          "args": ["acp"]
+        }
+      ]
+    },
+    "shell:allow-kill",
+    "shell:allow-stdin-write",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "monday-server",
+          "sidecar": true
+        },
+        {
+          "name": "claude-version",
+          "cmd": "claude",
+          "args": ["--version"]
+        },
+        {
+          "name": "claude-auth",
+          "cmd": "claude",
+          "args": ["auth", "status"]
+        },
+        {
+          "name": "claude",
+          "cmd": "claude",
+          "args": [
+            "-p",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--strict-mcp-config",
+            "--mcp-config",
+            {
+              "validator": "\\{\"mcpServers\":\\{\"monday\":\\{[^\\n]*\\}\\}\\}"
+            },
+            "--setting-sources",
+            {
+              "validator": ""
+            },
+            "--permission-mode",
+            {
+              "validator": "dontAsk|acceptEdits"
+            },
+            "--allowedTools",
+            {
+              "validator": "mcp__monday(,[A-Za-z]+)*"
+            },
+            "--tools",
+            {
+              "validator": "|default"
+            },
+            "--system-prompt",
+            {
+              "validator": "[\\s\\S]*"
+            },
+            "--session-id",
+            {
+              "validator": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+            },
+            "--no-session-persistence"
+          ]
+        },
+        {
+          "name": "codex-version",
+          "cmd": "codex",
+          "args": ["--version"]
+        },
+        {
+          "name": "codex-login",
+          "cmd": "codex",
+          "args": ["login", "status"]
+        },
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": ["app-server"]
+        },
+        {
+          "name": "opencode-version",
+          "cmd": "opencode",
+          "args": ["--version"]
+        },
+        {
+          "name": "opencode-auth",
+          "cmd": "opencode",
+          "args": ["auth", "list"]
+        },
+        {
+          "name": "opencode",
+          "cmd": "opencode",
+          "args": ["acp"]
+        }
       ]
     }
   ]
