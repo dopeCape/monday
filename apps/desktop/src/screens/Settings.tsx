@@ -14,7 +14,7 @@ import {
   SETTING_SECTIONS,
   type SettingKey,
   type SettingSection,
-  type Settings,
+  type Settings as SettingValues,
   settingsSchema,
 } from "@monday/shared";
 import { Btn, EmptyState, Kbd, Toast } from "@monday/ui";
@@ -125,7 +125,7 @@ function sectionOf(name: string | undefined): SettingSection {
  * is the result.
  */
 export async function writeAll(
-  set: <K extends SettingKey>(key: K, value: Settings[K]) => Promise<SetResult>,
+  set: <K extends SettingKey>(key: K, value: SettingValues[K]) => Promise<SetResult>,
   changes: ReadonlyArray<[SettingKey, unknown]>,
   previous: ReadonlyArray<[SettingKey, unknown]>,
 ): Promise<SetResult> {
