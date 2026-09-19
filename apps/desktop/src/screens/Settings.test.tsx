@@ -41,7 +41,7 @@ import { type Api, createApi, type PendingPairings } from "../platform/api.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { fakePlatform } from "../platform/tauri.ts";
 import { Shell, type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
-import { Settings, type SettingsProps } from "./Settings.tsx";
+import { Settings, type SettingsProps, writeAll } from "./Settings.tsx";
 import { controlKinds } from "./settings/render.tsx";
 import { buildSearchIndex, searchSettings } from "./settings/search.ts";
 
@@ -1464,6 +1464,42 @@ describe("Settings › panels", () => {
     expect(voice?.textContent).toContain("Built");
     await click(voice?.querySelector(".switch"));
     expect(voice?.textContent).toContain("That did not work: no server");
+  });
+});
+
+/* ------------------------------ Several keys as one change ------------------------------ */
+
+describe("writeAll", () => {
+  test("writes in order and, when one key is refused, puts the earlier ones back", async () => {
+    const log: string[] = [];
+    const set = async (key: SettingKey, value: unknown) => {
+      log.push(`${key}=${JSON.stringify(value)}`);
+      if (key === "layout.list") {
+        return { ok: false as const, reason: "invalid" as const, message: "no such list" };
+      }
+      return { ok: true as const };
+    };
+    const result = await writeAll(
+      set as never,
+      [
+        ["layout.nav", "hidden"],
+        ["layout.agent", "right"],
+        ["layout.list", "bogus"],
+      ],
+      [
+        ["layout.nav", "full"],
+        ["layout.agent", "bottom"],
+        ["layout.list", "stream"],
+      ],
+    );
+    expect(result).toEqual({ ok: false, reason: "invalid", message: "no such list" });
+    expect(log).toEqual([
+      'layout.nav="hidden"',
+      'layout.agent="right"',
+      'layout.list="bogus"',
+      'layout.nav="full"',
+      'layout.agent="bottom"',
+    ]);
   });
 });
 

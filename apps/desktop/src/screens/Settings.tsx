@@ -14,6 +14,7 @@ import {
   SETTING_SECTIONS,
   type SettingKey,
   type SettingSection,
+  type Settings,
   settingsSchema,
 } from "@monday/shared";
 import { Btn, EmptyState, Kbd, Toast } from "@monday/ui";
@@ -117,6 +118,32 @@ function sectionOf(name: string | undefined): SettingSection {
     : "appearance";
 }
 
+/**
+ * Writes several keys as one change: in order, and when one is refused in the
+ * middle (an invalid value the Shell rejects) the keys already written go back
+ * to `previous`, so a preset or a View never half-applies. The first refusal
+ * is the result.
+ */
+export async function writeAll(
+  set: <K extends SettingKey>(key: K, value: Settings[K]) => Promise<SetResult>,
+  changes: ReadonlyArray<[SettingKey, unknown]>,
+  previous: ReadonlyArray<[SettingKey, unknown]>,
+): Promise<SetResult> {
+  const applied: SettingKey[] = [];
+  for (const [k, v] of changes) {
+    const result = await set(k, v as never);
+    if (!result.ok) {
+      for (const key of applied) {
+        const before = previous.find(([p]) => p === key);
+        if (before) await set(key, before[1] as never);
+      }
+      return result;
+    }
+    applied.push(k);
+  }
+  return { ok: true };
+}
+
 /** Where the page should scroll after a navigation: a group anchor or a card's key. */
 interface Target {
   section: SettingSection;
@@ -180,11 +207,7 @@ export function Settings({
       const previous = changes.map(
         ([k]) => [k, structuredClone(shell.settings[k])] as [SettingKey, unknown],
       );
-      let result: SetResult = { ok: true };
-      for (const [k, v] of changes) {
-        result = await shell.set(k, v as never);
-        if (!result.ok) break;
-      }
+      const result = await writeAll(shell.set, changes, previous);
       if (result.ok) {
         setToast({
           id: ++toastSeq.current,
