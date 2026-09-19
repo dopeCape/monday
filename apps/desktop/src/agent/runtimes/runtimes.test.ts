@@ -213,9 +213,10 @@ describe("the Claude Code adapter", () => {
     (p): p is Extract<typeof p, { identifier: string }> =>
       typeof p === "object" && "identifier" in p && p.identifier === "shell:allow-execute",
   );
-  const claudeScope = (scope?.allow as Array<{ name?: string; args?: unknown }>).find(
-    (a) => a.name === "claude",
-  ) as { args: Array<string | { validator: string }> } | undefined;
+  const allowed = (scope?.allow ?? []) as Array<{ name?: string; args?: unknown }>;
+  const claudeScope = allowed.find((a) => a.name === "claude") as
+    | { args: Array<string | { validator: string }> }
+    | undefined;
 
   /** The Tauri shell scope's rule: fixed entries must match, validators are anchored regexes. */
   function allowedByScope(args: string[]): string | null {
