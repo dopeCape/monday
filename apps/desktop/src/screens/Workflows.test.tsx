@@ -151,7 +151,7 @@ async function mount(api: WorkflowsApi, onAsk?: (text: string) => void) {
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell settings={{ "workflows.page.refresh_seconds": 0 }}>
+      <StaticShell settings={{ "workflows.page.refresh_seconds": 0, "ai.level": "automate" }}>
         <Workflows
           api={api}
           onAsk={onAsk}
