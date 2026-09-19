@@ -254,6 +254,8 @@ export interface Suggestion {
 export interface AgentPanelProps {
   /** The runtime line after the title, such as "Claude Code · tejas@genai-labs.io". */
   runtime?: string | undefined;
+  /** Clicking the runtime line opens Settings, AI and agent (docs/spec/agent-composer.md, Surface). */
+  onRuntime?: (() => void) | undefined;
   suggestions?: readonly Suggestion[] | undefined;
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
   /** Shows the plus button that starts a new Session. */
@@ -261,15 +263,31 @@ export interface AgentPanelProps {
   onHistory?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   /** Button titles; the Settings strings in the app, the mock's words by default. */
-  labels?: { new?: string; history?: string; collapse?: string } | undefined;
+  labels?: { new?: string; history?: string; collapse?: string; runtime?: string } | undefined;
   /** The AgentThread. */
   children?: ReactNode | undefined;
   className?: string | undefined;
 }
 
+/** The runtime line, a button when the header opens Settings. */
+function runtimeLine(
+  runtime: string | undefined,
+  onRuntime: (() => void) | undefined,
+  title: string | undefined,
+): ReactNode {
+  if (runtime === undefined) return undefined;
+  if (!onRuntime) return runtime;
+  return (
+    <button type="button" className="runtime" onClick={onRuntime} title={title}>
+      {runtime}
+    </button>
+  );
+}
+
 /** The panel that rises above the bar when the Agent is open (agent: bottom). */
 export function AgentPanel({
   runtime,
+  onRuntime,
   suggestions,
   onSuggest,
   onNew,
@@ -281,7 +299,7 @@ export function AgentPanel({
 }: AgentPanelProps) {
   return (
     <div className={cx("agent-panel", className)}>
-      <ColHead title="monday" count={runtime}>
+      <ColHead title="monday" count={runtimeLine(runtime, onRuntime, labels?.runtime)}>
         {onNew ? (
           <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>
             <Icon icon={PlusIcon} />
@@ -325,9 +343,10 @@ export function AgentDock({ children, className }: AgentDockProps) {
 export interface AgentColumnProps {
   side: "left" | "right";
   runtime?: string | undefined;
+  onRuntime?: (() => void) | undefined;
   onNew?: (() => void) | undefined;
   onHistory?: (() => void) | undefined;
-  labels?: { new?: string; history?: string } | undefined;
+  labels?: { new?: string; history?: string; runtime?: string } | undefined;
   /** The AgentThread, then the AgentBar. */
   children?: ReactNode | undefined;
   className?: string | undefined;
@@ -339,6 +358,7 @@ export interface AgentColumnProps {
 export function AgentColumn({
   side,
   runtime,
+  onRuntime,
   onNew,
   onHistory,
   labels,
@@ -348,7 +368,7 @@ export function AgentColumn({
 }: AgentColumnProps) {
   return (
     <section className={cx("agent-col", side, className)}>
-      <ColHead title="monday" count={runtime}>
+      <ColHead title="monday" count={runtimeLine(runtime, onRuntime, labels?.runtime)}>
         {bare ? null : (
           <>
             <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>

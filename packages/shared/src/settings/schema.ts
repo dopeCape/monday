@@ -2353,6 +2353,16 @@ export const settingsSchema = {
     "Developer mode warning",
     "Developer mode gives the runtime its own shell, file and web tools. Mail content is untrusted and could direct them.",
   ),
+  "strings.agent.untitled_session": str(
+    "ai",
+    "A Session with no first message",
+    "New conversation",
+  ),
+  "strings.agent.open_runtime": str(
+    "ai",
+    "Runtime line tooltip",
+    "Change the runtime under AI and agent",
+  ),
   "strings.settings.pinned": str("appearance", "Pinned control label", "set in monday.toml"),
   "strings.settings.fix": str("appearance", "Fix config button", "Fix with monday"),
   /* The Settings screens (docs/spec/settings.md, slice 17) */

@@ -990,6 +990,24 @@ button.msg {
 .agent-panel .col-head h2 {
   font-size: var(--fs-md);
 }
+/* the runtime line is a button: it opens Settings, AI and agent */
+.col-head .count .runtime {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  transition: color var(--t-fast);
+}
+.col-head .count .runtime:hover {
+  color: var(--fg-muted);
+}
+.col-head .count .runtime:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .agent-thread {
   flex: 1;
   min-height: 0;

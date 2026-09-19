@@ -214,7 +214,7 @@ export function Tabs<K extends string>({ items, active, onChange, className }: T
 export interface ColHeadProps {
   title?: string | undefined;
   /** The muted text after the title: a count, a runtime, a month. */
-  count?: string | number | undefined;
+  count?: ReactNode | undefined;
   /** Controls before the title, such as a close button on a sheet. */
   leading?: ReactNode | undefined;
   /** Controls after the spacer, right-aligned. */
@@ -231,7 +231,7 @@ export function ColHead({ title, count, leading, children, className }: ColHeadP
     <div className={cx("col-head", className)} data-tauri-drag-region>
       {leading}
       {title ? <h2 data-tauri-drag-region>{title}</h2> : null}
-      {count !== undefined ? (
+      {count !== undefined && count !== null ? (
         <span className="count" data-tauri-drag-region>
           {count}
         </span>

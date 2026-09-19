@@ -49,6 +49,8 @@ export type ComposerStrings = AgentStrings &
     | "strings.agent.builtin_tool"
     | "strings.agent.developer_mode"
     | "strings.agent.developer_warning"
+    | "strings.agent.untitled_session"
+    | "strings.agent.open_runtime"
   >;
 
 export function composerStrings(settings: Settings): ComposerStrings {
@@ -85,6 +87,8 @@ export function composerStrings(settings: Settings): ComposerStrings {
     "strings.agent.builtin_tool": settings["strings.agent.builtin_tool"],
     "strings.agent.developer_mode": settings["strings.agent.developer_mode"],
     "strings.agent.developer_warning": settings["strings.agent.developer_warning"],
+    "strings.agent.untitled_session": settings["strings.agent.untitled_session"],
+    "strings.agent.open_runtime": settings["strings.agent.open_runtime"],
   };
 }
 
@@ -319,6 +323,8 @@ export interface ComposerProps {
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
   /** One conversation only: no new, history or Developer mode (the onboarding conversation). */
   plain?: boolean | undefined;
+  /** Clicking the header's runtime line opens Settings, AI and agent. */
+  onOpenRuntime?: (() => void) | undefined;
 }
 
 export function Composer({
@@ -336,6 +342,7 @@ export function Composer({
   onOpenThread,
   onSuggest,
   plain = false,
+  onOpenRuntime,
 }: ComposerProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const turns = useMemo(
@@ -400,7 +407,7 @@ export function Composer({
               void agent.openSession(s.id);
             }}
           >
-            <b>{s.title || "New conversation"}</b>
+            <b>{s.title || strings["strings.agent.untitled_session"]}</b>
             <span className="t">{formatListTime(s.lastActivity, now)}</span>
           </button>
         ))
@@ -442,6 +449,7 @@ export function Composer({
     new: strings["strings.agent.new"],
     history: strings["strings.agent.history"],
     collapse: strings["strings.agent.collapse"],
+    runtime: strings["strings.agent.open_runtime"],
   };
 
   if (mode === "bottom") {
@@ -450,6 +458,7 @@ export function Composer({
         {open ? (
           <AgentPanel
             runtime={runtime}
+            onRuntime={onOpenRuntime}
             suggestions={chips}
             onSuggest={onSuggestion}
             onNew={onNew}
@@ -475,6 +484,7 @@ export function Composer({
     <AgentColumn
       side={mode}
       runtime={runtime}
+      onRuntime={onOpenRuntime}
       onNew={onNew}
       onHistory={toggleHistory}
       labels={labels}

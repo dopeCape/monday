@@ -395,6 +395,7 @@ export function App({
       text={columnText}
       onTextChange={setColumnText}
       onOpenThread={(id) => navigate(`thread:${id}`)}
+      onOpenRuntime={() => navigate("settings:ai")}
     />
   );
   const sends = useSyncExternalStore(composer.subscribe, composer.sends, composer.sends);

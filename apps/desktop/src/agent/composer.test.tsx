@@ -78,6 +78,8 @@ const archiveTurn = (): AgentEvent[] => [
   ),
 ];
 
+const navigated: string[] = [];
+
 function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runtime | undefined }) {
   const agent = useAgentSession({
     client,
@@ -94,6 +96,7 @@ function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runti
       initialOpen={null}
       timing={{ collapse: 0, toast: 60_000 }}
       agent={agent}
+      onNavigate={(target) => navigated.push(target)}
     />
   );
 }
@@ -374,6 +377,18 @@ describe("the composer in bottom-bar mode", () => {
     expect(document.querySelector(".agent-thread .u")?.textContent).toBe(
       "Archive newsletters older than a week",
     );
+  });
+
+  test("the header's runtime line is a button that opens Settings, AI and agent", async () => {
+    const client = fakeAgentClient();
+    navigated.length = 0;
+    await mount(client);
+    await typeInBar("");
+    const line = document.querySelector<HTMLButtonElement>(".agent-panel .col-head .count button");
+    expect(line?.textContent).toBe("Claude Code · tejas@genai-labs.io");
+    expect(line?.title).toBe("Change the runtime under AI and agent");
+    await click(line);
+    expect(navigated).toEqual(["settings:ai"]);
   });
   test("a Session on a Local runtime: the header names it, Developer mode is a switch with its warning, the CLI's own tool is a marked card, and a switch shows as a line", async () => {
     const client = fakeAgentClient({
