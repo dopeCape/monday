@@ -179,6 +179,33 @@ describe("onboarding: the first screen and the AI level", () => {
     expect(q(".choice-card.on")?.dataset.value).toBe("assist");
     expect(captured?.settings["appearance.density"]).toBe("comfortable");
   });
+
+  test("a later Account's offer seeds no density: the first run already did, and the user may have changed it since", async () => {
+    await mount(
+      { accountId: "acct-2", screenWidth: 1024 },
+      {
+        "ai.level": "assist",
+        "appearance.density": "spacious",
+        "onboarding.state": {
+          welcome: { status: "completed", at: NOW.toISOString() },
+          "acct-2": { status: "offered", at: NOW.toISOString() },
+        },
+      },
+    );
+    expect(captured?.settings["appearance.density"]).toBe("spacious");
+  });
+
+  test("while detection still runs, Continue waits on moving up from off, so the runtime question is never skipped", async () => {
+    const pending = { detect: () => new Promise<never>(() => {}) };
+    await mount({ runtimes: pending });
+    await click(card("assist"));
+    const cont = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Continue");
+    expect(cont?.disabled).toBe(true);
+    // Just mail needs no runtime: Continue is live at once.
+    await click(card("off"));
+    const again = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Continue");
+    expect(again?.disabled).toBe(false);
+  });
 });
 
 describe("onboarding: the welcome before any Account", () => {

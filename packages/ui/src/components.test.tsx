@@ -48,6 +48,7 @@ import {
   Seg,
   SettingsField,
   SideCard,
+  SourceView,
   Swatch,
   Switch,
   Tabs,
@@ -486,6 +487,13 @@ describe("settings and workflows", () => {
     expect(render(<FlowEdge />)).toContain('class="edge"');
     expect(render(<FlowNode kind="act" icon={SunIcon} label="Send" />)).toContain("node act");
   });
+
+  test("SourceView prints the document as JSON in the mono face token", () => {
+    const html = render(<SourceView document={{ name: "Candidate intake", version: 3 }} />);
+    expect(html).toContain('class="source"');
+    expect(html).toContain("font-family:var(--font-mono)");
+    expect(html).toContain("&quot;name&quot;: &quot;Candidate intake&quot;");
+  });
 });
 
 describe("theme", () => {
@@ -620,7 +628,7 @@ describe("routing", () => {
     expect(ask).toContain("The agent proposes a rule.");
   });
 
-  test("DecisionRow offers the candidates, and an X only when there is one", () => {
+  test("DecisionRow offers the candidates, and an X to leave the Thread out either way", () => {
     const two = render(
       <DecisionRow
         threadId="d1"
@@ -637,7 +645,7 @@ describe("routing", () => {
     );
     expect(two).toContain('<button type="button" class="btn sm">Hiring</button>');
     expect(two).toContain('<button type="button" class="btn sm">Community</button>');
-    expect(two).not.toContain('aria-label="Leave"');
+    expect(two).toContain('aria-label="Leave"');
     const one = render(
       <DecisionRow
         threadId="d2"

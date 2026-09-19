@@ -4,7 +4,7 @@
 // through a fake of the routing API. Mounted under a StaticShell with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { GroupView, ProposedMove, RoutingPreview } from "@monday/shared";
+import type { GroupView, HostedProvider, ProposedMove, RoutingPreview } from "@monday/shared";
 import { groups, threads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
@@ -114,14 +114,18 @@ function fakeApi(): RoutingApi & { calls: string[] } {
   };
 }
 
-async function mount(api: RoutingApi, routing = fixtureRouting()) {
+async function mount(
+  api: RoutingApi,
+  routing = fixtureRouting(),
+  keys: { shared(): Promise<{ shared: HostedProvider[] }> } | null = null,
+) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
     root?.render(
       <StaticShell settings={{ "ai.level": "automate" }}>
-        <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} />
+        <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} keys={keys} />
       </StaticShell>,
     );
   });
@@ -175,12 +179,15 @@ describe("Routing page", () => {
     // Needs a decision: two rows from the fixture, candidates as buttons.
     const decisions = el.querySelectorAll(".side-card")[1] as HTMLElement;
     expect(decisions.querySelectorAll(".sample")).toHaveLength(2);
+    // Every row can be left out of every Group, tied candidates or not.
     expect(buttons(decisions).map((b) => b.textContent?.trim())).toEqual([
       "Hiring",
       "Community",
+      "",
       "Finance",
       "",
     ]);
+    expect(decisions.querySelectorAll('button[aria-label="Leave"]')).toHaveLength(2);
     expect(api.calls).toEqual(["groups"]);
   });
 
@@ -213,6 +220,41 @@ describe("Routing page", () => {
     expect(el.querySelector(".side-card.preview")).toBeNull();
   });
 
+  test("Ask for a group hands the typed sentence to the composer, with the Setting's prefix", async () => {
+    const asked: string[] = [];
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <StaticShell settings={{ "ai.level": "automate" }}>
+          <Routing
+            routing={fixtureRouting()}
+            inbox={fixtureInbox(threads)}
+            api={fakeApi()}
+            keys={null}
+            onAsk={(t) => asked.push(t)}
+          />
+        </StaticShell>,
+      );
+    });
+    await act(async () => {
+      await tick();
+    });
+    const input = host.querySelector<HTMLInputElement>(".ask input");
+    if (!input) throw new Error("no ask box");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "A Support inbox for anything from customers");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await tick();
+    });
+    expect(asked).toEqual(["Make a group: A Support inbox for anything from customers"]);
+  });
+
   test("Change rule opens the editor with the Predicate and Examples; Save sends the patch", async () => {
     const api = fakeApi();
     const el = await mount(api);
@@ -236,5 +278,49 @@ describe("Routing page", () => {
       briefPolicy: null,
     });
     expect(el.querySelector(".rule-edit")).toBeNull();
+  });
+
+  test("Delete group asks once, naming the Group, and deletes on the second click", async () => {
+    const api = fakeApi();
+    const el = await mount(api);
+    await click(byText(el, "Change rule"));
+    const editor = el.querySelector(".rule-edit") as HTMLElement;
+    await click(byText(editor, "Delete group"));
+    expect(api.calls.filter((c) => c.startsWith("delete"))).toEqual([]);
+    const confirm = byText(editor, "Delete Hiring for good");
+    expect(confirm?.className).toContain("danger");
+    // Cancel forgets the question; the next Delete asks again.
+    await click(byText(editor, "Cancel"));
+    await click(byText(el, "Change rule"));
+    const again = el.querySelector(".rule-edit") as HTMLElement;
+    expect(byText(again, "Delete group")).toBeDefined();
+    await click(byText(again, "Delete group"));
+    await click(byText(again, "Delete Hiring for good"));
+    expect(api.calls).toContain("delete:hiring");
+    expect(el.querySelector(".rule-edit")).toBeNull();
+  });
+
+  test("with the Server unreachable no Confidence is shown: nothing comes from the fixtures", async () => {
+    const api = fakeApi();
+    api.groups = async () => {
+      throw new Error("offline");
+    };
+    const el = await mount(api);
+    expect([...el.querySelectorAll(".grp-h .tag")]).toHaveLength(0);
+    // The unread counts still come from the stream.
+    expect(el.querySelector(".grp-h .n")?.textContent).toBe("1 unread");
+  });
+
+  test("at automate with no shared key the page says routing needs one; with a key it says nothing", async () => {
+    const el = await mount(fakeApi(), fixtureRouting(), { shared: async () => ({ shared: [] }) });
+    expect(el.querySelector(".routing-note")?.textContent).toBe(
+      "Routing runs on the Server with a shared key. Share one under AI and agent.",
+    );
+    await act(async () => root?.unmount());
+    host?.remove();
+    const el2 = await mount(fakeApi(), fixtureRouting(), {
+      shared: async () => ({ shared: ["anthropic"] }),
+    });
+    expect(el2.querySelector(".routing-note")).toBeNull();
   });
 });

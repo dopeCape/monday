@@ -34,7 +34,7 @@ export function render(route, ui) {
             </div>
             <div class="side-card">
               <h3>Needs a decision <span class="tag">2</span></h3>
-              <div class="sample"><span class="avatar" style="--c:var(--fg-muted)">${initials("Ola Nordmann")}</span><span>Quick question about your open roles</span><div class="acts"><button class="btn sm">Hiring</button><button class="btn sm">Community</button></div></div>
+              <div class="sample"><span class="avatar" style="--c:var(--fg-muted)">${initials("Ola Nordmann")}</span><span>Quick question about your open roles</span><div class="acts"><button class="btn sm">Hiring</button><button class="btn sm">Community</button><button class="btn sm icon">${ic("ph-x")}</button></div></div>
               <div class="sample"><span class="avatar" style="--c:var(--fg-muted)">${initials("Deel")}</span><span>Contractor payment scheduled</span><div class="acts"><button class="btn sm">Finance</button><button class="btn sm icon">${ic("ph-x")}</button></div></div>
             </div>
             <div class="side-card">

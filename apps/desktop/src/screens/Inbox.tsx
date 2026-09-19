@@ -1077,6 +1077,7 @@ export function Inbox({
             else onNavigate?.(`thread:${id}`);
           }}
           onSuggest={applySuggestionLayout}
+          onOpenRuntime={() => onNavigate?.("settings:ai")}
         />
       ) : null}
 

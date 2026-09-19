@@ -78,6 +78,8 @@ const archiveTurn = (): AgentEvent[] => [
   ),
 ];
 
+const navigated: string[] = [];
+
 function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runtime | undefined }) {
   const agent = useAgentSession({
     client,
@@ -94,6 +96,7 @@ function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runti
       initialOpen={null}
       timing={{ collapse: 0, toast: 60_000 }}
       agent={agent}
+      onNavigate={(target) => navigated.push(target)}
     />
   );
 }
@@ -266,6 +269,39 @@ describe("the composer in bottom-bar mode", () => {
     expect(bar()).not.toBeNull();
   });
 
+  test("a second click on Apply or Undo in the same tick is a no-op: one approval, one undo", async () => {
+    const client = fakeAgentClient({
+      turns: [archiveTurn],
+      onApprove: (call: ToolCall) => [
+        toolEvent({ ...call, status: "done", approvedBy: "user", undoable: true }),
+      ],
+    });
+    await mount(client);
+    await typeInBar("archive every newsletter older than a week");
+    await submitBar();
+    const archive = cardByTool("archive");
+    if (!archive) throw new Error("no archive card");
+    const apply = button(archive, "Apply");
+    if (!apply) throw new Error("no Apply");
+    await act(async () => {
+      apply.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      apply.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(client.approvals).toHaveLength(1);
+    const applied = cardByTool("archived");
+    if (!applied) throw new Error("no applied card");
+    const undo = button(applied, "Undo");
+    if (!undo) throw new Error("no Undo");
+    await act(async () => {
+      undo.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      undo.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(client.undos).toEqual(["c2"]);
+    expect(cardByTool("archived")?.querySelector(".st")?.textContent?.trim()).toBe("Undone");
+  });
+
   test("a send asks even for one message; Cancel changes nothing and the card says so", async () => {
     const client = fakeAgentClient({
       turns: [
@@ -342,6 +378,41 @@ describe("the composer in bottom-bar mode", () => {
       "Archive newsletters older than a week",
     );
   });
+
+  test("a turn the Server refuses shows the failure in one line with Retry, which sends the same text again", async () => {
+    const inner = fakeAgentClient();
+    let refuse = true;
+    const client: FakeAgentClient = {
+      ...inner,
+      turn: async (sessionId, text, context, onEvent) => {
+        if (refuse) throw new Error("Claude Code could not start: program not found: claude");
+        return inner.turn(sessionId, text, context, onEvent);
+      },
+    };
+    await mount(client);
+    await typeInBar("hello there");
+    await submitBar();
+    const line = document.querySelector(".agent-error");
+    expect(line?.textContent).toContain("Claude Code could not start: program not found: claude");
+    expect(inner.sent).toEqual([]);
+    refuse = false;
+    await click(line?.querySelector("button"));
+    expect(document.querySelector(".agent-error")).toBeNull();
+    expect(inner.sent.map((s) => s.text)).toEqual(["hello there"]);
+    expect(document.querySelector(".agent-thread .a p")?.textContent).toBe("You said: hello there");
+  });
+
+  test("the header's runtime line is a button that opens Settings, AI and agent", async () => {
+    const client = fakeAgentClient();
+    navigated.length = 0;
+    await mount(client);
+    await typeInBar("");
+    const line = document.querySelector<HTMLButtonElement>(".agent-panel .col-head .count button");
+    expect(line?.textContent).toBe("Claude Code · tejas@genai-labs.io");
+    expect(line?.title).toBe("Change the runtime under AI and agent");
+    await click(line);
+    expect(navigated).toEqual(["settings:ai"]);
+  });
   test("a Session on a Local runtime: the header names it, Developer mode is a switch with its warning, the CLI's own tool is a marked card, and a switch shows as a line", async () => {
     const client = fakeAgentClient({
       turns: [
@@ -385,6 +456,16 @@ describe("the composer in bottom-bar mode", () => {
     const bash = document.querySelector<HTMLElement>('.tool[data-builtin="true"]');
     expect(bash?.querySelector(".t")?.textContent).toBe("Developer mode: Bash");
     expect(bash?.querySelector(".t i, .t svg")).not.toBeNull();
+    // Developer mode is per Session: a new one, and a past one opened from History, start off.
+    await typeInBar("/new");
+    await submitBar();
+    expect(document.querySelector(".agent-developer .chip")?.classList.contains("on")).toBe(false);
+    await click(document.querySelector('.agent-panel button[title="History"]'));
+    await click(document.querySelectorAll(".agent-history .r")[1]);
+    expect(document.querySelector(".agent-thread .u")?.textContent).toBe(
+      "what is in my home folder?",
+    );
+    expect(document.querySelector(".agent-developer .chip")?.classList.contains("on")).toBe(false);
   });
 
   test("switching the Runtime mid-Session puts a line in the thread before the next turn", async () => {

@@ -17,9 +17,10 @@ import {
   Chip,
   formatListTime,
   formatSpan,
+  motionMs,
   type Suggestion,
 } from "@monday/ui";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { runtimeLabel } from "./runtimeLine.ts";
 import type { TranscriptEvent } from "./transcript.ts";
 import { type AgentStrings, cardActions, statusLabel, toolTitle } from "./transcript.ts";
@@ -49,6 +50,8 @@ export type ComposerStrings = AgentStrings &
     | "strings.agent.builtin_tool"
     | "strings.agent.developer_mode"
     | "strings.agent.developer_warning"
+    | "strings.agent.untitled_session"
+    | "strings.agent.open_runtime"
   >;
 
 export function composerStrings(settings: Settings): ComposerStrings {
@@ -85,6 +88,8 @@ export function composerStrings(settings: Settings): ComposerStrings {
     "strings.agent.builtin_tool": settings["strings.agent.builtin_tool"],
     "strings.agent.developer_mode": settings["strings.agent.developer_mode"],
     "strings.agent.developer_warning": settings["strings.agent.developer_warning"],
+    "strings.agent.untitled_session": settings["strings.agent.untitled_session"],
+    "strings.agent.open_runtime": settings["strings.agent.open_runtime"],
   };
 }
 
@@ -319,6 +324,8 @@ export interface ComposerProps {
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
   /** One conversation only: no new, history or Developer mode (the onboarding conversation). */
   plain?: boolean | undefined;
+  /** Clicking the header's runtime line opens Settings, AI and agent. */
+  onOpenRuntime?: (() => void) | undefined;
 }
 
 export function Composer({
@@ -336,13 +343,29 @@ export function Composer({
   onOpenThread,
   onSuggest,
   plain = false,
+  onOpenRuntime,
 }: ComposerProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Bottom bar: a collapsing panel stays mounted for one sink (--t-med), then goes.
+  const [shown, setShown] = useState(open);
+  const leaving = shown && !open;
+  useEffect(() => {
+    if (open) {
+      setShown(true);
+      return;
+    }
+    const ms = motionMs("--t-med");
+    if (ms <= 0) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(false), ms);
+    return () => clearTimeout(timer);
+  }, [open]);
   const turns = useMemo(
     () => turnsOf(agent.events, { strings, now, working: agent.busy }),
     [agent.events, agent.busy, strings, now],
   );
-  const lastUserText = [...agent.events].reverse().find((e) => e.kind === "user");
 
   const submit = (value: string) => {
     if (!value.trim()) return;
@@ -352,7 +375,7 @@ export function Composer({
 
   const onToolAction = (action: string, call: ToolCall) => {
     if (call.tool === "error") {
-      if (lastUserText?.kind === "user") void agent.send(lastUserText.text);
+      void agent.retry();
       return;
     }
     if (action === strings["strings.agent.approve"] || action === strings["strings.agent.apply"]) {
@@ -400,7 +423,7 @@ export function Composer({
               void agent.openSession(s.id);
             }}
           >
-            <b>{s.title || "New conversation"}</b>
+            <b>{s.title || strings["strings.agent.untitled_session"]}</b>
             <span className="t">{formatListTime(s.lastActivity, now)}</span>
           </button>
         ))
@@ -431,31 +454,39 @@ export function Composer({
         onOpenThread={onOpenThread}
       />
       {agent.error ? (
-        <div className="agent-error">
-          {agent.error === NO_CLIENT ? strings["strings.agent.no_session"] : agent.error}
+        <div className="agent-error" role="alert">
+          <span>
+            {agent.error === NO_CLIENT ? strings["strings.agent.no_session"] : agent.error}
+          </span>
+          {agent.error !== NO_CLIENT ? (
+            <Chip onClick={() => void agent.retry()}>{strings["strings.agent.retry"]}</Chip>
+          ) : null}
         </div>
       ) : null}
     </>
   );
-  const chips = agent.events.length === 0 ? suggestions : undefined;
+  const chips = agent.events.length === 0 && !historyOpen ? suggestions : undefined;
   const labels = {
     new: strings["strings.agent.new"],
     history: strings["strings.agent.history"],
     collapse: strings["strings.agent.collapse"],
+    runtime: strings["strings.agent.open_runtime"],
   };
 
   if (mode === "bottom") {
     return (
       <AgentDock>
-        {open ? (
+        {open || shown ? (
           <AgentPanel
             runtime={runtime}
+            onRuntime={onOpenRuntime}
             suggestions={chips}
             onSuggest={onSuggestion}
             onNew={onNew}
             onHistory={toggleHistory}
             onClose={() => onOpenChange?.(false)}
             labels={labels}
+            className={leaving ? "leaving" : undefined}
           >
             {history ?? thread}
           </AgentPanel>
@@ -475,6 +506,7 @@ export function Composer({
     <AgentColumn
       side={mode}
       runtime={runtime}
+      onRuntime={onOpenRuntime}
       onNew={onNew}
       onHistory={toggleHistory}
       labels={labels}

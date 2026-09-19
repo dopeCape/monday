@@ -1,4 +1,4 @@
-// The Local runtimes (CONTEXT.md, Local runtime; slice 15): the three
+// The Local runtimes (CONTEXT.md, Local runtime): the three
 // adapters behind the AgentSession seam, their detection, and the settings
 // they read. A Device picks one by `ai.local.cli`, spawns it through the
 // platform's shell scope, and points it at monday's MCP server on the

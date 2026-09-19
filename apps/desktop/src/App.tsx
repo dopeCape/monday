@@ -395,6 +395,7 @@ export function App({
       text={columnText}
       onTextChange={setColumnText}
       onOpenThread={(id) => navigate(`thread:${id}`)}
+      onOpenRuntime={() => navigate("settings:ai")}
     />
   );
   const sends = useSyncExternalStore(composer.subscribe, composer.sends, composer.sends);
@@ -545,6 +546,10 @@ export function App({
         inbox={inbox}
         workspaceId={ws.id}
         onNavigate={navigate}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
       />
     ) : active === "workflows" ? (
       <Workflows

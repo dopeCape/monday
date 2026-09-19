@@ -3,9 +3,10 @@
 // from the Inbox source, searches from the Cache's FTS, writes go through
 // InboxActions so they enter the Outbox and the same undo tokens as a manual
 // action, Drafts and sends through the compose seam, Settings through the
-// Shell (which knows what the Config file pins). The Hosted composer runs on
-// the Server; the Local runtimes of slice 15 drive this one while the client
-// is open.
+// Shell (which knows what the Config file pins). The composer's tools run on
+// the Server either way (a Local runtime reaches them over the Sidecar's
+// loopback MCP); this host is the Device side ADR 0007 names for a Local-only
+// install's client catch-up, and nothing wires it yet.
 
 import type {
   Draft,
@@ -111,7 +112,7 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
         break;
       case "undelete":
       case "tags":
-        // Not on the Inbox seam yet; the Server host covers them until slice 15 widens this one.
+        // Not on the Inbox seam; the Server host covers them.
         return;
     }
     undoTokens.push(token);
