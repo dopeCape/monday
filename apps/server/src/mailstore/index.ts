@@ -12,7 +12,8 @@
 // through recordChange, inside the same transaction, and NOTIFYs the in-process
 // listeners (src/changes/bus.ts). Intents from the Outbox go through applyIntent,
 // which applies per-field last-writer-wins (packages/shared sync.ts) and logs
-// the losers to `activity`.
+// the losers to `activity`; a winning intent is then handed to the intent
+// observer (the sync engine, which mirrors it and pushes it to the Provider).
 
 import type {
   Account,
@@ -209,6 +210,13 @@ export interface ListChangesOptions {
   limit: number;
 }
 
+/**
+ * Told after every intent that won last-writer-wins, once its transaction
+ * committed. The sync engine registers itself to mirror the write and push
+ * it to the Provider; a failure is logged and never reaches the caller.
+ */
+export type IntentObserver = (intent: Intent, workspaceId: Id) => Promise<void>;
+
 export interface Mailstore extends ContentStore {
   createWorkspace(account: Account): Promise<Workspace>;
   /**
@@ -228,15 +236,20 @@ export interface Mailstore extends ContentStore {
    * written to the Activity log and reported with `applied: false`.
    */
   applyIntent(intent: Intent): Promise<IntentResult>;
+  /** Registers who hears about winning intents (the sync engine). One at a time. */
+  setIntentObserver(observer: IntentObserver | null): void;
   /** Insert or update by (workspace, provider thread id). Encrypts the subject. */
   upsertThread(input: ThreadInput): Promise<Id>;
   /** The header projection of one Thread by its Provider id, or null. */
   findThread(workspaceId: Id, providerThreadId: string): Promise<Thread | null>;
-  /** Header-only update; works locked. */
+  /** Header-only update; works locked. Records a thread change when something actually changed. */
   updateThread(threadId: Id, patch: ThreadPatch): Promise<void>;
-  /** Removes a Message and, when it was the last one, its Thread. */
+  /** Removes a Message and, when it was the last one, its Thread; the feed says so either way. */
   deleteMessage(messageId: Id): Promise<{ threadDeleted: boolean }>;
-  /** Moves every Message and label of `fromThreadId` into `intoThreadId` and deletes the former. */
+  /**
+   * Moves every Message and label of `fromThreadId` into `intoThreadId` and
+   * deletes the former; the feed carries the moved Messages and the removal.
+   */
   mergeThreads(fromThreadId: Id, intoThreadId: Id): Promise<void>;
   /** Insert or update by (workspace, provider message id). Encrypts body and snippet. */
   upsertMessage(input: MessageInput): Promise<Id>;
@@ -471,8 +484,14 @@ function describeIntent(intent: Intent): string {
   }
 }
 
-export function createMailstore(db: Db, keys: Keys): Mailstore {
+export interface MailstoreOptions {
+  log?: (message: string) => void;
+}
+
+export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = {}): Mailstore {
   const content = createContentStore(keys);
+  const log = options.log ?? (() => {});
+  let intentObserver: IntentObserver | null = null;
 
   const requireThread = async (executor: Db | Tx, threadId: string) => {
     const row = await executor.query.threads.findFirst({ where: eq(threads.id, threadId) });
@@ -534,6 +553,76 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     });
   };
 
+  /** Records that a Thread row is gone: its last projection, marked removed (and deleted, for older clients). */
+  const recordThreadRemoved = async (executor: Db | Tx, row: ThreadRow) => {
+    const { tagIds, labelIds } = await linksOf(executor, row.id);
+    return store.recordChange(executor, {
+      workspaceId: row.workspaceId,
+      kind: "thread",
+      entityId: row.id,
+      payload: { ...projectThread(row, tagIds, labelIds), deleted: true, removed: true },
+    });
+  };
+
+  const messagePayload = (m: typeof messages.$inferSelect, removed = false) => ({
+    id: m.id,
+    threadId: m.threadId,
+    from: m.from,
+    to: m.to,
+    cc: m.cc,
+    date: m.date.toISOString(),
+    hasAttachments: m.hasAttachments,
+    ...(removed ? { removed: true } : {}),
+  });
+
+  /** The transactional half of applyIntent: last-writer-wins, the row, the feed. */
+  const applyIntentTx = (intent: Intent): Promise<IntentResult & { workspaceId: string }> =>
+    db.transaction(async (tx) => {
+      const row = await requireThread(tx, intent.threadId);
+      const group = FIELD_GROUP_OF[intent.kind];
+      const last = row.writes[group] ?? null;
+      const resolution = resolveWrite(intent, last);
+      if (!resolution.wins) {
+        await tx.insert(activity).values({
+          id: crypto.randomUUID(),
+          workspaceId: row.workspaceId,
+          actor: intent.actor,
+          tool: `thread.${intent.kind}`,
+          summary: `${describeIntent(intent)} on thread ${row.id} not applied: ${resolution.reason}`,
+          at: new Date(intent.at),
+        });
+        return { applied: false, reason: resolution.reason, workspaceId: row.workspaceId };
+      }
+      const writes: FieldWrites = {
+        ...row.writes,
+        [group]: { at: intent.at, by: intent.actor },
+      };
+      if (intent.kind === "tags") {
+        await tx.delete(threadTags).where(eq(threadTags.threadId, row.id));
+        const ids = [...new Set(intent.tags)];
+        if (ids.length > 0) {
+          await tx.insert(threadTags).values(ids.map((tagId) => ({ threadId: row.id, tagId })));
+        }
+        await tx
+          .update(threads)
+          .set({ writes, updatedAt: new Date() })
+          .where(eq(threads.id, row.id));
+        await store.recordChange(tx, {
+          workspaceId: row.workspaceId,
+          kind: "thread_tags",
+          entityId: row.id,
+          payload: { threadId: row.id, ids },
+        });
+        return { applied: true, workspaceId: row.workspaceId };
+      }
+      await tx
+        .update(threads)
+        .set({ ...intentColumns(intent), writes, updatedAt: new Date() })
+        .where(eq(threads.id, row.id));
+      await recordThread(tx, row.id);
+      return { applied: true, workspaceId: row.workspaceId };
+    });
+
   const store: Mailstore = {
     storeContent: content.storeContent,
     readContent: content.readContent,
@@ -589,52 +678,22 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       return Number(row?.seq ?? 0);
     },
 
+    setIntentObserver(observer) {
+      intentObserver = observer;
+    },
+
     async applyIntent(intent) {
-      return db.transaction(async (tx) => {
-        const row = await requireThread(tx, intent.threadId);
-        const group = FIELD_GROUP_OF[intent.kind];
-        const last = row.writes[group] ?? null;
-        const resolution = resolveWrite(intent, last);
-        if (!resolution.wins) {
-          await tx.insert(activity).values({
-            id: crypto.randomUUID(),
-            workspaceId: row.workspaceId,
-            actor: intent.actor,
-            tool: `thread.${intent.kind}`,
-            summary: `${describeIntent(intent)} on thread ${row.id} not applied: ${resolution.reason}`,
-            at: new Date(intent.at),
-          });
-          return { applied: false, reason: resolution.reason };
+      const result = await applyIntentTx(intent);
+      if (result.applied && intentObserver) {
+        try {
+          await intentObserver(intent, result.workspaceId);
+        } catch (error) {
+          log(
+            `intent observer ${intent.kind} on ${intent.threadId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-        const writes: FieldWrites = {
-          ...row.writes,
-          [group]: { at: intent.at, by: intent.actor },
-        };
-        if (intent.kind === "tags") {
-          await tx.delete(threadTags).where(eq(threadTags.threadId, row.id));
-          const ids = [...new Set(intent.tags)];
-          if (ids.length > 0) {
-            await tx.insert(threadTags).values(ids.map((tagId) => ({ threadId: row.id, tagId })));
-          }
-          await tx
-            .update(threads)
-            .set({ writes, updatedAt: new Date() })
-            .where(eq(threads.id, row.id));
-          await store.recordChange(tx, {
-            workspaceId: row.workspaceId,
-            kind: "thread_tags",
-            entityId: row.id,
-            payload: { threadId: row.id, ids },
-          });
-          return { applied: true };
-        }
-        await tx
-          .update(threads)
-          .set({ ...intentColumns(intent), writes, updatedAt: new Date() })
-          .where(eq(threads.id, row.id));
-        await recordThread(tx, row.id);
-        return { applied: true };
-      });
+      }
+      return { applied: result.applied, ...(result.reason ? { reason: result.reason } : {}) };
     },
 
     async createWorkspace(account) {
@@ -714,35 +773,53 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     },
 
     async updateThread(threadId, patch) {
-      await requireThread(db, threadId);
-      await db
-        .update(threads)
-        .set({
-          ...(patch.unread !== undefined ? { unread: patch.unread } : {}),
-          ...(patch.starred !== undefined ? { starred: patch.starred } : {}),
-          ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
-          ...(patch.participants !== undefined ? { participants: patch.participants } : {}),
-          ...(patch.lastActivity !== undefined
-            ? { lastActivity: new Date(patch.lastActivity) }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(threads.id, threadId));
+      const row = await requireThread(db, threadId);
+      const next = {
+        unread: patch.unread ?? row.unread,
+        starred: patch.starred ?? row.starred,
+        archived: patch.archived ?? row.archived,
+        participants: patch.participants ?? row.participants,
+        lastActivity: patch.lastActivity ? new Date(patch.lastActivity) : row.lastActivity,
+      };
+      const changed =
+        next.unread !== row.unread ||
+        next.starred !== row.starred ||
+        next.archived !== row.archived ||
+        next.lastActivity.getTime() !== row.lastActivity.getTime() ||
+        JSON.stringify(next.participants) !== JSON.stringify(row.participants);
+      if (!changed) return;
+      await db.transaction(async (tx) => {
+        await tx
+          .update(threads)
+          .set({ ...next, updatedAt: new Date() })
+          .where(eq(threads.id, threadId));
+        // A flag the Provider flipped (read on the phone) reaches every Device through the feed.
+        await recordThread(tx, threadId);
+      });
     },
 
     async deleteMessage(messageId) {
       const message = await requireMessage(db, messageId);
       return db.transaction(async (tx) => {
         await tx.delete(messages).where(eq(messages.id, messageId));
+        await store.recordChange(tx, {
+          workspaceId: message.workspaceId,
+          kind: "message",
+          entityId: message.id,
+          payload: messagePayload(message, true),
+        });
         const [agg] = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(messages)
           .where(eq(messages.threadId, message.threadId));
         if ((agg?.count ?? 0) === 0) {
+          const thread = await requireThread(tx, message.threadId);
+          await recordThreadRemoved(tx, thread);
           await tx.delete(threads).where(eq(threads.id, message.threadId));
           return { threadDeleted: true };
         }
         await refreshThread(tx, message.threadId);
+        await recordThread(tx, message.threadId);
         return { threadDeleted: false };
       });
     },
@@ -752,10 +829,19 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const from = await requireThread(db, fromThreadId);
       const into = await requireThread(db, intoThreadId);
       await db.transaction(async (tx) => {
-        await tx
+        const moved = await tx
           .update(messages)
           .set({ threadId: intoThreadId })
-          .where(eq(messages.threadId, fromThreadId));
+          .where(eq(messages.threadId, fromThreadId))
+          .returning();
+        for (const m of moved) {
+          await store.recordChange(tx, {
+            workspaceId: m.workspaceId,
+            kind: "message",
+            entityId: m.id,
+            payload: messagePayload(m),
+          });
+        }
         const fromLabels = await tx
           .select({ labelId: threadLabels.labelId })
           .from(threadLabels)
@@ -778,8 +864,10 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
             updatedAt: new Date(),
           })
           .where(eq(threads.id, intoThreadId));
+        await recordThreadRemoved(tx, from);
         await tx.delete(threads).where(eq(threads.id, fromThreadId));
         await refreshThread(tx, intoThreadId);
+        await recordThread(tx, intoThreadId);
       });
     },
 
@@ -831,15 +919,7 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
           workspaceId,
           kind: "message",
           entityId: stored,
-          payload: {
-            id: stored,
-            threadId: input.threadId,
-            from: message.from,
-            to: message.to,
-            cc: message.cc,
-            date: message.date.toISOString(),
-            hasAttachments: message.hasAttachments,
-          },
+          payload: messagePayload(message),
         });
         await recordThread(tx, input.threadId);
         return stored;

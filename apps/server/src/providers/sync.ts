@@ -1,12 +1,20 @@
 // The sync engine: Provider events in, Mailstore writes out. Owns the
 // sync_state and sync_messages tables (its mirror of what the Provider holds)
-// and three Job steps: provider.sync (a bounded slice of work, newest first,
+// and four Job steps: provider.sync (a bounded slice of work, newest first,
 // headers before bodies), provider.watch (holds the push connection in this
-// process; needs-process) and provider.reconcile (the periodic full pass,
-// because notifications are lossy). Threading is the Provider's when it has
-// Threads, else threading.ts over the mirror.
+// process; needs-process), provider.reconcile (the periodic full pass,
+// because notifications are lossy) and provider.change (one inbox action
+// pushed to the Provider). Threading is the Provider's when it has Threads,
+// else threading.ts over the mirror.
+//
+// The other direction: a winning intent (an archive, a read, a star, a
+// snooze, a delete) reaches the engine through the Mailstore's intent
+// observer. The engine applies its effect to the mirror at once, so the next
+// pass computes the Thread the way the user left it, and enqueues a
+// provider.change Job that carries it to the Provider with retries; the
+// reconcile pass corrects the mirror if the Provider never took it.
 
-import type { Person, Provider as ProviderKind } from "@monday/shared";
+import type { Intent, Person, Provider as ProviderKind } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
@@ -29,6 +37,7 @@ import type {
   Change,
   Flags,
   Mailbox,
+  MailboxRole,
   MessageSummary,
   ProviderError,
   RawMessage,
@@ -40,6 +49,7 @@ import type {
 export const SYNC_STEP = "provider.sync";
 export const WATCH_STEP = "provider.watch";
 export const RECONCILE_STEP = "provider.reconcile";
+export const CHANGE_STEP = "provider.change";
 
 /** Mailboxes the engine keeps out: duplicates of everything (Gmail All Mail), views, spam. */
 const SKIPPED_ROLES = new Set(["all", "junk", "flagged", "important", "subscribed"]);
@@ -178,6 +188,13 @@ export interface SyncEngine {
   setArrivalHook(hook: ArrivalHook): void;
   /** Applies an inbox action at the Provider and mirrors it locally. Ids are Mailstore ids. */
   applyChange(accountId: string, target: EngineChangeTarget, change: Change): Promise<void>;
+  /**
+   * A winning intent from a Device or the Agent: its effect lands on the
+   * mirror now and a provider.change Job carries it to the Provider. The
+   * Mailstore's intent observer; a Thread the engine does not mirror (no
+   * Provider rows yet) is left alone.
+   */
+  recordIntent(intent: Intent, workspaceId: string): Promise<void>;
   /** Starts (or confirms) the push watcher for an Account in this process. */
   watch(accountId: string): Promise<{ supported: boolean; running: boolean }>;
   /** Stops a watcher. */
@@ -204,6 +221,43 @@ export interface SyncEngineOptions {
 interface SyncPayload {
   accountId: string;
   mailboxIds?: string[];
+}
+
+interface ChangePayload {
+  accountId: string;
+  threadId: string;
+  change: Change;
+}
+
+/**
+ * The Provider action an intent maps to (docs/spec/inbox.md, "Action
+ * semantics"), or null when the intent is monday's alone (a move between
+ * Groups, Tags). A snooze leaves the Inbox with archive semantics; its wake,
+ * an unsnooze, and an undelete bring the Thread back to the Inbox.
+ */
+export function providerChangeOf(intent: Intent, inboxId: string | null): Change | null {
+  switch (intent.kind) {
+    case "archive":
+    case "snooze":
+      return { kind: "archive" };
+    case "unarchive":
+    case "unsnooze":
+    case "undelete":
+      return inboxId ? { kind: "move", mailboxId: inboxId } : null;
+    case "star":
+      return { kind: "star", value: true };
+    case "unstar":
+      return { kind: "star", value: false };
+    case "read":
+      return { kind: "read", value: true };
+    case "unread":
+      return { kind: "read", value: false };
+    case "delete":
+      return { kind: "delete" };
+    case "move":
+    case "tags":
+      return null;
+  }
 }
 
 interface AccountRow {
@@ -273,6 +327,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
   /* ------------------------------ Accounts and Sessions ------------------------------ */
 
+  async function accountIdOf(workspaceId: string): Promise<string | null> {
+    const row = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { accountId: true },
+    });
+    return row?.accountId ?? null;
+  }
+
   async function account(accountId: string): Promise<AccountRow> {
     const [row] = await db
       .select({
@@ -325,6 +387,24 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     mailboxes: Mailbox[];
     labelIdOf: Map<string, string>;
     inboxId: string | null;
+  }
+
+  /** The mailbox map from the labels table alone, for work that must not open a Session. */
+  async function mailboxMapFromLabels(workspaceId: string): Promise<MailboxMap> {
+    const rows = await db.select().from(labels).where(eq(labels.workspaceId, workspaceId));
+    const mailboxes: Mailbox[] = rows.map((r) => ({
+      id: r.providerId,
+      name: r.name,
+      role: (r.role as MailboxRole | null) ?? null,
+      parentId: null,
+      totalMessages: null,
+      unreadMessages: null,
+    }));
+    return {
+      mailboxes,
+      labelIdOf: new Map(rows.map((r) => [r.providerId, r.id])),
+      inboxId: rows.find((r) => r.role === "inbox")?.providerId ?? null,
+    };
   }
 
   async function syncMailboxList(workspaceId: string, s: Session): Promise<MailboxMap> {
@@ -1087,6 +1167,42 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       bodyObserver = observer;
     },
 
+    async recordIntent(intent, workspaceId) {
+      const rows = await db
+        .select()
+        .from(syncMessages)
+        .where(
+          and(
+            eq(syncMessages.workspaceId, workspaceId),
+            eq(syncMessages.threadId, intent.threadId),
+          ),
+        );
+      if (rows.length === 0) return;
+      const map = await mailboxMapFromLabels(workspaceId);
+      const change = providerChangeOf(intent, map.inboxId);
+      if (!change) return;
+      // The mirror takes the user's word now; the pass never flips the row back while the Job is on its way.
+      for (const row of rows) {
+        await db
+          .update(syncMessages)
+          .set({ ...localEffect(row, change, map), updatedAt: now() })
+          .where(
+            and(
+              eq(syncMessages.workspaceId, workspaceId),
+              eq(syncMessages.providerId, row.providerId),
+            ),
+          );
+      }
+      await refreshThread(intent.threadId, map);
+      const accountId =
+        rows[0]?.workspaceId === workspaceId ? await accountIdOf(workspaceId) : null;
+      if (!accountId || !jobsRef) return;
+      const payload: ChangePayload = { accountId, threadId: intent.threadId, change };
+      await jobsRef.enqueue(CHANGE_STEP, payload, {
+        id: `${CHANGE_STEP}:${intent.threadId}:${intent.kind}:${intent.at}`,
+      });
+    },
+
     async applyChange(accountId, target, change) {
       const acct = await account(accountId);
       const rows =
@@ -1164,6 +1280,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         const { supported, running } = await engine.watch(job.payload.accountId);
         if (!supported) return "done";
         return running ? { sleepMs: WATCH_RENEW_MS } : "again";
+      });
+      jobs.registerStep<ChangePayload>(CHANGE_STEP, async (job) => {
+        await engine.applyChange(
+          job.payload.accountId,
+          { threadId: job.payload.threadId },
+          job.payload.change,
+        );
+        return "done";
       });
       jobs.registerStep<SyncPayload>(RECONCILE_STEP, async (job, ctx) => {
         const settingsNow = await readSettings();

@@ -203,6 +203,7 @@ async function main() {
         ? createLineNotifier((line) => console.log(line))
         : createMemoryNotifier((line) => log(line)),
     publicUrl: publicUrlReader(handle.db, process.env),
+    log,
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");

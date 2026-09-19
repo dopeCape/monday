@@ -160,6 +160,7 @@ export async function bootCloud(
     // No desktop on a Cloud Server: an external approval waits in the pending items and is logged.
     notifier: createMemoryNotifier((line) => log(line)),
     publicUrl: publicUrlReader(handle.db, env),
+    log,
   });
 
   const boot: CloudBoot = {

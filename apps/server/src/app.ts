@@ -80,6 +80,7 @@ import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
 import { readGlobalSettings } from "./settings/read.ts";
+import { createSnoozeWaker } from "./snooze.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -171,6 +172,18 @@ export interface AppOptions {
   log?: (message: string) => void;
 }
 
+/** Whether an error, or the cause under it, says the database connection is gone. */
+function connectionGone(error: unknown): boolean {
+  for (let e = error, depth = 0; e && depth < 5; depth++) {
+    const code = (e as { code?: unknown }).code;
+    const message = (e as { message?: unknown }).message;
+    if (code === "CONNECTION_ENDED" || code === "CONNECTION_CLOSED") return true;
+    if (typeof message === "string" && /CONNECTION_(ENDED|CLOSED)/.test(message)) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 export function createApp(options: AppOptions): Hono<AppEnv> {
   const { db, auth, mode } = options;
   const keys = options.keys ?? createKeys(db);
@@ -228,6 +241,23 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       await intelligence.workflows.onArrival(arrival.workspaceId, arrival.threadId);
     });
   }
+  // A winning intent (a Device, the Agent, a Workflow) reaches the Provider
+  // through the sync engine's mirror and its provider.change Job, and a snooze
+  // arms the Job that brings the Thread back (docs/spec/inbox.md).
+  const snooze = createSnoozeWaker({
+    db,
+    mailstore,
+    ...(options.now ? { now: options.now } : {}),
+    log: (m) => console.warn(`[snooze] ${m}`),
+  });
+  if (options.jobs) {
+    snooze.registerSteps(options.jobs);
+    snooze.armAll().catch((error) => console.warn(`[snooze] arming failed: ${error}`));
+  }
+  mailstore.setIntentObserver(async (intent, workspaceId) => {
+    await snooze.observe(intent, workspaceId);
+    if (options.sync) await options.sync.recordIntent(intent, workspaceId);
+  });
   const placement = async (threadId: string) => {
     const row = await db.query.threads.findFirst({
       where: eq(threads.id, threadId),
@@ -298,12 +328,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       );
     }
   };
-  keys.onUnlock(sealLegacy);
-  if (keys.isUnlocked()) {
-    sealLegacy().catch((error) =>
-      log(`[hardening] sweep failed: ${error instanceof Error ? error.message : String(error)}`),
-    );
-  }
+  const sweep = () =>
+    sealLegacy().catch((error) => {
+      // A database that went away under the sweep (shutdown, a dropped test database) is not news.
+      if (!connectionGone(error)) {
+        log(`[hardening] sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  keys.onUnlock(sweep);
+  if (keys.isUnlocked()) void sweep();
 
   const app = new Hono<AppEnv>();
 
