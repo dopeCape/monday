@@ -990,6 +990,16 @@ export const settingsSchema = {
     label: "Gmail watch renewal",
     help: "Hours between renewals of the Gmail push watch. Gmail stops notifying after seven days without one.",
   }),
+  "sync.gmail_push_service_account": setting({
+    type: z.string().max(320),
+    default: "",
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    advanced: true,
+    label: "Gmail push signing account",
+    help: "The service account email Pub/Sub signs push deliveries as (the Google project's Pub/Sub push subscription needs a service account with roles/iam.serviceAccountTokenCreator granted to the Pub/Sub service agent). The Cloud verifies every Gmail push against it; empty means no push subscription is registered and Gmail is polled on the reconcile interval.",
+  }),
   "sync.graph_subscription_renew_hours": setting({
     type: z.int().min(1).max(144),
     default: 72,

@@ -39,6 +39,9 @@ import type { LoopbackListener } from "../../src/routes/oauth.ts";
 import { type TestDatabase, testDatabase } from "../harness.ts";
 import { createGmailServer, type GmailServer } from "./gmail-server.ts";
 import { createGraphServer, type GraphServer } from "./graph-server.ts";
+import { createOidcSigner, googlePushClaims, type OidcSigner } from "./oidc-signer.ts";
+
+const PUSH_ACCOUNT = "monday-push@monday-test.iam.gserviceaccount.com";
 
 const fixture = generateFixture();
 const SIDECAR_TOKEN = "per-launch-token";
@@ -80,6 +83,8 @@ describe("push registrations, webhooks and the OAuth routes", () => {
   let gmail: GmailServer;
   let graph: GraphServer;
   let publicUrl: string | null = null;
+  let pushServiceAccount = "";
+  let signer: OidcSigner;
   const loopback = fakeLoopback();
   let gmailAccountId = "";
   let graphAccountId = "";
@@ -100,6 +105,7 @@ describe("push registrations, webhooks and the OAuth routes", () => {
 
   beforeAll(async () => {
     db = await testDatabase();
+    signer = await createOidcSigner();
     gmail = createGmailServer(fixture);
     graph = createGraphServer(fixture);
     const keys = createKeys(db.handle.db);
@@ -131,10 +137,12 @@ describe("push registrations, webhooks and the OAuth routes", () => {
       engine,
       serverId: "cloud-1",
       publicUrl: async () => publicUrl,
+      jwks: signer.jwks,
       settings: async () => ({
         gmailWatchRenewHours: 24,
         graphSubscriptionRenewHours: 72,
         publicUrl: "",
+        gmailPushServiceAccount: pushServiceAccount,
       }),
     });
     push.registerSteps(jobs);
@@ -348,14 +356,29 @@ describe("push registrations, webhooks and the OAuth routes", () => {
     expect(await runStep(GRAPH_SUBSCRIBE_STEP)).toEqual({ sleepMs: NO_PUBLIC_URL_SLEEP_MS });
 
     publicUrl = "https://monday.example";
+    // A public URL but no signing account: nothing is registered that the webhook could not verify.
+    expect(await runStep(GMAIL_PUSH_SUBSCRIBE_STEP)).toEqual({ sleepMs: NO_PUBLIC_URL_SLEEP_MS });
+    expect(
+      (await readPushState(db.handle.db, gmailAccountId)).gmail?.pushSubscription ?? null,
+    ).toBeNull();
+
+    pushServiceAccount = PUSH_ACCOUNT;
     expect(await runStep(GMAIL_PUSH_SUBSCRIBE_STEP)).toEqual({ sleepMs: 24 * 3_600_000 });
     const gmailState = (await readPushState(db.handle.db, gmailAccountId)).gmail;
     expect(gmailState?.registeredBy).toBe("cloud-1");
     expect(gmailState?.pushSecret).toBeTruthy();
+    expect(gmailState?.pushServiceAccount).toBe(PUSH_ACCOUNT);
+    expect(gmailState?.pushAudience).toBe(
+      `https://monday.example/webhooks/gmail/${gmailAccountId}`,
+    );
     const sub = gmail.subscriptions.get(gmailState?.pushSubscription ?? "");
     expect(sub).toMatchObject({
       pushConfig: {
         pushEndpoint: `https://monday.example/webhooks/gmail/${gmailAccountId}?secret=${gmailState?.pushSecret}`,
+        oidcToken: {
+          serviceAccountEmail: PUSH_ACCOUNT,
+          audience: `https://monday.example/webhooks/gmail/${gmailAccountId}`,
+        },
       },
     });
 
@@ -378,8 +401,9 @@ describe("push registrations, webhooks and the OAuth routes", () => {
     );
   });
 
-  test("the Gmail webhook checks the secret and wakes sync", async () => {
+  test("the Gmail webhook verifies the Pub/Sub OIDC token, then the secret, and wakes sync", async () => {
     const state = (await readPushState(db.handle.db, gmailAccountId)).gmail;
+    const audience = state?.pushAudience ?? "";
     const envelope = {
       message: {
         data: btoa(JSON.stringify({ emailAddress: fixture.address, historyId: 5 })),
@@ -387,33 +411,70 @@ describe("push registrations, webhooks and the OAuth routes", () => {
       },
       subscription: state?.pushSubscription,
     };
-    const forbidden = await app.request(`/webhooks/gmail/${gmailAccountId}?secret=wrong`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(envelope),
+    const post = (secret: string, bearer: string | null, body: unknown = envelope) =>
+      app.request(`/webhooks/gmail/${gmailAccountId}?secret=${secret}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    const token = await signer.sign(googlePushClaims(audience, PUSH_ACCOUNT, Date.now()));
+    const secret = state?.pushSecret ?? "";
+
+    // The secret alone is no longer enough.
+    expect((await post(secret, null)).status).toBe(403);
+    expect(await push.gmailWebhookVerdict(gmailAccountId, secret, envelope, null)).toEqual({
+      ok: false,
+      reason: "no_token",
     });
-    expect(forbidden.status).toBe(403);
+    // A token for another endpoint or signed as another account.
+    const elsewhere = await signer.sign(
+      googlePushClaims("https://elsewhere.test/webhooks/gmail/x", PUSH_ACCOUNT, Date.now()),
+    );
+    expect((await post(secret, elsewhere)).status).toBe(403);
+    const impostor = await signer.sign(googlePushClaims(audience, "evil@x.test", Date.now()));
+    expect(await push.gmailWebhookVerdict(gmailAccountId, secret, envelope, impostor)).toEqual({
+      ok: false,
+      reason: "token",
+    });
+    // A good token with the wrong secret.
+    expect((await post("wrong", token)).status).toBe(403);
+    expect(await push.gmailWebhookVerdict(gmailAccountId, "wrong", envelope, token)).toEqual({
+      ok: false,
+      reason: "secret",
+    });
+
     const before = await queuedSyncJobs(gmailAccountId);
-    const ok = await app.request(`/webhooks/gmail/${gmailAccountId}?secret=${state?.pushSecret}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(envelope),
-    });
-    expect(ok.status).toBe(204);
+    expect((await post(secret, token)).status).toBe(204);
     expect(await queuedSyncJobs(gmailAccountId)).toBe(before + 1);
     // Someone else's address is acknowledged and ignored.
-    const other = await app.request(
-      `/webhooks/gmail/${gmailAccountId}?secret=${state?.pushSecret}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          message: { data: btoa(JSON.stringify({ emailAddress: "x@y.test", historyId: 6 })) },
-        }),
-      },
-    );
+    const other = await post(secret, token, {
+      message: { data: btoa(JSON.stringify({ emailAddress: "x@y.test", historyId: 6 })) },
+    });
     expect(other.status).toBe(204);
     expect(await queuedSyncJobs(gmailAccountId)).toBe(before + 1);
+    // An Account with no registration refuses everything.
+    expect(await push.gmailWebhookVerdict(graphAccountId, secret, envelope, token)).toEqual({
+      ok: false,
+      reason: "no_registration",
+    });
+  });
+
+  test("clearing the signing account drops the push subscription so nothing delivers unverifiably", async () => {
+    const before = (await readPushState(db.handle.db, gmailAccountId)).gmail;
+    expect(before?.pushSubscription).toBeTruthy();
+    pushServiceAccount = "";
+    expect(await runStep(GMAIL_PUSH_SUBSCRIBE_STEP)).toEqual({ sleepMs: NO_PUBLIC_URL_SLEEP_MS });
+    const after = (await readPushState(db.handle.db, gmailAccountId)).gmail;
+    expect(after?.pushSubscription).toBeNull();
+    expect(after?.pushServiceAccount).toBeNull();
+    expect(gmail.subscriptions.has(before?.pushSubscription ?? "")).toBe(false);
+    // The pull subscription (the Sidecar's watch) is untouched.
+    expect(after?.pushSecret).toBe(before?.pushSecret ?? null);
+    pushServiceAccount = PUSH_ACCOUNT;
+    expect(await runStep(GMAIL_PUSH_SUBSCRIBE_STEP)).toEqual({ sleepMs: 24 * 3_600_000 });
   });
 
   test("the Graph webhook answers the handshake, checks clientState, and lifecycle events reregister", async () => {

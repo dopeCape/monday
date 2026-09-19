@@ -111,14 +111,24 @@ export async function ensurePullSubscription(
   return subscription;
 }
 
+/** The OIDC token Pub/Sub signs each push delivery with (gmail/oidc.ts verifies it). */
+export interface PushOidc {
+  serviceAccountEmail: string;
+  audience: string;
+}
+
 export async function ensurePushSubscription(
   client: GmailClient,
   topic: string,
   pushEndpoint: string,
+  oidc: PushOidc,
   subscription = subscriptionNameFor(topic, "push"),
 ): Promise<string> {
   await ensureSubscription(client, topic, subscription, {
-    pushConfig: { pushEndpoint },
+    pushConfig: {
+      pushEndpoint,
+      oidcToken: { serviceAccountEmail: oidc.serviceAccountEmail, audience: oidc.audience },
+    },
   });
   return subscription;
 }

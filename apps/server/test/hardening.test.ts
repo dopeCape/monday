@@ -443,13 +443,7 @@ describe("transcripts and checkpoints under the envelope", () => {
     `;
     const swept = await intelligence.sealLegacy();
     expect(swept.integrations).toBe(2);
-    expect(await intelligence.integrationSecrets.list()).toEqual(
-      ["discord", "slack"].sort(
-        (a, b) =>
-          ["slack", "notion", "drive", "discord", "webhook"].indexOf(a) -
-          ["slack", "notion", "drive", "discord", "webhook"].indexOf(b),
-      ),
-    );
+    expect(await intelligence.integrationSecrets.list()).toEqual(["slack", "discord"]);
     expect(await intelligence.integrationSecrets.load("discord")).toEqual({
       webhookUrl: "https://discord.test/api/webhooks/1/hippo",
     });
