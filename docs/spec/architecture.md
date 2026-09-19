@@ -74,11 +74,17 @@ One HTTP JSON API on the Server, typed routes, a generated client in `packages/s
 - `/workflows`, `/workflows/:id/versions`, `/runs`, `/runs/:id/retry`, `/runs/:id/approve`.
 - `/sessions`, `/sessions/:id/turns` (the turn streams its events over SSE on the POST itself), `/sessions/:id/approvals/:activityId`, `/activity`, `/activity/:id/undo`, `/agent/tools`.
 - `/calendar/events`, `/calendar/invites/:id/rsvp`.
-- `/settings`, `/devices`, `/pair`, `/credentials`.
+- `/settings`, `/devices` (with `/devices/me` and `/devices/pending`, the codes waiting for approval), `/pair`, `/storage`, `/credentials`.
 - `/mcp`: the external MCP transport (streamable HTTP).
 - `/health`, `/capabilities` (protocol version, mode, features).
 
 The Sidecar serves the same API on loopback with the per-launch token, plus the pairing UI when a Cloud is configured.
+
+## Settings screens
+
+- Every page is rendered from the settings schema by `apps/desktop/src/screens/settings/render.tsx`: a section's keys arranged into groups (`SETTING_GROUPS`, `groupsInSection`), one control per key from its control shape (`describeSetting`) or from the named special control the entry declares (`control`), Advanced folded per group, keys another control renders (`renderedBy`) nested with their own `data-setting`. A key added with a `section` and no other metadata lands under a group derived from its prefix.
+- Panels that are not Settings (Accounts, Voice profile, the Config file, the Groups tree, the Meter, the Activity log, the Server, Devices, Storage, About) register against a group name. "Ask monday" inputs hand text to the composer; nothing on these pages calls a model.
+- The Local runtime detection seam is `RuntimeDetection` on the screen; the Permissions tier list renders from `TOOL_TIERS` in `packages/shared`, which a Server test pins to the tool catalog.
 
 ## Runtimes
 

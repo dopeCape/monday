@@ -1,4 +1,5 @@
 export { editConfigKey, formatValue, type TomlValue } from "./edit.ts";
+export { indexLines, type LineIndex, lineOf, splitKey } from "./lines.ts";
 export {
   BASE16_MAPPING,
   BASE16_SLOTS,

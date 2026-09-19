@@ -371,10 +371,16 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
     },
     devices: {
       list: () => request<Device[]>("/devices"),
+      /** The caller: this Device's id, or the Sidecar's fixed one. */
+      me: () => request<DeviceMe>("/devices/me"),
+      /** Pairing codes other Devices are showing and waiting on, plus whether the setup code still applies. */
+      pending: () => request<PendingPairings>("/devices/pending"),
       revoke: (id: Id) => raw(`/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
       /** Approves a pairing code another Device is showing (ADR 0006). */
       confirm: (code: string) => request<{ ok: boolean }>("/pair/confirm", json("POST", { code })),
     },
+    /** What the Server holds: message count and database size, for the Storage line. */
+    storage: () => request<StorageInfo>("/storage"),
     upgrade: {
       status: () => request<UpgradeStatus>("/upgrade"),
       export: () => request<ExportResult>("/upgrade/export", { method: "POST" }),
@@ -531,6 +537,30 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         }),
     },
   };
+}
+
+/* ------------------------------ Devices and storage (ADR 0006) ------------------------------ */
+
+export interface DeviceMe {
+  id: Id;
+  kind: "device" | "sidecar";
+}
+
+export interface PendingPairing {
+  code: string;
+  name: string;
+  expiresAt: string;
+}
+
+export interface PendingPairings {
+  pending: PendingPairing[];
+  /** The one-time setup code would still be accepted: no Device has paired yet. */
+  setupAvailable: boolean;
+}
+
+export interface StorageInfo {
+  messages: number;
+  bytes: number;
 }
 
 /* ------------------------------ Upgrade shapes (ADR 0008) ------------------------------ */

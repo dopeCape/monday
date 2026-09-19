@@ -1,9 +1,10 @@
 /// <reference types="bun-types" />
 // Settings › Server through the DOM with happy-dom: the three upgrade cards
 // with their env vars and Deploy links on a Sidecar-only install, the
-// database copy, the re-pairing with a Cloud URL and a setup code (and the
-// confirm-from-another-device path), and the Devices list. The server is a
-// scripted Api, the Cloud a scripted fetch, the browser opener a spy.
+// database copy, and the re-pairing with a Cloud URL and a setup code (and the
+// confirm-from-another-device path). The Devices list and the schema-backed
+// controls are the renderer's (Settings.test.tsx). The server is a scripted
+// Api, the Cloud a scripted fetch, the browser opener a spy.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Capabilities, Device, HostedState } from "@monday/shared";
@@ -67,6 +68,10 @@ function fakeApi(over: { capabilities?: Capabilities; devices?: Device[] } = {})
   const devices = over.devices ?? [];
   const api: Api = {
     ...base,
+    settings: {
+      all: async () => ({ global: {}, device: {} }),
+      set: async (key, value, scope) => ({ key, value, scope }),
+    },
     capabilities: async () => over.capabilities ?? caps(),
     upgrade: {
       status: async () => ({
@@ -98,6 +103,8 @@ function fakeApi(over: { capabilities?: Capabilities; devices?: Device[] } = {})
     },
     devices: {
       list: async () => devices,
+      me: async () => ({ id: devices[0]?.id ?? "d0", kind: "device" as const }),
+      pending: async () => ({ pending: [], setupAvailable: false }),
       revoke: async (id) => {
         calls.push({ name: "revoke", args: [id] });
         return new Response(null, { status: 204 });
@@ -328,7 +335,7 @@ describe("Settings › Server on a Sidecar-only install", () => {
 describe("Settings › Server once a Cloud is paired", () => {
   const cloud: CloudTarget = { baseUrl: "https://monday.example", token: "tok", deviceId: "d1" };
 
-  test("shows both, the preference, the attach step and the devices; hides the cards", async () => {
+  test("shows both and the attach step; hides the cards", async () => {
     const m = await mount(
       {},
       {
@@ -351,11 +358,6 @@ describe("Settings › Server once a Cloud is paired", () => {
     expect(text()).toContain("Cloud at monday.example");
     expect(document.querySelector(".upgrade-cards")).toBeNull();
     expect(text()).toContain("Connected to monday.example");
-    expect(text()).toContain("Laptop");
-
-    // The preference is the server.prefer Setting.
-    await clickText("Sidecar");
-    await settle();
 
     // Attaching the Sidecar to the Cloud database records it for the next launch.
     // The Move section above has the first database input; the attach step the second.
@@ -377,13 +379,6 @@ describe("Settings › Server once a Cloud is paired", () => {
     await settle();
     expect(m.calls).toContainEqual({ name: "attach", args: ["postgres://u:p@db/monday"] });
     expect(text()).toContain("Restart monday to finish.");
-
-    // Approving a code another device shows.
-    await type("input[placeholder='000000']", "123456");
-    await clickText("Approve a code");
-    await settle();
-    expect(m.calls).toContainEqual({ name: "confirm", args: ["123456"] });
-    expect(text()).toContain("Approved");
 
     await clickText("Disconnect");
     await settle();

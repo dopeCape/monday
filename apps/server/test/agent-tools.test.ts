@@ -5,7 +5,12 @@
 // scripted model driving the loop end to end without a network or Postgres.
 
 import { describe, expect, test } from "bun:test";
-import type { AgentEvent, ApprovalDecision, ToolPreview } from "@monday/shared";
+import {
+  type AgentEvent,
+  type ApprovalDecision,
+  TOOL_TIERS,
+  type ToolPreview,
+} from "@monday/shared";
 import {
   createAgentHost,
   createMemoryActivityLog,
@@ -107,6 +112,8 @@ describe("the tool catalog", () => {
       forward_thread: "leaves_mailbox",
       undo: "read",
     });
+    // The shared list the Settings screens render the Permissions tiers from matches the catalog.
+    expect(tiers).toEqual(TOOL_TIERS);
     const mcp = server.mcpTools();
     expect(mcp.map((t) => t.name)).toEqual(TOOL_CATALOG.map((t) => t.name));
     const send = mcp.find((t) => t.name === "send_draft");

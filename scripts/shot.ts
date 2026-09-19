@@ -38,6 +38,12 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   { name: "compose", app: "/?compose=d1", mock: "/app.html?chrome=0&overlay=compose" },
   // Slice 12: the Routing page over the fixture Groups and the Needs a decision queue.
   { name: "routing", app: "/?screen=routing", mock: "/app.html?chrome=0#/routing" },
+  // Slice 17: every Settings section the mock has, rendered from the schema.
+  ...["accounts", "appearance", "ai", "workflows", "server", "shortcuts", "about"].map((s) => ({
+    name: `settings-${s}`,
+    app: `/?screen=settings&section=${s}`,
+    mock: `/app.html?chrome=0#/settings/${s}`,
+  })),
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {

@@ -1,311 +1,219 @@
-// Settings › Accounts and Appearance over the Shell. Every control comes from the
-// settings schema; a Pinned key renders locked with "set in monday.toml" (ADR 0001,
-// docs/spec/settings.md). Accounts lists what is connected and hosts the add-account
-// paths (slice 9); Server holds the mode, the upgrade cards and the devices
-// (slice 21); the remaining sections arrive in slice 17.
+// Settings over the Shell (docs/spec/settings.md, ADR 0001, ADR 0004): the
+// section nav, one schema-rendered page per section, and the undo toast every
+// change offers. Every control comes from the settings schema through
+// settings/render.tsx; the special controls and the panels register there
+// from settings/controls.tsx and settings/panels.tsx. Nothing here is a
+// hand-built settings screen. "Ask monday" inputs hand their text to the
+// composer through `onAsk`; nothing on these pages calls a model.
 
-import { type Density, type SettingKey, settingsSchema, type ThemeMode } from "@monday/shared";
-import { Btn, palettes, Seg, SettingsField, Swatch, Tag } from "@monday/ui";
+import {
+  SETTING_SECTIONS,
+  type SettingKey,
+  type SettingSection,
+  settingsSchema,
+} from "@monday/shared";
 import {
   AtIcon,
   CloudIcon,
-  GearSixIcon,
-  MonitorIcon,
-  MoonIcon,
+  CpuIcon,
+  FlowArrowIcon,
+  InfoIcon,
+  KeyboardIcon,
   PaletteIcon,
-  SunIcon,
+  ShuffleIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
-import type { AccountView } from "../platform/api.ts";
-import { useShell } from "../shell/Shell.tsx";
-import { AddAccount } from "./settings/AddAccount.tsx";
-import { Server } from "./settings/Server.tsx";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { chordLabel, chordOf, type KeymapName, resolveKeymap } from "../keyboard/keymaps.ts";
+import { type DeviceProviderKeys, deviceProviderKeys } from "../platform/providerKeys.ts";
+import { platform } from "../platform/tauri.ts";
+import { type SetResult, useShell } from "../shell/Shell.tsx";
+import { Toast } from "./inbox/Toast.tsx";
+import "./settings/controls.tsx";
+import "./settings/panels.tsx";
+import {
+  type RuntimeDetection,
+  SettingsPage,
+  type SettingsScreen,
+  SettingsScreenProvider,
+} from "./settings/render.tsx";
+import type { ServerProps } from "./settings/Server.tsx";
 import { fill } from "./settings/wizard.ts";
 
-const NAV: Array<{ key: string; label: string; icon: ReactNode }> = [
-  { key: "accounts", label: "Accounts", icon: <AtIcon /> },
-  { key: "appearance", label: "Appearance", icon: <PaletteIcon /> },
-  { key: "server", label: "Server", icon: <CloudIcon /> },
-  { key: "about", label: "About", icon: <GearSixIcon /> },
-];
+const ICONS: Record<SettingSection, ReactNode> = {
+  accounts: <AtIcon />,
+  appearance: <PaletteIcon />,
+  routing: <ShuffleIcon />,
+  ai: <CpuIcon />,
+  workflows: <FlowArrowIcon />,
+  server: <CloudIcon />,
+  shortcuts: <KeyboardIcon />,
+  about: <InfoIcon />,
+};
 
-export function Settings({ initialSection = "appearance" }: { initialSection?: string }) {
-  const [section, setSection] = useState(initialSection);
-  return (
-    <div className="main page">
-      <div className="settings">
-        <nav className="settings-nav">
-          <h4>Settings</h4>
-          {NAV.map((n) => (
-            <button
-              key={n.key}
-              type="button"
-              className={`nav-item ${section === n.key ? "on" : ""}`}
-              onClick={() => setSection(n.key)}
-            >
-              {n.icon}
-              <span>{n.label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="settings-body">
-          <div className="settings-in">
-            {section === "accounts" ? (
-              <Accounts />
-            ) : section === "appearance" ? (
-              <Appearance />
-            ) : section === "server" ? (
-              <Server />
-            ) : (
-              <About />
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+export interface SettingsProps {
+  initialSection?: string | undefined;
+  /** Routes an "Ask monday" text to the composer, prefilled. Inert when absent. */
+  onAsk?: ((text: string) => void) | undefined;
+  /** The Local runtime detection seam (slice 15). */
+  runtimes?: RuntimeDetection | undefined;
+  /** This Device's provider keys; defaults to the platform keychain. */
+  keys?: DeviceProviderKeys | undefined;
+  serverProps?: ServerProps | undefined;
+  workspaceId?: string | undefined;
+  version?: string | undefined;
+  now?: (() => Date) | undefined;
 }
 
-const PROVIDER_LOGO: Record<string, string> = { gmail: "G", graph: "M", jmap: "J", imap: "@" };
+interface ToastState {
+  id: number;
+  text: string;
+  undo: () => void;
+}
 
-export function Accounts() {
+function sectionOf(name: string | undefined): SettingsSection {
+  return (SETTING_SECTIONS as readonly string[]).includes(name ?? "")
+    ? (name as SettingSection)
+    : "appearance";
+}
+
+type SettingsSection = SettingSection;
+
+export function Settings({
+  initialSection,
+  onAsk,
+  runtimes,
+  keys: keysProp,
+  serverProps,
+  workspaceId = "ws-1",
+  version = "0.1.0",
+  now = () => new Date(),
+}: SettingsProps) {
   const shell = useShell();
   const s = shell.settings;
-  const [accounts, setAccounts] = useState<AccountView[]>([]);
-  const [adding, setAdding] = useState(false);
-  const refresh = useCallback(() => {
-    shell.api.accounts
-      .list()
-      .then((r) => setAccounts(r.accounts))
-      .catch(() => setAccounts([]));
-  }, [shell.api]);
+  const [section, setSection] = useState<SettingsSection>(() =>
+    sectionOf(
+      initialSection ??
+        (typeof location !== "undefined"
+          ? (new URLSearchParams(location.search).get("section") ?? undefined)
+          : undefined),
+    ),
+  );
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastSeq = useRef(0);
+  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (keysProp) return;
+    let live = true;
+    void platform().then((p) => {
+      if (live) setKeys(deviceProviderKeys(p));
+    });
+    return () => {
+      live = false;
+    };
+  }, [keysProp]);
 
-  if (adding) {
-    return (
-      <AddAccount
-        onCancel={() => setAdding(false)}
-        onAdded={() => {
-          refresh();
-        }}
-      />
-    );
-  }
-  return (
-    <>
-      <h1>{s["strings.accounts.title"]}</h1>
-      <p>{s["strings.accounts.intro"]}</p>
-      <div className="accounts-list">
-        {accounts.length === 0 ? <div className="note">{s["strings.accounts.empty"]}</div> : null}
-        {accounts.map((a) => (
-          <div className="account-row" key={a.id}>
-            <div className="lg">{PROVIDER_LOGO[a.provider] ?? "@"}</div>
-            <div>
-              <b>{a.address}</b>
-              <span>{a.lastError ?? a.provider}</span>
-            </div>
-            <Tag kind={a.capabilities.push ? "ok" : undefined}>
-              {a.capabilities.push ? s["strings.accounts.push"] : s["strings.accounts.polling"]}
-            </Tag>
-            <Btn
-              sm
-              onClick={() => {
-                if (!confirm(fill(s["strings.accounts.remove_confirm"], { address: a.address })))
-                  return;
-                shell.api.accounts
-                  .remove(a.id)
-                  .then(refresh)
-                  .catch(() => {});
-              }}
-            >
-              {s["strings.accounts.remove"]}
-            </Btn>
-          </div>
-        ))}
-      </div>
-      <Btn primary onClick={() => setAdding(true)}>
-        {s["strings.accounts.add"]}
-      </Btn>
-    </>
+  const changeMany = useCallback(
+    async (changes: Array<[SettingKey, unknown]>, label: string): Promise<SetResult> => {
+      const previous = changes.map(([k]) => [k, shell.settings[k]] as [SettingKey, unknown]);
+      let result: SetResult = { ok: true };
+      for (const [k, v] of changes) {
+        result = await shell.set(k, v as never);
+        if (!result.ok) break;
+      }
+      if (result.ok) {
+        setToast({
+          id: ++toastSeq.current,
+          text: fill(shell.settings["strings.settings.changed"], { label }),
+          undo: () => {
+            for (const [k, v] of previous) void shell.set(k, v as never);
+            setToast({
+              id: ++toastSeq.current,
+              text: shell.settings["strings.settings.undone"],
+              undo: () => {},
+            });
+          },
+        });
+      }
+      return result;
+    },
+    [shell],
   );
-}
 
-function Pinned({ k, children }: { k: SettingKey; children: ReactNode }) {
-  const shell = useShell();
-  if (!shell.pinned.has(k)) return <>{children}</>;
-  return (
-    <span
-      title={`Set in ${shell.config.file?.path ?? "monday.toml"}`}
-      style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}
-    >
-      <Tag>{shell.settings["strings.settings.pinned"]}</Tag>
-      <span style={{ opacity: 0.5, pointerEvents: "none" }}>{children}</span>
-    </span>
+  const screen = useMemo<SettingsScreen>(
+    () => ({
+      workspaceId,
+      change: (key, value) => changeMany([[key, value]], settingsSchema[key].label),
+      changeMany,
+      onAsk: onAsk ?? (() => {}),
+      runtimes: runtimes ?? null,
+      keys,
+      version,
+      now,
+      serverProps,
+    }),
+    [workspaceId, changeMany, onAsk, runtimes, keys, version, now, serverProps],
   );
-}
 
-function Appearance() {
-  const shell = useShell();
-  const s = shell.settings;
-  const resolved: "light" | "dark" =
-    s["appearance.mode"] === "system"
-      ? matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light"
-      : s["appearance.mode"];
-  const help = (k: SettingKey) => settingsSchema[k].help;
+  // The keymap's undo chord undoes the last change while its toast shows.
+  const undoChord = useMemo(
+    () => resolveKeymap(s["keyboard.keymap"] as KeymapName, s["keyboard.bindings"]).undo,
+    [s["keyboard.keymap"], s["keyboard.bindings"]],
+  );
+  const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT"
+    ) {
+      return;
+    }
+    if (toast && chordOf(e) === undoChord) {
+      e.preventDefault();
+      toast.undo();
+    }
+  };
+
+  const expire = useCallback(() => setToast(null), []);
 
   return (
-    <>
-      <h1>Appearance</h1>
-      <p>
-        The agent and this page save to your settings. A key set in your config file wins and shows
-        here as pinned.
-      </p>
-
-      {shell.config.error ? (
-        <div className="note" style={{ marginBottom: 16 }}>
-          Config file line {shell.config.error.line ?? "?"}: {shell.config.error.message}. Using the
-          last good config.
-        </div>
-      ) : null}
-      {shell.config.warnings.map((w) => (
-        <div className="note" key={`${w.line}-${w.key}`} style={{ marginBottom: 8 }}>
-          Line {w.line}: {w.message}
-        </div>
-      ))}
-
-      <div className="sect">
-        <h3>Theme</h3>
-        <SettingsField label="Mode" hint={help("appearance.mode")}>
-          <Pinned k="appearance.mode">
-            <Seg<ThemeMode>
-              options={[
-                { value: "system", label: "System", icon: MonitorIcon },
-                { value: "light", label: "Light", icon: SunIcon },
-                { value: "dark", label: "Dark", icon: MoonIcon },
-              ]}
-              value={s["appearance.mode"]}
-              onChange={(v) => void shell.set("appearance.mode", v)}
-            />
-          </Pinned>
-        </SettingsField>
-      </div>
-
-      <div className="sect">
-        <h3>Palette</h3>
-        <p>{help("appearance.palette")}</p>
-        <Pinned k="appearance.palette">
-          <div className="swatches">
-            {palettes.map((p) => (
-              <Swatch
-                key={p.key}
-                palette={p}
-                mode={resolved}
-                on={s["appearance.palette"] === p.key}
-                onSelect={(k) => void shell.set("appearance.palette", k)}
-              />
+    <SettingsScreenProvider value={screen}>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: the undo chord is a page-level shortcut */}
+      <div className="main page" onKeyDown={onKeyDown}>
+        <div className="settings">
+          <nav className="settings-nav">
+            <h4>{s["strings.settings.title"]}</h4>
+            {SETTING_SECTIONS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`nav-item ${section === n ? "on" : ""}`}
+                onClick={() => setSection(n)}
+              >
+                {ICONS[n]}
+                <span>{s[`strings.settings.section.${n}`]}</span>
+              </button>
             ))}
+          </nav>
+          <div className="settings-body">
+            <div className="settings-in" data-section={section}>
+              <SettingsPage section={section} />
+            </div>
           </div>
-        </Pinned>
-      </div>
-
-      <div className="sect">
-        <h3>Layout</h3>
-        <SettingsField label="Navigation" hint={help("layout.nav")}>
-          <Pinned k="layout.nav">
-            <Seg
-              options={[
-                { value: "full", label: "Full" },
-                { value: "rail", label: "Rail" },
-                { value: "hidden", label: "Hidden" },
-              ]}
-              value={s["layout.nav"]}
-              onChange={(v) => void shell.set("layout.nav", v)}
-            />
-          </Pinned>
-        </SettingsField>
-        <SettingsField label="Agent" hint={help("layout.agent")}>
-          <Pinned k="layout.agent">
-            <Seg
-              options={[
-                { value: "bottom", label: "Bottom bar" },
-                { value: "left", label: "Left column" },
-                { value: "right", label: "Right column" },
-              ]}
-              value={s["layout.agent"]}
-              onChange={(v) => void shell.set("layout.agent", v)}
-            />
-          </Pinned>
-        </SettingsField>
-        <SettingsField label="List" hint={help("layout.list")}>
-          <Pinned k="layout.list">
-            <Seg
-              options={[
-                { value: "stream", label: "Stream" },
-                { value: "split", label: "Split" },
-              ]}
-              value={s["layout.list"]}
-              onChange={(v) => void shell.set("layout.list", v)}
-            />
-          </Pinned>
-        </SettingsField>
-        <SettingsField label="Density" hint={help("appearance.density")}>
-          <Pinned k="appearance.density">
-            <Seg<Density>
-              options={[
-                { value: "compact", label: "Compact" },
-                { value: "comfortable", label: "Comfortable" },
-                { value: "spacious", label: "Spacious" },
-              ]}
-              value={s["appearance.density"]}
-              onChange={(v) => void shell.set("appearance.density", v)}
-            />
-          </Pinned>
-        </SettingsField>
-      </div>
-
-      <div className="sect">
-        <h3>Config file</h3>
-        <p>
-          Yours, never written by the app unless you ask. Keys set here win over saved settings and
-          show as pinned above.
-        </p>
-        <div className="code-head">
-          <span className="live" />
-          watching <span style={{ color: "var(--fg)" }}>{shell.config.file?.path ?? "…"}</span>
         </div>
-        <div className="code">
-          {shell.config.file?.exists ? shell.config.file.text : "# no config file yet"}
-        </div>
+        {toast ? (
+          <Toast
+            key={toast.id}
+            text={toast.text}
+            undoLabel={s["strings.settings.undo"]}
+            undoKey={chordLabel(undoChord, mac)}
+            ms={s["inbox.undo_toast_ms"]}
+            onUndo={toast.text === s["strings.settings.undone"] ? undefined : toast.undo}
+            onExpire={expire}
+          />
+        ) : null}
       </div>
-    </>
-  );
-}
-
-function About() {
-  const shell = useShell();
-  return (
-    <>
-      <h1>About</h1>
-      <p>monday is free, open source and self-hostable.</p>
-      <div className="sect">
-        <SettingsField
-          label="Server"
-          hint={
-            shell.server?.kind === "cloud"
-              ? `Cloud at ${shell.server.target.baseUrl}`
-              : shell.sidecar?.running
-                ? `Sidecar on port ${shell.sidecar.port}`
-                : "starting"
-          }
-        >
-          <Btn>Check for updates</Btn>
-        </SettingsField>
-        <SettingsField label="Telemetry" hint={shell.settings["strings.about.telemetry"]} />
-      </div>
-    </>
+    </SettingsScreenProvider>
   );
 }
