@@ -8,8 +8,10 @@
 import type {
   AgentEvent,
   AgentSession,
+  LocalCli,
   Runtime,
   RuntimeInfo,
+  RuntimeStatus,
   SessionStartContext,
   SessionSummary,
   Settings,
@@ -36,6 +38,8 @@ export interface DeviceAgentClientOptions {
   address: (workspaceId: string) => string;
   /** The line to the Server; the Api by default, an in-process host in tests. */
   link?: SessionLink | undefined;
+  /** What detection found for a CLI, when it ran; a ruled-out CLI is refused with its reason. */
+  statusOf?: ((cli: LocalCli) => RuntimeStatus | null) | undefined;
   now?: (() => Date) | undefined;
   log?: ((line: string) => void) | undefined;
 }
@@ -71,6 +75,8 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
       const running = existing.runtime().runtime;
       if (running.kind === "local" && running.cli === cli) return existing;
     }
+    const status = options.statusOf?.(cli) ?? null;
+    if (status?.reason) throw new Error(status.reason);
     const sidecar = options.sidecar();
     if (!sidecar)
       throw new Error(

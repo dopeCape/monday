@@ -144,6 +144,29 @@ describe("transcript", () => {
         "me@example.test",
       ),
     ).toBe("Codex (gpt-5.6-sol) · me@example.test");
+    // A CLI detection ruled out says so in the header (docs/spec/agent-composer.md).
+    const missing = {
+      cli: "claude-code" as const,
+      command: "claude",
+      installed: false,
+      version: null,
+      loggedIn: null,
+      reason: "not here",
+    };
+    expect(runtimeLine(null, strings, "me@example.test", { "claude-code": missing })).toBe(
+      "Claude Code not available · me@example.test",
+    );
+    expect(
+      runtimeLine(null, strings, "me@example.test", {
+        "claude-code": {
+          ...missing,
+          installed: true,
+          version: "2.1.223",
+          loggedIn: true,
+          reason: null,
+        },
+      }),
+    ).toBe("Claude Code · me@example.test");
   });
 
   test("the Runtime the Settings ask for, and what counts as the same one", () => {

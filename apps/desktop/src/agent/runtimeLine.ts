@@ -4,7 +4,14 @@
 // Also the Runtime the Settings ask for, which the composer compares with
 // the Session's to switch it mid-Session.
 
-import type { HostedProvider, Runtime, RuntimeInfo, Settings } from "@monday/shared";
+import type {
+  HostedProvider,
+  LocalCli,
+  Runtime,
+  RuntimeInfo,
+  RuntimeStatus,
+  Settings,
+} from "@monday/shared";
 import { resolveTaskModel } from "@monday/shared";
 
 const PROVIDER_LABEL: Record<HostedProvider, string> = {
@@ -29,7 +36,15 @@ export type RuntimeSettings = Pick<
   | "ai.local.model.claude-code"
   | "ai.local.model.codex"
   | "ai.local.model.opencode"
+  | "strings.agent.unavailable"
 >;
+
+/** A detected CLI that cannot serve: missing, or not logged in. */
+export function unavailable(status: RuntimeStatus | null | undefined): boolean {
+  return (
+    status !== null && status !== undefined && (!status.installed || status.loggedIn === false)
+  );
+}
 
 /** "Claude Code (claude-opus-5)" or "Anthropic claude-sonnet-5". */
 export function runtimeLabel(runtime: Runtime, model: string | null = null): string {
@@ -42,12 +57,23 @@ export function runtimeLine(
   info: RuntimeInfo | null,
   settings: RuntimeSettings,
   address: string,
+  /** What detection found on this Device, when it ran. */
+  statuses?: Partial<Record<LocalCli, RuntimeStatus>> | null,
 ): string {
+  const runtime: Runtime = info
+    ? info.runtime
+    : settings["ai.mode"] === "local"
+      ? { kind: "local", cli: settings["ai.local.cli"] }
+      : { kind: "hosted", provider: settings["ai.hosted.provider"], model: "" };
+  if (runtime.kind === "local" && unavailable(statuses?.[runtime.cli])) {
+    const line = settings["strings.agent.unavailable"].replace("{runtime}", CLI_LABEL[runtime.cli]);
+    return `${line} · ${address}`;
+  }
   const label = info
     ? runtimeLabel(info.runtime, info.model)
-    : settings["ai.mode"] === "local"
-      ? runtimeLabel({ kind: "local", cli: settings["ai.local.cli"] }, null)
-      : PROVIDER_LABEL[settings["ai.hosted.provider"]];
+    : runtime.kind === "local"
+      ? runtimeLabel(runtime, null)
+      : PROVIDER_LABEL[runtime.provider];
   return `${label} · ${address}`;
 }
 

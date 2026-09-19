@@ -1535,18 +1535,12 @@ export const settingsSchema = {
     "Local runtime not logged in",
     "{runtime} is installed but not logged in. Sign in from a terminal, then try again.",
   ),
-  "strings.agent.needs_developer_mode": str(
-    "ai",
-    "Local runtime cannot strip built-ins",
-    "{runtime} cannot turn off its own tools. Turn on Developer mode to use it anyway.",
-  ),
   "strings.agent.runtime_switched": str("ai", "Runtime switch line", "Now answering: {runtime}"),
   "strings.agent.builtin_tool": str(
     "ai",
     "Developer mode built-in card title",
     "Developer mode: {tool}",
   ),
-  "strings.agent.cli_model": str("ai", "Local runtime line", "{runtime} ({model})"),
   "strings.agent.ask_about_thread": str("ai", "Ask about this Thread", "About this thread"),
   "strings.agent.approve": str("ai", "Approval card: approve", "Approve"),
   "strings.agent.apply": str("ai", "Batch preview: apply", "Apply"),

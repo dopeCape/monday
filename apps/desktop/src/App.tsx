@@ -21,6 +21,7 @@ import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
 import { deviceAgentClient } from "./agent/deviceClient.ts";
 import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
+import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
@@ -97,6 +98,10 @@ export function App({
   settingsRef.current = shell.settings;
   const sidecarRef = useRef(shell.sidecar);
   sidecarRef.current = shell.sidecar;
+  // What this Device found of the three CLIs; null where nothing can be spawned.
+  const runtimes = useLocalRuntimes(shell.spawn, shell.settings);
+  const runtimesRef = useRef(runtimes);
+  runtimesRef.current = runtimes;
   // In the app the Device client drives a Local runtime itself and sends Hosted turns
   // to the Server; the browser dev server, with no processes to spawn, stays Hosted.
   const client = useMemo(
@@ -114,6 +119,7 @@ export function App({
                 },
                 settings: () => settingsRef.current,
                 address: () => account.address,
+                statusOf: (cli) => runtimesRef.current?.[cli] ?? null,
                 log: (line) => console.warn(line),
               })
             : apiAgentClient(shell.api)
@@ -131,7 +137,7 @@ export function App({
     developerModeDefault: shell.settings["ai.developer_mode_default"],
     onSettingsChanged: () => void shell.refresh(),
   });
-  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address, runtimes);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
   const chips = useMemo(
     () =>

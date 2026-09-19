@@ -72,7 +72,8 @@ One HTTP JSON API on the Server, typed routes, a generated client in `packages/s
 - `/drafts`, `/send` (schedules a send Job), `/scheduled`.
 - `/groups`, `/sections`, `/routing/rerun`, `/routing/decisions`.
 - `/workflows`, `/workflows/:id/versions`, `/runs`, `/runs/:id/retry`, `/runs/:id/approve`.
-- `/sessions`, `/sessions/:id/turns` (the turn streams its events over SSE on the POST itself), `/sessions/:id/approvals/:activityId`, `/activity`, `/activity/:id/undo`, `/agent/tools`.
+- `/sessions` (with an optional `runtime` for a Session a Local runtime drives), `/sessions/:id/turns` (the turn streams its events over SSE on the POST itself), `/sessions/:id/approvals/:activityId`, `/activity`, `/activity/:id/undo`, `/agent/tools`.
+- For a Session on a Local runtime, whose turns the Device drives: `PATCH /sessions/:id/runtime` (the switch, answered with the line the thread shows), `POST /sessions/:id/events` (what the CLI said), `GET /sessions/:id/live` (SSE of the tool cards the Server produces as the CLI's MCP calls run), and `/mcp/local` on the Sidecar: monday's tools over MCP streamable HTTP on loopback, bearer the Device token, `X-Monday-Workspace` and `X-Monday-Session` naming whose cards they are. `monday-server mcp --port --token --workspace [--session]` is the stdio launcher that proxies to it.
 - `/calendar/events`, `/calendar/invites/:id/rsvp`.
 - `/settings`, `/devices`, `/pair`, `/credentials`.
 - `/mcp`: the external MCP transport (streamable HTTP).
@@ -82,7 +83,7 @@ The Sidecar serves the same API on loopback with the per-launch token, plus the 
 
 ## Runtimes
 
-- Local: Claude Code (`claude -p` stream-json via the user's binary), Codex (`codex app-server`), OpenCode (`opencode serve`), each behind one AgentSession interface, built-in tools stripped, monday's tools via the loopback MCP server (research 2, ADR 0002).
+- Local: Claude Code (`claude -p` stream-json via the user's binary), Codex (`codex app-server`), OpenCode (`opencode acp`, the Agent Client Protocol over stdio), each behind one AgentSession interface, built-in tools stripped, monday's tools via the loopback MCP server (research 2, ADR 0002). The Device spawns the CLI through the Tauri shell scope for that binary, persists what it said, and learns of the tool cards over the Session's live stream; approvals resume through the same route as a Hosted interrupt. A Runtime switch mid-Session starts a new epoch whose first turn carries the transcript so far as context.
 - Hosted: LangChain providers for Anthropic, Gemini, OpenAI, Kimi, OpenRouter; LangGraph agent loop with Postgres checkpoints; Roles main and fast per provider (ADR 0007).
 - The tool server is one implementation with approvals inside; both runtime kinds call it.
 
