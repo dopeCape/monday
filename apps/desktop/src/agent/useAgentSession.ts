@@ -51,6 +51,8 @@ export interface AgentSession {
   developerMode: boolean;
   setDeveloperMode(on: boolean): void;
   send(text: string): Promise<void>;
+  /** Sends the last text again, after a turn the Server or the CLI refused; nothing when none was sent. */
+  retry(): Promise<void>;
   approve(activityId: string): Promise<void>;
   decline(activityId: string): Promise<void>;
   undo(activityId: string): Promise<ActivityRecord | null>;
@@ -76,6 +78,7 @@ export const NULL_SESSION: AgentSession = {
   developerMode: false,
   setDeveloperMode: () => {},
   send: async () => {},
+  retry: async () => {},
   approve: async () => {},
   decline: async () => {},
   undo: async () => null,
@@ -237,15 +240,22 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     }
   }, [client, workspaceId, refreshHistory, options.developerModeDefault]);
 
+  /** The last text sent, for Retry after a refused turn. */
+  const lastTextRef = useRef<string | null>(null);
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return Promise.resolve();
       if (trimmed === "/new") return newSession();
+      lastTextRef.current = trimmed;
       return run((s) => client?.turn(s.id, trimmed, turnContext(), onEvent) ?? Promise.resolve());
     },
     [client, run, onEvent, newSession, turnContext],
   );
+  const retry = useCallback(() => {
+    const text = lastTextRef.current;
+    return text ? send(text) : Promise.resolve();
+  }, [send]);
 
   const approve = useCallback(
     (activityId: string) =>
@@ -342,6 +352,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     developerMode,
     setDeveloperMode,
     send,
+    retry,
     approve,
     decline,
     undo,

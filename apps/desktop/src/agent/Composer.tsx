@@ -366,7 +366,6 @@ export function Composer({
     () => turnsOf(agent.events, { strings, now, working: agent.busy }),
     [agent.events, agent.busy, strings, now],
   );
-  const lastUserText = [...agent.events].reverse().find((e) => e.kind === "user");
 
   const submit = (value: string) => {
     if (!value.trim()) return;
@@ -376,7 +375,7 @@ export function Composer({
 
   const onToolAction = (action: string, call: ToolCall) => {
     if (call.tool === "error") {
-      if (lastUserText?.kind === "user") void agent.send(lastUserText.text);
+      void agent.retry();
       return;
     }
     if (action === strings["strings.agent.approve"] || action === strings["strings.agent.apply"]) {
@@ -455,13 +454,18 @@ export function Composer({
         onOpenThread={onOpenThread}
       />
       {agent.error ? (
-        <div className="agent-error">
-          {agent.error === NO_CLIENT ? strings["strings.agent.no_session"] : agent.error}
+        <div className="agent-error" role="alert">
+          <span>
+            {agent.error === NO_CLIENT ? strings["strings.agent.no_session"] : agent.error}
+          </span>
+          {agent.error !== NO_CLIENT ? (
+            <Chip onClick={() => void agent.retry()}>{strings["strings.agent.retry"]}</Chip>
+          ) : null}
         </div>
       ) : null}
     </>
   );
-  const chips = agent.events.length === 0 ? suggestions : undefined;
+  const chips = agent.events.length === 0 && !historyOpen ? suggestions : undefined;
   const labels = {
     new: strings["strings.agent.new"],
     history: strings["strings.agent.history"],

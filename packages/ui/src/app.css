@@ -1247,9 +1247,14 @@ button.msg {
   font-size: var(--fs-xs);
 }
 .agent-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   padding: 0 var(--pad) 12px;
   font-size: var(--fs-xs);
   color: var(--danger);
+  animation: fade-in var(--t-fast) var(--ease);
 }
 .agent-developer {
   display: flex;
@@ -1260,9 +1265,6 @@ button.msg {
 }
 .agent-developer .warn {
   color: var(--warning);
-  animation: fade-in var(--t-fast) var(--ease);
-}
-.agent-error {
   animation: fade-in var(--t-fast) var(--ease);
 }
 .results {

@@ -379,6 +379,29 @@ describe("the composer in bottom-bar mode", () => {
     );
   });
 
+  test("a turn the Server refuses shows the failure in one line with Retry, which sends the same text again", async () => {
+    const inner = fakeAgentClient();
+    let refuse = true;
+    const client: FakeAgentClient = {
+      ...inner,
+      turn: async (sessionId, text, context, onEvent) => {
+        if (refuse) throw new Error("Claude Code could not start: program not found: claude");
+        return inner.turn(sessionId, text, context, onEvent);
+      },
+    };
+    await mount(client);
+    await typeInBar("hello there");
+    await submitBar();
+    const line = document.querySelector(".agent-error");
+    expect(line?.textContent).toContain("Claude Code could not start: program not found: claude");
+    expect(inner.sent).toEqual([]);
+    refuse = false;
+    await click(line?.querySelector("button"));
+    expect(document.querySelector(".agent-error")).toBeNull();
+    expect(inner.sent.map((s) => s.text)).toEqual(["hello there"]);
+    expect(document.querySelector(".agent-thread .a p")?.textContent).toBe("You said: hello there");
+  });
+
   test("the header's runtime line is a button that opens Settings, AI and agent", async () => {
     const client = fakeAgentClient();
     navigated.length = 0;

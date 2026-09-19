@@ -317,6 +317,7 @@ export function Workflows({
                     }}
                     onToggle={(enabled) => toggle(w, enabled)}
                     enableLabel={`${s.enable ?? "Enabled"}: ${w.name}`}
+                    busy={busy}
                   />
                 ))}
               </div>
