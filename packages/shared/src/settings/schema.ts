@@ -2296,6 +2296,16 @@ export const settingsSchema = {
     "{runtime} is installed but not logged in. Sign in from a terminal, then try again.",
   ),
   "strings.agent.runtime_switched": str("ai", "Runtime switch line", "Now answering: {runtime}"),
+  "strings.agent.start_failed": str(
+    "ai",
+    "Local runtime could not start",
+    "{runtime} could not start: {message}",
+  ),
+  "strings.agent.sidecar_missing": str(
+    "ai",
+    "Local runtime without a Sidecar",
+    "The Sidecar is not running, so a Local runtime cannot reach monday's tools. Start it under Sync server.",
+  ),
   "strings.agent.builtin_tool": str(
     "ai",
     "Developer mode built-in card title",

@@ -21,6 +21,7 @@ import type { Api } from "../platform/api.ts";
 import { type AgentClient, apiAgentClient } from "./client.ts";
 import {
   apiSessionLink,
+  CLI_LABEL,
   createLocalSession,
   localRuntimeSettings,
   mcpEndpointOf,
@@ -55,6 +56,18 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
     return session;
   };
 
+  const fill = (template: string, values: Record<string, string>) =>
+    template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? "");
+
+  /** A start that failed, in plain words: the CLI's name and what it said. */
+  const startFailure = (cli: LocalCli, error: unknown): Error =>
+    new Error(
+      fill(options.settings()["strings.agent.start_failed"], {
+        runtime: CLI_LABEL[cli],
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+
   const sessionOf = async (id: string): Promise<SessionSummary> => {
     const known = sessions.get(id);
     if (known) return known;
@@ -78,10 +91,7 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
     const status = options.statusOf?.(cli) ?? null;
     if (status?.reason) throw new Error(status.reason);
     const sidecar = options.sidecar();
-    if (!sidecar)
-      throw new Error(
-        "The Sidecar is not running, so a Local runtime cannot reach monday's tools.",
-      );
+    if (!sidecar) throw new Error(options.settings()["strings.agent.sidecar_missing"]);
     const created = createLocalSession(cli, {
       runner: options.runner,
       link,
@@ -149,7 +159,11 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
       const session = await sessionOf(sessionId);
       if (session.runtime.kind === "hosted") return hosted.turn(sessionId, text, context, onEvent);
       const adapter = adapterFor(session);
-      await adapter.start(await startContext(session, context));
+      try {
+        await adapter.start(await startContext(session, context));
+      } catch (error) {
+        throw startFailure(session.runtime.cli, error);
+      }
       await adapter.send(text, onEvent);
     },
     async approve(sessionId, activityId, decision, context, onEvent) {
