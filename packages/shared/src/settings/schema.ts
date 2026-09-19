@@ -2096,10 +2096,16 @@ export const settingsSchema = {
   "strings.workflows.runs_on_local": str(
     "workflows",
     "Placement: local",
-    "Runs here via Claude Code",
+    "Runs here via {runtime}",
   ),
   "strings.workflows.last_run": str("workflows", "Last run line", "Last run {when}"),
   "strings.workflows.never_ran": str("workflows", "No runs yet", "Not run yet"),
+  "strings.workflows.loading": str("workflows", "Workflows loading line", "Loading your workflows"),
+  "strings.workflows.load_failed": str(
+    "workflows",
+    "Workflows could not load",
+    "Could not load your workflows: {message}",
+  ),
   "strings.workflows.source": str("workflows", "Source button", "Source"),
   "strings.workflows.ask_placeholder": str(
     "workflows",
@@ -2116,7 +2122,7 @@ export const settingsSchema = {
   "strings.workflows.where_local": str(
     "workflows",
     "Where it runs: local",
-    "Runs on this machine through a Local runtime. It waits while the app is closed and catches up on launch.",
+    "Runs on this machine through {runtime}. It waits while the app is closed and catches up on launch.",
   ),
   "strings.workflows.dry_run": str("workflows", "Dry run button", "Dry run"),
   "strings.workflows.dry_run_title": str(
@@ -2204,6 +2210,11 @@ export const settingsSchema = {
     "Ask for a group placeholder",
     "A Support inbox for anything from customers",
   ),
+  "strings.routing.ask.prefix": str(
+    "routing",
+    "Ask for a group: the sentence sent to the Agent",
+    "Make a group: {sentence}",
+  ),
   "strings.routing.ask.help": str(
     "routing",
     "Ask for a group help",
@@ -2233,6 +2244,45 @@ export const settingsSchema = {
   "strings.routing.preview.ask": str("routing", "Re-run preview ask", "Needs a decision"),
   "strings.routing.preview.out": str("routing", "Re-run preview out", "No group"),
   "strings.routing.no_rule": str("routing", "Group without a rule", "No rule yet"),
+  "strings.routing.edit.name": str("routing", "Rule editor: name", "Name"),
+  "strings.routing.edit.sentence": str("routing", "Rule editor: sentence", "Rule"),
+  "strings.routing.edit.domains": str(
+    "routing",
+    "Rule editor: domains",
+    "Always from these domains",
+  ),
+  "strings.routing.edit.senders": str(
+    "routing",
+    "Rule editor: senders",
+    "Always from these senders",
+  ),
+  "strings.routing.edit.subjects": str(
+    "routing",
+    "Rule editor: subjects",
+    "Always with these subjects",
+  ),
+  "strings.routing.edit.lists": str("routing", "Rule editor: lists", "Always from these lists"),
+  "strings.routing.edit.threshold": str(
+    "routing",
+    "Rule editor: threshold",
+    "Route threshold, empty for the Setting",
+  ),
+  "strings.routing.edit.brief_policy": str("routing", "Rule editor: brief policy", "Brief policy"),
+  "strings.routing.edit.brief.default": str("routing", "Brief policy: the Setting", "Setting"),
+  "strings.routing.edit.brief.always": str("routing", "Brief policy: always", "Always"),
+  "strings.routing.edit.brief.on_open": str("routing", "Brief policy: on open", "On open"),
+  "strings.routing.edit.brief.never": str("routing", "Brief policy: never", "Never"),
+  "strings.routing.edit.belongs": str("routing", "Example: belongs", "Belongs"),
+  "strings.routing.edit.not_belongs": str("routing", "Example: does not belong", "Does not belong"),
+  "strings.routing.edit.save": str("routing", "Rule editor: save", "Save"),
+  "strings.routing.edit.cancel": str("routing", "Rule editor: cancel", "Cancel"),
+  "strings.routing.edit.delete": str("routing", "Rule editor: delete", "Delete group"),
+  "strings.routing.edit.delete_confirm": str(
+    "routing",
+    "Rule editor: confirm delete",
+    "Delete {name} for good",
+  ),
+  "strings.routing.loading": str("routing", "Routing loading line", "Loading your groups"),
   "strings.routing.hosted_needed": str(
     "routing",
     "Routing needs a Hosted runtime",
@@ -2251,6 +2301,16 @@ export const settingsSchema = {
     "{runtime} is installed but not logged in. Sign in from a terminal, then try again.",
   ),
   "strings.agent.runtime_switched": str("ai", "Runtime switch line", "Now answering: {runtime}"),
+  "strings.agent.start_failed": str(
+    "ai",
+    "Local runtime could not start",
+    "{runtime} could not start: {message}",
+  ),
+  "strings.agent.sidecar_missing": str(
+    "ai",
+    "Local runtime without a Sidecar",
+    "The Sidecar is not running, so a Local runtime cannot reach monday's tools. Start it under Sync server.",
+  ),
   "strings.agent.builtin_tool": str(
     "ai",
     "Developer mode built-in card title",
@@ -2307,6 +2367,41 @@ export const settingsSchema = {
     "ai",
     "Developer mode warning",
     "Developer mode gives the runtime its own shell, file and web tools. Mail content is untrusted and could direct them.",
+  ),
+  "strings.agent.chip.pending": str(
+    "ai",
+    "Suggestion: a call waiting in the Session",
+    "Decide on the pending {tool}",
+  ),
+  "strings.agent.chip.external": str(
+    "ai",
+    "Suggestion: an external caller's call waiting",
+    "Decide on the {tool} that {credential} asks for",
+  ),
+  "strings.agent.chip.paused_run": str(
+    "ai",
+    "Suggestion: a Workflow Run waiting at a Step",
+    "Decide on the {step} step waiting in {workflow}",
+  ),
+  "strings.agent.chip.reply_one": str(
+    "ai",
+    "Suggestion: one Thread in Needs your reply",
+    "Reply to the thread waiting on me",
+  ),
+  "strings.agent.chip.reply_many": str(
+    "ai",
+    "Suggestion: Threads in Needs your reply",
+    "Reply to the {n} threads waiting on me",
+  ),
+  "strings.agent.untitled_session": str(
+    "ai",
+    "A Session with no first message",
+    "New conversation",
+  ),
+  "strings.agent.open_runtime": str(
+    "ai",
+    "Runtime line tooltip",
+    "Change the runtime under AI and agent",
   ),
   "strings.settings.pinned": str("appearance", "Pinned control label", "set in monday.toml"),
   "strings.settings.fix": str("appearance", "Fix config button", "Fix with monday"),
@@ -2534,6 +2629,17 @@ export const settingsSchema = {
     "New Event: failure",
     "Could not add the Event: {message}",
   ),
+  "strings.calendar.form.end_before_start": str(
+    "accounts",
+    "New Event: end before start",
+    "The end has to come after the start.",
+  ),
+  "strings.calendar.answer_failed": str(
+    "accounts",
+    "Answering an Event failed",
+    "Could not send your answer: {message}",
+  ),
+  "strings.calendar.read_only": str("accounts", "Calendar list: read only tag", "read only"),
   "strings.calendar.remove": str("accounts", "Event: remove", "Remove"),
   "strings.calendar.reminder": str(
     "accounts",

@@ -11,6 +11,7 @@ import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { StaticShell } from "../shell/Shell.tsx";
+import { WorkspaceProvider } from "../workspace.tsx";
 import { Workflows } from "./Workflows.tsx";
 import { fixtureWorkflowsApi, type WorkflowsApi } from "./workflows/workflow-data.ts";
 
@@ -297,5 +298,78 @@ describe("the Workflows page", () => {
     expect(card.textContent).toContain("Nothing was applied");
     expect(texts(card, '[data-status="would_ask"]')).toEqual(["Slack: Slack would run"]);
     expect(texts(card, '[data-status="would_apply"]')).toHaveLength(3);
+  });
+
+  test("Where it runs names the current Workspace's address, never the fixture's; the Local line names the CLI Setting", async () => {
+    const api = fixtureWorkflowsApi();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <StaticShell
+          settings={{
+            "workflows.page.refresh_seconds": 0,
+            "ai.level": "automate",
+            "ai.local.cli": "codex",
+          }}
+        >
+          <WorkspaceProvider value={{ id: "ws-9", accountId: "a-9", address: "me@example.test" }}>
+            <Workflows api={api} now={NOW} />
+          </WorkspaceProvider>
+        </StaticShell>,
+      );
+    });
+    await act(async () => {
+      await tick();
+      await tick();
+    });
+    const el = host;
+    expect(api.calls).toEqual([]);
+    const where = [...el.querySelectorAll(".side-card")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Where it runs"),
+    );
+    expect(where?.textContent).toContain("Runs on me@example.test");
+    expect(where?.textContent).not.toContain("genai-labs");
+    expect(texts(el, ".wf-card .where")[2]).toContain("Runs here via Codex");
+  });
+
+  test("while the list loads it says so; a list that cannot load says why, in plain words", async () => {
+    const api = fixtureWorkflowsApi();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const slow: WorkflowsApi = {
+      ...api,
+      list: async (ws) => {
+        await gate;
+        return api.list(ws);
+      },
+    };
+    const el = await mount(slow);
+    expect(el.querySelector(".wf-loading")?.textContent).toBe("Loading your workflows");
+    expect(el.querySelector(".wf")?.getAttribute("aria-busy")).toBe("true");
+    await act(async () => {
+      release();
+      await tick();
+      await tick();
+    });
+    expect(el.querySelector(".wf-loading")).toBeNull();
+    expect(texts(el, ".wf-card .wf-top b")).toHaveLength(3);
+
+    const broken: WorkflowsApi = {
+      ...api,
+      list: async () => {
+        throw new Error("the Server is unreachable");
+      },
+    };
+    await act(async () => root?.unmount());
+    host?.remove();
+    const el2 = await mount(broken);
+    expect(el2.querySelector(".routing-error")?.textContent).toBe(
+      "Could not load your workflows: the Server is unreachable",
+    );
+    expect(el2.querySelector(".wf-loading")).toBeNull();
   });
 });

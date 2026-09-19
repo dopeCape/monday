@@ -1,5 +1,5 @@
 // The Device's line to the Server for a Session a Local runtime drives
-// (ADR 0002, slice 15). The CLI's tool calls land on the Server over MCP, so
+// (ADR 0002). The CLI's tool calls land on the Server over MCP, so
 // the Server owns every tool card; the Device learns of them here, persists
 // what the CLI said here, and answers a waiting card here. The Api
 // implementation talks to the routes; tests hand an in-process Agent host.

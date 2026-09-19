@@ -95,6 +95,8 @@ export interface WorkflowCardProps {
   onSelect?: (() => void) | undefined;
   onToggle?: ((enabled: boolean) => void) | undefined;
   enableLabel?: string | undefined;
+  /** A change is on its way to the Server: the switch waits for it. */
+  busy?: boolean | undefined;
   className?: string | undefined;
 }
 
@@ -113,6 +115,7 @@ export function WorkflowCard({
   onSelect,
   onToggle,
   enableLabel,
+  busy,
   className,
 }: WorkflowCardProps) {
   return (
@@ -140,7 +143,12 @@ export function WorkflowCard({
       <FlowChain nodes={nodes} />
       <div className="wf-foot">
         <span>{lastRunLabel}</span>
-        <Switch on={enabled} label={enableLabel ?? name} onChange={(next) => onToggle?.(next)} />
+        <Switch
+          on={enabled}
+          label={enableLabel ?? name}
+          disabled={busy}
+          onChange={(next) => onToggle?.(next)}
+        />
       </div>
     </div>
   );
@@ -377,7 +385,7 @@ export interface SourceViewProps {
 }
 
 const SOURCE_STYLE: CSSProperties = {
-  fontFamily: "var(--mono)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--fs-xs)",
   lineHeight: 1.5,
   whiteSpace: "pre-wrap",
