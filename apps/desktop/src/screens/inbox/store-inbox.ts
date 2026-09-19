@@ -7,29 +7,45 @@
 // Cache rules (a body fetched once stays; an opened Thread is read again only
 // when a Message has none). The Brief comes from the Cache, where the feed
 // and the Store's warming put it before open; an open that finds none, or a
-// stale one, asks the Server under the brief policy (slice 13).
+// stale one, asks the Server under the brief policy (docs/spec/inbox.md, Briefs).
 // Sections are decided here, on the client, from the Section rules in
 // Settings over Thread state and Group (CONTEXT.md "Section rule"): fast,
 // local, and never waiting on the Server. A Section the Server assigned
 // (the section Task) is kept as is.
 
-import type { AiLevel, Brief, Message, SectionRuleSetting, Thread } from "@monday/shared";
+import type {
+  AiLevel,
+  Brief,
+  Group,
+  Message,
+  SectionRuleSetting,
+  Tag,
+  Thread,
+} from "@monday/shared";
 import { sectionOf } from "@monday/shared";
 import {
   ALL_THREADS_SQL,
   BRIEF_OF_THREAD_SQL,
+  GROUPS_SQL,
   type LiveQuery,
   MESSAGES_OF_THREAD_SQL,
   rowToBrief,
   rowToCachedThread,
+  rowToGroup,
   rowToMessage,
+  rowToTag,
   type Store,
   type StoreIntent,
+  TAGS_SQL,
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
-import type { Inbox, UndoToken } from "./actions.ts";
+import type { BodyUnavailable, Inbox, UndoToken } from "./actions.ts";
 
-/** What an undo puts back: the inverse intents, in the order the action ran. */
+/**
+ * What an undo puts back: the inverse intents, in the order the action ran.
+ * A Thread the action found already in its target state has no inverse, so
+ * undoing "mark read" on a mixed batch leaves the Threads that were read alone.
+ */
 type Reversal = Array<StoreIntent>;
 
 export interface StoreInbox extends Inbox {
@@ -66,6 +82,15 @@ interface Watched {
   listeners: Set<() => void>;
   messages: readonly Message[];
   brief: Brief | undefined;
+  unavailable: BodyUnavailable | null;
+}
+
+/** What a failed content read means to the reader: the status the API client carries. */
+function classify(error: unknown): BodyUnavailable {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (status === 0) return "offline";
+  if (status === 423) return "locked";
+  return "failed";
 }
 
 const EMPTY: readonly Message[] = [];
@@ -95,6 +120,7 @@ export async function createStoreInbox(
       listeners: new Set(),
       messages: EMPTY,
       brief: undefined,
+      unavailable: null,
     };
     live.subscribe((rows) => {
       entry.messages = rows.map(rowToMessage);
@@ -134,26 +160,43 @@ export async function createStoreInbox(
     }
   };
 
+  /** Tells the reader why bodies are missing, or that they no longer are. */
+  const setUnavailable = (threadId: string, why: BodyUnavailable | null) => {
+    const w = watched.get(threadId);
+    if (!w || w.unavailable === why) return;
+    w.unavailable = why;
+    for (const l of [...w.listeners]) l();
+  };
+
   /** Headers and attachments from the Server, then every body the Cache lacks. */
   const fetchThread = async (threadId: string) => {
     const content = options.content;
     if (!content) return;
-    const headers = await content.messages(threadId);
+    let headers: Awaited<ReturnType<typeof content.messages>>;
+    try {
+      headers = await content.messages(threadId);
+    } catch (error) {
+      setUnavailable(threadId, classify(error));
+      throw error;
+    }
     await store.cacheMessages(headers);
     const cached = await store.query<{ id: string; body_text: string | null }>(
       "select id, body_text from messages where thread_id = ?",
       [threadId],
     );
     const have = new Set(cached.filter((r) => r.body_text !== null).map((r) => r.id));
+    let why: BodyUnavailable | null = null;
     for (const m of headers) {
       if (have.has(m.id) || m.bodyState === "pending") continue;
       try {
         const body = await content.body(m.id, { images: options.remoteImages?.() ?? false });
         await store.cacheBody(m.id, { text: body.text, html: body.display.html });
       } catch (error) {
+        why ??= classify(error);
         log(`body ${m.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    setUnavailable(threadId, why);
   };
 
   /** The Section a row lands in: the Server's when it set one, else the rules over the row. */
@@ -174,14 +217,20 @@ export async function createStoreInbox(
   };
 
   let lastRows: Record<string, unknown>[] = [];
+  /** The Threads in the trash, which the domain type does not carry. */
+  const deletedIds = new Set<string>();
   const project = (rows: Record<string, unknown>[]) => {
     lastRows = rows;
     byId.clear();
+    deletedIds.clear();
     const all = rows.map((r) => {
       const entry = rowToCachedThread(r, store.workspaceId);
       return { thread: sectioned(entry), deleted: entry.deleted };
     });
-    for (const { thread } of all) byId.set(thread.id, thread);
+    for (const { thread, deleted } of all) {
+      byId.set(thread.id, thread);
+      if (deleted) deletedIds.add(thread.id);
+    }
     stream = all
       .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
       .map(({ thread }) => thread);
@@ -200,10 +249,32 @@ export async function createStoreInbox(
     });
   });
 
-  /** Runs `make` for every known id and files the inverse under a new token. */
+  // Groups and Tags as the Cache holds them (the feed keeps both current).
+  let groups: readonly Group[] = [];
+  let tags: readonly Tag[] = [];
+  const groupsLive = store.live<Record<string, unknown>>(GROUPS_SQL);
+  const tagsLive = store.live<Record<string, unknown>>(TAGS_SQL);
+  await Promise.all([
+    new Promise<void>((resolve) => {
+      groupsLive.subscribe((rows) => {
+        groups = rows.map((r) => rowToGroup(r, store.workspaceId));
+        for (const l of [...listeners]) l();
+        resolve();
+      });
+    }),
+    new Promise<void>((resolve) => {
+      tagsLive.subscribe((rows) => {
+        tags = rows.map((r) => rowToTag(r, store.workspaceId));
+        for (const l of [...listeners]) l();
+        resolve();
+      });
+    }),
+  ]);
+
+  /** Runs `make` for every known id and files the inverses under a new token. */
   const act = async (
     ids: readonly string[],
-    make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent },
+    make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent | null },
   ): Promise<UndoToken> => {
     const reversal: Reversal = [];
     for (const id of ids) {
@@ -211,7 +282,7 @@ export async function createStoreInbox(
       if (!thread) continue;
       const { intent, reverse } = make(thread);
       await store.intent(intent);
-      reversal.push(reverse);
+      if (reverse) reversal.push(reverse);
     }
     const token = `u${++tokenSeq}`;
     undos.set(token, reversal);
@@ -227,14 +298,37 @@ export async function createStoreInbox(
     | "unread"
     | "delete"
     | "undelete";
+  /** Whether a Thread already sits where a flag intent would put it. */
+  const already = (kind: Flag, t: Thread, deleted: boolean): boolean => {
+    switch (kind) {
+      case "archive":
+        return t.archived;
+      case "unarchive":
+        return !t.archived;
+      case "star":
+        return t.starred;
+      case "unstar":
+        return !t.starred;
+      case "read":
+        return !t.unread;
+      case "unread":
+        return t.unread;
+      case "delete":
+        return deleted;
+      case "undelete":
+        return !deleted;
+    }
+  };
   const flip = (kind: Flag, reverse: Flag) => (t: Thread) => ({
     intent: { kind, threadId: t.id },
-    reverse: { kind: reverse, threadId: t.id },
+    reverse: already(kind, t, deletedIds.has(t.id)) ? null : { kind: reverse, threadId: t.id },
   });
 
   return {
     threads: () => stream,
     thread: (id) => byId.get(id),
+    groups: () => groups,
+    tags: () => tags,
     messages: (threadId) => watch(threadId).messages,
     watchMessages(threadId, listener) {
       const w = watch(threadId);
@@ -249,6 +343,7 @@ export async function createStoreInbox(
       };
     },
     brief: (threadId) => watch(threadId).brief,
+    unavailable: (threadId) => watch(threadId).unavailable,
     async openThread(threadId) {
       let pending = opening.get(threadId);
       if (!pending) {
@@ -304,6 +399,8 @@ export async function createStoreInbox(
     },
     close() {
       live.close();
+      groupsLive.close();
+      tagsLive.close();
       listeners.clear();
       for (const w of watched.values()) {
         w.live.close();

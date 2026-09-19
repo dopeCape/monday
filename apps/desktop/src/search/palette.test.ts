@@ -47,6 +47,7 @@ const thread = (id: string, subject: string, from = "Aoife Brennan"): Thread => 
 
 const hit = (t: Thread, pinned = false, score = 1): SearchHit => ({
   thread: t,
+  tags: [],
   workspaceId: "ws",
   account: "a@x",
   snippet: "…",

@@ -593,6 +593,16 @@ export const settingsSchema = {
     label: "Undo toast",
     help: "Milliseconds an undo toast stays before it fades.",
   }),
+  "inbox.time_refresh_seconds": setting({
+    type: z.int().min(0).max(3600),
+    default: 30,
+    scope: "device",
+    section: "appearance",
+    group: "Inbox",
+    advanced: true,
+    label: "Time refresh",
+    help: "Seconds between refreshes of the relative times in the list, such as 2h or Mon. Zero keeps them as they were when the list rendered. Per device.",
+  }),
 
   /* The Settings page itself (docs/spec/settings.md) */
   "settings.search_limit": setting({
@@ -966,6 +976,16 @@ export const settingsSchema = {
     label: "Sync batch",
     help: "Messages fetched per step during the first sync. Larger is faster; smaller shows progress sooner.",
   }),
+  "sync.poll_seconds": setting({
+    type: z.int().min(5).max(600),
+    default: 30,
+    scope: "device",
+    section: "server",
+    group: "Storage",
+    advanced: true,
+    label: "Change polling",
+    help: "Seconds between asks for changes on a Server that cannot push them (Vercel or Netlify without a wake channel). Per device.",
+  }),
   "sync.graph_poll_seconds": setting({
     type: z.int().min(30).max(600),
     default: 90,
@@ -1098,6 +1118,15 @@ export const settingsSchema = {
     group: "Reader",
     label: "Collapse quoted history",
     help: "Fold the earlier Messages a reply quotes below its own text. Click to expand.",
+  }),
+  "reader.mark_read_on_open": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: "Reader",
+    label: "Mark read on open",
+    help: "Opening a Thread in the reader marks it read, and the provider hears of it. Off keeps a Thread unread until you mark it yourself.",
   }),
 
   /* Search and Cache */
@@ -2067,6 +2096,22 @@ export const settingsSchema = {
     "routing",
     "Brief chip: action unavailable",
     "That action is not available here",
+  ),
+  "strings.reader.body_failed": str(
+    "routing",
+    "Body could not be read",
+    "Message text could not be loaded. Open the thread again to retry",
+  ),
+  "strings.reader.download_failed": str(
+    "routing",
+    "Attachment download failed",
+    "Could not download {name}",
+  ),
+  "strings.reader.empty_title": str("routing", "Empty reader heading", "Nothing open"),
+  "strings.reader.empty_help": str(
+    "routing",
+    "Empty reader line",
+    "Pick a conversation, or use {down} and {up}.",
   ),
   "strings.agent.placeholder": str("ai", "Agent bar placeholder", "Ask or tell monday"),
   "strings.agent.placeholder_open": str(

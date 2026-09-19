@@ -21,8 +21,9 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useState } from "react";
+import { type AnimationEvent, type ReactNode, useState } from "react";
 import { Picker } from "./Picker.tsx";
+import { useExit } from "./useExit.ts";
 
 export interface ReaderStrings {
   close: string;
@@ -75,13 +76,16 @@ export interface ReaderProps {
   onToggleRead: () => void;
   /** The user wants to answer: focus in the reply box, R, A or F, the reply-all or forward buttons. */
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
-  /** A Brief action chip was clicked; the screen runs it as a tool call (slice 13). */
+  /** A Brief action chip was clicked; the screen runs it as a tool call (docs/spec/inbox.md, Briefs). */
   onBriefAction?: ((action: BriefAction) => void) | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
-  /** Rendered between the Brief and the Messages: the invite bar (slice 18). */
+  /** Rendered between the Brief and the Messages: the invite bar. */
   banner?: ReactNode | undefined;
+  /** The sheet is on its way out (the screen's exit hook): its leave animation runs, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function Reader({
@@ -110,9 +114,21 @@ export function Reader({
   onOpenLink,
   attachmentSrc,
   banner,
+  leaving,
+  onLeft,
 }: ReaderProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [more, setMore] = useState(false);
+  const moreExit = useExit(more, "--t-fast");
+  // A new Thread in the same reader (J and K in the split list) starts with its menu closed.
+  const [menuThread, setMenuThread] = useState(thread.id);
+  if (menuThread !== thread.id) {
+    setMenuThread(thread.id);
+    setMore(false);
+  }
+  const onAnimationEnd = (e: AnimationEvent<HTMLElement>) => {
+    if (leaving && e.target === e.currentTarget) onLeft?.();
+  };
   const last = messages[messages.length - 1];
   const count =
     thread.messageCount === 1
@@ -122,7 +138,11 @@ export function Reader({
   const recipient = last?.from.name ?? thread.participants[0]?.name ?? "";
 
   return (
-    <section className={`col reader ${sheet ? "sheet" : ""}`} data-thread={thread.id}>
+    <section
+      className={`col reader${sheet ? " sheet" : ""}${leaving ? " leaving" : ""}`}
+      data-thread={thread.id}
+      onAnimationEnd={onAnimationEnd}
+    >
       <ColHead
         leading={
           <>
@@ -156,7 +176,7 @@ export function Reader({
           <DotsThreeIcon />
         </Btn>
       </ColHead>
-      {more ? (
+      {moreExit.mounted ? (
         <Picker
           label={strings.more}
           items={[
@@ -169,10 +189,12 @@ export function Reader({
             else onToggleRead();
           }}
           onClose={() => setMore(false)}
+          leaving={moreExit.leaving}
+          onLeft={moreExit.onEnd}
         />
       ) : null}
       <div className="reader-body">
-        <div className="reader-inner">
+        <div className="reader-inner" key={thread.id}>
           <h1>
             {thread.subject}
             {thread.starred ? <StarIcon weight="fill" aria-label={strings.star} /> : null}

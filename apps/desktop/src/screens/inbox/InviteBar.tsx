@@ -1,4 +1,4 @@
-// The invite bar (slice 18; CONTEXT.md "Invite"; design/js/screens/calendar.js
+// The invite bar (CONTEXT.md "Invite"; design/js/screens/calendar.js
 // "Invite in a thread"): the text/calendar part of a Thread as one bar under
 // the Brief: the title, the slot, the organizer, an overlap with the user's
 // own calendar, and Accept, Tentative, Decline. The answer is an Outbox

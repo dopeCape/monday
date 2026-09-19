@@ -33,6 +33,9 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
   const [store, setStore] = useState<Store | null>(null);
   const [content, setContent] = useState<ContentTransport | null>(null);
   const caps = useRef<Capabilities | null>(null);
+  // The polling interval is a Setting (ADR 0004), read when a connection opens.
+  const pollSeconds = useRef(shell.settings["sync.poll_seconds"]);
+  pollSeconds.current = shell.settings["sync.poll_seconds"];
 
   useEffect(() => {
     let disposed = false;
@@ -48,7 +51,9 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
         opened = await createStore({
           workspaceId,
           driver: await tauriDriver(workspaceId),
-          transport: apiTransport(shell.api, () => caps.current),
+          transport: apiTransport(shell.api, () => caps.current, {
+            pollMs: () => pollSeconds.current * 1000,
+          }),
           log: (m) => console.warn(`[store] ${m}`),
         });
         if (!disposed) setContent(apiContent(shell.api));

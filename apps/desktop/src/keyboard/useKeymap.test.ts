@@ -3,7 +3,7 @@
 // typing in a field swallows the plain keys.
 
 import { describe, expect, test } from "bun:test";
-import { KEY_ACTIONS, type KeyAction, VIM } from "./keymaps.ts";
+import { KEY_ACTIONS, type KeyAction, NATURAL, VIM } from "./keymaps.ts";
 import { type DispatchEvent, dispatchKey, type KeyContext, type KeyHandlers } from "./useKeymap.ts";
 
 const ctx: KeyContext = { pane: "list", focus: "e2", selection: ["e1", "e2"] };
@@ -67,7 +67,7 @@ describe("dispatchKey with the Vim map", () => {
         },
       });
       expect(result).toBe(expected);
-      expect(ran).toEqual([{ action: expected, ctx }]);
+      expect(ran).toEqual([{ action: expected, ctx: { ...ctx, typing: false } }]);
       expect(prevented).toBe(true);
     });
   }
@@ -90,6 +90,18 @@ describe("dispatchKey with the Vim map", () => {
     const result = dispatchKey(VIM, {}, ctx, press("j"));
     expect(result).toBeNull();
   });
+
+  test("a handler that declines with false leaves the key its default", () => {
+    let prevented = false;
+    const result = dispatchKey(VIM, { "move.down": () => false }, ctx, {
+      ...press("j"),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(result).toBeNull();
+    expect(prevented).toBe(false);
+  });
 });
 
 describe("typing in a field", () => {
@@ -108,5 +120,20 @@ describe("typing in a field", () => {
       "palette.open",
     );
     expect(ran.map((r) => r.action)).toEqual(["sheet.close", "palette.open"]);
+  });
+
+  test("tells the handler it is typing, so the Natural map's mod+z can yield to the field's own undo", () => {
+    let prevented = false;
+    const handlers: KeyHandlers = { undo: (c) => (c.typing ? false : undefined) };
+    const e = {
+      ...press("z", { typing: true, metaKey: true }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    };
+    expect(dispatchKey(NATURAL, handlers, ctx, e)).toBeNull();
+    expect(prevented).toBe(false);
+    expect(dispatchKey(NATURAL, handlers, ctx, { ...e, typing: false })).toBe("undo");
+    expect(prevented).toBe(true);
   });
 });

@@ -7,7 +7,6 @@
 
 import type { Settings, Thread } from "@monday/shared";
 import { Btn, Chip, ColHead, MessageRow } from "@monday/ui";
-import { tagsOf } from "@monday/ui/fixtures";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -212,7 +211,7 @@ export function Search({
               <MessageRow
                 key={key}
                 thread={h.snippet ? { ...h.thread, snippet: h.snippet } : h.thread}
-                tags={tagsOf(h.thread)}
+                tags={h.tags}
                 selected={key === focus}
                 now={now}
                 account={all ? h.account : undefined}

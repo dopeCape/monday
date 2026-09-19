@@ -20,12 +20,17 @@ export interface ComposeOverlayProps {
   initial: DraftContent;
   strings: ComposeUiStrings;
   idleMs: number;
+  /** The undo window Send schedules with (send.delay_seconds); zero sends at once. */
+  delaySeconds: number;
   /** Hours from now the Later menu offers. */
   laterPresetsHours: readonly number[];
   now: () => Date;
   onClose: () => void;
-  onSent: (sent: { sendId: string; runAt: string; draftId: string }) => void;
+  onSent: (sent: { sendId: string; runAt: string; draftId: string; later?: boolean }) => void;
   onError: (message: string) => void;
+  /** On its way out (the screen's exit hook): the scrim runs its leave, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function ComposeOverlay({
@@ -34,11 +39,14 @@ export function ComposeOverlay({
   initial,
   strings,
   idleMs,
+  delaySeconds,
   laterPresetsHours,
   now,
   onClose,
   onSent,
   onError,
+  leaving,
+  onLeft,
 }: ComposeOverlayProps) {
   const editor = useDraftEditor({ composer, draftId, initial, idleMs });
   const [showCc, setShowCc] = useState(initial.cc.length > 0);
@@ -53,8 +61,8 @@ export function ComposeOverlay({
   const send = useCallback(
     async (options?: SendOptions) => {
       try {
-        const result = await editor.send(options);
-        onSent({ ...result, draftId });
+        const result = await editor.send(options ?? { delaySeconds });
+        onSent({ ...result, draftId, later: options?.runAt !== undefined });
       } catch (error) {
         onError(
           error instanceof Error && error.message === "no_recipients"
@@ -63,7 +71,7 @@ export function ComposeOverlay({
         );
       }
     },
-    [editor, onSent, onError, draftId, strings.noRecipients],
+    [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients],
   );
 
   const close = useCallback(async () => {
@@ -120,6 +128,8 @@ export function ComposeOverlay({
         note={suggestion?.note ? { text: suggestion.note } : undefined}
         formatting={formatting}
         canSend={editor.canSend}
+        leaving={leaving}
+        onLeft={onLeft}
         onClose={() => void close()}
         onSend={() => void send()}
         onLater={() => setLater((l) => !l)}
@@ -174,6 +184,7 @@ export function ComposeOverlay({
             attachments={content.attachments}
             uploads={editor.uploads}
             onRemove={editor.removeAttachment}
+            onDismissUpload={editor.dismissUpload}
             strings={{ uploading: strings.uploading, remove: strings.removeAttachment }}
           />
         }

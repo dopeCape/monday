@@ -82,10 +82,16 @@ export interface ContentTransport {
   ): Promise<{ blobId: Id }>;
 }
 
-/** How often a polling deployment is asked for changes; a Setting once slice 7 lands. */
-export const POLL_INTERVAL_MS = 30_000;
+export interface ApiTransportOptions {
+  /** How often a polling deployment is asked for changes, in ms; the sync.poll_seconds Setting, read when a connection opens. */
+  pollMs: () => number;
+}
 
-export function apiTransport(api: Api, capabilities: () => Capabilities | null): StoreTransport {
+export function apiTransport(
+  api: Api,
+  capabilities: () => Capabilities | null,
+  options: ApiTransportOptions,
+): StoreTransport {
   return {
     changes: (workspaceId, since, limit) => api.changes.list(workspaceId, since, limit),
     intent: (intent) => api.threads.intent(intent),
@@ -98,7 +104,7 @@ export function apiTransport(api: Api, capabilities: () => Capabilities | null):
       const realtime = capabilities()?.realtime ?? "polling";
       if (realtime === "websocket") return connectWebSocket(api, workspaceId, handlers);
       if (realtime === "sse") return connectSse(api, workspaceId, handlers);
-      return connectPolling(handlers);
+      return connectPolling(handlers, options.pollMs());
     },
   };
 }
@@ -193,7 +199,7 @@ function connectSse(api: Api, workspaceId: Id, handlers: WakeHandlers): WakeConn
   };
 }
 
-function connectPolling(handlers: WakeHandlers, intervalMs = POLL_INTERVAL_MS): WakeConnection {
+function connectPolling(handlers: WakeHandlers, intervalMs: number): WakeConnection {
   const timer = setInterval(() => handlers.onWake(-1), intervalMs);
   queueMicrotask(handlers.onOpen);
   return {

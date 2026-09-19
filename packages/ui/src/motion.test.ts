@@ -77,9 +77,10 @@ describe("motion tokens", () => {
           .getPropertyValue(property)
           .match(/\b\d+(?:\.\d+)?m?s\b/g) ?? []
       ).map(parseDuration);
-    // With transitions on, the tokens resolve: the card enters over --t-med, the chip over --t-fast.
+    // With transitions on, the tokens resolve: the card enters over --t-med, the chip over --t-fast
+    // (its background, color, border and press).
     expect(durations(host.children[1] as Element, "animation")).toEqual([220]);
-    expect(durations(host.children[2] as Element, "transition")).toEqual([120, 120]);
+    expect(durations(host.children[2] as Element, "transition")).toEqual([120, 120, 120, 120]);
     expect(durations(host.children[0] as Element, "animation")).toEqual([220]);
 
     document.documentElement.dataset.transitions = "off";

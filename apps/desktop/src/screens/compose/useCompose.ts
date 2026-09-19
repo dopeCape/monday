@@ -33,6 +33,8 @@ export interface PendingSend {
   sendId: string;
   runAt: string;
   draftId: string;
+  /** Picked from the Later menu: the bar shows the time, not a countdown. */
+  later?: boolean | undefined;
 }
 
 export interface ComposeController {
@@ -51,7 +53,7 @@ export interface ComposeController {
     messages: readonly Message[],
     kind: "reply" | "forward",
     forceReplyAll?: boolean,
-    /** From a Brief chip: the proposed opening line, or the forward recipient (slice 13). */
+    /** From a Brief chip: the proposed opening line, or the forward recipient. */
     seed?: { opening?: string | undefined; to?: Person[] | undefined },
   ): void;
   closeOverlay(): void;
