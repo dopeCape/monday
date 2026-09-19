@@ -9,18 +9,23 @@ import type {
   Actor,
   AgentEvent,
   ApprovalDecision,
+  Attendee,
   BriefPolicy,
+  CalendarSource,
   ChangeKind,
   DecisionCandidate,
   DraftAttachment,
   DraftKind,
   DraftStatus,
+  EventStatus,
   FieldWrites,
   HostedProvider,
+  InviteMethod,
   Person,
   Predicate,
   Provider,
   RouteBy,
+  RsvpResponse,
   RunStatus,
   RunStepStatus,
   RunTrigger,
@@ -924,4 +929,142 @@ export const workflowRunSteps = pgTable(
     at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.runId, t.index] })],
+);
+
+/* ------------------------------ Calendar (slice 18) ------------------------------ */
+
+/** The push registration (Google channel, Graph subscription) a calendar holds while one is live. */
+export interface CalendarSubscription {
+  id: string;
+  resourceId?: string;
+  token: string;
+  expiresAt: string;
+  registeredBy: string;
+}
+
+/**
+ * The calendars of a Workspace as its Provider lists them (research 6), or
+ * the one Local calendar of an Account with no calendar API. `visible` is the
+ * per-Workspace choice the views read; it lives here so every Device agrees.
+ */
+export const calendars = pgTable(
+  "calendars",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    source: text("source").$type<CalendarSource>().notNull(),
+    providerId: text("provider_id").notNull(),
+    name: text("name").notNull(),
+    primary: boolean("primary").notNull().default(false),
+    writable: boolean("writable").notNull().default(true),
+    visible: boolean("visible").notNull().default(true),
+    color: text("color"),
+    /** The Provider's incremental sync token for this calendar; null before the first pass. */
+    syncToken: text("sync_token"),
+    subscription: jsonb("subscription").$type<CalendarSubscription | null>(),
+    lastSync: timestamp("last_sync", { withTimezone: true, mode: "date" }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [unique("calendars_workspace_provider").on(t.workspaceId, t.providerId)],
+);
+
+/**
+ * An Event (CONTEXT.md): times, attendees, link and status in the clear, so
+ * the views and the free/busy check work on a locked Server and the feed can
+ * carry them; the title, description and location are content like a
+ * Message body and sit under one envelope of the "event" kind.
+ */
+export const events = pgTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    calendarId: text("calendar_id")
+      .notNull()
+      .references(() => calendars.id, { onDelete: "cascade" }),
+    providerId: text("provider_id").notNull(),
+    uid: text("uid"),
+    /** JSON {title, description, location} under one envelope. */
+    contentEnc: bytea("content_enc").notNull(),
+    contentKey: bytea("content_key").notNull(),
+    /** The lowercased 80-character title prefix, like threads.subject_search: the one leak, for the list on a locked Server. */
+    titleSearch: text("title_search").notNull().default(""),
+    start: timestamp("start", { withTimezone: true, mode: "date" }).notNull(),
+    end: timestamp("end", { withTimezone: true, mode: "date" }).notNull(),
+    allDay: boolean("all_day").notNull().default(false),
+    timeZone: text("time_zone"),
+    organizer: jsonb("organizer").$type<Person | null>(),
+    attendees: jsonb("attendees").$type<Attendee[]>().notNull().default([]),
+    link: text("link"),
+    status: text("status").$type<EventStatus>().notNull().default("confirmed"),
+    recurrence: text("recurrence"),
+    recurringEventId: text("recurring_event_id"),
+    response: text("response").$type<RsvpResponse | null>(),
+    createdByAgent: boolean("created_by_agent").notNull().default(false),
+    etag: text("etag"),
+    /** The iCalendar SEQUENCE the Event was last seen at, for the invite bar's "ask again" rule. */
+    sequence: integer("sequence").notNull().default(0),
+    deleted: boolean("deleted").notNull().default(false),
+    /** Set on a calendar reset; cleared when the Provider yields the Event again, else dropped. */
+    stale: boolean("stale").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("events_calendar_provider").on(t.calendarId, t.providerId),
+    index("events_window_idx").on(t.workspaceId, t.start, t.end),
+    index("events_uid_idx").on(t.workspaceId, t.uid),
+  ],
+);
+
+/**
+ * An Invite (CONTEXT.md): the text/calendar part of a Message, parsed. The
+ * title and the part itself are content under the "event" kind; the times,
+ * people and the answer so far are headers the invite bar renders from the
+ * feed. `event_id` links it to the Event on the calendar once matched.
+ */
+export const invites = pgTable(
+  "invites",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    eventId: text("event_id").references(() => events.id, { onDelete: "set null" }),
+    method: text("method").$type<InviteMethod>().notNull(),
+    uid: text("uid").notNull(),
+    sequence: integer("sequence").notNull().default(0),
+    titleEnc: bytea("title_enc").notNull(),
+    titleKey: bytea("title_key").notNull(),
+    /** The original text/calendar part, for the REPLY monday builds and for a late import. */
+    icalEnc: bytea("ical_enc").notNull(),
+    icalKey: bytea("ical_key").notNull(),
+    start: timestamp("start", { withTimezone: true, mode: "date" }).notNull(),
+    end: timestamp("end", { withTimezone: true, mode: "date" }).notNull(),
+    allDay: boolean("all_day").notNull().default(false),
+    organizer: jsonb("organizer").$type<Person | null>(),
+    attendees: jsonb("attendees").$type<Attendee[]>().notNull().default([]),
+    response: text("response").$type<RsvpResponse>().notNull().default("needs-action"),
+    byMail: boolean("by_mail").notNull().default(false),
+    senderMismatch: boolean("sender_mismatch").notNull().default(false),
+    receivedAt: timestamp("received_at", { withTimezone: true, mode: "date" }).notNull(),
+    writes: jsonb("writes").$type<FieldWrites>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("invites_message").on(t.messageId),
+    index("invites_thread_idx").on(t.threadId),
+    index("invites_uid_idx").on(t.workspaceId, t.uid),
+  ],
 );

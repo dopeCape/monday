@@ -12,9 +12,15 @@
 
 import type {
   AccountCapabilities,
+  Attendee,
+  CalendarInfo,
+  EventInput,
+  EventStatus,
   IsoDate,
+  MeetingLinkKind,
   Person,
   Provider as ProviderKind,
+  RsvpResponse,
 } from "@monday/shared";
 
 /* ------------------------------ Credentials ------------------------------ */
@@ -64,11 +70,21 @@ export type Endpoint =
   | { kind: "gmail"; pubsubTopic: string | null }
   | { kind: "none" };
 
+/** A CalDAV calendar linked to an Account whose Provider has no calendar API (slice 18). */
+export interface CalDavLink {
+  /** The calendar home or a calendar collection; discovery walks from here. */
+  url: string;
+  user: string;
+  password: string;
+}
+
 export interface Credentials {
   /** The Account's address; the identity sends go out as. */
   address: string;
   auth: Auth;
   endpoint: Endpoint;
+  /** Set when the user linked a CalDAV calendar under Settings, Accounts. */
+  caldav?: CalDavLink | null;
 }
 
 /* ------------------------------ Capabilities ------------------------------ */
@@ -235,6 +251,110 @@ export interface Watch {
   stop(): Promise<void>;
 }
 
+/* ------------------------------ Calendar (slice 18, docs/research/calendar-apis.md) ------------------------------ */
+
+/** One calendar as the Provider lists it. */
+export interface ProviderCalendar {
+  id: string;
+  name: string;
+  primary: boolean;
+  writable: boolean;
+  color: string | null;
+}
+
+/** An Event as the Provider holds it; ids are the Provider's own. */
+export interface ProviderEvent {
+  id: string;
+  calendarId: string;
+  uid: string | null;
+  title: string;
+  description: string;
+  location: string;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  timeZone: string | null;
+  organizer: Person | null;
+  attendees: Attendee[];
+  link: string | null;
+  status: EventStatus;
+  recurrence: string | null;
+  recurringEventId: string | null;
+  /** The Account's own response when it is an attendee. */
+  response: RsvpResponse | null;
+  etag: string | null;
+  updatedAt: IsoDate;
+}
+
+export interface EventWindow {
+  from: IsoDate;
+  to: IsoDate;
+}
+
+/**
+ * The events one syncEvents call yields, in order, like SyncEvent for mail:
+ * "reset" first when the stored state cannot be continued (Google 410, a
+ * stale DAV sync-token), then every Event in the window as "upserted"; the
+ * "state" token is stored once everything before it is applied.
+ */
+export type CalendarSyncEvent =
+  | { type: "reset" }
+  | { type: "upserted"; event: ProviderEvent }
+  | { type: "removed"; id: string }
+  | { type: "state"; state: string; complete: boolean };
+
+/** What createEvent takes: the user's input plus who organizes. */
+export interface CreateEventInput extends EventInput {
+  organizer: Person;
+  /** The meeting link kind to mint, resolved from the Settings. */
+  meetingLink: MeetingLinkKind;
+  customLink: string | null;
+}
+
+/**
+ * A Provider's calendar API behind one interface (research 6, "Recommended
+ * minimum surface for v1"): Google Calendar, Graph, CalDAV. Google, Graph
+ * and a scheduling CalDAV server mail invitations and replies themselves;
+ * `info().providerSendsInvites` says so and the calendar module then never
+ * sends iMIP mail for the Account.
+ */
+export interface CalendarSession {
+  info(): CalendarInfo;
+  listCalendars(): Promise<ProviderCalendar[]>;
+  syncEvents(
+    calendarId: string,
+    state: string | null,
+    window: EventWindow,
+  ): AsyncIterable<CalendarSyncEvent>;
+  createEvent(calendarId: string, input: CreateEventInput): Promise<ProviderEvent>;
+  updateEvent(
+    calendarId: string,
+    eventId: string,
+    input: Partial<CreateEventInput>,
+    etag: string | null,
+  ): Promise<ProviderEvent>;
+  deleteEvent(calendarId: string, eventId: string): Promise<void>;
+  /** The Account's own answer on an Event it was invited to; the Provider mails the reply. */
+  rsvp(calendarId: string, eventId: string, response: RsvpResponse): Promise<ProviderEvent>;
+  /**
+   * Places an invitation the Provider did not add itself (a CalDAV server
+   * without scheduling, or one that only adds known senders). Absent where
+   * the Provider always auto-adds (Google, Graph).
+   */
+  importInvite?(calendarId: string, ical: string): Promise<ProviderEvent>;
+  /**
+   * Registers a webhook for changes on a calendar (Google events.watch, Graph
+   * subscriptions). Absent on CalDAV, which is polled.
+   */
+  subscribe?(
+    calendarId: string,
+    address: string,
+    token: string,
+  ): Promise<{ id: string; expiresAt: IsoDate }>;
+  unsubscribe?(subscription: { id: string; resourceId?: string }): Promise<void>;
+  close(): Promise<void>;
+}
+
 /* ------------------------------ The interface ------------------------------ */
 
 export interface Session {
@@ -258,6 +378,12 @@ export interface Session {
   /** Removes a mirrored Draft, after a send or a delete. Missing ids are not an error. */
   deleteDraft?(id: string): Promise<void>;
   watch(mailboxIds: string[]): Watch;
+  /**
+   * The Account's calendar API (slice 18): Google Calendar for Gmail, Graph
+   * for Graph. Null or absent on Providers without one; the calendar module
+   * then uses a linked CalDAV calendar or the Local calendar.
+   */
+  calendar?(): CalendarSession | null;
   close(): Promise<void>;
 }
 
