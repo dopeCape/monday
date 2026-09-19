@@ -4368,6 +4368,18 @@ button.prov {
   animation-duration: 0ms !important;
   transition-duration: 0ms !important;
 }
+/* Light to dark and back: the Shell sets data-theme-fade for one slow beat
+   after the mode flips, and every surface eases its colors over it. */
+:root[data-theme-fade] body,
+:root[data-theme-fade] body *,
+:root[data-theme-fade] body *::before,
+:root[data-theme-fade] body *::after {
+  transition:
+    background-color var(--t-slow) var(--ease),
+    color var(--t-slow) var(--ease),
+    border-color var(--t-slow) var(--ease),
+    fill var(--t-slow) var(--ease);
+}
 /* the CalDAV link form under Settings, Accounts, Meetings (slice 18) */
 .caldav-account {
   margin-top: 10px;

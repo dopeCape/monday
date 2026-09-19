@@ -37,6 +37,12 @@ export interface Platform {
   /** Only after the user explicitly asked (ADR 0001). */
   writeConfig(text: string): Promise<void>;
   onConfigChanged(cb: (file: ConfigFile) => void): () => void;
+  /**
+   * The palette file `appearance.palette` names (a token TOML or a base16
+   * YAML): `~` expands, a relative path is under the config directory. Read
+   * only, never written; `exists` is false when there is no such file.
+   */
+  readPaletteFile(path: string): Promise<ConfigFile>;
   secretGet(key: string): Promise<string | null>;
   secretSet(key: string, value: string): Promise<void>;
   secretDelete(key: string): Promise<void>;
@@ -128,6 +134,7 @@ async function tauriPlatform(): Promise<Platform> {
     readConfig: () => invoke<ConfigFile>("read_config"),
     writeConfig: (text) => invoke("write_config", { text }),
     onConfigChanged: (cb) => sub<ConfigFile>("config:changed", cb),
+    readPaletteFile: (path) => invoke<ConfigFile>("read_palette_file", { path }),
     secretGet: (key) => invoke<string | null>("secret_get", { key }),
     secretSet: (key, value) => invoke("secret_set", { key, value }),
     secretDelete: (key) => invoke("secret_delete", { key }),
@@ -151,6 +158,8 @@ export interface FakePlatformOptions {
   rootKey?: string | null;
   /** The processes the fake spawns; none by default, so every CLI reads as not installed. */
   spawn?: ProcessRunner;
+  /** Palette files by path, as `appearance.palette` would name them. */
+  files?: Record<string, string>;
 }
 
 /** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
@@ -197,6 +206,10 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     onConfigChanged: (cb) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
+    },
+    readPaletteFile: async (path) => {
+      const content = options.files?.[path];
+      return { path, exists: content !== undefined, text: content ?? "" };
     },
     secretGet: async (k) => secrets.get(k) ?? null,
     secretSet: async (k, v) => {

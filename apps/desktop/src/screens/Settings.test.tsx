@@ -39,7 +39,8 @@ import { createFakeToolHost } from "../../../server/src/intelligence/agent/tools
 import { createToolServer } from "../../../server/src/intelligence/agent/tools/index.ts";
 import { type Api, createApi, type PendingPairings } from "../platform/api.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
-import { type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
+import { fakePlatform } from "../platform/tauri.ts";
+import { Shell, type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
 import { Settings, type SettingsProps } from "./Settings.tsx";
 import { controlKinds } from "./settings/render.tsx";
 import { buildSearchIndex, searchSettings } from "./settings/search.ts";
@@ -1465,6 +1466,95 @@ describe("Settings › panels", () => {
     expect(voice?.textContent).toContain("That did not work: no server");
   });
 });
+
+/* ------------------------------ Appearance on the document ------------------------------ */
+
+describe("Settings › Appearance on the document", () => {
+  test("the Transitions switch flips the root attribute the motion tokens read", async () => {
+    // The real Shell over a fake host, so the document root is written.
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    await act(async () =>
+      r.render(
+        <Shell host={fakePlatform("")}>
+          <Settings initialSection="appearance" now={() => NOW} keys={fakeKeys()} />
+        </Shell>,
+      ),
+    );
+    await settle();
+    const doc = document.documentElement;
+    expect(doc.dataset.transitions).toBe("auto");
+    const card = q('[data-setting="appearance.transitions"]');
+    const sw = card?.querySelector<HTMLButtonElement>(".switch");
+    expect(sw?.getAttribute("aria-checked")).toBe("true");
+    await click(sw);
+    expect(doc.dataset.transitions).toBe("off");
+    expect(sw?.getAttribute("aria-checked")).toBe("false");
+    // The switch is per device, and the card says so.
+    expect(card?.dataset.scope).toBe("device");
+    await click(sw);
+    expect(doc.dataset.transitions).toBe("auto");
+  });
+
+  test("a palette file that does not parse says so on the card; a good one names itself", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    const good = `name = "Moss"\n[light]\n${PALETTE_HALF}\n[dark]\n${PALETTE_HALF}\n`;
+    await act(async () =>
+      r.render(
+        <Shell
+          host={fakePlatform("", {
+            files: { "/p/broken.toml": "[light]\nbg = 1\n", "/p/moss.toml": good },
+          })}
+        >
+          <Settings initialSection="appearance" now={() => NOW} keys={fakeKeys()} />
+        </Shell>,
+      ),
+    );
+    await settle();
+    const card = () => q('[data-setting="appearance.palette"]');
+    await click(card()?.querySelector(".sw.custom"));
+    const path = card()?.querySelector<HTMLInputElement>(".palette-path input");
+    await type(path, "/p/broken.toml");
+    await blur(path);
+    await settle();
+    expect(card()?.textContent).toContain("bg must be a color string");
+    expect(document.documentElement.dataset.palette).toBe("custom");
+    await type(path, "/p/moss.toml");
+    await blur(path);
+    await settle();
+    expect(card()?.querySelector("[data-palette-name]")?.textContent).toBe(
+      "Moss, from the palette file",
+    );
+    expect(document.documentElement.style.getPropertyValue("--bg")).toBe("#f0f4ee");
+  });
+});
+
+const PALETTE_HALF = [
+  'bg = "#f0f4ee"',
+  'panel = "#ffffff"',
+  'sunken = "#e6ebe3"',
+  'raised = "#ffffff"',
+  'overlay = "#ffffff"',
+  'fg = "#1f2a1c"',
+  'fg-muted = "#5f6d5a"',
+  'fg-faint = "#98a493"',
+  'accent = "#3a7d44"',
+  'accent-fg = "#ffffff"',
+  'success = "#1f9d61"',
+  'warning = "#d4880f"',
+  'danger = "#d9403c"',
+  'info = "#2f7fd6"',
+  'tag-1 = "#3a7d44"',
+  'tag-2 = "#1f9d61"',
+  'tag-3 = "#d4880f"',
+  'tag-4 = "#b8479a"',
+  'tag-5 = "#2a9fa8"',
+].join("\n");
 
 /* ------------------------------ The Agent changes any of them ------------------------------ */
 

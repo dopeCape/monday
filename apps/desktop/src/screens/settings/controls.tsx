@@ -146,8 +146,21 @@ function PaletteControl({ k }: ControlProps) {
   const path = useDraft(custom ? current : "", (text) =>
     text.trim() ? change(text.trim()) : undefined,
   );
+  // The file's outcome: its name once it applied, or the first problem in the footer.
+  const file = custom ? shell.customPalette : null;
   return (
-    <Row k={k} block error={error}>
+    <Row
+      k={k}
+      block
+      error={error ?? file?.error}
+      foot={
+        file?.name ? (
+          <span className="palette-name" data-palette-name={file.name}>
+            {fill(s["strings.settings.palette.from_file"], { name: file.name })}
+          </span>
+        ) : undefined
+      }
+    >
       <div className="swatches">
         {palettes.map((p) => (
           <Swatch

@@ -2419,7 +2419,11 @@ export const settingsSchema = {
     "My monday.toml has problems: {problems}. Fix the file for me and show me the change first.",
   ),
   "strings.settings.palette.custom": str("appearance", "Custom palette card", "Custom"),
-  "strings.settings.palette.from_file": str("appearance", "Custom palette sub", "from file"),
+  "strings.settings.palette.from_file": str(
+    "appearance",
+    "Custom palette loaded line",
+    "{name}, from the palette file",
+  ),
   "strings.settings.palette.path": str("appearance", "Palette file label", "Palette file"),
   "strings.settings.palette.path_help": str(
     "appearance",

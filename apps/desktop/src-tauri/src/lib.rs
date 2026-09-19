@@ -19,6 +19,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             config::read_config,
             config::write_config,
+            config::read_palette_file,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
