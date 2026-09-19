@@ -33,6 +33,7 @@ import { openExternal, saveDownload } from "../platform/open.ts";
 import type { SearchModule } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
 import { type Composer, fixtureComposer } from "./compose/composer.ts";
 import { ReplyCompose } from "./compose/ReplyCompose.tsx";
@@ -41,6 +42,7 @@ import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
+import { ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
@@ -95,6 +97,8 @@ export interface InboxProps {
   initialAgentText?: string | undefined;
   /** The composer's Session (slice 14); inert without an Agent host. */
   agent?: AgentSession | undefined;
+  /** The calendar seam (slice 18): the reader's invite bar and its overlap line. Absent, no bar. */
+  calendar?: CalendarSource | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -153,6 +157,7 @@ export function Inbox({
   onSearch,
   initialAgentText,
   agent = NULL_SESSION,
+  calendar,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -779,6 +784,11 @@ export function Inbox({
 
       {showReader && thread ? (
         <Reader
+          banner={
+            calendar ? (
+              <ThreadInviteBar calendar={calendar} threadId={thread.id} settings={settings} />
+            ) : null
+          }
           thread={thread}
           messages={messages}
           brief={brief}

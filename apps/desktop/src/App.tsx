@@ -24,6 +24,9 @@ import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
+import { useEventReminders } from "./calendar/reminders.ts";
+import { Calendar } from "./screens/Calendar.tsx";
+import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
@@ -61,6 +64,8 @@ export interface AppProps {
   now?: Date | undefined;
   /** The Workflows page's Server side; the Shell's client or the fixture by default, a fake in tests. */
   workflowsApi?: WorkflowsApi | undefined;
+  /** The calendar seam (slice 18): the Calendar screen, the invite bar and the reminders. Absent, the screen is empty. */
+  calendar?: CalendarSource | undefined;
 }
 
 const defaultComposer = fixtureComposer();
@@ -77,9 +82,12 @@ export function App({
   agentClient,
   now: nowProp,
   workflowsApi,
+  calendar,
 }: AppProps) {
   const shell = useShell();
   const now = nowProp ?? new Date();
+  // Desktop notifications before an Event starts (Settings: notifications.*).
+  useEventReminders(calendar, shell.settings);
   const storeGroups = useSyncExternalStore(
     routing?.subscribe ?? noSubscribe,
     routing?.groups ?? noGroups,
@@ -239,6 +247,7 @@ export function App({
       } else if (target === "search") setActive("search");
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
+      else if (target === "calendar") setActive("calendar");
       else if (target === "activity") setActive("settings");
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
@@ -331,6 +340,17 @@ export function App({
         }}
         now={now}
       />
+    ) : active === "calendar" && calendar ? (
+      <Calendar
+        key="screen"
+        source={calendar}
+        now={now}
+        onNavigate={navigate}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
+      />
     ) : active === "scheduled" ? (
       <div key="screen" className="main inbox">
         <Scheduled composer={composer} strings={strings.scheduled} now={new Date()} />
@@ -375,6 +395,7 @@ export function App({
         onNavigate={navigate}
         onSearch={openSearch}
         agent={agent}
+        calendar={calendar}
       />
     ),
   );

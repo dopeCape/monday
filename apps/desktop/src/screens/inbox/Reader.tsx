@@ -80,6 +80,8 @@ export interface ReaderProps {
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
+  /** Rendered between the Brief and the Messages: the invite bar (slice 18). */
+  banner?: ReactNode | undefined;
 }
 
 export function Reader({
@@ -107,6 +109,7 @@ export function Reader({
   onOpenAttachment,
   onOpenLink,
   attachmentSrc,
+  banner,
 }: ReaderProps) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [more, setMore] = useState(false);
@@ -186,6 +189,7 @@ export function Reader({
               onAction={onBriefAction}
             />
           ) : null}
+          {banner}
           {messages.map((m, i) => (
             <Message
               key={m.id}
