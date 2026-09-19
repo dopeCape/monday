@@ -3,7 +3,7 @@
 import { MagnifyingGlassIcon, PencilSimpleLineIcon } from "@phosphor-icons/react";
 import { cx } from "../format.ts";
 import { Icon, type IconComponent } from "./icon.tsx";
-import type { NavWorkspace } from "./nav-sidebar.tsx";
+import { DEFAULT_NAV_LABELS, type NavLabels, type NavWorkspace } from "./nav-sidebar.tsx";
 import { Avatar } from "./primitives.tsx";
 
 export interface RailItem {
@@ -15,6 +15,8 @@ export interface RailItem {
 
 export interface RailProps {
   workspace: NavWorkspace;
+  /** The search and compose tooltips; the app reads them from Settings. */
+  labels?: Pick<NavLabels, "search" | "compose"> | undefined;
   /** Inbox and the Groups, at the top. */
   items: readonly RailItem[];
   /** Calendar, Workflows, Routing, Settings, at the bottom. */
@@ -51,6 +53,7 @@ function RailButton({
 
 export function Rail({
   workspace,
+  labels = DEFAULT_NAV_LABELS,
   items,
   tail,
   active,
@@ -62,10 +65,15 @@ export function Rail({
   return (
     <nav className={cx("rail", className)}>
       <Avatar name={workspace.name} initials={workspace.initials} color="var(--fg)" square />
-      <button type="button" title="Search ⌘K" aria-label="Search" onClick={onSearch}>
+      <button
+        type="button"
+        title={`${labels.search} ⌘K`}
+        aria-label={labels.search}
+        onClick={onSearch}
+      >
         <Icon icon={MagnifyingGlassIcon} />
       </button>
-      <button type="button" title="New message" aria-label="New message" onClick={onCompose}>
+      <button type="button" title={labels.compose} aria-label={labels.compose} onClick={onCompose}>
         <Icon icon={PencilSimpleLineIcon} />
       </button>
       <span className="gap" />

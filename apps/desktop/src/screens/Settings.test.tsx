@@ -1518,7 +1518,7 @@ describe("Settings › Appearance on the document", () => {
     await settle();
     const card = () => q('[data-setting="appearance.palette"]');
     await click(card()?.querySelector(".sw.custom"));
-    const path = card()?.querySelector<HTMLInputElement>(".palette-path input");
+    const path = card()?.querySelector<HTMLInputElement>(".palette-path input") ?? null;
     await type(path, "/p/broken.toml");
     await blur(path);
     await settle();

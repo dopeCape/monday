@@ -1,8 +1,9 @@
 // Mock data for the design lock-in. Names and content are invented.
 export const workspace = {
-  name: "GenAI Labs",
+  // The nav names the Account's address, as the app does (apps/desktop/src/shell/nav.ts).
+  name: "tejas@genai-labs.io",
   email: "tejas@genai-labs.io",
-  initials: "GL",
+  initials: "TG",
   accounts: ["tejas@genai-labs.io", "tejas@hey.com", "hello@monday.email"],
 };
 
@@ -153,27 +154,28 @@ export const groups = [
 
 export const nav = {
   main: [
-    { key: "inbox", label: "Inbox", icon: "ph-tray", n: 14, hot: true },
-    { key: "starred", label: "Starred", icon: "ph-star", n: 3 },
-    { key: "snoozed", label: "Snoozed", icon: "ph-clock", n: 5 },
-    { key: "drafts", label: "Drafts", icon: "ph-note-pencil", n: 2 },
+    // Counts are the unread Threads in the Inbox, as the app derives them from the fixtures.
+    { key: "inbox", label: "Inbox", icon: "ph-tray", n: 2, hot: true },
+    { key: "starred", label: "Starred", icon: "ph-star", n: 1 },
+    { key: "snoozed", label: "Snoozed", icon: "ph-clock" },
+    { key: "drafts", label: "Drafts", icon: "ph-note-pencil" },
     { key: "sent", label: "Sent", icon: "ph-paper-plane-tilt" },
     { key: "archive", label: "Archive", icon: "ph-archive" },
   ],
   smart: [
-    { key: "hiring", label: "Hiring", icon: "ph-users-three", n: 6, smart: true, color: "var(--tag-4)", children: [
-      { key: "candidates", label: "Candidates", n: 4 }, { key: "interviews", label: "Interviews", n: 2 }, { key: "rejected", label: "Rejected" },
+    { key: "hiring", label: "Hiring", icon: "ph-users-three", n: 1, smart: true, color: "var(--tag-4)", children: [
+      { key: "candidates", label: "Candidates", n: 1 }, { key: "interviews", label: "Interviews" }, { key: "rejected", label: "Rejected" },
     ] },
-    { key: "finance", label: "Finance", icon: "ph-receipt", n: 2, smart: true, color: "var(--tag-2)", children: [
-      { key: "invoices", label: "Invoices", n: 1 }, { key: "receipts", label: "Receipts", n: 1 },
+    { key: "finance", label: "Finance", icon: "ph-receipt", smart: true, color: "var(--tag-2)", children: [
+      { key: "invoices", label: "Invoices" }, { key: "receipts", label: "Receipts" },
     ] },
     { key: "investors", label: "Investors", icon: "ph-handshake", n: 1, smart: true, color: "var(--tag-1)" },
-    { key: "community", label: "Community", icon: "ph-github-logo", n: 3, smart: true, color: "var(--tag-5)" },
+    { key: "community", label: "Community", icon: "ph-github-logo", smart: true, color: "var(--tag-5)" },
     { key: "press", label: "Press", icon: "ph-microphone", smart: true, color: "var(--tag-3)" },
   ],
   calendar: [{ key: "calendar", label: "Calendar", icon: "ph-calendar-blank" }],
   automation: [
-    { key: "workflows", label: "Workflows", icon: "ph-flow-arrow", n: 3, running: true },
+    { key: "workflows", label: "Workflows", icon: "ph-flow-arrow" },
     { key: "routing", label: "Routing", icon: "ph-git-branch" },
   ],
 };

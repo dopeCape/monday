@@ -5,20 +5,8 @@
 // Setting keeps its value), and no Session is opened. Onboarding is offered
 // once per Account, after it is added, and again from "Set me up".
 
-import type { ExternalPending } from "@monday/shared";
+import type { ExternalPending, Group } from "@monday/shared";
 import { NavSidebar, Rail } from "@monday/ui";
-import {
-  automationNav,
-  calendarNav,
-  counts,
-  folders,
-  groupIcon,
-  groups,
-  navWorkspace,
-  railItems,
-  railTail,
-} from "@monday/ui/fixtures";
-import { ClockIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
@@ -51,6 +39,7 @@ import type { RuntimeDetection } from "./screens/settings/render.tsx";
 import { Workflows } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
+import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
 import { useWorkspace } from "./workspace.tsx";
 
@@ -125,7 +114,10 @@ function topSenders(
 
 const defaultComposer = fixtureComposer();
 const noSubscribe = () => () => {};
-const noGroups = () => groups;
+const NO_GROUPS: readonly Group[] = [];
+const noGroups = () => NO_GROUPS;
+const NO_THREADS: ReturnType<InboxData["threads"]> = [];
+const noThreads = () => NO_THREADS;
 
 export function App({
   inbox,
@@ -153,7 +145,13 @@ export function App({
     routing?.groups ?? noGroups,
     routing?.groups ?? noGroups,
   );
-  const navGroups = routing ? storeGroups : groups;
+  // The nav's Groups and counts follow the Store; without a routing seam there are no Groups.
+  const navGroups = routing ? storeGroups : NO_GROUPS;
+  const inboxThreads = useSyncExternalStore(
+    inbox?.subscribe ?? noSubscribe,
+    inbox?.threads ?? noThreads,
+    inbox?.threads ?? noThreads,
+  );
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
@@ -400,13 +398,31 @@ export function App({
   const sends = useSyncExternalStore(composer.subscribe, composer.sends, composer.sends);
   const pending = sends.filter((s) => s.status === "scheduled").length;
   const strings = composeStrings(shell.settings);
-  const navFolders =
-    pending > 0
-      ? [
-          ...folders,
-          { key: "scheduled", label: strings.scheduled.title, icon: ClockIcon, count: pending },
-        ]
-      : folders;
+  const groupIcons = shell.settings["routing.group_icons"];
+  const groupIcon = useMemo(() => groupIconFor(groupIcons), [groupIcons]);
+  const nav = useMemo(
+    () =>
+      navModel({
+        address: ws.address,
+        status: !online ? "offline" : syncing ? "syncing" : "online",
+        threads: inboxThreads,
+        groups: navGroups,
+        groupIcon,
+        scheduled: { count: pending, label: strings.scheduled.title },
+        strings: shell.settings,
+      }),
+    [
+      ws.address,
+      online,
+      syncing,
+      inboxThreads,
+      navGroups,
+      groupIcon,
+      pending,
+      strings.scheduled.title,
+      shell.settings,
+    ],
+  );
   const onCompose = () => {
     setActive("inbox");
     setComposeRequest((n) => n + 1);
@@ -492,15 +508,17 @@ export function App({
     parts.push(
       <NavSidebar
         key="nav"
-        workspace={navWorkspace}
-        folders={navFolders}
-        calendar={calendarNav}
+        workspace={nav.workspace}
+        labels={nav.labels}
+        folders={nav.folders}
+        calendar={nav.calendar}
         groups={navGroups}
-        groupIcon={groupIcon}
-        counts={counts}
-        automation={automationNav}
+        groupIcon={nav.groupIcon}
+        counts={nav.counts}
+        automation={nav.automation}
         active={active}
         onSelect={setActive}
+        onSearch={() => openSearch("")}
         onCompose={onCompose}
       />,
     );
@@ -510,11 +528,13 @@ export function App({
     parts.push(
       <Rail
         key="rail"
-        workspace={navWorkspace}
-        items={railItems}
-        tail={railTail}
+        workspace={nav.workspace}
+        labels={nav.labels}
+        items={nav.rail}
+        tail={nav.railTail}
         active={active}
         onSelect={setActive}
+        onSearch={() => openSearch("")}
         onCompose={onCompose}
       />,
     );
