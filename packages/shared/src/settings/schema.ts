@@ -1865,6 +1865,11 @@ export const settingsSchema = {
     "Brief chip: calendar not connected",
     "Calendar is not connected yet",
   ),
+  "strings.reader.brief_action.calendar_added": str(
+    "routing",
+    "Brief chip: Event added",
+    "Added to your calendar: {title}",
+  ),
   "strings.reader.brief_action.unavailable": str(
     "routing",
     "Brief chip: action unavailable",

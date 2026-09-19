@@ -3833,3 +3833,28 @@ button.prov {
     transition: none !important;
   }
 }
+/* the CalDAV link form under Settings, Accounts, Meetings (slice 18) */
+.caldav-account {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.caldav-address {
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.caldav-form,
+.caldav-linked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.caldav-form .input {
+  min-width: 140px;
+}
+.caldav-error {
+  color: var(--warning);
+  font-size: var(--fs-xs);
+}

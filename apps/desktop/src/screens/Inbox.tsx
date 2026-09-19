@@ -438,14 +438,29 @@ export function Inbox({
 
   // Action chips are tool calls (slice 13): reply and forward open compose and
   // never send, snooze and archive apply with Undo, a link opens outside.
+  const defaultDuration = s["calendar.default_duration_minutes"];
   const actionRunner = useMemo(
     () =>
       createActionRunner({
         inbox,
         compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
         openLink: (url) => openExternal(url),
+        // The chip is the user's own click, so the Event goes straight on the calendar (slice 18).
+        ...(calendar
+          ? {
+              calendar: async ({ title, start }) => {
+                const startAt = new Date(start);
+                await calendar.create({
+                  title,
+                  start: startAt.toISOString(),
+                  end: new Date(startAt.getTime() + defaultDuration * 60_000).toISOString(),
+                  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                });
+              },
+            }
+          : {}),
       }),
-    [inbox, startReply],
+    [inbox, startReply, calendar, defaultDuration],
   );
   const runBriefAction = useCallback(
     async (action: BriefAction) => {
@@ -462,7 +477,12 @@ export function Inbox({
         );
         return;
       }
-      if (outcome.call.tool === "thread.archive") {
+      if (outcome.call.tool === "calendar.create_event") {
+        showToast(
+          fill(t("strings.reader.brief_action.calendar_added"), { title: outcome.call.args.title }),
+          null,
+        );
+      } else if (outcome.call.tool === "thread.archive") {
         showToast(t("strings.inbox.toast.archived"), outcome.undo);
       } else if (outcome.call.tool === "thread.snooze") {
         showToast(
