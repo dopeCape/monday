@@ -433,6 +433,16 @@ describe("the composer in bottom-bar mode", () => {
     const bash = document.querySelector<HTMLElement>('.tool[data-builtin="true"]');
     expect(bash?.querySelector(".t")?.textContent).toBe("Developer mode: Bash");
     expect(bash?.querySelector(".t i, .t svg")).not.toBeNull();
+    // Developer mode is per Session: a new one, and a past one opened from History, start off.
+    await typeInBar("/new");
+    await submitBar();
+    expect(document.querySelector(".agent-developer .chip")?.classList.contains("on")).toBe(false);
+    await click(document.querySelector('.agent-panel button[title="History"]'));
+    await click(document.querySelectorAll(".agent-history .r")[1]);
+    expect(document.querySelector(".agent-thread .u")?.textContent).toBe(
+      "what is in my home folder?",
+    );
+    expect(document.querySelector(".agent-developer .chip")?.classList.contains("on")).toBe(false);
   });
 
   test("switching the Runtime mid-Session puts a line in the thread before the next turn", async () => {

@@ -303,12 +303,14 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         sessionRef.current = loaded.session;
         setEvents(applyEvents([], loaded.events));
         setRuntimeInfo(client.runtimeOf(loaded.session.id));
+        // Developer mode is per Session (CONTEXT.md): another Session starts from the default.
+        setDeveloperMode(options.developerModeDefault ?? false);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [client],
+    [client, options.developerModeDefault],
   );
 
   const waiting = useMemo(() => waitingCalls(events), [events]);
