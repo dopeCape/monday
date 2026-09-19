@@ -5,6 +5,7 @@ import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { platform } from "./platform/tauri.ts";
+import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
@@ -35,6 +36,7 @@ function Root() {
     inbox: StoreInbox;
     composer: StoreComposer;
     routing: StoreRouting;
+    calendar: StoreCalendar;
   } | null>(null);
 
   // The bulk body route: "search older mail" and the pre-warm Job share it.
@@ -90,13 +92,19 @@ function Root() {
   useEffect(() => {
     if (!content) return;
     let closed = false;
-    let opened: { inbox: StoreInbox; composer: StoreComposer; routing: StoreRouting } | null = null;
+    let opened: {
+      inbox: StoreInbox;
+      composer: StoreComposer;
+      routing: StoreRouting;
+      calendar: StoreCalendar;
+    } | null = null;
     let routingSeam: StoreRouting | null = null;
     void Promise.all([
       createStoreRouting(store).then((r) => {
         routingSeam = r;
         return r;
       }),
+      createStoreCalendar(store, shell.api),
       createStoreInbox(store, {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],
@@ -118,13 +126,14 @@ function Root() {
           suggestions: p.isTauri ? undefined : { d1: { ghost: draftGhost, note: draftNote } },
         }),
       ),
-    ]).then(([routing, inbox, composer]) => {
+    ]).then(([routing, calendar, inbox, composer]) => {
       if (closed) {
         inbox.close();
         composer.close();
         routing.close();
+        calendar.close();
       } else {
-        opened = { inbox, composer, routing };
+        opened = { inbox, composer, routing, calendar };
         setSeams(opened);
       }
     });
@@ -133,8 +142,9 @@ function Root() {
       opened?.inbox.close();
       opened?.composer.close();
       opened?.routing.close();
+      opened?.calendar.close();
     };
-  }, [store, content]);
+  }, [store, content, shell.api]);
 
   // Changed Section rules re-section the stream at once, without a new Cache read.
   const sectionRules = shell.settings["sections.rules"];
@@ -154,6 +164,7 @@ function Root() {
       inbox={seams.inbox}
       composer={seams.composer}
       routing={seams.routing}
+      calendar={seams.calendar}
       online={status === "online" || status === "syncing"}
       syncing={progress}
       search={search}

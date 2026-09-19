@@ -29,9 +29,12 @@ import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
+import { useEventReminders } from "./calendar/reminders.ts";
 import type { AccountView } from "./platform/api.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "./platform/providerKeys.ts";
 import { platform } from "./platform/tauri.ts";
+import { Calendar } from "./screens/Calendar.tsx";
+import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
@@ -83,6 +86,8 @@ export interface AppProps {
   accounts?: { list(): Promise<{ accounts: AccountView[] }> } | null | undefined;
   /** This Device's provider keys, for the runtime step; the platform keychain by default. */
   keys?: DeviceProviderKeys | null | undefined;
+  /** The calendar seam (slice 18): the Calendar screen, the invite bar and the reminders. Absent, the screen is empty. */
+  calendar?: CalendarSource | undefined;
 }
 
 /** Detection as the Settings screens and onboarding read it, from what the Device found. */
@@ -135,11 +140,14 @@ export function App({
   workflowsApi,
   accounts: accountsProp,
   keys: keysProp,
+  calendar,
 }: AppProps) {
   const shell = useShell();
   const now = nowProp ?? new Date();
   // Just mail (CONTEXT.md "AI level"): no agent column, no bar, no Session.
   const aiOff = shell.settings["ai.level"] === "off";
+  // Desktop notifications before an Event starts (Settings: notifications.*).
+  useEventReminders(calendar, shell.settings);
   const storeGroups = useSyncExternalStore(
     routing?.subscribe ?? noSubscribe,
     routing?.groups ?? noGroups,
@@ -409,6 +417,7 @@ export function App({
       } else if (target === "search") setActive("search");
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
+      else if (target === "calendar") setActive("calendar");
       else if (target === "activity") setActive("settings");
       else if (target === "onboarding") openOnboarding(null, true);
       else if (target.startsWith("thread:")) {
@@ -535,6 +544,17 @@ export function App({
         }}
         now={now}
       />
+    ) : active === "calendar" && calendar ? (
+      <Calendar
+        key="screen"
+        source={calendar}
+        now={now}
+        onNavigate={navigate}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
+      />
     ) : active === "scheduled" ? (
       <div key="screen" className="main inbox">
         <Scheduled composer={composer} strings={strings.scheduled} now={new Date()} />
@@ -580,6 +600,7 @@ export function App({
         onSearch={openSearch}
         agent={agent}
         externalPending={externalPending}
+        calendar={calendar}
       />
     ),
   );

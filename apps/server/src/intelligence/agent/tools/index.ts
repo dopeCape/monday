@@ -19,6 +19,7 @@ import type { ToolExtensions } from "./extensions.ts";
 export type { ToolDefinition, ToolPlan, ToolSettings } from "./catalog.ts";
 export { TOOL_CATALOG } from "./catalog.ts";
 export type {
+  CalendarSeam,
   ExternalSeam,
   IntegrationsSeam,
   McpSeam,
@@ -444,6 +445,14 @@ export async function replayUndo(
       }
       for (const id of undo.groupIds) await onboarding.deleteGroup(id);
       return `Undone: ${plural(undo.groupIds.length, "Group")} removed and ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
+    }
+    case "event": {
+      const calendar = extensions?.calendar;
+      if (!calendar) return "Cannot undo: the calendar is not available from this host.";
+      const current = await calendar.readEvent(undo.eventId);
+      if (!current) return "Nothing to undo: the Event is already gone.";
+      await calendar.deleteEvent(undo.eventId);
+      return `Undone: "${current.title}" was cancelled${current.attendees.some((a) => !a.self) ? " and the attendees told" : ""}.`;
     }
   }
 }

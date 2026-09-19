@@ -16,6 +16,7 @@ import {
   PUBLIC_PREFIXES,
   requireAuth,
 } from "./auth/middleware.ts";
+import { type CalendarModule, CalendarUnavailableError } from "./calendar/index.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
@@ -57,6 +58,7 @@ import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
 import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { agentRoutes } from "./routes/agent.ts";
+import { calendarRoutes } from "./routes/calendar.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { draftsRoutes } from "./routes/drafts.ts";
@@ -140,6 +142,8 @@ export interface AppOptions {
   oauth?: Omit<OAuthRoutesOptions, "accounts">;
   /** Provider push webhooks (public paths, verified by their own secrets). */
   push?: PushManager;
+  /** The calendar module (slice 18); absent in tests that never touch a calendar. */
+  calendar?: CalendarModule;
   /**
    * This Server's heartbeat id, so /capabilities can report the topology
    * (Sidecar only, Cloud, both) from the fresh heartbeats. Absent, the Server
@@ -196,6 +200,14 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       if (options.jobs) created.registerSteps(options.jobs);
       return created;
     })();
+  // The calendar tools act through the module (slice 18).
+  if (options.calendar) intelligence.attachCalendar(options.calendar);
+  // Bodies landing carry the text/calendar parts the calendar module turns into Invites (slice 18).
+  if (options.calendar && options.sync) {
+    options.sync.setBodyObserver((account, messageId, threadId, raw) =>
+      (options.calendar as CalendarModule).observeBody(account, messageId, threadId, raw),
+    );
+  }
   // Threads whose bodies landed go to the brief policy through the Jobs table (slice 13).
   options.sync?.setThreadObserver((workspaceId, threadId) =>
     intelligence.briefs.threadReady(workspaceId, threadId),
@@ -347,6 +359,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       },
     }),
   );
+  if (options.calendar) app.route("/", calendarRoutes(options.calendar));
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {
@@ -382,6 +395,9 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     if (error instanceof TurnBusyError) return c.json({ error: "turn_running" }, 409);
     if (error instanceof WorkflowNotFoundError) return c.json({ error: "not_found" }, 404);
     if (error instanceof RunNotWaitingError) return c.json({ error: "run_not_waiting" }, 409);
+    if (error instanceof CalendarUnavailableError) {
+      return c.json({ error: "calendar_unavailable", reason: error.reason }, 409);
+    }
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

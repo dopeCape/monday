@@ -135,6 +135,11 @@ describe("the tool catalog", () => {
       adopt_workflow: "reversible",
       propose_views: "reversible",
       set_keymap: "reversible",
+      list_events: "read",
+      schedule_event: "leaves_mailbox",
+      rsvp: "leaves_mailbox",
+      update_event: "leaves_mailbox",
+      delete_event: "destructive",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

@@ -31,6 +31,7 @@ import {
 import {
   type ActivityLog,
   type AgentHost,
+  type CalendarSeam,
   createActivityLog,
   createAgentHost,
   createServerToolHost,
@@ -155,6 +156,8 @@ export interface Intelligence {
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
+  /** Hands the calendar tools their seam (slice 18); the app calls it once the calendar module exists. */
+  attachCalendar(seam: CalendarSeam): void;
 }
 
 const AGENT_SETTING_KEYS = [
@@ -402,6 +405,9 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.onboarding = onboarding;
 
   return {
+    attachCalendar(seam) {
+      extensions.calendar = seam;
+    },
     runtime,
     keys,
     meter,

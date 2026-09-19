@@ -179,6 +179,8 @@ export interface ComposeInput {
   messageId?: string;
   date?: Date;
   attachments?: { name: string; mediaType: string; bytes: Uint8Array }[];
+  /** An iTIP part (RFC 6047): text/calendar with its method, beside the text alternative. */
+  icalEvent?: { method: string; content: string };
 }
 
 function formatPerson(p: Person): string {
@@ -204,6 +206,9 @@ export async function composeMime(input: ComposeInput): Promise<Uint8Array> {
       contentType: a.mediaType,
       content: Buffer.from(a.bytes),
     })),
+    icalEvent: input.icalEvent
+      ? { method: input.icalEvent.method, content: input.icalEvent.content, filename: "invite.ics" }
+      : undefined,
   });
   const buffer = await composer.compile().build();
   return new Uint8Array(buffer);

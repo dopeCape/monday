@@ -116,14 +116,123 @@ export function AccountsPanel(_: PanelProps) {
 }
 registerPanel("accounts", "Accounts", AccountsPanel);
 
-/** The CalDAV calendar link: a placeholder until the calendar slice. */
+/**
+ * The CalDAV calendar link (slice 18): for each Account without a calendar
+ * API, a form that links a CalDAV calendar (URL, user, app password) through
+ * PUT /accounts/:id/caldav, which proves the link before storing it under the
+ * credential envelope; a linked Account shows the URL and can unlink.
+ */
 export function CalDavPanel(_: PanelProps) {
-  const s = useShell().settings;
+  const shell = useShell();
+  const s = shell.settings;
+  const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [linked, setLinked] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    shell.api.accounts
+      .list()
+      .then((r) => setAccounts(r.accounts.filter((a) => !a.capabilities.calendar)))
+      .catch(() => setAccounts([]));
+  }, [shell.api]);
+  useEffect(() => {
+    for (const a of accounts) {
+      shell.api.calendar
+        .info(a.workspaceId)
+        .then((info) => {
+          if (info.source === "caldav") setLinked((l) => ({ ...l, [a.id]: "linked" }));
+        })
+        .catch(() => {});
+    }
+  }, [accounts, shell.api]);
+  const submit = async (account: AccountView, form: HTMLFormElement) => {
+    const data = new FormData(form);
+    const link = {
+      url: String(data.get("url") ?? "").trim(),
+      user: String(data.get("user") ?? "").trim(),
+      password: String(data.get("password") ?? ""),
+    };
+    if (!link.url || !link.user || !link.password) return;
+    setBusy(account.id);
+    setError(null);
+    try {
+      await shell.api.calendar.linkCalDav(account.id, link);
+      setLinked((l) => ({ ...l, [account.id]: link.url }));
+      form.reset();
+    } catch (err) {
+      setError(
+        fill(s["strings.settings.caldav.failed"], {
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+  const unlink = async (account: AccountView) => {
+    setBusy(account.id);
+    try {
+      await shell.api.calendar.linkCalDav(account.id, null);
+      setLinked((l) => {
+        const { [account.id]: _gone, ...rest } = l;
+        return rest;
+      });
+    } catch (err) {
+      setError(
+        fill(s["strings.settings.caldav.failed"], {
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
-    <div className="field" data-panel="caldav">
+    <div className="field caldav" data-panel="caldav">
       <div className="l">
         <b>{s["strings.settings.caldav.title"]}</b>
         <span>{s["strings.settings.caldav.soon"]}</span>
+        {accounts.map((a) => (
+          <div key={a.id} className="caldav-account" data-account={a.id}>
+            <div className="caldav-address">{a.address}</div>
+            {linked[a.id] ? (
+              <div className="caldav-linked">
+                <span>
+                  {fill(s["strings.settings.caldav.linked"], { url: linked[a.id] ?? "" })}
+                </span>
+                <Btn sm disabled={busy === a.id} onClick={() => void unlink(a)}>
+                  {s["strings.settings.caldav.unlink"]}
+                </Btn>
+              </div>
+            ) : (
+              <form
+                className="caldav-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void submit(a, e.currentTarget);
+                }}
+              >
+                <Input
+                  name="url"
+                  type="url"
+                  placeholder={s["strings.settings.caldav.url"]}
+                  required
+                />
+                <Input name="user" placeholder={s["strings.settings.caldav.user"]} required />
+                <Input
+                  name="password"
+                  type="password"
+                  placeholder={s["strings.settings.caldav.password"]}
+                  required
+                />
+                <Btn sm type="submit" disabled={busy === a.id}>
+                  {s["strings.settings.caldav.link"]}
+                </Btn>
+              </form>
+            )}
+          </div>
+        ))}
+        {error ? <span className="caldav-error">{error}</span> : null}
       </div>
     </div>
   );

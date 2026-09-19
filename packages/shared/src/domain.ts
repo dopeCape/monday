@@ -186,7 +186,9 @@ export type ContentKind =
   | "tag-rationale"
   | "summary"
   | "embedding"
-  | "credential";
+  | "credential"
+  /** An Event's title, description and location, content like a Message body (slice 18). */
+  | "event";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read
@@ -503,16 +505,136 @@ export interface Device {
   lastSeen: IsoDate;
 }
 
-/* ------------------------------ Calendar ------------------------------ */
+/* ------------------------------ Calendar (slice 18) ------------------------------ */
+
+/** Where a Workspace's Events live: the Provider's calendar API, a linked CalDAV calendar, or the Local calendar. */
+export type CalendarSource = "google" | "graph" | "jmap" | "caldav" | "local";
+
+/** One calendar of a Workspace, as the Provider lists it, or the Local calendar. */
+export interface Calendar {
+  id: Id;
+  workspaceId: Id;
+  source: CalendarSource;
+  /** The Provider's id; "local" for the Local calendar. */
+  providerId: string;
+  name: string;
+  primary: boolean;
+  /** The user may write Events here. */
+  writable: boolean;
+  /** Shown in the views; kept on the Server so every Device agrees. */
+  visible: boolean;
+  color: string | null;
+}
+
+export type RsvpResponse = "accepted" | "tentative" | "declined" | "needs-action";
+
+export interface Attendee extends Person {
+  response: RsvpResponse;
+  /** True for the Workspace's own address. */
+  self?: boolean;
+  optional?: boolean;
+  organizer?: boolean;
+}
+
+export type EventStatus = "confirmed" | "tentative" | "cancelled";
+
+/** The kind of meeting link the scheduling tool asks the Provider to make. */
+export type MeetingLinkKind = "none" | "google-meet" | "teams" | "jitsi" | "custom";
+
+/** The Setting's value: a kind, or "provider" for whatever the Account's Provider mints (Meet, Teams), none elsewhere. */
+export type MeetingLinkSetting = MeetingLinkKind | "provider";
 
 export interface CalendarEvent {
   id: Id;
+  workspaceId: Id;
   calendarId: Id;
+  /** The Provider's own id for the Event; the Local calendar mints a UUID. */
+  providerId: string;
+  /** The iCalendar UID, shared with the Invite that carried it. */
+  uid: string | null;
+  title: string;
+  description: string;
+  location: string;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  /** The IANA time zone the Event was made in, when the Provider says. */
+  timeZone: string | null;
+  organizer: Person | null;
+  attendees: Attendee[];
+  /** The meeting link: Meet, Teams, or what the organizer put in CONFERENCE, LOCATION or the description. */
+  link: string | null;
+  status: EventStatus;
+  /** The RRULE as the Provider gives it; null for a single Event. */
+  recurrence: string | null;
+  /** The master Event of an instance, when the Provider expands recurrences. */
+  recurringEventId: string | null;
+  /** The Workspace's own response when it is an attendee. */
+  response: RsvpResponse | null;
+  createdByAgent: boolean;
+  /** Provider ETag, Schedule-Tag or change key; drives conditional updates. */
+  etag: string | null;
+  updatedAt: IsoDate;
+}
+
+/** What creates or updates an Event: everything the user can edit. */
+export interface EventInput {
+  calendarId?: Id | null | undefined;
+  title: string;
+  description?: string | undefined;
+  location?: string | undefined;
+  start: IsoDate;
+  end: IsoDate;
+  allDay?: boolean | undefined;
+  timeZone?: string | null | undefined;
+  attendees?: Person[] | undefined;
+  /** The link the Provider should mint, or a fixed URL under "custom". */
+  meetingLink?: MeetingLinkKind | undefined;
+  customLink?: string | null | undefined;
+  recurrence?: string | null | undefined;
+  createdByAgent?: boolean | undefined;
+}
+
+/** What updates an Event: any subset of the input; an absent field keeps its value. */
+export type EventPatch = { [K in keyof EventInput]?: EventInput[K] | undefined };
+
+export type InviteMethod = "REQUEST" | "REPLY" | "CANCEL" | "PUBLISH";
+
+/** A text/calendar part in a Message (CONTEXT.md "Invite"), as the invite bar renders it. */
+export interface Invite {
+  id: Id;
+  workspaceId: Id;
+  messageId: Id;
+  threadId: Id;
+  /** The Event the Invite was matched to or created, once known. */
+  eventId: Id | null;
+  method: InviteMethod;
+  uid: string;
+  sequence: number;
   title: string;
   start: IsoDate;
   end: IsoDate;
-  attendees: Person[];
-  link: string | null;
-  status: "confirmed" | "tentative" | "cancelled";
-  createdByAgent: boolean;
+  allDay: boolean;
+  organizer: Person | null;
+  attendees: Attendee[];
+  /** The Workspace's answer so far. */
+  response: RsvpResponse;
+  /** The RSVP goes by mail (iMIP REPLY) rather than through a calendar API. */
+  byMail: boolean;
+  /** RFC 6047 2.3: the From header did not match the ORGANIZER. */
+  senderMismatch: boolean;
+  receivedAt: IsoDate;
+}
+
+/** Which calendar operations a Workspace's Account offers, and who sends invitations. */
+export interface CalendarInfo {
+  source: CalendarSource;
+  /** The Provider mails invitations itself (Google, Graph, CalDAV with scheduling); monday never does then. */
+  providerSendsInvites: boolean;
+  /** The meeting link kinds the Provider can mint. */
+  meetingLinks: MeetingLinkKind[];
+  /** The link kind the scheduling tool uses for this Account. */
+  defaultMeetingLink: MeetingLinkKind;
+  /** The Provider pushes changes where a public URL exists; otherwise monday polls. */
+  push: boolean;
 }

@@ -28,8 +28,10 @@ import {
   type Watch,
   type WatchEvent,
 } from "../types.ts";
+import { createFakeCalendar, type FakeCalendar, type FakeCalendarOptions } from "./calendar.ts";
 import type { Fixture, FixtureAttachment, FixtureMessage } from "./fixture.ts";
 
+export { createFakeCalendar, type FakeCalendar, type MailedNotice } from "./calendar.ts";
 export { FIXTURE_MESSAGE_COUNT, type Fixture, generateFixture } from "./fixture.ts";
 
 interface Stored {
@@ -60,6 +62,12 @@ export interface FakeProviderOptions {
   /** False to report no push. */
   push?: boolean;
   pageSize?: number;
+  /**
+   * Hands out a fake calendar from Session.calendar() (slice 18), playing
+   * Google or Graph; absent, the Session has no calendar API and the
+   * calendar module uses the Local calendar.
+   */
+  calendar?: FakeCalendarOptions;
 }
 
 export interface FakeProvider extends Provider {
@@ -76,6 +84,8 @@ export interface FakeProvider extends Provider {
   snapshot(): { id: string; mailboxIds: string[]; flags: Flags }[];
   /** How many times each Session method ran, for pacing assertions. */
   calls: Record<string, number>;
+  /** The fake calendar, when options.calendar asked for one. */
+  calendar: FakeCalendar | null;
 }
 
 const encoder = new TextEncoder();
@@ -200,13 +210,19 @@ export function createFakeProvider(
     return found.mailboxIds;
   };
 
+  const calendar = options.calendar ? createFakeCalendar(fixture.address, options.calendar) : null;
   const capabilities: ProviderCapabilities = {
     push: options.push ?? true,
     labels: true,
     snooze: false,
     mute: false,
-    calendar: false,
-    meetingLink: null,
+    calendar: calendar !== null,
+    meetingLink:
+      calendar?.info().defaultMeetingLink === "google-meet"
+        ? "meet"
+        : calendar?.info().defaultMeetingLink === "teams"
+          ? "teams"
+          : null,
     syncTier: "state",
     threads,
     savesSentCopy: true,
@@ -386,13 +402,24 @@ export function createFakeProvider(
         mime.byteLength,
       );
       const raw = rawMessageOf(id, parsed);
+      // Text parts (an iTIP invitation, say) are kept so a test can read what went out.
+      const kept: FixtureAttachment[] = [];
+      for (const a of raw.attachments) {
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of a.content()) chunks.push(chunk);
+        kept.push({
+          name: a.name,
+          mediaType: a.mediaType,
+          text: new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c)))),
+        });
+      }
       store.set(id, {
         summary: { ...summary, threadId: threads ? `sent-${id}` : null },
         flags: summary.flags,
         mailboxIds: [sent],
         text: raw.text,
         html: raw.html,
-        attachments: [],
+        attachments: kept,
         allHeaders: raw.headers,
       });
       record(id, "created", [sent]);
@@ -441,6 +468,11 @@ export function createFakeProvider(
       record(id, "destroyed", s.mailboxIds);
     },
 
+    calendar() {
+      count("calendar");
+      return calendar;
+    },
+
     watch(_mailboxIds: string[]): Watch {
       count("watch");
       if (!capabilities.push) {
@@ -469,6 +501,7 @@ export function createFakeProvider(
   const provider: FakeProvider = {
     kind: "fake",
     calls,
+    calendar,
     async connect(credentials: Credentials) {
       count("connect");
       if (credentials.auth.kind === "password" && credentials.auth.password === "wrong") {

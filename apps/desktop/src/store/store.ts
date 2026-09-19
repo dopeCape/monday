@@ -14,23 +14,28 @@ import type {
   Actor,
   Brief,
   BriefChange,
+  CalendarChange,
   Change,
   DecisionChange,
   Draft,
   DraftChange,
   DraftIntent,
   DraftIntentArgs,
+  EventChange,
   GroupChange,
   Id,
   Intent,
   IntentArgs,
+  InviteChange,
+  InviteIntent,
+  InviteIntentArgs,
   IsoDate,
   Message,
   MessageBodyRow,
   SendChange,
   ThreadChange,
 } from "@monday/shared";
-import { isDraftIntentKind } from "@monday/shared";
+import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import schemaSql from "./schema.sql?raw";
@@ -51,7 +56,9 @@ export interface LiveQuery<T> {
 export type StoreIntent = IntentArgs & { threadId: Id; actor?: Actor; at?: IsoDate };
 /** A Draft or send intent as the compose surface raises it (ADR 0010). */
 export type DraftStoreIntent = DraftIntentArgs & { draftId: Id; actor?: Actor; at?: IsoDate };
-export type AnyIntent = Intent | DraftIntent;
+/** An Invite's answer as the invite bar raises it (slice 18). */
+export type InviteStoreIntent = InviteIntentArgs & { inviteId: Id; actor?: Actor; at?: IsoDate };
+export type AnyIntent = Intent | DraftIntent | InviteIntent;
 
 /** A Message header with its attachment headers, as GET /threads/:id/messages returns it. */
 export interface CachedMessageHeader {
@@ -96,7 +103,7 @@ export interface Store {
   query<T = Row>(sql: string, params?: SqlParam[]): Promise<T[]>;
   live<T = Row>(sql: string, params?: SqlParam[]): LiveQuery<T>;
   /** Applies locally, appends to the Outbox, returns. The network happens in sync. */
-  intent(action: StoreIntent | DraftStoreIntent): Promise<void>;
+  intent(action: StoreIntent | DraftStoreIntent | InviteStoreIntent): Promise<void>;
   /**
    * Content the screens fetched through the content routes, written into the
    * Cache so live queries pick it up: Message headers with attachments, one
@@ -113,6 +120,12 @@ export interface Store {
    * too. Returns how many landed. Never throws.
    */
   warmBriefs(): Promise<number>;
+  /**
+   * Fetches the title, description and location of every Event and the title
+   * of every Invite whose feed row is newer than its content (slice 18), in
+   * batches through the transport. Runs after each pull. Never throws.
+   */
+  warmEvents(): Promise<number>;
   setReplyAll(threadId: Id, replyAll: boolean): Promise<void>;
   /**
    * Cache-only writes that are not intents and never reach the Outbox: bodies
@@ -293,6 +306,21 @@ export function localStatements(intent: Intent): Statement[] {
         })),
       ];
   }
+}
+
+/** The Cache statements that make an Invite's answer visible before the Server has it (slice 18). */
+export function localInviteStatements(intent: InviteIntent): Statement[] {
+  return [
+    {
+      sql: "update invites set response = ? where id = ?",
+      params: [intent.response, intent.inviteId],
+    },
+    {
+      // The Event the Invite points at answers the same way, so the views agree at once.
+      sql: "update events set response = ?, updated_at = ? where id = (select event_id from invites where id = ?)",
+      params: [intent.response, intent.at, intent.inviteId],
+    },
+  ];
 }
 
 /** The Cache statements that make a Draft or send intent visible before the Server has it. */
@@ -476,7 +504,103 @@ export function changeStatements(change: Change): Statement[] {
       return [groupUpsert(change.payload)];
     case "decision":
       return [decisionUpsert(change.payload)];
+    case "calendar":
+      return [calendarUpsert(change.payload)];
+    case "event":
+      return [eventUpsert(change.payload)];
+    case "invite":
+      return [inviteUpsert(change.payload)];
   }
+}
+
+/** A calendar row from the feed, or its removal with its Events. */
+function calendarUpsert(c: CalendarChange): Statement {
+  if (c.deleted) return { sql: "delete from calendars where id = ?", params: [c.id] };
+  return {
+    sql: `insert into calendars (id, source, provider_id, name, "primary", writable, visible, color)
+          values (?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict (id) do update set
+            source = excluded.source, provider_id = excluded.provider_id, name = excluded.name,
+            "primary" = excluded."primary", writable = excluded.writable, visible = excluded.visible,
+            color = excluded.color`,
+    params: [c.id, c.source, c.providerId, c.name, c.primary, c.writable, c.visible, c.color],
+  };
+}
+
+/**
+ * An Event header row from the feed (slice 18): times, people, link and
+ * status always; the title is content and stays until a newer header marks
+ * it stale for the warm step. A deleted Event drops the row.
+ */
+function eventUpsert(e: EventChange): Statement {
+  if (e.deleted) return { sql: "delete from events where id = ?", params: [e.id] };
+  return {
+    sql: `insert into events (id, calendar_id, provider_id, uid, start, "end", all_day, time_zone, organizer,
+            attendees, link, status, recurrence, recurring_event_id, response, created_by_agent, content_stale, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          on conflict (id) do update set
+            calendar_id = excluded.calendar_id, provider_id = excluded.provider_id, uid = excluded.uid,
+            start = excluded.start, "end" = excluded."end", all_day = excluded.all_day, time_zone = excluded.time_zone,
+            organizer = excluded.organizer, attendees = excluded.attendees, link = excluded.link,
+            status = excluded.status, recurrence = excluded.recurrence, recurring_event_id = excluded.recurring_event_id,
+            response = excluded.response, created_by_agent = excluded.created_by_agent,
+            content_stale = case when excluded.updated_at > events.updated_at or events.title = '' then 1 else events.content_stale end,
+            updated_at = max(events.updated_at, excluded.updated_at)`,
+    params: [
+      e.id,
+      e.calendarId,
+      e.providerId,
+      e.uid,
+      e.start,
+      e.end,
+      e.allDay,
+      e.timeZone,
+      e.organizer,
+      e.attendees,
+      e.link,
+      e.status,
+      e.recurrence,
+      e.recurringEventId,
+      e.response,
+      e.createdByAgent,
+      e.updatedAt,
+    ],
+  };
+}
+
+/** An Invite header row from the feed; the title is content, warmed like an Event's. */
+function inviteUpsert(i: InviteChange): Statement {
+  if (i.deleted) return { sql: "delete from invites where id = ?", params: [i.id] };
+  return {
+    sql: `insert into invites (id, message_id, thread_id, event_id, method, uid, sequence, start, "end", all_day,
+            organizer, attendees, response, by_mail, sender_mismatch, received_at, content_stale)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          on conflict (id) do update set
+            message_id = excluded.message_id, thread_id = excluded.thread_id, event_id = excluded.event_id,
+            method = excluded.method, uid = excluded.uid, sequence = excluded.sequence, start = excluded.start,
+            "end" = excluded."end", all_day = excluded.all_day, organizer = excluded.organizer,
+            attendees = excluded.attendees, response = excluded.response, by_mail = excluded.by_mail,
+            sender_mismatch = excluded.sender_mismatch, received_at = excluded.received_at,
+            content_stale = case when invites.title = '' then 1 else invites.content_stale end`,
+    params: [
+      i.id,
+      i.messageId,
+      i.threadId,
+      i.eventId,
+      i.method,
+      i.uid,
+      i.sequence,
+      i.start,
+      i.end,
+      i.allDay,
+      i.organizer,
+      i.attendees,
+      i.response,
+      i.byMail,
+      i.senderMismatch,
+      i.receivedAt,
+    ],
+  };
 }
 
 /** A Group row from the feed, or its removal. Sub-groups arrive as their own rows. */
@@ -668,6 +792,15 @@ interface OutboxRow {
 
 function intentOf(row: OutboxRow): AnyIntent {
   const args = JSON.parse(row.payload) as Record<string, unknown>;
+  if (isInviteIntentKind(row.kind)) {
+    return {
+      ...args,
+      kind: row.kind,
+      inviteId: row.thread_id,
+      at: row.at,
+      actor: row.actor,
+    } as InviteIntent;
+  }
   if (isDraftIntentKind(row.kind)) {
     return {
       ...args,
@@ -688,6 +821,7 @@ function intentOf(row: OutboxRow): AnyIntent {
 
 /** The local effect of any Outbox row. */
 function localOf(intent: AnyIntent): Statement[] {
+  if ("inviteId" in intent) return localInviteStatements(intent);
   return "draftId" in intent ? localDraftStatements(intent) : localStatements(intent);
 }
 
@@ -699,6 +833,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   const backoff = options.backoff ?? { minMs: 1_000, maxMs: 30_000 };
   const pageSize = options.changesPageSize ?? 500;
   const warmLimit = options.briefWarmLimit ?? 50;
+  const eventWarmBatch = 200;
   const log = options.log ?? (() => {});
 
   await applySchema(driver);
@@ -787,6 +922,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       if (c.kind === "thread_tags") return [c.payload.threadId];
       if (c.kind === "draft") return [c.payload.id];
       if (c.kind === "send") return [c.payload.draftId];
+      if (c.kind === "invite") return [c.payload.id];
       return [];
     });
     for (const intent of await pendingFor(touched)) statements.push(...localOf(intent));
@@ -806,9 +942,11 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       const intent = intentOf(row);
       try {
         const answer =
-          "draftId" in intent
-            ? await transport.draftIntent(workspaceId, intent)
-            : await transport.intent(intent);
+          "inviteId" in intent
+            ? await transport.inviteIntent(intent)
+            : "draftId" in intent
+              ? await transport.draftIntent(workspaceId, intent)
+              : await transport.intent(intent);
         if (!answer.applied) log(`intent ${row.kind} on ${row.thread_id} lost: ${answer.reason}`);
         await driver.exec("delete from outbox where seq = ?", [row.seq]);
         result.pushed += 1;
@@ -886,6 +1024,75 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     return landed;
   };
 
+  /**
+   * Event and Invite content follows the feed rows (slice 18): titles are
+   * fetched in batches through the transport so the views and the invite
+   * bar read them from the Cache. Ids the Server no longer has are dropped.
+   */
+  const warmEvents = async (): Promise<number> => {
+    const fetchContent = transport.eventsContent;
+    const fetchInvite = transport.invite;
+    if (closed) return 0;
+    let landed = 0;
+    try {
+      if (fetchContent) {
+        const rows = await driver.query(
+          "select id from events where content_stale = 1 order by start limit ?",
+          [eventWarmBatch],
+        );
+        const ids = rows.map((r) => String(r.id));
+        if (ids.length > 0) {
+          const content = await fetchContent.call(transport, workspaceId, ids);
+          const seen = new Set<string>();
+          const statements: Statement[] = [];
+          for (const c of content) {
+            seen.add(c.id);
+            statements.push({
+              sql: "update events set title = ?, description = ?, location = ?, content_stale = 0 where id = ?",
+              params: [c.title, c.description, c.location, c.id],
+            });
+            landed += 1;
+          }
+          for (const id of ids) {
+            if (!seen.has(id))
+              statements.push({ sql: "delete from events where id = ?", params: [id] });
+          }
+          await write(statements);
+        }
+      }
+      if (fetchInvite) {
+        const rows = await driver.query(
+          "select id from invites where content_stale = 1 order by received_at desc limit ?",
+          [warmLimit],
+        );
+        for (const row of rows) {
+          if (closed) break;
+          const id = String(row.id);
+          try {
+            const invite = await fetchInvite.call(transport, id);
+            if (invite) {
+              await write([
+                {
+                  sql: "update invites set title = ?, content_stale = 0 where id = ?",
+                  params: [invite.title, id],
+                },
+              ]);
+              landed += 1;
+            } else {
+              await write([{ sql: "delete from invites where id = ?", params: [id] }]);
+            }
+          } catch (error) {
+            log(`invite ${id}: ${error instanceof Error ? error.message : String(error)}`);
+            if (error instanceof ApiError && !error.permanent) break;
+          }
+        }
+      }
+    } catch (error) {
+      log(`warm events: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return landed;
+  };
+
   const runSync = async (): Promise<SyncResult> => {
     const result: SyncResult = { pushed: 0, pulled: 0, cursor: 0, pending: 0, error: null };
     setStatus("syncing");
@@ -893,6 +1100,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       await drainOutbox(result);
       await pullChanges(result);
       await warmBriefs();
+      await warmEvents();
       setStatus(connection ? "online" : "offline");
     } catch (error) {
       result.error = error instanceof Error ? error : new Error(String(error));
@@ -1038,7 +1246,13 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       let intent: AnyIntent;
       let entityId: Id;
       let payload: Record<string, unknown>;
-      if ("draftId" in action) {
+      if ("inviteId" in action) {
+        const { inviteId, actor: _c, at: _a, ...args } = action;
+        intent = { ...args, inviteId, at: stampAt, actor: stampActor } as InviteIntent;
+        entityId = inviteId;
+        const { kind: _k, inviteId: _i, at: _x, actor: _y, ...rest } = intent;
+        payload = rest;
+      } else if ("draftId" in action) {
         const { draftId, actor: _c, at: _a, ...args } = action;
         intent = { ...args, draftId, at: stampAt, actor: stampActor } as DraftIntent;
         entityId = draftId;
@@ -1087,6 +1301,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     },
 
     warmBriefs,
+    warmEvents,
 
     async setReplyAll(threadId, replyAll) {
       await write([

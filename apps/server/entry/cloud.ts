@@ -155,6 +155,7 @@ export async function bootCloud(
     // No loopback listener off the user's machine: the wizard pastes the code instead.
     oauth: { flow: createOAuthFlow(), loopback: null },
     push: services.push,
+    calendar: services.calendar,
     mounts: [kicker.routes()],
     // No desktop on a Cloud Server: an external approval waits in the pending items and is logged.
     notifier: createMemoryNotifier((line) => log(line)),

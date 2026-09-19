@@ -15,6 +15,7 @@ import { parseMime, pickHeaders, rawMessageOf, snippetOf } from "../mime.ts";
 import { base64url, decodeBase64url } from "../oauth/pkce.ts";
 import { createTokenBroker, type TokenBroker } from "../oauth/tokens.ts";
 import {
+  type CalendarSession,
   type Change,
   type ChangeTarget,
   type Flags,
@@ -35,6 +36,7 @@ import {
   type SyncOptions,
   type Watch,
 } from "../types.ts";
+import { createGoogleCalendar } from "./calendar.ts";
 import { GmailApiError, GmailClient } from "./client.ts";
 import {
   ensurePullSubscription,
@@ -44,6 +46,7 @@ import {
 } from "./pubsub.ts";
 import { GMAIL_COST, type TokenBucket } from "./quota.ts";
 
+export { createGoogleCalendar, eventOfGoogle } from "./calendar.ts";
 export { GmailApiError, GmailClient } from "./client.ts";
 export * from "./pubsub.ts";
 export * from "./quota.ts";
@@ -287,6 +290,7 @@ export class GmailSession implements Session {
   /** The label filter of the last watch, reused by renewals. */
   private watchLabelIds: string[] | null = null;
   private pullSubscription: string | null = null;
+  private calendarSession: CalendarSession | null = null;
 
   constructor(
     readonly client: GmailClient,
@@ -295,6 +299,15 @@ export class GmailSession implements Session {
     private readonly options: GmailProviderOptions,
   ) {
     this.page = Math.min(MAX_PAGE, options.pageSize ?? DEFAULT_PAGE);
+  }
+
+  /** Google Calendar over the same client and token (slice 18). */
+  calendar(): CalendarSession {
+    this.calendarSession ??= createGoogleCalendar(this.client, this.address, {
+      ...(this.options.now ? { now: () => new Date(this.options.now?.() ?? Date.now()) } : {}),
+      ...(this.options.random ? { random: this.options.random } : {}),
+    });
+    return this.calendarSession;
   }
 
   get auth(): OAuthAuth {
@@ -307,8 +320,8 @@ export class GmailSession implements Session {
       labels: true,
       snooze: false,
       mute: false,
-      calendar: false,
-      meetingLink: null,
+      calendar: true,
+      meetingLink: "meet",
       syncTier: "state",
       threads: true,
       savesSentCopy: true,

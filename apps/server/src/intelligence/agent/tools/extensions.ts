@@ -18,7 +18,10 @@ import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
+import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
+
+export type { CalendarSeam } from "./calendar.ts";
 
 /* ------------------------------ Seams ------------------------------ */
 
@@ -73,6 +76,8 @@ export interface ToolExtensions {
   external?: ExternalSeam | undefined;
   /** What the onboarding tools act through (slice 20). */
   onboarding?: OnboardingSeam | undefined;
+  /** The calendar module (slice 18), once the app has one. */
+  calendar?: CalendarSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });
@@ -600,6 +605,7 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   approveWorkflowStep,
   runWorkflow,
   createExternalKey,
+  ...CALENDAR_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 /** The tool an integration Step of a Workflow maps to. */

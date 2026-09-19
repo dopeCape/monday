@@ -8,7 +8,9 @@ import type {
   Id,
   IsoDate,
   LocalCli,
+  MeetingLinkKind,
   Person,
+  RsvpResponse,
   Runtime,
   Thread,
   Tier,
@@ -70,6 +72,12 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   adopt_workflow: "reversible",
   propose_views: "reversible",
   set_keymap: "reversible",
+  // The calendar tools (slice 18): an invite goes out, so scheduling and answering ask first.
+  list_events: "read",
+  schedule_event: "leaves_mailbox",
+  rsvp: "leaves_mailbox",
+  update_event: "leaves_mailbox",
+  delete_event: "destructive",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -99,7 +107,28 @@ export type ToolPreview =
   | { kind: "threads"; action: string; count: number; threads: PreviewThread[] }
   | { kind: "send"; to: Person[]; cc: Person[]; subject: string; text: string }
   | { kind: "setting"; key: string; from: unknown; to: unknown }
+  | { kind: "event"; event: EventPreview }
   | { kind: "text"; text: string };
+
+/** An Event as the scheduling card shows it before it exists (slice 18). */
+export interface EventPreview {
+  /** "schedule", "update", "cancel" or "rsvp": the verb the card leads with. */
+  action: "schedule" | "update" | "cancel" | "rsvp";
+  title: string;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  timeZone: string | null;
+  attendees: Person[];
+  /** The link kind that will be minted, or the URL when it is already known. */
+  link: MeetingLinkKind | string | null;
+  /** Who mails the invitations: the Provider (Google, Graph, a scheduling CalDAV server), monday (iMIP), or nobody (no attendees). */
+  invitesBy: "provider" | "monday" | "none";
+  /** Titles of own Events that overlap the slot. */
+  conflicts: string[];
+  /** The answer, on an "rsvp". */
+  response?: RsvpResponse | undefined;
+}
 
 /** How many Threads a preview lists in full before it says "and N more". */
 export const PREVIEW_LIST_MAX = 25;
@@ -123,7 +152,9 @@ export type UndoRecord =
   /** An external key the Agent created (slice 19): Undo revokes it. */
   | { kind: "external_key"; credentialId: Id }
   /** Onboarding's approved Group proposal: the Groups it created and the moves to put back. */
-  | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] };
+  | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] }
+  /** An Event the scheduling tool made: Undo cancels it (the Provider mails the cancellation). */
+  | { kind: "event"; eventId: Id };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

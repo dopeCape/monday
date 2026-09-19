@@ -67,6 +67,7 @@ export {
 export type { SessionStore } from "./sessions.ts";
 export { collapseEvents, createMemorySessionStore, createSessionStore } from "./sessions.ts";
 export type {
+  CalendarSeam,
   ExternalSeam,
   IntegrationsSeam,
   McpSeam,

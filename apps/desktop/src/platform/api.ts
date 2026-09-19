@@ -9,6 +9,9 @@ import type {
   ApprovalDecision,
   Brief,
   BriefTrigger,
+  Calendar,
+  CalendarEvent,
+  CalendarInfo,
   Capabilities,
   ChangesPage,
   CorrectionResult,
@@ -18,6 +21,8 @@ import type {
   DraftContent,
   DraftIntent,
   DryRunPreview,
+  EventInput,
+  EventPatch,
   ExternalConsent,
   ExternalCredential,
   ExternalKeyCreated,
@@ -30,6 +35,8 @@ import type {
   Id,
   Intent,
   IntentResult,
+  Invite,
+  InviteIntent,
   MessageBodiesPage,
   MeterMonth,
   ProposedMove,
@@ -567,6 +574,73 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         request<RunView>(
           `/workflows/runs/${encodeURIComponent(runId)}/approvals`,
           json("POST", { decision, standing }),
+        ),
+    },
+    /** The calendar (slice 18): calendars, Events in a window, the content batch, Invites and the RSVP intent. */
+    calendar: {
+      info: (workspaceId: Id) =>
+        request<CalendarInfo>(`/calendar/info?${new URLSearchParams({ workspace: workspaceId })}`),
+      calendars: (workspaceId: Id) =>
+        request<{ calendars: Calendar[] }>(
+          `/calendars?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.calendars),
+      setVisible: (calendarId: Id, visible: boolean) =>
+        request<Calendar>(
+          `/calendars/${encodeURIComponent(calendarId)}/visible`,
+          json("PUT", { visible }),
+        ),
+      linkCalDav: (accountId: Id, link: { url: string; user: string; password: string } | null) =>
+        request<CalendarInfo>(
+          `/accounts/${encodeURIComponent(accountId)}/caldav`,
+          json("PUT", link),
+        ),
+      events: (workspaceId: Id, from: string, to: string) =>
+        request<{ events: CalendarEvent[] }>(
+          `/calendar/events?${new URLSearchParams({ workspace: workspaceId, from, to })}`,
+        ).then((r) => r.events),
+      eventsContent: (workspaceId: Id, ids: readonly Id[]) =>
+        request<{
+          events: Array<{ id: Id; title: string; description: string; location: string }>;
+        }>("/calendar/events/content", json("POST", { workspace: workspaceId, ids })).then(
+          (r) => r.events,
+        ),
+      event: (eventId: Id) =>
+        request<CalendarEvent>(`/calendar/events/${encodeURIComponent(eventId)}`),
+      create: (workspaceId: Id, input: EventInput) =>
+        request<CalendarEvent>(
+          "/calendar/events",
+          json("POST", { workspace: workspaceId, ...input }),
+        ),
+      update: (eventId: Id, patch: EventPatch) =>
+        request<CalendarEvent>(
+          `/calendar/events/${encodeURIComponent(eventId)}`,
+          json("PUT", patch),
+        ),
+      remove: (eventId: Id) =>
+        raw(`/calendar/events/${encodeURIComponent(eventId)}`, { method: "DELETE" }).then(
+          () => undefined,
+        ),
+      respond: (eventId: Id, response: "accepted" | "tentative" | "declined") =>
+        request<CalendarEvent>(
+          `/calendar/events/${encodeURIComponent(eventId)}/respond`,
+          json("POST", { response }),
+        ),
+      invite: async (inviteId: Id): Promise<Invite | null> => {
+        try {
+          return await request<Invite>(`/invites/${encodeURIComponent(inviteId)}`);
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+      invitesOf: (threadId: Id) =>
+        request<{ invites: Invite[] }>(`/threads/${encodeURIComponent(threadId)}/invites`).then(
+          (r) => r.invites,
+        ),
+      rsvp: (intent: InviteIntent) =>
+        request<IntentResult>(
+          `/invites/${encodeURIComponent(intent.inviteId)}/rsvp`,
+          json("POST", { at: intent.at, actor: intent.actor, response: intent.response }),
         ),
     },
     /** The Agent host (ADR 0002): Sessions, turns streamed over SSE, approvals, the Activity log. */

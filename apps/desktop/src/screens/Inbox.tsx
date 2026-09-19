@@ -33,6 +33,7 @@ import { openExternal, saveDownload } from "../platform/open.ts";
 import type { SearchModule } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
 import { type Composer, fixtureComposer } from "./compose/composer.ts";
 import { ReplyCompose } from "./compose/ReplyCompose.tsx";
@@ -41,6 +42,7 @@ import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
+import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
@@ -97,6 +99,8 @@ export interface InboxProps {
   agent?: AgentSession | undefined;
   /** External calls parked on an approval (slice 19), for the chips. */
   externalPending?: readonly ExternalPending[] | undefined;
+  /** The calendar seam (slice 18): the reader's invite bar and its overlap line. Absent, no bar. */
+  calendar?: CalendarSource | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -156,6 +160,7 @@ export function Inbox({
   initialAgentText,
   agent = NULL_SESSION,
   externalPending,
+  calendar,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -438,14 +443,29 @@ export function Inbox({
 
   // Action chips are tool calls (slice 13): reply and forward open compose and
   // never send, snooze and archive apply with Undo, a link opens outside.
+  const defaultDuration = s["calendar.default_duration_minutes"];
   const actionRunner = useMemo(
     () =>
       createActionRunner({
         inbox,
         compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
         openLink: (url) => openExternal(url),
+        // The chip is the user's own click, so the Event goes straight on the calendar (slice 18).
+        ...(calendar
+          ? {
+              calendar: async ({ title, start }) => {
+                const startAt = new Date(start);
+                await calendar.create({
+                  title,
+                  start: startAt.toISOString(),
+                  end: new Date(startAt.getTime() + defaultDuration * 60_000).toISOString(),
+                  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                });
+              },
+            }
+          : {}),
       }),
-    [inbox, startReply],
+    [inbox, startReply, calendar, defaultDuration],
   );
   const runBriefAction = useCallback(
     async (action: BriefAction) => {
@@ -462,7 +482,12 @@ export function Inbox({
         );
         return;
       }
-      if (outcome.call.tool === "thread.archive") {
+      if (outcome.call.tool === "calendar.create_event") {
+        showToast(
+          fill(t("strings.reader.brief_action.calendar_added"), { title: outcome.call.args.title }),
+          null,
+        );
+      } else if (outcome.call.tool === "thread.archive") {
         showToast(t("strings.inbox.toast.archived"), outcome.undo);
       } else if (outcome.call.tool === "thread.snooze") {
         showToast(
@@ -749,6 +774,9 @@ export function Inbox({
               })}
             </div>
           ) : null}
+          {calendar && s["calendar.today_panel"] ? (
+            <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
+          ) : null}
           {rows.length === 0 && !syncing ? (
             <div className="empty-line">{t("strings.inbox.empty")}</div>
           ) : null}
@@ -785,6 +813,11 @@ export function Inbox({
 
       {showReader && thread ? (
         <Reader
+          banner={
+            calendar ? (
+              <ThreadInviteBar calendar={calendar} threadId={thread.id} settings={settings} />
+            ) : null
+          }
           thread={thread}
           messages={messages}
           brief={brief}

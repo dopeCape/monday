@@ -16,6 +16,7 @@ import {
   type AgentTurn,
   Chip,
   formatListTime,
+  formatSpan,
   type Suggestion,
 } from "@monday/ui";
 import { type ReactNode, useMemo, useState } from "react";
@@ -35,6 +36,14 @@ export type ComposerStrings = AgentStrings &
     | "strings.agent.preview_more"
     | "strings.agent.preview_send"
     | "strings.agent.preview_setting"
+    | "strings.agent.preview_event.schedule"
+    | "strings.agent.preview_event.update"
+    | "strings.agent.preview_event.cancel"
+    | "strings.agent.preview_event.rsvp"
+    | "strings.agent.preview_event.link"
+    | "strings.agent.preview_event.by_provider"
+    | "strings.agent.preview_event.by_monday"
+    | "strings.agent.preview_event.conflicts"
     | "strings.agent.no_session"
     | "strings.agent.runtime_switched"
     | "strings.agent.builtin_tool"
@@ -63,6 +72,14 @@ export function composerStrings(settings: Settings): ComposerStrings {
     "strings.agent.preview_more": settings["strings.agent.preview_more"],
     "strings.agent.preview_send": settings["strings.agent.preview_send"],
     "strings.agent.preview_setting": settings["strings.agent.preview_setting"],
+    "strings.agent.preview_event.schedule": settings["strings.agent.preview_event.schedule"],
+    "strings.agent.preview_event.update": settings["strings.agent.preview_event.update"],
+    "strings.agent.preview_event.cancel": settings["strings.agent.preview_event.cancel"],
+    "strings.agent.preview_event.rsvp": settings["strings.agent.preview_event.rsvp"],
+    "strings.agent.preview_event.link": settings["strings.agent.preview_event.link"],
+    "strings.agent.preview_event.by_provider": settings["strings.agent.preview_event.by_provider"],
+    "strings.agent.preview_event.by_monday": settings["strings.agent.preview_event.by_monday"],
+    "strings.agent.preview_event.conflicts": settings["strings.agent.preview_event.conflicts"],
     "strings.agent.no_session": settings["strings.agent.no_session"],
     "strings.agent.runtime_switched": settings["strings.agent.runtime_switched"],
     "strings.agent.builtin_tool": settings["strings.agent.builtin_tool"],
@@ -73,6 +90,30 @@ export function composerStrings(settings: Settings): ComposerStrings {
 
 const fill = (template: string, values: Record<string, string | number>) =>
   template.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? ""));
+
+const LINK_LABELS: Record<string, string> = {
+  "google-meet": "Google Meet",
+  teams: "Microsoft Teams",
+  jitsi: "Jitsi",
+  custom: "your custom URL",
+};
+
+/** A link kind reads as its product name; a URL reads as its host. */
+function linkLabel(link: string): string {
+  if (LINK_LABELS[link]) return LINK_LABELS[link] as string;
+  try {
+    return new URL(link).host;
+  } catch {
+    return link;
+  }
+}
+
+/** Which Provider a card's link kind implies, for the "goes out from" line. */
+function sourceOf(e: { link: string | null }): string {
+  if (e.link === "google-meet" || (e.link ?? "").includes("meet.google.com")) return "google";
+  if (e.link === "teams" || (e.link ?? "").includes("teams.microsoft.com")) return "graph";
+  return "calendar";
+}
 
 /** The preview in the app's own language: thread rows, the message, the Setting line. */
 export function PreviewView({
@@ -129,6 +170,45 @@ export function PreviewView({
           })}
         </div>
       );
+    case "event": {
+      const e = preview.event;
+      const verb =
+        e.action === "rsvp"
+          ? fill(strings["strings.agent.preview_event.rsvp"], { response: e.response ?? "" })
+          : strings[`strings.agent.preview_event.${e.action}`];
+      const source = { google: "Google", graph: "Microsoft", caldav: "CalDAV", jmap: "Fastmail" };
+      return (
+        <div className="agent-preview agent-event">
+          <div className="count">{verb}</div>
+          <div className="ev-title">{e.title}</div>
+          <div className="ev-when">{formatSpan(e.start, e.end, e.allDay)}</div>
+          {e.attendees.length > 0 ? (
+            <div className="ev-who">{e.attendees.map((p) => p.name || p.email).join(", ")}</div>
+          ) : null}
+          {e.link ? (
+            <div className="ev-link">
+              {fill(strings["strings.agent.preview_event.link"], { link: linkLabel(e.link) })}
+            </div>
+          ) : null}
+          {e.conflicts.length > 0 ? (
+            <div className="ev-conflict">
+              {fill(strings["strings.agent.preview_event.conflicts"], {
+                titles: e.conflicts.join(", "),
+              })}
+            </div>
+          ) : null}
+          {e.invitesBy === "provider" ? (
+            <div className="more">
+              {fill(strings["strings.agent.preview_event.by_provider"], {
+                source: (source as Record<string, string>)[sourceOf(e)] ?? "calendar",
+              })}
+            </div>
+          ) : e.invitesBy === "monday" ? (
+            <div className="more">{strings["strings.agent.preview_event.by_monday"]}</div>
+          ) : null}
+        </div>
+      );
+    }
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }

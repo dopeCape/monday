@@ -2,7 +2,7 @@
 -- external MCP server (keys and OAuth tokens, hashed), the dynamically
 -- registered OAuth clients, authorization codes with their PKCE challenge,
 -- refresh tokens, and the credential name on the Activity log as actor.
--- Chained after 0011_workflows; 0012 is slice 18's and is re-linked at merge.
+
 CREATE TABLE "external_credentials" (
 	"id" text PRIMARY KEY NOT NULL,
 	"kind" text NOT NULL,
