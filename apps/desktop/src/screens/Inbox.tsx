@@ -42,7 +42,7 @@ import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
-import { ThreadInviteBar } from "./inbox/InviteBar.tsx";
+import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
@@ -767,6 +767,9 @@ export function Inbox({
                 total: syncing.total.toLocaleString("en-US"),
               })}
             </div>
+          ) : null}
+          {calendar && s["calendar.today_panel"] ? (
+            <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
           ) : null}
           {rows.length === 0 && !syncing ? (
             <div className="empty-line">{t("strings.inbox.empty")}</div>

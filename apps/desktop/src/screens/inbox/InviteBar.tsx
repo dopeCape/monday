@@ -10,7 +10,8 @@ import type { Invite, RsvpResponse, Settings } from "@monday/shared";
 import { Btn, formatSpan, Icon, Tag } from "@monday/ui";
 import { CalendarBlankIcon, WarningIcon } from "@phosphor-icons/react";
 import { useMemo, useSyncExternalStore } from "react";
-import { answerLabel } from "../Calendar.tsx";
+import { openExternal } from "../../platform/open.ts";
+import { answerLabel, TodayPanel } from "../Calendar.tsx";
 import { type CalendarSource, type Occurrence, occurrencesIn } from "../calendar/calendar-data.ts";
 import { fill } from "./triage.ts";
 
@@ -137,5 +138,38 @@ export function ThreadInviteBar({ calendar, threadId, settings }: ThreadInviteBa
       strings={settings}
       onRsvp={(id, response) => void calendar.rsvp(id, response)}
     />
+  );
+}
+
+export interface StreamTodayPanelProps {
+  calendar: CalendarSource;
+  now: Date;
+  settings: Settings;
+}
+
+/** The Today panel at the top of the inbox stream (Setting calendar.today_panel): today's Events, or nothing. */
+export function StreamTodayPanel({ calendar, now, settings }: StreamTodayPanelProps) {
+  const events = useSyncExternalStore(calendar.subscribe, calendar.events, calendar.events);
+  const calendars = useSyncExternalStore(
+    calendar.subscribe,
+    calendar.calendars,
+    calendar.calendars,
+  );
+  const items = useMemo(() => {
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const to = new Date(from.getTime() + 86_400_000);
+    return occurrencesIn(events, calendars, { from, to });
+  }, [events, calendars, now]);
+  if (items.length === 0) return null;
+  return (
+    <div className="stream-today" data-today-panel>
+      <div className="sec">{settings["strings.calendar.today_panel"]}</div>
+      <TodayPanel
+        items={items}
+        now={now}
+        strings={settings}
+        onJoin={(o) => void openExternal(o.link as string)}
+      />
+    </div>
   );
 }

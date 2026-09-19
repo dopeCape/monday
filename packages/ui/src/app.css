@@ -3858,3 +3858,12 @@ button.prov {
   color: var(--warning);
   font-size: var(--fs-xs);
 }
+/* the Today panel at the top of the inbox stream (slice 18) */
+.stream-today {
+  padding: 6px var(--pad) 8px;
+  border-bottom: 1px solid var(--border);
+}
+.stream-today .today-panel .tp-row.now {
+  margin-left: 0;
+  padding-left: 8px;
+}
