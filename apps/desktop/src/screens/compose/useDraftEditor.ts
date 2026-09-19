@@ -30,6 +30,8 @@ export interface DraftEditor {
   flush(): Promise<void>;
   attach(files: readonly File[]): Promise<void>;
   removeAttachment(blobId: string): void;
+  /** Forgets an upload that failed. */
+  dismissUpload(key: string): void;
   setAttachments(attachments: DraftContent["attachments"]): void;
   /** Saves, then schedules the send Job. Rejects with "no_recipients" when nobody is on it. */
   send(options?: SendOptions): Promise<{ sendId: string; runAt: string }>;
@@ -55,7 +57,10 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
       }),
     [composer, draftId, idleMs],
   );
-  useEffect(() => () => autosave.cancel(), [autosave]);
+  // Closing the surface (Escape, the close button, a send elsewhere) saves
+  // what is pending rather than dropping it: a Draft is never lost to a key.
+  // After discard or send nothing is pending, so this is a no-op then.
+  useEffect(() => () => void autosave.flush(), [autosave]);
 
   const update = useCallback(
     (patch: Partial<DraftContent>) => {
@@ -103,8 +108,10 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
     [composer, update],
   );
 
+  // A failed upload is not on the Draft; it shows with its error and never blocks Send.
   const canSend =
-    content.to.length + content.cc.length + content.bcc.length > 0 && uploads.length === 0;
+    content.to.length + content.cc.length + content.bcc.length > 0 &&
+    uploads.every((u) => u.error !== undefined);
 
   return {
     content,
@@ -117,6 +124,7 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
     attach,
     removeAttachment: (blobId) =>
       update({ attachments: contentRef.current.attachments.filter((a) => a.blobId !== blobId) }),
+    dismissUpload: (key) => setUploads((u) => u.filter((x) => x.key !== key)),
     setAttachments: (attachments) => update({ attachments }),
     async send(options) {
       if (

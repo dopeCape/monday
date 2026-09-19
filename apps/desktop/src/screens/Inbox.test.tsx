@@ -277,6 +277,19 @@ describe("keyboard triage", () => {
     expect(rowIds()[0]).toBe("e1");
   });
 
+  test("the toast fades after the Setting's delay, counted from when it appeared, not from the last render", async () => {
+    await mount({ timing: { collapse: 0, toast: 40 } });
+    await press("e");
+    expect(toast()).toBe("ArchivedUndo Z");
+    // Renders keep coming (J moves the focus) inside the window; none restarts the clock.
+    await act(async () => Bun.sleep(15));
+    await press("j");
+    await act(async () => Bun.sleep(15));
+    await press("k");
+    await act(async () => Bun.sleep(20));
+    expect(toast()).toBeNull();
+  });
+
   test("a row collapses with a transition before it leaves the list", async () => {
     await mount({ timing: { collapse: 30, toast: 60_000 } });
     await press("e");
@@ -494,14 +507,53 @@ describe("the reader", () => {
     await mount({ inbox, initialOpen: "e2" });
     const buttons = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")];
     const byTitle = (t: string) => buttons.find((b) => b.title.startsWith(t));
+    // Opening e2 read it (the Setting); the toolbar then acts on the open Thread.
+    expect(calls).toEqual(['markRead:["e2"]']);
     await act(async () => byTitle("Delete")?.click());
-    expect(calls).toEqual(['delete:["e2"]']);
+    expect(calls).toEqual(['markRead:["e2"]', 'delete:["e2"]']);
     expect(toast()).toBe("DeletedUndo Z");
     expect(reader()).toBe("e3");
     await act(async () => byTitle("Archive")?.click());
-    expect(calls[1]).toBe('archive:["e3"]');
+    expect(calls[2]).toBe('archive:["e3"]');
     expect(toast()).toBe("ArchivedUndo Z");
     expect(reader()).toBe("e4");
+  });
+
+  test("opening marks the Thread read once (a Setting); mark unread from the menu holds", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: null });
+    expect(inbox.thread("e1")?.unread).toBe(true);
+    await press("Enter");
+    expect(reader()).toBe("e1");
+    expect(calls).toEqual(['markRead:["e1"]']);
+    expect(document.querySelector(".row[data-thread=e1]")?.classList.contains("unread")).toBe(
+      false,
+    );
+    // The More menu offers Mark unread, and the open Thread stays unread afterwards.
+    const more = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")].find(
+      (b) => b.title === "More",
+    );
+    await act(async () => more?.click());
+    const item = [...document.querySelectorAll<HTMLButtonElement>(".reader .pop-item")].find((b) =>
+      b.textContent?.includes("Mark unread"),
+    );
+    await act(async () => item?.click());
+    expect(calls).toEqual(['markRead:["e1"]', 'markUnread:["e1"]']);
+    expect(inbox.thread("e1")?.unread).toBe(true);
+    // The next unread Thread reads on its own open.
+    await press("Escape");
+    await press("j");
+    await press("Enter");
+    expect(calls.length).toBe(3);
+    expect(calls[2]).toBe('markRead:["e2"]');
+  });
+
+  test("with reader.mark_read_on_open off, opening leaves the Thread unread", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: "e1" }, { "reader.mark_read_on_open": false });
+    expect(reader()).toBe("e1");
+    expect(calls).toEqual([]);
+    expect(inbox.thread("e1")?.unread).toBe(true);
   });
 
   test("the reader's Archive button acts on the open Thread", async () => {
@@ -521,6 +573,21 @@ describe("the reader", () => {
       document.querySelector<HTMLButtonElement>(".reader .msg.collapsed")?.click(),
     );
     expect(document.querySelectorAll(".reader .msg.collapsed").length).toBe(1);
+  });
+
+  test("a Brief chip that archives advances the reader like the toolbar does", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: "e10" });
+    // e10's Brief carries an archive chip; a click applies it with Undo and moves on.
+    const chip = [
+      ...document.querySelectorAll<HTMLButtonElement>(".reader .brief-actions .chip"),
+    ].find((b) => b.textContent === "Archive");
+    expect(chip).not.toBeUndefined();
+    await act(async () => chip?.click());
+    expect(calls).toContain('archive:["e10"]');
+    expect(toast()).toBe("ArchivedUndo Z");
+    expect(reader()).toBe("e11");
+    expect(focusRow()).toBe("e11");
   });
 
   test("the reader's More menu stars and marks unread", async () => {

@@ -204,32 +204,45 @@ function HtmlBody({
   const [imagesShown, setImagesShown] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Show images: the Server moved each remote src to data-src and marked the
+  // element blocked (the stylesheet hides it); showing puts the src back and
+  // lifts the mark. Runs again when the html itself changes.
   useEffect(() => {
     const root = ref.current;
-    if (!root || !imagesShown) return;
+    if (!root || !imagesShown || html === "") return;
     for (const img of root.querySelectorAll<HTMLImageElement>("img[data-src]")) {
       const src = img.dataset.src;
-      if (src) img.src = src;
+      if (!src) continue;
+      img.src = src;
+      img.removeAttribute("data-blocked");
     }
-  }, [imagesShown]);
+  }, [imagesShown, html]);
 
+  // Inline parts (<img src="/attachments/:id">) resolve through the opener to a URL the webview may load.
   useEffect(() => {
     const root = ref.current;
-    if (!root || !attachmentSrc) return;
+    if (!root || !attachmentSrc || html === "") return;
     let cancelled = false;
+    const urls: string[] = [];
     for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
       const raw = img.getAttribute("src") ?? "";
       const m = raw.match(ATTACHMENT_SRC);
       if (!m?.[1]) continue;
       img.removeAttribute("src");
       void attachmentSrc(decodeURIComponent(m[1])).then((url) => {
-        if (!cancelled) img.src = url;
+        if (cancelled) return;
+        urls.push(url);
+        img.src = url;
       });
     }
     return () => {
       cancelled = true;
+      // Object URLs the opener minted are released with the body they served.
+      if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+        for (const url of urls) if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+      }
     };
-  }, [attachmentSrc]);
+  }, [attachmentSrc, html]);
 
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     const target = (e.target as HTMLElement | null)?.closest?.("a[href]");

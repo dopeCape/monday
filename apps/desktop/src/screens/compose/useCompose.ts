@@ -33,6 +33,8 @@ export interface PendingSend {
   sendId: string;
   runAt: string;
   draftId: string;
+  /** Picked from the Later menu: the bar shows the time, not a countdown. */
+  later?: boolean | undefined;
 }
 
 export interface ComposeController {

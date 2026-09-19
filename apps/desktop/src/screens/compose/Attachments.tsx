@@ -20,10 +20,18 @@ export interface AttachmentsProps {
   attachments: readonly DraftAttachment[];
   uploads: readonly Upload[];
   onRemove: (blobId: string) => void;
+  /** Drops an upload that failed, so it stops standing in the way of Send. */
+  onDismissUpload?: ((key: string) => void) | undefined;
   strings: { uploading: string; remove: string };
 }
 
-export function Attachments({ attachments, uploads, onRemove, strings }: AttachmentsProps) {
+export function Attachments({
+  attachments,
+  uploads,
+  onRemove,
+  onDismissUpload,
+  strings,
+}: AttachmentsProps) {
   if (attachments.length === 0 && uploads.length === 0) return null;
   return (
     <div className="c-atts">
@@ -45,7 +53,7 @@ export function Attachments({ attachments, uploads, onRemove, strings }: Attachm
       {uploads.map((u) => (
         <span
           key={u.key}
-          className="att uploading"
+          className={u.error ? "att uploading failed" : "att uploading"}
           title={
             u.error ?? strings.uploading.replace("{pct}", String(Math.round(u.fraction * 100)))
           }
@@ -55,7 +63,19 @@ export function Attachments({ attachments, uploads, onRemove, strings }: Attachm
           <span className="sz">
             {u.error ?? strings.uploading.replace("{pct}", String(Math.round(u.fraction * 100)))}
           </span>
-          <span className="bar" style={{ width: `${Math.round(u.fraction * 100)}%` }} />
+          {u.error && onDismissUpload ? (
+            <button
+              type="button"
+              className="x"
+              aria-label={`${strings.remove}: ${u.name}`}
+              onClick={() => onDismissUpload(u.key)}
+            >
+              ×
+            </button>
+          ) : null}
+          {u.error ? null : (
+            <span className="bar" style={{ width: `${Math.round(u.fraction * 100)}%` }} />
+          )}
         </span>
       ))}
     </div>

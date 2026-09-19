@@ -4,6 +4,9 @@
 // Keys are ignored while the user types in an input, textarea or editable
 // element, with two exceptions so the app stays reachable from a field:
 // Escape, and chords that hold the platform modifier (such as the palette).
+// A handler that declines a key (an overlay is open, the field's own undo
+// should win) returns false, and the key keeps its default: the browser's
+// own undo in a field, a newline in the editor.
 
 import { useEffect, useMemo, useRef } from "react";
 import { useShell } from "../shell/Shell.tsx";
@@ -25,9 +28,12 @@ export interface KeyContext {
   focus: string | null;
   /** The multi-select, in the order the rows were added. */
   selection: readonly string[];
+  /** The key came from a field that takes typing (only Escape and mod chords reach a handler then). */
+  typing?: boolean | undefined;
 }
 
-export type KeyHandlers = Partial<Record<KeyAction, (ctx: KeyContext) => void>>;
+/** A handler returns false to decline the key; anything else means it was handled. */
+export type KeyHandlers = Partial<Record<KeyAction, (ctx: KeyContext) => unknown>>;
 
 export interface DispatchEvent extends KeyLike {
   /** True when the event target takes typing. */
@@ -51,8 +57,8 @@ export function dispatchKey(
   if (!action) return null;
   const handler = handlers[action];
   if (!handler) return null;
+  if (handler({ ...ctx, typing: e.typing }) === false) return null;
   e.preventDefault();
-  handler(ctx);
   return action;
 }
 

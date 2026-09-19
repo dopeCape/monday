@@ -1109,6 +1109,15 @@ export const settingsSchema = {
     label: "Collapse quoted history",
     help: "Fold the earlier Messages a reply quotes below its own text. Click to expand.",
   }),
+  "reader.mark_read_on_open": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: "Reader",
+    label: "Mark read on open",
+    help: "Opening a Thread in the reader marks it read, and the provider hears of it. Off keeps a Thread unread until you mark it yourself.",
+  }),
 
   /* Search and Cache */
   "search.cache_window_days": setting({

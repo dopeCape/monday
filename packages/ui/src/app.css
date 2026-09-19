@@ -3788,6 +3788,10 @@ button.prov {
   color: var(--fg-faint);
   margin-left: 2px;
 }
+/* an upload that failed: the error in place of the size, in the warning color */
+.c-atts .att.failed .sz {
+  color: var(--warning);
+}
 .c-field .to {
   flex: 1;
   display: flex;

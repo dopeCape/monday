@@ -283,6 +283,15 @@ export function Inbox({
   const messages = useThreadMessages(inbox, openThreadId);
   const brief = useThreadBrief(inbox, openThreadId);
 
+  // Opening a Thread reads it (a Setting): once per open, so "mark unread"
+  // from the reader's menu holds until the next Thread opens. No toast and no
+  // undo token: reading is not an action to take back.
+  const markReadOnOpen = settings["reader.mark_read_on_open"];
+  useEffect(() => {
+    if (!markReadOnOpen || openThreadId === null) return;
+    if (inbox.thread(openThreadId)?.unread) void inbox.markRead([openThreadId]);
+  }, [markReadOnOpen, openThreadId, inbox]);
+
   /* ------------------------------ Compose ------------------------------ */
 
   // Compose runs on the real clock unless a test pins one: a send counts down
@@ -341,11 +350,27 @@ export function Inbox({
     [t],
   );
 
+  /**
+   * After Threads leave the list: the selection advances in the Setting's
+   * direction and, in the sheet, the next Thread opens or the sheet closes
+   * (docs/spec/inbox.md, "After archive, snooze or delete").
+   */
+  const advanceAfter = useCallback(
+    (ids: readonly string[]) => {
+      const next = nextFocus(order, focus, ids, s["inbox.after_action.direction"]);
+      setSelection([]);
+      setFocus(next);
+      if (stream && readerOpen && focus !== null && ids.includes(focus)) {
+        if (!s["inbox.after_action.open_next"] || next === null) setReaderOpen(false);
+      }
+    },
+    [order, focus, s, stream, readerOpen],
+  );
+
   /** Runs one removing action on ids, advances the focus and shows the toast. */
   const remove = useCallback(
     async (kind: RemovingKind, ids: readonly string[], until?: Date) => {
       if (ids.length === 0) return;
-      const next = nextFocus(order, focus, ids, s["inbox.after_action.direction"]);
       let token: UndoToken;
       let text: string;
       if (kind === "archive") {
@@ -359,14 +384,10 @@ export function Inbox({
         token = await inbox.snooze(ids, when);
         text = fill(t("strings.inbox.toast.snoozed"), { when: formatWake(when, now) });
       }
-      setSelection([]);
-      setFocus(next);
-      if (stream && readerOpen && focus !== null && ids.includes(focus)) {
-        if (!s["inbox.after_action.open_next"] || next === null) setReaderOpen(false);
-      }
+      advanceAfter(ids);
       showToast(countText(text, ids.length), token);
     },
-    [order, focus, s, t, inbox, now, stream, readerOpen, showToast, countText],
+    [t, inbox, now, advanceAfter, showToast, countText],
   );
 
   /** Previews a batch above the Setting, else runs it. */
@@ -526,8 +547,10 @@ export function Inbox({
           null,
         );
       } else if (outcome.call.tool === "thread.archive") {
+        advanceAfter([thread.id]);
         showToast(t("strings.inbox.toast.archived"), outcome.undo);
       } else if (outcome.call.tool === "thread.snooze") {
+        advanceAfter([thread.id]);
         showToast(
           fill(t("strings.inbox.toast.snoozed"), {
             when: formatWake(new Date(outcome.call.args.until), now),
@@ -536,7 +559,7 @@ export function Inbox({
         );
       }
     },
-    [thread, actionRunner, showToast, t, now],
+    [thread, actionRunner, advanceAfter, showToast, t, now],
   );
 
   const openAttachment = useCallback(
@@ -616,7 +639,7 @@ export function Inbox({
     "thread.delete": () => !overlay && request("delete", acting()),
     "thread.star": () => !overlay && void toggleStar(acting()),
     "thread.label": () => {
-      if (overlay) return;
+      if (overlay) return false;
       setPaletteQuery(t("strings.inbox.action.label"));
       setPaletteOpen(true);
     },
@@ -627,19 +650,20 @@ export function Inbox({
     "compose.forward": () => !overlay && focus && startReply("forward"),
     "select.toggle": () => !overlay && focus && setSelection(toggleSelected(selection, focus)),
     "select.extend_down": () => {
-      if (overlay) return;
+      if (overlay) return false;
       const r = extendSelection(order, selection, focus, 1);
       setSelection(r.selection);
       setFocus(r.focus);
     },
     "select.extend_up": () => {
-      if (overlay) return;
+      if (overlay) return false;
       const r = extendSelection(order, selection, focus, -1);
       setSelection(r.selection);
       setFocus(r.focus);
     },
-    undo: () => {
-      if (overlay) return;
+    undo: ({ typing }) => {
+      // In a field the field's own undo wins (the Natural keymap binds mod+z).
+      if (overlay || typing) return false;
       if (compose.pending) void compose.undo(openThreadId);
       else void undo();
     },
@@ -891,6 +915,7 @@ export function Inbox({
                 }
                 strings={cs}
                 idleMs={compose.idleMs}
+                delaySeconds={compose.delaySeconds}
                 replyAll={compose.reply.replyAll}
                 onReplyAll={compose.setReplyAll}
                 onForward={() => startReply("forward")}
@@ -981,6 +1006,8 @@ export function Inbox({
         <UndoBar
           key={compose.pending.sendId}
           runAt={compose.pending.runAt}
+          later={compose.pending.later}
+          stayMs={toastMs}
           now={nowFn}
           strings={cs.undo}
           undoKey={key("undo")}
@@ -1016,6 +1043,7 @@ export function Inbox({
           initial={compose.overlay.initial}
           strings={cs}
           idleMs={compose.idleMs}
+          delaySeconds={compose.delaySeconds}
           laterPresetsHours={compose.laterPresetsHours}
           now={nowFn}
           onClose={compose.closeOverlay}
