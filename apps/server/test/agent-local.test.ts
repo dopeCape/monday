@@ -385,6 +385,8 @@ describe("the routes a Device uses for a local Session", () => {
       parseMcpArgs(["--port=4242", "--token", "abc", "--workspace", "ws", "--pinned", "a.b, c.d"]),
     ).toEqual({
       port: 4242,
+      url: null,
+      key: null,
       token: "abc",
       workspace: "ws",
       session: null,
