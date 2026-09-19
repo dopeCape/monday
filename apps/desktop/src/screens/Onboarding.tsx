@@ -88,13 +88,47 @@ export function chipsForQuestion(
   }
 }
 
-export function Onboarding({
+/** The screen: the Settings seams for the runtime step around the body. */
+export function Onboarding(props: OnboardingProps) {
+  const shell = useShell();
+  const { workspaceId, runtimes = null, keys = null } = props;
+  const now = props.now ?? new Date();
+  const changeMany = useCallback(
+    async (changes: Array<[SettingKey, unknown]>): Promise<SetResult> => {
+      let result: SetResult = { ok: true };
+      for (const [k, v] of changes) {
+        result = await shell.set(k, v as never);
+        if (!result.ok) break;
+      }
+      return result;
+    },
+    [shell],
+  );
+  const screen = useMemo<SettingsScreen>(
+    () => ({
+      workspaceId,
+      change: (key, value) => changeMany([[key, value]]),
+      changeMany,
+      onAsk: () => {},
+      runtimes,
+      keys,
+      version: "",
+      now: () => now,
+    }),
+    [workspaceId, changeMany, runtimes, keys, now],
+  );
+  return (
+    <SettingsScreenProvider value={screen}>
+      <OnboardingBody {...props} now={now} />
+    </SettingsScreenProvider>
+  );
+}
+
+function OnboardingBody({
   accountId,
   workspaceId,
   address,
   agentClient,
-  runtimes = null,
-  keys = null,
   senders = [],
   threadCount = 0,
   rerun = false,
@@ -137,33 +171,6 @@ export function Onboarding({
     record(status);
     onDone();
   };
-
-  /* ------------------------------ The runtime step's seams ------------------------------ */
-
-  const changeMany = useCallback(
-    async (changes: Array<[SettingKey, unknown]>): Promise<SetResult> => {
-      let result: SetResult = { ok: true };
-      for (const [k, v] of changes) {
-        result = await shell.set(k, v as never);
-        if (!result.ok) break;
-      }
-      return result;
-    },
-    [shell],
-  );
-  const screen = useMemo<SettingsScreen>(
-    () => ({
-      workspaceId,
-      change: (key, value) => changeMany([[key, value]]),
-      changeMany,
-      onAsk: () => {},
-      runtimes,
-      keys,
-      version: "",
-      now: () => now,
-    }),
-    [workspaceId, changeMany, runtimes, keys, now],
-  );
 
   /* ------------------------------ The conversation ------------------------------ */
 
@@ -244,98 +251,96 @@ export function Onboarding({
 
   return (
     <div className="main page" data-screen="onboarding" data-step={step}>
-      <SettingsScreenProvider value={screen}>
-        <div className="onboarding">
-          <div className="onboarding-in">
-            {step === "level" ? (
-              <>
-                <h1>{s["strings.onboarding.title"]}</h1>
-                <p>{s["strings.onboarding.intro"]}</p>
-                <ChoiceCards cards={levelCards(s)} value={chosen} onChange={pickLevel} />
-                <p className="choice-note">{s["strings.ai.level.change_note"]}</p>
-                <div className="actions">
-                  <span className="sp" />
-                  <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip"]}</Btn>
-                  <Btn primary disabled={chosen === null} onClick={() => void continueFromLevel()}>
-                    {s["strings.onboarding.continue"]}
-                  </Btn>
-                </div>
-              </>
-            ) : null}
+      <div className="onboarding">
+        <div className="onboarding-in">
+          {step === "level" ? (
+            <>
+              <h1>{s["strings.onboarding.title"]}</h1>
+              <p>{s["strings.onboarding.intro"]}</p>
+              <ChoiceCards cards={levelCards(s)} value={chosen} onChange={pickLevel} />
+              <p className="choice-note">{s["strings.ai.level.change_note"]}</p>
+              <div className="actions">
+                <span className="sp" />
+                <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip"]}</Btn>
+                <Btn primary disabled={chosen === null} onClick={() => void continueFromLevel()}>
+                  {s["strings.onboarding.continue"]}
+                </Btn>
+              </div>
+            </>
+          ) : null}
 
-            {step === "runtime" ? (
-              <>
-                <h1>{s["strings.ai.level.runtime_title"]}</h1>
-                <RuntimeStep
-                  configured={configured}
-                  onContinue={() => void applyLevel(chosen ?? "assist")}
-                  onBack={() => setStep("level")}
-                />
-              </>
-            ) : null}
+          {step === "runtime" ? (
+            <>
+              <h1>{s["strings.ai.level.runtime_title"]}</h1>
+              <RuntimeStep
+                configured={configured}
+                onContinue={() => void applyLevel(chosen ?? "assist")}
+                onBack={() => setStep("level")}
+              />
+            </>
+          ) : null}
 
-            {step === "chat" ? (
-              <>
-                <h1>{s["strings.onboarding.chat_title"]}</h1>
-                <p>{s["strings.onboarding.chat_intro"]}</p>
-                <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
-                  {chips.length > 0 && !finished ? (
-                    <div className="onboarding-chips">
-                      {chips.map((c) => (
-                        <Chip key={c} onClick={() => void agent.send(c)}>
-                          {c}
-                        </Chip>
-                      ))}
-                      <Chip onClick={() => void agent.send(s["strings.onboarding.skip"])}>
-                        {s["strings.onboarding.skip"]}
+          {step === "chat" ? (
+            <>
+              <h1>{s["strings.onboarding.chat_title"]}</h1>
+              <p>{s["strings.onboarding.chat_intro"]}</p>
+              <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
+                {!finished ? (
+                  <div className="onboarding-chips">
+                    {chips.map((c) => (
+                      <Chip key={c} onClick={() => void agent.send(c)}>
+                        {c}
                       </Chip>
-                    </div>
-                  ) : null}
-                  <Composer
-                    agent={agent}
-                    mode="right"
-                    runtime={runtimeText}
-                    strings={agentStrings}
-                    suggestions={[]}
-                    now={now}
-                    placeholder={s["strings.agent.placeholder_open"]}
-                    text={text}
-                    onTextChange={setText}
-                  />
-                </div>
-                <div className="actions">
-                  <span className="sp" />
-                  {finished ? (
-                    <Btn primary onClick={() => finish("completed")}>
-                      {s["strings.onboarding.done"]}
-                    </Btn>
-                  ) : (
-                    <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip_rest"]}</Btn>
-                  )}
-                </div>
-              </>
-            ) : null}
-
-            {step === "keymap" ? (
-              <>
-                <h1>{s["strings.onboarding.keymap_title"]}</h1>
-                <p>{s["strings.onboarding.keymap_intro"]}</p>
-                <ChoiceCards
-                  cards={keymaps}
-                  value={s["keyboard.keymap"]}
-                  onChange={(k) => void shell.set("keyboard.keymap", k)}
+                    ))}
+                    <Chip onClick={() => void agent.send(s["strings.onboarding.skip"])}>
+                      {s["strings.onboarding.skip"]}
+                    </Chip>
+                  </div>
+                ) : null}
+                <Composer
+                  agent={agent}
+                  mode="right"
+                  runtime={runtimeText}
+                  strings={agentStrings}
+                  suggestions={[]}
+                  now={now}
+                  placeholder={s["strings.agent.placeholder_open"]}
+                  text={text}
+                  onTextChange={setText}
                 />
-                <div className="actions">
-                  <span className="sp" />
+              </div>
+              <div className="actions">
+                <span className="sp" />
+                {finished ? (
                   <Btn primary onClick={() => finish("completed")}>
                     {s["strings.onboarding.done"]}
                   </Btn>
-                </div>
-              </>
-            ) : null}
-          </div>
+                ) : (
+                  <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip_rest"]}</Btn>
+                )}
+              </div>
+            </>
+          ) : null}
+
+          {step === "keymap" ? (
+            <>
+              <h1>{s["strings.onboarding.keymap_title"]}</h1>
+              <p>{s["strings.onboarding.keymap_intro"]}</p>
+              <ChoiceCards
+                cards={keymaps}
+                value={s["keyboard.keymap"]}
+                onChange={(k) => void shell.set("keyboard.keymap", k)}
+              />
+              <div className="actions">
+                <span className="sp" />
+                <Btn primary onClick={() => finish("completed")}>
+                  {s["strings.onboarding.done"]}
+                </Btn>
+              </div>
+            </>
+          ) : null}
         </div>
-      </SettingsScreenProvider>
+      </div>
     </div>
   );
 }
