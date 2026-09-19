@@ -39,6 +39,7 @@ import { claimableNeeds, isDeploymentMode } from "../src/capabilities.ts";
 import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
 import { createDb, dbOptionsFor } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
+import { createLineNotifier, createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
 import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
@@ -53,7 +54,7 @@ import { startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
 import { findPgDump, pgDump } from "./pg-dump.ts";
 import { migrationsFolder } from "./resources.ts";
-import { createServices } from "./services.ts";
+import { createServices, publicUrlReader } from "./services.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
 const debug = process.env.MONDAY_LOG === "debug" ? log : () => {};
@@ -195,6 +196,13 @@ async function main() {
     },
     push,
     mounts: mode === "sidecar" ? [upgradeRoutes(upgrade)] : [],
+    // An external approval with no client open (slice 19): the Sidecar tells its
+    // Tauri parent over stdout; a container has no desktop and logs it.
+    notifier:
+      mode === "sidecar"
+        ? createLineNotifier((line) => console.log(line))
+        : createMemoryNotifier((line) => log(line)),
+    publicUrl: publicUrlReader(handle.db, process.env),
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");

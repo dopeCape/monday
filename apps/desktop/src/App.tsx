@@ -1,6 +1,7 @@
 // Composes the shell from the layout knobs (ADR 0009): nav full, rail or hidden;
 // agent bottom, left or right; then the active screen.
 
+import type { ExternalPending } from "@monday/shared";
 import { NavSidebar, Rail } from "@monday/ui";
 import {
   account,
@@ -180,15 +181,41 @@ export function App({
       if (timer) clearInterval(timer);
     };
   }, [workflowsClient, refreshSeconds]);
+  // External callers' calls parked on an approval (slice 19): the Workspace's
+  // external feed while the client is open, which is also how the Server knows
+  // a client is open; each becomes a chip that opens the caller's Session.
+  const [externalPending, setExternalPending] = useState<ExternalPending[]>([]);
+  const externalClient = shell.server ? shell.api.external : null;
+  useEffect(() => {
+    if (!externalClient) return;
+    let cancelled = false;
+    externalClient
+      .pending(workspace.id)
+      .then((list) => {
+        if (!cancelled) setExternalPending(list);
+      })
+      .catch(() => {});
+    const stop = externalClient.live(workspace.id, (p) =>
+      setExternalPending((current) => [
+        ...current.filter((x) => x.activityId !== p.activityId),
+        ...(p.status === "waiting" ? [p] : []),
+      ]),
+    );
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [externalClient]);
   const chips = useMemo(
     () =>
       suggestionsFor({
         settings: shell.settings,
         waiting: agent.waiting,
         pausedRuns,
+        external: externalPending,
         needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
       }),
-    [shell.settings, agent.waiting, pausedRuns, inbox],
+    [shell.settings, agent.waiting, pausedRuns, externalPending, inbox],
   );
   const column = (side: "left" | "right") => (
     <AgentComposer
@@ -375,6 +402,7 @@ export function App({
         onNavigate={navigate}
         onSearch={openSearch}
         agent={agent}
+        externalPending={externalPending}
       />
     ),
   );

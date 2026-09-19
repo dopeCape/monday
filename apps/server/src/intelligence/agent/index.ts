@@ -49,7 +49,14 @@ export { createActivityLog, createMemoryActivityLog, publicActivity } from "./ac
 export type { InterruptPayload } from "./graph.ts";
 export { BudgetExceededError } from "./graph.ts";
 export { createServerToolHost } from "./host.ts";
-export { createMondayMcpServer, type McpContext, mcpResultOf } from "./mcp.ts";
+export {
+  createMondayMcpServer,
+  type McpContext,
+  mcpResultOf,
+  scopeAllows,
+  scopeError,
+  toolsForScope,
+} from "./mcp.ts";
 export {
   createHostedSession,
   graphThreadId,
@@ -59,6 +66,7 @@ export {
 export type { SessionStore } from "./sessions.ts";
 export { collapseEvents, createMemorySessionStore, createSessionStore } from "./sessions.ts";
 export type {
+  ExternalSeam,
   IntegrationsSeam,
   McpSeam,
   ToolExtensions,
@@ -147,6 +155,10 @@ export interface LocalCall {
   /** The CLI's own id for the call when it has one; generated otherwise. */
   callId?: string | undefined;
   pinned?: readonly string[] | undefined;
+  /** An external credential (slice 19): the row's actor, and the card's caller name. */
+  actor?: { kind: "external"; name: string } | undefined;
+  /** The external search cap, below the Agent's own Setting. */
+  searchLimit?: number | undefined;
 }
 
 export interface AgentHost {
@@ -234,6 +246,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const decided = new Map<string, ApprovalDecision>();
   /** Who waits for a waiting row to move on, by Activity row. */
   const settled = new Map<string, Array<(row: ActivityRow) => void>>();
+  /**
+   * Rows parked by `call` (an MCP transport, local or external), whatever
+   * Runtime their Session names: the approval answers them here, never
+   * through a LangGraph checkpoint.
+   */
+  const parked = new Set<string>();
   const listeners = new Map<string, Set<(event: AgentEvent) => void>>();
 
   const tools = (workspaceId: string): ToolServer => {
@@ -441,7 +459,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     async resume(sessionId, activityId, decision, context, onEvent) {
       const session = await requireSession(sessionId);
-      if (session.runtime.kind === "local") {
+      if (session.runtime.kind === "local" || parked.has(activityId)) {
         return resumeLocal(session, activityId, decision, onEvent);
       }
       const agent = hostedFor(session);
@@ -487,7 +505,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           publish(sessionId, event);
           void sessions.append(sessionId, event);
         }
+        if (row.status === "waiting") parked.add(row.id);
         if (row.status !== "waiting") {
+          parked.delete(row.id);
           const waiters = settled.get(row.id);
           if (waiters) {
             settled.delete(row.id);
@@ -502,6 +522,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           callId: input.callId ?? crypto.randomUUID(),
           sessionId,
           pinned: input.pinned,
+          actor: input.actor,
+          searchLimit: input.searchLimit,
         },
         {
           ask: (row) => {

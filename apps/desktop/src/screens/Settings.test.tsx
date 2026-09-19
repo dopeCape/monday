@@ -12,6 +12,8 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   type ActivityRecord,
   type Device,
+  type ExternalConsent,
+  type ExternalCredential,
   type HostedProvider,
   isSettingKey,
   isStringKey,
@@ -108,6 +110,8 @@ function scriptedApi(
     voice?: VoiceProfile;
     stored?: Record<string, unknown>;
     shared?: HostedProvider[];
+    credentials?: ExternalCredential[];
+    consents?: ExternalConsent[];
   } = {},
 ): Scripted {
   const calls: Scripted["calls"] = [];
@@ -227,6 +231,47 @@ function scriptedApi(
         if (!row) throw new Error("no row");
         row.undoneAt = NOW.toISOString();
         return row;
+      },
+    },
+    external: {
+      ...base.external,
+      credentials: async () => over.credentials ?? [],
+      createKey: async (input) => {
+        calls.push({ name: "external.createKey", args: [input] });
+        return {
+          credential: {
+            id: "c-new",
+            kind: "key",
+            name: input.name,
+            scope: input.scope,
+            workspaceIds: input.workspaceIds,
+            createdAt: NOW.toISOString(),
+            expiresAt: "2026-12-16T10:00:00Z",
+            lastUsedAt: null,
+            revokedAt: null,
+            clientId: null,
+            prefix: "mk_live_abcdef",
+          },
+          secret: "mk_live_abcdef0123456789",
+        };
+      },
+      revoke: async (id) => {
+        calls.push({ name: "external.revoke", args: [id] });
+      },
+      consents: async () => over.consents ?? [],
+      approveConsent: async (ref, workspaceIds) => {
+        calls.push({ name: "external.approve", args: [ref, workspaceIds] });
+        const found = over.consents?.[0];
+        if (!found) throw Object.assign(new Error("not found"), { status: 404 });
+        return found;
+      },
+      denyConsent: async (id) => {
+        calls.push({ name: "external.deny", args: [id] });
+      },
+      pending: async () => [],
+      live: () => () => {},
+      decide: async () => {
+        throw new Error("not scripted");
       },
     },
   };
@@ -559,6 +604,122 @@ describe("Settings › AI and agent", () => {
 });
 
 /* ------------------------------ Sync server ------------------------------ */
+
+describe("Settings › AI › External access", () => {
+  test("keys and signed-in clients with scope, Workspaces, expiry and last use; revoke; a new key shown once with Copy; a consent approved by code", async () => {
+    const scripted = scriptedApi({
+      credentials: [
+        {
+          id: "c1",
+          kind: "key",
+          name: "assistant",
+          scope: "read",
+          workspaceIds: ["ws-1"],
+          createdAt: "2026-09-01T10:00:00Z",
+          expiresAt: "2026-11-30T10:00:00Z",
+          lastUsedAt: "2026-09-17T09:00:00Z",
+          revokedAt: null,
+          clientId: null,
+          prefix: "mk_live_zzzzzz",
+        },
+        {
+          id: "c2",
+          kind: "oauth",
+          name: "Claude Desktop",
+          scope: "act",
+          workspaceIds: null,
+          createdAt: "2026-09-01T10:00:00Z",
+          expiresAt: "2026-09-10T10:00:00Z",
+          lastUsedAt: null,
+          revokedAt: null,
+          clientId: "client-1",
+          prefix: null,
+        },
+      ],
+      consents: [
+        {
+          id: "consent-1",
+          clientId: "client-1",
+          clientName: "Cursor",
+          scope: "read",
+          workspaceIds: null,
+          code: "424242",
+          expiresAt: "2026-09-17T10:10:00Z",
+        },
+      ],
+    });
+    let answer = false;
+    (globalThis as { confirm: (m?: string) => boolean }).confirm = () => answer;
+    const copied: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (t: string) => void copied.push(t) },
+    });
+    await mount({ initialSection: "ai" }, { api: scripted.api });
+    const panel = q('[data-panel="external"]');
+    expect(panel).not.toBeNull();
+    // The Setting controls of the group render beside the panel, under Advanced.
+    expect(q('[data-setting="external.rate_per_minute"]')).not.toBeNull();
+    expect(q('[data-setting="external.key_expiry_days"]')).not.toBeNull();
+
+    const key = q('[data-credential="c1"]');
+    expect(key?.textContent).toContain("assistant (mk_live_zzzzzz...)");
+    expect(key?.textContent).toContain("Key · Read only · 1 workspaces · Last used Today 09:00");
+    expect(key?.textContent).toContain("Expires");
+    const client = q('[data-credential="c2"]');
+    expect(client?.textContent).toContain("Signed in · Read and act, asks first · All workspaces");
+    expect(client?.textContent).toContain("Never used");
+    expect(client?.textContent).toContain("Expired");
+
+    // Revoke asks first.
+    await clickText("Revoke", key ?? document);
+    expect(scripted.calls.find((c) => c.name === "external.revoke")).toBeUndefined();
+    answer = true;
+    await clickText("Revoke", key ?? document);
+    expect(scripted.calls).toContainEqual({ name: "external.revoke", args: ["c1"] });
+
+    // A new key: name, scope, expiry; then the secret once, with Copy.
+    await clickText("New key", panel ?? document);
+    await type(q<HTMLInputElement>("#external-name"), "my assistant");
+    await click(
+      [...(q('[data-panel="external-new"]')?.querySelectorAll("button") ?? [])].find(
+        (b) => b.textContent === "Read and act, asks first",
+      ),
+    );
+    await type(q<HTMLInputElement>("#external-days"), "30");
+    await clickText("Create key", q('[data-panel="external-new"]') ?? document);
+    expect(scripted.calls).toContainEqual({
+      name: "external.createKey",
+      args: [{ name: "my assistant", scope: "act", workspaceIds: null, expiresInDays: 30 }],
+    });
+    const shown = q('[data-panel="external-key"]');
+    expect(shown?.querySelector<HTMLInputElement>("input[data-secret]")?.value).toBe(
+      "mk_live_abcdef0123456789",
+    );
+    expect(shown?.textContent).toContain("shown once");
+    await clickText("Copy", shown ?? document);
+    expect(copied).toEqual(["mk_live_abcdef0123456789"]);
+    expect(shown?.textContent).toContain("Copied");
+    await clickText("Done", shown ?? document);
+    expect(q('[data-panel="external-key"]')).toBeNull();
+
+    // An OAuth consent waiting: approved from the list, or by the code the page shows.
+    const consent = q('[data-consent="consent-1"]');
+    expect(consent?.textContent).toContain("Cursor wants Read only access, code 424242");
+    await clickText("Approve", consent ?? document);
+    expect(scripted.calls).toContainEqual({
+      name: "external.approve",
+      args: [{ id: "consent-1" }, null],
+    });
+    await type(q<HTMLInputElement>("#external-code"), "424242");
+    await clickText("Approve", q('[data-panel="external-consents"] .wizard-fields') ?? document);
+    expect(scripted.calls).toContainEqual({
+      name: "external.approve",
+      args: [{ code: "424242" }, null],
+    });
+    expect(q('[data-panel="external-consents"]')?.textContent).toContain("Approved");
+  });
+});
 
 describe("Settings › Sync server", () => {
   test("devices with this Device marked, revoke with confirm, pending codes to approve, and storage", async () => {

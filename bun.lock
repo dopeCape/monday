@@ -54,6 +54,7 @@
         "@langchain/openai": "^1.5.13",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@monday/shared": "workspace:*",
+        "@monday/ui": "workspace:*",
         "@noble/hashes": "^2.4.0",
         "drizzle-orm": "^0.45.2",
         "embedded-postgres": "18.4.0-beta.17",

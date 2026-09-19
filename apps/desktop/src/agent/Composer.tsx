@@ -283,6 +283,12 @@ export function Composer({
 
   const onSuggestion = (s: Suggestion) => {
     onSuggest?.(s);
+    if (s.session) {
+      // An external caller's card waits in its own Session: open it, the card carries the caller's name.
+      onOpenChange?.(true);
+      void agent.openSession(s.session);
+      return;
+    }
     submit(s.label);
   };
 

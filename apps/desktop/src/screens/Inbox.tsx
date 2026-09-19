@@ -4,7 +4,7 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { BriefAction, Settings } from "@monday/shared";
+import type { BriefAction, ExternalPending, Settings } from "@monday/shared";
 import { Btn, ColHead, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
 import { account, groups, NOW, sections, tagsOf, workspace } from "@monday/ui/fixtures";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
@@ -95,6 +95,8 @@ export interface InboxProps {
   initialAgentText?: string | undefined;
   /** The composer's Session (slice 14); inert without an Agent host. */
   agent?: AgentSession | undefined;
+  /** External calls parked on an approval (slice 19), for the chips. */
+  externalPending?: readonly ExternalPending[] | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -153,6 +155,7 @@ export function Inbox({
   onSearch,
   initialAgentText,
   agent = NULL_SESSION,
+  externalPending,
 }: InboxProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -637,9 +640,10 @@ export function Inbox({
       suggestionsFor({
         settings: s,
         waiting: agent.waiting,
+        external: externalPending,
         needsReply: threads.filter((th) => th.section === "needs-reply"),
       }),
-    [s, agent.waiting, threads],
+    [s, agent.waiting, externalPending, threads],
   );
   /** A chip that names Layout knobs applies them here; the sentence still goes to the Agent. */
   const applySuggestionLayout = (sg: Suggestion) => {

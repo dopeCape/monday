@@ -401,6 +401,8 @@ export interface ToolCall {
   declined?: boolean;
   /** A Local runtime's own built-in tool, used in Developer mode; the card carries the warning glyph. */
   builtin?: boolean;
+  /** The external credential that made the call (docs/spec/external-mcp.md); the card names it. */
+  actorName?: string | null;
 }
 
 export interface ActivityEntry extends ToolCall {

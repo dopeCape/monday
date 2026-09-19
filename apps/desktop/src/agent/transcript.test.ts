@@ -86,6 +86,10 @@ describe("transcript", () => {
     expect(toolTitle(call({ tool: "search_threads", status: "running" }))).toBe("Searching mail");
     expect(toolTitle(call({ tool: "archive_threads" }))).toBe("Archived");
     expect(toolTitle(call({ tool: "make_tea" }))).toBe("make tea");
+    // An external caller's card names the caller (slice 19).
+    expect(
+      toolTitle(call({ tool: "archive_threads", status: "waiting", actorName: "ops bot" })),
+    ).toBe("Archive, asked by ops bot");
   });
 
   test("suggestion chips: pending approvals, then Needs your reply, then the evergreen Setting, capped", () => {
@@ -94,14 +98,30 @@ describe("transcript", () => {
       settings: strings,
       waiting: [call({ status: "waiting", tool: "send_draft" })],
       pausedRuns: [{ workflowName: "Candidate intake", stepName: "Slack" }],
+      external: [
+        {
+          activityId: "a-ext",
+          workspaceId: "ws",
+          credentialId: "c1",
+          credentialName: "ops bot",
+          tool: "archive_threads",
+          inputSummary: "12 threads",
+          status: "waiting",
+          text: null,
+          sessionId: "s-ext",
+          at: "2026-09-19T10:00:00Z",
+        },
+      ],
       needsReply: [thread, thread, thread],
     });
     expect(chips.map((c) => c.label)).toEqual([
       "Decide on the pending send draft",
+      "Decide on the archive threads that ops bot asks for",
       "Decide on the Slack step waiting in Candidate intake",
       "Reply to the 3 threads waiting on me",
-      "Summarize what I missed since yesterday",
     ]);
+    // The external chip opens the caller's Session, where the card waits, instead of sending a turn.
+    expect(chips[1]?.session).toBe("s-ext");
     const capped = suggestionsFor({
       settings: {
         ...strings,

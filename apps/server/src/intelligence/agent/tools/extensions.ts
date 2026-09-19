@@ -6,6 +6,8 @@
 
 import type {
   DryRunPreview,
+  ExternalKeyCreated,
+  ExternalKeyInput,
   RunView,
   ToolPreview,
   WorkflowInput,
@@ -56,10 +58,18 @@ export interface WorkflowsSeam {
   askBeforeEnable(): Promise<boolean>;
 }
 
+/** What the external key tool acts through: the credentials of the external MCP server (slice 19). */
+export interface ExternalSeam {
+  createKey(input: ExternalKeyInput): Promise<ExternalKeyCreated>;
+  /** False when the credential was already revoked or never existed. */
+  revoke(credentialId: string): Promise<boolean>;
+}
+
 export interface ToolExtensions {
   integrations?: IntegrationsSeam | undefined;
   mcp?: McpSeam | undefined;
   workflows?: WorkflowsSeam | undefined;
+  external?: ExternalSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });
@@ -514,6 +524,63 @@ const runWorkflow: ToolDefinition<{ workflow_id: string; thread_id?: string | un
   },
 };
 
+/* ------------------------------ External access (slice 19) ------------------------------ */
+
+const createExternalKey: ToolDefinition<{
+  name: string;
+  scope: "read" | "act";
+  workspace_ids?: string[] | undefined;
+  expires_in_days?: number | undefined;
+}> = {
+  name: "create_external_key",
+  description:
+    "Make a key another agent can use on monday's external MCP server (Settings, AI, External access). Read scope lists only read tools; act scope adds the rest, which still ask the user. The key is shown once, in the card. Reversible: undo revokes it.",
+  tier: "reversible",
+  input: z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .describe("Who the key is for, as the list and approvals name it"),
+    scope: z.enum(["read", "act"]).default("read"),
+    workspace_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .optional()
+      .describe("The Workspaces it may reach; absent means this one only"),
+    expires_in_days: z.int().min(1).max(3650).optional(),
+  }),
+  summarize: (i) => `${i.name} (${i.scope})`,
+  async run(i, ctx) {
+    const seam = ctx.extensions?.external;
+    if (!seam) {
+      return { kind: "refused", text: "External access is not available from this host." };
+    }
+    const workspaceIds = i.workspace_ids ?? [ctx.host.workspaceId];
+    return {
+      kind: "action",
+      preview: text(
+        `New external key "${i.name}", ${i.scope} scope, for ${workspaceIds.length === 1 ? "this Workspace" : `${workspaceIds.length} Workspaces`}${i.expires_in_days ? `, expires in ${i.expires_in_days} days` : ""}.`,
+      ),
+      count: 1,
+      apply: async () => {
+        const made = await seam.createKey({
+          name: i.name,
+          scope: i.scope,
+          workspaceIds,
+          expiresInDays: i.expires_in_days,
+        });
+        // The secret on the first line: that is the line the card shows, once.
+        return {
+          text: `Key ${made.secret} for "${made.credential.name}", ${made.credential.scope} scope, expires ${made.credential.expiresAt.slice(0, 10)}.\nShown once; tell the user to copy it now.`,
+          data: { credential: made.credential, secret: made.secret },
+          undo: { kind: "external_key", credentialId: made.credential.id },
+        };
+      },
+    };
+  },
+};
+
 export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   postToSlack,
   postToDiscord,
@@ -529,6 +596,7 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   listWorkflowRuns,
   approveWorkflowStep,
   runWorkflow,
+  createExternalKey,
 ] as unknown as readonly ToolDefinition<never>[];
 
 /** The tool an integration Step of a Workflow maps to. */

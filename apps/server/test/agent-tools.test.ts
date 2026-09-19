@@ -126,6 +126,8 @@ describe("the tool catalog", () => {
       list_workflow_runs: "read",
       approve_workflow_step: "leaves_mailbox",
       run_workflow: "reversible",
+      // Slice 19: an external key the Agent makes; revoking it is the undo.
+      create_external_key: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

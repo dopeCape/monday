@@ -141,6 +141,8 @@ export interface Intelligence {
   agent: AgentHost;
   activity: ActivityLog;
   workflows: Workflows;
+  /** The extension tools' seams; a module made after this one (external MCP, slice 19) fills its slot here. */
+  extensions: ToolExtensions;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
@@ -380,6 +382,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     agent,
     activity,
     workflows,
+    extensions,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

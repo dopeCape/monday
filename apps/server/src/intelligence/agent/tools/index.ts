@@ -18,7 +18,13 @@ import type { ToolExtensions } from "./extensions.ts";
 
 export type { ToolDefinition, ToolPlan, ToolSettings } from "./catalog.ts";
 export { TOOL_CATALOG } from "./catalog.ts";
-export type { IntegrationsSeam, McpSeam, ToolExtensions, WorkflowsSeam } from "./extensions.ts";
+export type {
+  ExternalSeam,
+  IntegrationsSeam,
+  McpSeam,
+  ToolExtensions,
+  WorkflowsSeam,
+} from "./extensions.ts";
 export { INTEGRATION_TOOL } from "./extensions.ts";
 
 export interface ToolCallRequest {
@@ -31,6 +37,10 @@ export interface ToolCallRequest {
   runId?: string | null | undefined;
   /** Setting keys the calling Device pins. */
   pinned?: readonly string[] | undefined;
+  /** An external MCP caller (slice 19): named on the Activity row as its actor. */
+  actor?: { kind: "external"; name: string } | undefined;
+  /** A lower cap on search results than the Agent's Setting, for external callers. */
+  searchLimit?: number | undefined;
 }
 
 export interface ToolCallContext {
@@ -201,7 +211,11 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
     },
 
     async call(request, ctx) {
-      const settings = await options.settings();
+      const base = await options.settings();
+      const settings: ToolSettings =
+        request.searchLimit !== undefined
+          ? { ...base, searchLimit: Math.min(base.searchLimit, request.searchLimit) }
+          : base;
       const existing = request.sessionId
         ? await activity.findCall(request.sessionId, request.callId)
         : request.runId
@@ -241,6 +255,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
           preview: fields.preview ?? null,
           status: fields.status,
           decision: null,
+          actor: request.actor,
         });
         ctx.onUpdate?.(row);
         return row;
@@ -412,6 +427,14 @@ export async function replayUndo(
         await workflows.enable(undo.workflowId, undo.previous.enabled);
       }
       return `Undone: the workflow is back at version ${undo.previous.version}, ${undo.previous.enabled ? "enabled" : "disabled"}.`;
+    }
+    case "external_key": {
+      const external = extensions?.external;
+      if (!external) return "Cannot undo: external access is not available from this host.";
+      const revoked = await external.revoke(undo.credentialId);
+      return revoked
+        ? "Undone: the key was revoked."
+        : "Nothing to undo: the key was already revoked.";
     }
   }
 }
