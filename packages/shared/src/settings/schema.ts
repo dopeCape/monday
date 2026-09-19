@@ -3362,7 +3362,12 @@ export function settingLevel(key: SettingKey): AiLevel {
   if (key.startsWith("workflows.") || key.startsWith("briefs.") || AUTOMATE_KEYS.has(key)) {
     return "automate";
   }
-  if (key.startsWith("ai.") || key.startsWith("agent.") || key.startsWith("external.")) {
+  if (
+    (settingsSchema[key] as SettingEntry).section === "ai" ||
+    key.startsWith("ai.") ||
+    key.startsWith("agent.") ||
+    key.startsWith("external.")
+  ) {
     return "assist";
   }
   return "off";
