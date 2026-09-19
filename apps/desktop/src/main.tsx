@@ -1,14 +1,16 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
-import { account, draftGhost, draftNote, workspace } from "@monday/ui/fixtures";
+import { draftGhost, draftNote } from "@monday/ui/fixtures";
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import type { AccountView } from "./platform/api.ts";
 import { platform } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
+import { Settings } from "./screens/Settings.tsx";
 import { createSearch, type FetchBodies } from "./search/index.ts";
 import { createPrewarm } from "./search/prewarm.ts";
 import { Shell, useShell } from "./shell/Shell.tsx";
@@ -19,6 +21,12 @@ import {
   useStoreStatus,
   useSyncProgress,
 } from "./store/index.ts";
+import {
+  type CurrentWorkspace,
+  FIXTURE_WORKSPACE,
+  useWorkspace,
+  WorkspaceProvider,
+} from "./workspace.tsx";
 
 /**
  * The app over the Store: the inbox and compose seams, the workspace dot, the
@@ -28,6 +36,7 @@ function Root() {
   const store = useStore();
   const content = useContent();
   const shell = useShell();
+  const ws = useWorkspace();
   const settingsRef = useRef(shell.settings);
   settingsRef.current = shell.settings;
   const status = useStoreStatus();
@@ -48,7 +57,7 @@ function Root() {
   const search = useMemo(
     () =>
       createSearch({
-        sources: () => [{ store, account: account.address }],
+        sources: () => [{ store, account: ws.address }],
         settings: () => ({
           weights: [8, 3, 2, 1],
           recencyDays: settingsRef.current["search.recency_boost_days"],
@@ -113,7 +122,7 @@ function Root() {
         sections: {
           rules: () => settingsRef.current["sections.rules"],
           order: () => settingsRef.current["sections.order"],
-          owner: account.address,
+          owner: ws.address,
           groupNames: () =>
             Object.fromEntries((routingSeam?.groups() ?? []).map((g) => [g.id, g.name])),
         },
@@ -121,7 +130,7 @@ function Root() {
       }),
       platform().then((p) =>
         createStoreComposer(store, content, {
-          address: account.address,
+          address: ws.address,
           // The browser dev server shows the design fixture's suggestion; the Agent's arrive in slice 14.
           suggestions: p.isTauri ? undefined : { d1: { ghost: draftGhost, note: draftNote } },
         }),
@@ -144,7 +153,7 @@ function Root() {
       opened?.routing.close();
       opened?.calendar.close();
     };
-  }, [store, content, shell.api]);
+  }, [store, content, shell.api, ws.address]);
 
   // Changed Section rules re-section the stream at once, without a new Cache read.
   const sectionRules = shell.settings["sections.rules"];
@@ -172,14 +181,68 @@ function Root() {
   );
 }
 
-// One Workspace at a time (CONTEXT.md). Until accounts arrive with the
-// Providers the fixture Workspace names the Cache file.
+/** How often the first-run screen asks whether an Account has arrived. */
+const FIRST_RUN_POLL_MS = 3000;
+
+/**
+ * Picks the Workspace: the first connected Account's in the app, the design
+ * fixture's on the browser dev server (no Server there). With a Server and no
+ * Account yet, the Accounts screen is the whole app until one is connected.
+ */
+function WorkspaceGate() {
+  const shell = useShell();
+  const [accounts, setAccounts] = useState<AccountView[] | null>(null);
+  const server = shell.server;
+  useEffect(() => {
+    if (!server) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      shell.api.accounts
+        .list()
+        .then((r) => {
+          if (stopped) return;
+          setAccounts(r.accounts);
+          if (r.accounts.length === 0) timer = setTimeout(tick, FIRST_RUN_POLL_MS);
+        })
+        .catch(() => {
+          if (!stopped) timer = setTimeout(tick, FIRST_RUN_POLL_MS);
+        });
+    };
+    tick();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [server, shell.api]);
+
+  const current = useMemo<CurrentWorkspace | null>(() => {
+    if (!server) return FIXTURE_WORKSPACE;
+    const first = accounts?.[0];
+    return first ? { id: first.workspaceId, accountId: first.id, address: first.address } : null;
+  }, [server, accounts]);
+
+  if (server && accounts === null) return null;
+  if (!current) {
+    return (
+      <div className="app" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+        <Settings initialSection="accounts" />
+      </div>
+    );
+  }
+  return (
+    <WorkspaceProvider value={current}>
+      <StoreProvider workspaceId={current.id}>
+        <Root />
+      </StoreProvider>
+    </WorkspaceProvider>
+  );
+}
+
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <Shell>
-      <StoreProvider workspaceId={workspace.id}>
-        <Root />
-      </StoreProvider>
+      <WorkspaceGate />
     </Shell>
   </StrictMode>,
 );

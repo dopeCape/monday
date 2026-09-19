@@ -8,7 +8,6 @@
 import type { ExternalPending } from "@monday/shared";
 import { NavSidebar, Rail } from "@monday/ui";
 import {
-  account,
   automationNav,
   calendarNav,
   counts,
@@ -18,7 +17,6 @@ import {
   navWorkspace,
   railItems,
   railTail,
-  workspace,
 } from "@monday/ui/fixtures";
 import { ClockIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -54,6 +52,7 @@ import { Workflows } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { useShell } from "./shell/Shell.tsx";
+import { useWorkspace } from "./workspace.tsx";
 
 export interface AppProps {
   /** The inbox's data seam; the Store's implementation in the app, fixtures in tests. */
@@ -143,6 +142,7 @@ export function App({
   calendar,
 }: AppProps) {
   const shell = useShell();
+  const ws = useWorkspace();
   const now = nowProp ?? new Date();
   // Just mail (CONTEXT.md "AI level"): no agent column, no bar, no Session.
   const aiOff = shell.settings["ai.level"] === "off";
@@ -195,7 +195,7 @@ export function App({
                   return s?.running ? { port: s.port, token: s.token } : null;
                 },
                 settings: () => settingsRef.current,
-                address: () => account.address,
+                address: () => ws.address,
                 statusOf: (cli) => runtimesRef.current?.[cli] ?? null,
                 log: (line) => console.warn(line),
               })
@@ -208,7 +208,7 @@ export function App({
   const detection = useMemo(() => detectionOf(runtimes), [runtimes]);
   const agentSession = useAgentSession({
     client: aiOff ? null : client,
-    workspaceId: workspace.id,
+    workspaceId: ws.id,
     context: () => ({ pinned: [...pinned] }),
     newAfterHours: shell.settings["ai.session.new_after_hours"],
     runtime: wantedRuntime,
@@ -242,7 +242,7 @@ export function App({
     }),
     [agentSession, setMeUp, openOnboarding],
   );
-  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address, runtimes);
+  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, ws.address, runtimes);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
   // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
   // Agent's approve_workflow_step tool then shows the card in the composer.
@@ -255,8 +255,8 @@ export function App({
     const load = async () => {
       try {
         const [runs, list] = await Promise.all([
-          workflowsClient.runs(workspace.id, { status: "paused" }),
-          workflowsClient.list(workspace.id),
+          workflowsClient.runs(ws.id, { status: "paused" }),
+          workflowsClient.list(ws.id),
         ]);
         if (cancelled) return;
         setPausedRuns(
@@ -285,12 +285,12 @@ export function App({
     if (!externalClient) return;
     let cancelled = false;
     externalClient
-      .pending(workspace.id)
+      .pending(ws.id)
       .then((list) => {
         if (!cancelled) setExternalPending(list);
       })
       .catch(() => {});
-    const stop = externalClient.live(workspace.id, (p) =>
+    const stop = externalClient.live(ws.id, (p) =>
       setExternalPending((current) => [
         ...current.filter((x) => x.activityId !== p.activityId),
         ...(p.status === "waiting" ? [p] : []),
@@ -362,7 +362,7 @@ export function App({
     () =>
       topSenders(
         inbox?.threads() ?? [],
-        onboarding?.account?.address ?? account.address,
+        onboarding?.account?.address ?? ws.address,
         shell.settings["onboarding.sender_chips"],
       ),
     [inbox, onboarding, shell.settings["onboarding.sender_chips"]],
@@ -449,9 +449,9 @@ export function App({
       >
         <Onboarding
           key={`onboarding-${onboarding?.account?.id ?? "none"}-${onboarding?.rerun ? "again" : "first"}`}
-          accountId={onboarding?.account?.id ?? account.id}
-          workspaceId={onboarding?.account?.workspaceId ?? workspace.id}
-          address={onboarding?.account?.address ?? account.address}
+          accountId={onboarding?.account?.id ?? ws.accountId}
+          workspaceId={onboarding?.account?.workspaceId ?? ws.id}
+          address={onboarding?.account?.address ?? ws.address}
           agentClient={fixtureChat ? onboardingFixtureClient(() => now) : client}
           initialStep={fixtureChat ? "chat" : undefined}
           runtimes={detection}
@@ -510,7 +510,7 @@ export function App({
       <Settings
         key={`screen-${settingsSection ?? ""}`}
         initialSection={settingsSection}
-        workspaceId={workspace.id}
+        workspaceId={ws.id}
         runtimes={detection ?? undefined}
         keys={keysProp ?? undefined}
         onAsk={(text) => {
@@ -523,13 +523,13 @@ export function App({
         key="screen"
         routing={routing}
         inbox={inbox}
-        workspaceId={workspace.id}
+        workspaceId={ws.id}
         onNavigate={navigate}
       />
     ) : active === "workflows" ? (
       <Workflows
         key="screen"
-        workspaceId={workspace.id}
+        workspaceId={ws.id}
         api={workflowsApi}
         groupName={(id) => {
           const g = navGroups.find((x) => x.id === id);
@@ -563,7 +563,7 @@ export function App({
       <Search
         key="screen"
         search={search}
-        workspaceId={workspace.id}
+        workspaceId={ws.id}
         query={searchQuery}
         onQuery={setSearchQuery}
         recentThreads={inbox?.threads().slice(0, 20) ?? []}
@@ -593,7 +593,7 @@ export function App({
         syncing={syncing}
         composeRequest={composeRequest}
         search={search}
-        workspaceId={workspace.id}
+        workspaceId={ws.id}
         initialOpen={openThread ?? undefined}
         initialAgentText={agentText}
         onNavigate={navigate}
