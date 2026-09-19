@@ -852,6 +852,81 @@ describe("the OpenCode adapter", () => {
   });
 });
 
+/* ------------------------------ A start that fails ------------------------------ */
+
+/** Answers a request line with a result or an error under the request's own id. */
+const answer =
+  (body: { result?: unknown; error?: unknown }) =>
+  (input: string): string[] => {
+    const id = (JSON.parse(input) as { id?: number }).id;
+    return id === undefined ? [] : [JSON.stringify({ jsonrpc: "2.0", id, ...body })];
+  };
+
+describe("a Local runtime whose session never opens", () => {
+  test("Codex: a thread/start error surfaces in the CLI's words, the process is ended, and the next start spawns again", async () => {
+    const link = fakeLink();
+    const refused = { error: { code: -32000, message: "Not logged in. Run `codex login` first." } };
+    const opened = { result: { thread: { id: "th-2" }, model: "gpt-5.6-sol" } };
+    let spawnsSoFar = 0;
+    const runner = fakeProcessRunner({
+      codex: {
+        replies: [
+          answer({ result: {} }),
+          () => [],
+          (input) => answer(spawnsSoFar++ === 0 ? refused : opened)(input),
+        ],
+        exitCode: 0,
+      },
+    });
+    const session = createCodexSession({
+      ...depsOver(runner.runner, link.link),
+      settings: () => ({ command: "codex", model: "", toolTimeoutSeconds: 1, systemPrompt: "x" }),
+    });
+    await expect(session.start(context())).rejects.toThrow(
+      "Not logged in. Run `codex login` first.",
+    );
+    expect(runner.spawns[0]?.process.killed).toBe(true);
+    // Nothing is half-started: a turn now refuses plainly instead of writing to no thread.
+    await expect(session.send("hello", () => {})).rejects.toThrow("Codex was not started");
+    await session.start(context());
+    expect(runner.spawns).toHaveLength(2);
+    expect(runner.spawns[1]?.process.killed).toBe(false);
+    expect(session.runtime().model).toBe("gpt-5.6-sol");
+    await session.cancel();
+  });
+
+  test("OpenCode: a session/new error is the same: ended, then spawned again on the next start", async () => {
+    const link = fakeLink();
+    const refused = { error: { code: -32000, message: "No provider is configured." } };
+    const opened = { result: { sessionId: "ses-2" } };
+    let spawnsSoFar = 0;
+    const runner = fakeProcessRunner({
+      opencode: {
+        replies: [
+          answer({ result: { protocolVersion: 1 } }),
+          (input) => answer(spawnsSoFar++ === 0 ? refused : opened)(input),
+        ],
+        exitCode: 0,
+      },
+    });
+    const session = createOpencodeSession({
+      ...depsOver(runner.runner, link.link),
+      settings: () => ({
+        command: "opencode",
+        model: "",
+        toolTimeoutSeconds: 1,
+        systemPrompt: "x",
+      }),
+    });
+    await expect(session.start(context())).rejects.toThrow("No provider is configured.");
+    expect(runner.spawns[0]?.process.killed).toBe(true);
+    await expect(session.send("hello", () => {})).rejects.toThrow("OpenCode was not started");
+    await session.start(context());
+    expect(runner.spawns).toHaveLength(2);
+    await session.cancel();
+  });
+});
+
 /* ------------------------------ Detection ------------------------------ */
 
 describe("detection", () => {
