@@ -16,6 +16,7 @@ import {
   ArchiveIcon,
   ArrowBendUpLeftIcon,
   ArrowsOutLineVerticalIcon,
+  CalendarBlankIcon,
   CaretDownIcon,
   CaretUpIcon,
   CheckSquareIcon,
@@ -80,6 +81,7 @@ const ICONS: Record<string, IconComponent> = {
   search: MagnifyingGlassIcon,
   workflow: FlowArrowIcon,
   sent: PaperPlaneTiltIcon,
+  calendar: CalendarBlankIcon,
 };
 
 const ACTION_ICON: Partial<Record<KeyAction, string>> = {
@@ -213,6 +215,7 @@ export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[
   }
   out.push({ target: "routing", label: t("strings.palette.nav.routing"), icon: "group" });
   out.push({ target: "workflows", label: t("strings.palette.nav.workflows"), icon: "workflow" });
+  out.push({ target: "calendar", label: t("strings.palette.nav.calendar"), icon: "calendar" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
   return out;
 }

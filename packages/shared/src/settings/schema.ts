@@ -2946,6 +2946,7 @@ export const settingsSchema = {
   "strings.palette.nav.search": str("appearance", "Palette: Search", "Search"),
   "strings.palette.nav.routing": str("appearance", "Palette: Routing", "Routing"),
   "strings.palette.nav.workflows": str("appearance", "Palette: Workflows", "Workflows"),
+  "strings.palette.nav.calendar": str("appearance", "Palette: Calendar", "Calendar"),
   "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
   "strings.palette.nav.settings_page": str(
     "appearance",
