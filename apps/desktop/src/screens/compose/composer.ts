@@ -49,7 +49,7 @@ export interface Composer {
   setReplyAllFor(threadId: string, replyAll: boolean): Promise<void>;
   /** A Draft whose content is newer on the Server is fetched before editing. */
   ensureContent(id: string): Promise<Draft | undefined>;
-  /** The Agent's suggestion for a Draft, when it has one (slice 14 fills this). */
+  /** The Agent's suggestion for a Draft, when it has one. */
   suggestion(id: string): DraftSuggestion | null;
 }
 

@@ -5,6 +5,7 @@
 
 import { Btn, formatWhen, Kbd } from "@monday/ui";
 import { useEffect, useRef, useState } from "react";
+import { useExit } from "../inbox/useExit.ts";
 
 export interface UndoBarStrings {
   /** "Sending in {n}s" */
@@ -50,13 +51,17 @@ export function UndoBar({
   tickMs = 250,
 }: UndoBarProps) {
   const [left, setLeft] = useState(() => secondsLeft(runAt, now()));
+  // Once the send is on its way (or a later send's bar has stayed) the bar
+  // slides out on the motion tokens, then tells the screen.
+  const [shown, setShown] = useState(true);
   const elapsed = useRef(onElapsed);
   elapsed.current = onElapsed;
+  const exit = useExit(shown, "--t-fast", () => elapsed.current?.());
 
   useEffect(() => {
     if (later) {
       if (stayMs === undefined) return;
-      const timer = setTimeout(() => elapsed.current?.(), stayMs);
+      const timer = setTimeout(() => setShown(false), stayMs);
       return () => clearTimeout(timer);
     }
     let fired = false;
@@ -65,7 +70,7 @@ export function UndoBar({
       setLeft(n);
       if (n === 0 && !fired) {
         fired = true;
-        elapsed.current?.();
+        setShown(false);
       }
     };
     tick();
@@ -79,8 +84,14 @@ export function UndoBar({
       ? strings.sendingIn.replace("{n}", String(left))
       : strings.sendingNow;
 
+  if (!exit.mounted) return null;
   return (
-    <div className="toast" role="status" data-send-undo>
+    <div
+      className={exit.leaving ? "toast leaving" : "toast"}
+      role="status"
+      data-send-undo
+      onAnimationEnd={exit.onEnd}
+    >
       <span className="count">{text}</span>
       {later || left > 0 ? (
         <Btn sm onClick={onUndo}>

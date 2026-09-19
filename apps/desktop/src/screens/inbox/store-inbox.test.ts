@@ -160,6 +160,32 @@ describe("storeInbox", () => {
   });
 });
 
+describe("storeInbox bodies", () => {
+  test("an open that finds no Server says why the bodies are missing, and the next open clears it", async () => {
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { content: fake.content });
+    await fake.store.write([
+      {
+        sql: "update messages set body_text = null, body_html = null, body_at = null where thread_id = 'e1'",
+      },
+    ]);
+    let notified = 0;
+    const stop = inbox.watchMessages("e1", () => notified++);
+    expect(inbox.unavailable("e1")).toBeNull();
+    fake.server.offline = true;
+    await inbox.openThread("e1");
+    expect(inbox.unavailable("e1")).toBe("offline");
+    expect(notified).toBeGreaterThan(0);
+    expect(inbox.messages("e1").every((m) => m.bodyText === undefined)).toBe(true);
+    fake.server.offline = false;
+    await inbox.openThread("e1");
+    expect(inbox.unavailable("e1")).toBeNull();
+    await settled(inbox, () => inbox.messages("e1").some((m) => m.bodyText !== undefined));
+    stop();
+    inbox.close();
+  });
+});
+
 describe("storeInbox Briefs (slice 13)", () => {
   const openWithContent = async () => {
     const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });

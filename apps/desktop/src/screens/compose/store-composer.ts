@@ -27,7 +27,7 @@ export interface StoreComposerOptions {
   now?: () => Date;
   /** Mints send ids; tests make them predictable. */
   id?: () => string;
-  /** Agent suggestions per Draft; the browser dev server seeds the fixture's, slice 14 the real ones. */
+  /** Agent suggestions per Draft; the browser dev server seeds the design fixture's. */
   suggestions?: Readonly<Record<string, DraftSuggestion>> | undefined;
 }
 

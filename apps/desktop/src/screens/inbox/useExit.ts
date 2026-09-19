@@ -74,3 +74,24 @@ export function useExit(open: boolean, token: MotionToken = "--t-med", onLeft?: 
 
   return { mounted: phase !== "gone", leaving: phase === "leaving", onEnd: finish };
 }
+
+export interface HeldExit<T> extends Exit {
+  /** What to render: the current value, or the last one while it leaves; null once gone. */
+  value: T | null;
+}
+
+/**
+ * The same for a value that is the thing shown (the open Thread, the compose
+ * Draft, the picker kind): the last value is held while it leaves, so the
+ * element can still render it on its way out.
+ */
+export function useExitValue<T>(
+  value: T | null | undefined,
+  token: MotionToken = "--t-med",
+  onLeft?: () => void,
+): HeldExit<T> {
+  const held = useRef<T | null>(value ?? null);
+  if (value !== null && value !== undefined) held.current = value;
+  const exit = useExit(value !== null && value !== undefined, token, onLeft);
+  return { ...exit, value: exit.mounted ? held.current : null };
+}

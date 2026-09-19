@@ -82,6 +82,9 @@ export interface ComposeProps {
   canSend?: boolean | undefined;
   strings?: Partial<ComposeStrings> | undefined;
   className?: string | undefined;
+  /** On its way out: the scrim runs its leave and reports the end. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function Compose({
@@ -104,6 +107,8 @@ export function Compose({
   canSend = true,
   strings: stringOverrides,
   className,
+  leaving,
+  onLeft,
 }: ComposeProps) {
   const strings = { ...DEFAULT_STRINGS, ...(stringOverrides ?? {}) };
   const title =
@@ -114,7 +119,7 @@ export function Compose({
         : strings.newMessage;
   const body = paragraphs(draft.bodyText);
   return (
-    <Scrim onClose={onClose}>
+    <Scrim onClose={onClose} leaving={leaving} onLeft={onLeft}>
       <div className={cx("compose", className)} role="dialog" aria-label={title}>
         <ColHead title={title}>
           <Btn icon title={strings.close} onClick={onClose}>

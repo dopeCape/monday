@@ -52,15 +52,23 @@ export interface ThreadReader {
   /**
    * Fetches headers, attachments and bodies into the Cache (within its
    * rules), then asks for a Brief under the brief policy when the Cache has
-   * none or a stale one (slice 13). Never throws.
+   * none or a stale one (docs/spec/inbox.md, Briefs). Never throws.
    */
   openThread(threadId: string): Promise<void>;
   /** The Brief the Cache holds for a Thread, computed before or after open; undefined when none. */
   brief(threadId: string): Brief | undefined;
+  /**
+   * Why the last open left bodies missing: the Server did not answer
+   * (offline), it is locked, or the read failed; null when nothing went
+   * wrong. Changes reach watchMessages listeners. The reader words it.
+   */
+  unavailable(threadId: string): BodyUnavailable | null;
   /** Asks the Server for a Brief by hand ("or when the user asks"). Never throws. */
   requestBrief(threadId: string): Promise<void>;
   attachmentBytes(attachmentId: string): Promise<{ bytes: Uint8Array; mediaType: string }>;
 }
+
+export type BodyUnavailable = "offline" | "locked" | "failed";
 
 export type Inbox = InboxActions & InboxSource & ThreadReader;
 
@@ -131,6 +139,7 @@ export function fixtureInbox(
     },
     openThread: async () => {},
     brief: (threadId) => briefOf(threadId),
+    unavailable: () => null,
     requestBrief: async () => {},
     attachmentBytes: async (attachmentId) => ({
       bytes: new TextEncoder().encode(attachmentId),

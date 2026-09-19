@@ -72,8 +72,10 @@ const titles = { inbox: "Inbox", hiring: "Hiring", candidates: "Candidates", int
 
 export function messageList(route, ui) {
   const title = titles[route.folder || "inbox"] || "Inbox";
+  // An open thread reads itself (the app's reader.mark_read_on_open), so the selected row drops its dot.
+  const unread = e => e.unread && !(ui.readerOpen && ui.selected === e.id);
   const row = e => `
-    <div class="row ${e.unread ? "unread" : ""} ${ui.selected === e.id ? "on" : ""}" data-open="${e.id}">
+    <div class="row ${unread(e) ? "unread" : ""} ${ui.selected === e.id ? "on" : ""}" data-open="${e.id}">
       <span class="dot"></span>
       <span class="from">${e.from.name}${e.count > 1 ? ` <span class="cnt">${e.count}</span>` : ""}</span>
       <span class="subj"><b>${e.subject}</b><span class="snip">${e.snippet}</span></span>

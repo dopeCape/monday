@@ -1,16 +1,15 @@
 // Action chips are tool calls (docs/spec/inbox.md, "Each chip is an ordinary
 // tool call with its Tier"; docs/spec/agent-composer.md). toolCallOf names
 // the tool, its arguments and its Tier for a BriefAction; ActionRunner runs
-// it. Until the tool server lands (slice 14) the runner here is over the
-// InboxActions seam and the compose surface, which keeps ADR 0002: a reply
-// or forward chip opens compose and never sends, snooze and archive apply
-// with Undo, a link opens outside. Slice 14 swaps the runner for one that
-// routes the same tool calls through the tool server.
+// it over the InboxActions seam and the compose surface, the same seams the
+// Device's ToolHost (agent/clientToolHost.ts) acts through, which keeps
+// ADR 0002: a reply or forward chip opens compose and never sends, snooze and
+// archive apply with Undo, a link opens outside.
 
 import type { BriefAction, Person, Tier } from "@monday/shared";
 import type { InboxActions, UndoToken } from "./actions.ts";
 
-/** The tool call a chip stands for. Names are the tool server's (slice 14). */
+/** The tool call a chip stands for. Names are the tool server's. */
 export type BriefToolCall =
   | { tool: "compose.reply"; tier: "always-ask"; args: { threadId: string; opening: string } }
   | { tool: "compose.forward"; tier: "always-ask"; args: { threadId: string; to: Person } }
@@ -74,7 +73,7 @@ export interface ActionRunnerDeps {
   /** Opens the reply box on the Thread with the seed; the user still sends (ADR 0002). */
   compose(kind: "reply" | "forward", threadId: string, seed: ComposeSeed): void;
   openLink(url: string): void | Promise<void>;
-  /** Absent until the calendar module (slice 18); the chip then reports calendar_unavailable. */
+  /** Absent on an Account with no calendar; the chip then reports calendar_unavailable. */
   calendar?:
     | ((event: { threadId: string; title: string; start: string }) => Promise<void>)
     | undefined;

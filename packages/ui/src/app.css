@@ -376,7 +376,9 @@ i.ph-bold > svg {
   white-space: nowrap;
   transition:
     background var(--t-fast),
-    color var(--t-fast);
+    color var(--t-fast),
+    opacity var(--t-fast),
+    transform var(--t-fast) var(--ease);
 }
 .btn:hover {
   background: var(--hover);
@@ -384,6 +386,18 @@ i.ph-bold > svg {
 }
 .btn:active {
   transform: translateY(1px);
+}
+.btn:focus-visible,
+.chip:focus-visible,
+.att:focus-visible,
+.cmdk-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
 }
 .btn.icon {
   width: 30px;
@@ -425,12 +439,17 @@ i.ph-bold > svg {
   white-space: nowrap;
   transition:
     background var(--t-fast),
-    color var(--t-fast);
+    color var(--t-fast),
+    border-color var(--t-fast),
+    transform var(--t-fast) var(--ease);
 }
 .chip:hover {
   background: var(--hover);
   color: var(--fg);
   border-color: var(--border-strong);
+}
+.chip:active {
+  transform: translateY(1px);
 }
 .chip.on {
   background: var(--fg);
@@ -518,6 +537,10 @@ i.ph-bold > svg {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast);
 }
 .seg button.on {
   background: var(--panel);
@@ -538,6 +561,9 @@ i.ph-bold > svg {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
 }
 .tabs button:hover {
   background: var(--hover);
@@ -644,16 +670,24 @@ i.ph-bold > svg {
   position: absolute;
   right: calc(var(--pad) - 4px);
   top: 50%;
-  transform: translateY(-50%);
-  display: none;
+  transform: translate(4px, -50%);
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
   gap: 2px;
   background: var(--panel);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-sm);
   padding: 2px;
+  transition:
+    opacity var(--t-fast),
+    transform var(--t-fast) var(--ease);
 }
-.row:hover .actions {
-  display: flex;
+.row:hover .actions,
+.row:focus-within .actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
 }
 .row:hover .time,
 .row:hover .meta {
@@ -691,7 +725,11 @@ i.ph-bold > svg {
 }
 :root[data-list="split"] .row .actions {
   top: 8px;
-  transform: none;
+  transform: translate(4px, 0);
+}
+:root[data-list="split"] .row:hover .actions,
+:root[data-list="split"] .row:focus-within .actions {
+  transform: translate(0, 0);
 }
 :root[data-list="split"] .row.on::before {
   content: "";
@@ -713,6 +751,7 @@ i.ph-bold > svg {
   max-width: 720px;
   margin: 0 auto;
   padding: 36px var(--pad) 180px;
+  animation: fade var(--t-fast);
 }
 .reader h1 {
   font-size: var(--fs-2xl);
@@ -848,6 +887,9 @@ i.ph-bold > svg {
   font-size: var(--fs-sm);
   color: var(--fg);
 }
+.att {
+  transition: background var(--t-fast);
+}
 .att:hover {
   background: var(--hover);
 }
@@ -872,6 +914,9 @@ i.ph-bold > svg {
   font-size: var(--fs-lg);
   line-height: 1.6;
   min-height: 96px;
+}
+.reply textarea {
+  transition: border-color var(--t-fast);
 }
 .reply textarea:focus {
   border-color: var(--border-strong);
@@ -917,6 +962,16 @@ button.msg {
 }
 @keyframes sheet-in {
   from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+:root[data-list="stream"] .reader.sheet.leaving {
+  animation: sheet-out var(--t-med) var(--ease-in) forwards;
+  pointer-events: none;
+}
+@keyframes sheet-out {
+  to {
     transform: translateX(16px);
     opacity: 0;
   }
@@ -3151,6 +3206,27 @@ button.prov {
     opacity: 0;
   }
 }
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+/* a box on its way down and out: the palette, compose, a batch preview, a picker, a toast */
+@keyframes sink {
+  to {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+.scrim.leaving {
+  animation: fade-out var(--t-med) var(--ease-in) forwards;
+  pointer-events: none;
+}
+.scrim.leaving > .cmdk,
+.scrim.leaving > .compose,
+.scrim.leaving > .batch {
+  animation: sink var(--t-med) var(--ease-in) forwards;
+}
 .cmdk {
   width: 600px;
   max-width: calc(100% - 40px);
@@ -3201,6 +3277,9 @@ button.prov {
 }
 .cmdk-item .mk {
   margin: 0 2px;
+}
+.cmdk-item {
+  transition: background var(--t-fast);
 }
 .cmdk-item.on,
 .cmdk-item:hover {
@@ -3415,6 +3494,12 @@ button.prov {
     opacity: 0;
   }
 }
+/* a Section heading whose last row is leaving folds with it */
+.sec.leaving {
+  max-height: 60px;
+  overflow: hidden;
+  animation: row-collapse var(--t-med) var(--ease) forwards;
+}
 
 /* first sync: a thin progress line at the top of the list */
 .sync {
@@ -3477,6 +3562,10 @@ button.prov {
   white-space: nowrap;
   animation: rise var(--t-med) var(--ease);
 }
+.toast.leaving {
+  animation: sink var(--t-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
 .toast .btn {
   height: 26px;
   padding: 0 8px;
@@ -3498,6 +3587,10 @@ button.prov {
   box-shadow: var(--shadow-lg);
   animation: rise var(--t-fast) var(--ease);
 }
+.pop.leaving {
+  animation: sink var(--t-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
 .pop-h {
   padding: 6px 10px;
   font-size: var(--fs-xs);
@@ -3515,6 +3608,9 @@ button.prov {
   font-size: var(--fs-md);
   text-align: left;
   color: var(--fg);
+}
+.pop-item {
+  transition: background var(--t-fast);
 }
 .pop-item:hover,
 .pop-item.on {

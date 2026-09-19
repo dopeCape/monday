@@ -236,6 +236,9 @@ export interface PaletteProps {
   /** Tab: the `agent.ask` action with the parsed query attached. */
   onAsk: (ask: AgentAsk) => void;
   now?: Date | undefined;
+  /** On its way out (the screen's exit hook): the leave animation runs, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 function isMac(): boolean {
@@ -255,6 +258,8 @@ export function Palette({
   onCommand,
   onAsk,
   now,
+  leaving,
+  onLeft,
 }: PaletteProps) {
   const { settings } = useShell();
   const mac = isMac();
@@ -369,6 +374,8 @@ export function Palette({
       onAsk={(text) => onAsk(agentHandoff(text, now))}
       onClose={onClose}
       now={now}
+      leaving={leaving}
+      onLeft={onLeft}
       strings={{
         placeholder: t("strings.search.placeholder"),
         move: t("strings.palette.foot.move"),

@@ -3,7 +3,14 @@
 // outside closes. Handled keys stop here so the list keymap stays quiet.
 
 import { cx } from "@monday/ui";
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type AnimationEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 export interface PickerItem {
   key: string;
@@ -21,20 +28,44 @@ export interface PickerProps {
   children?: ReactNode | undefined;
   className?: string | undefined;
   label: string;
+  /** On its way out: the focus is let go, clicks no longer pick, the leave animation runs, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
-export function Picker({ title, items, onPick, onClose, children, className, label }: PickerProps) {
+export function Picker({
+  title,
+  items,
+  onPick,
+  onClose,
+  children,
+  className,
+  label,
+  leaving,
+  onLeft,
+}: PickerProps) {
   const [active, setActive] = useState(0);
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (leaving) {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      return;
+    }
     host.current?.querySelector<HTMLElement>(".pop-item")?.focus();
     const away = (e: MouseEvent) => {
       if (host.current && !host.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
-  }, [onClose]);
+  }, [onClose, leaving]);
+
+  const onAnimationEnd = (e: AnimationEvent<HTMLDivElement>) => {
+    if (leaving && e.target === e.currentTarget) onLeft?.();
+  };
+  const pick = (key: string) => {
+    if (!leaving) onPick(key);
+  };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const typing = (e.target as HTMLElement).tagName === "INPUT";
@@ -62,7 +93,7 @@ export function Picker({ title, items, onPick, onClose, children, className, lab
       e.stopPropagation();
       e.preventDefault();
       const item = items[active];
-      if (item) onPick(item.key);
+      if (item) pick(item.key);
       return;
     }
     // Any other key belongs to this popover while it is open.
@@ -72,10 +103,11 @@ export function Picker({ title, items, onPick, onClose, children, className, lab
   return (
     <div
       ref={host}
-      className={cx("pop", className)}
+      className={cx("pop", leaving && "leaving", className)}
       role="dialog"
       aria-label={label}
       onKeyDown={onKey}
+      onAnimationEnd={onAnimationEnd}
     >
       {title ? <div className="pop-h">{title}</div> : null}
       {items.map((it, i) => (
@@ -84,7 +116,7 @@ export function Picker({ title, items, onPick, onClose, children, className, lab
           type="button"
           className={cx("pop-item", i === active && "on")}
           onMouseEnter={() => setActive(i)}
-          onClick={() => onPick(it.key)}
+          onClick={() => pick(it.key)}
         >
           <span>{it.label}</span>
           {it.detail ? <span className="when">{it.detail}</span> : null}

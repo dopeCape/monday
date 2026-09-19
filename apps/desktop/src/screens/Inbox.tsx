@@ -5,7 +5,7 @@
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
 import type { BriefAction, ExternalPending, Settings, Tag, Thread } from "@monday/shared";
-import { Btn, ColHead, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
+import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -58,6 +58,7 @@ import {
   toggleSelected,
 } from "./inbox/triage.ts";
 import { useClock } from "./inbox/useClock.ts";
+import { useExit, useExitValue } from "./inbox/useExit.ts";
 import { reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
 import { Palette, type PaletteCommand } from "./Palette.tsx";
 
@@ -151,6 +152,16 @@ function useThreadBrief(inbox: InboxData, threadId: string | null) {
     [inbox, threadId],
   );
   const get = useCallback(() => (threadId ? inbox.brief(threadId) : undefined), [inbox, threadId]);
+  return useSyncExternalStore(subscribe, get, get);
+}
+
+/** Why the open Thread's bodies are missing, from the reader seam; null when they are not. */
+function useThreadUnavailable(inbox: InboxData, threadId: string | null) {
+  const subscribe = useCallback(
+    (listener: () => void) => (threadId ? inbox.watchMessages(threadId, listener) : () => {}),
+    [inbox, threadId],
+  );
+  const get = useCallback(() => (threadId ? inbox.unavailable(threadId) : null), [inbox, threadId]);
   return useSyncExternalStore(subscribe, get, get);
 }
 
@@ -280,8 +291,21 @@ export function Inbox({
   const thread = focus ? inbox.thread(focus) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
-  const messages = useThreadMessages(inbox, openThreadId);
-  const brief = useThreadBrief(inbox, openThreadId);
+  // The sheet slides out over the Thread it showed, so that Thread's rows are
+  // held until the leave ends; the split reader never leaves.
+  const readerExit = useExitValue(showReader && thread ? thread : null);
+  const shownThread = readerExit.value;
+  const shownThreadId = shownThread?.id ?? null;
+  const messages = useThreadMessages(inbox, shownThreadId);
+  const brief = useThreadBrief(inbox, shownThreadId);
+  const unavailable = useThreadUnavailable(inbox, shownThreadId);
+  // Back online with a Thread open: read again what the Cache still lacks.
+  useEffect(() => {
+    if (online && shownThreadId && unavailable === "offline") void inbox.openThread(shownThreadId);
+  }, [online, shownThreadId, unavailable, inbox]);
+  const batchExit = useExitValue(batch);
+  const pickerExit = useExitValue(picker, "--t-fast");
+  const paletteExit = useExit(paletteOpen);
 
   // Opening a Thread reads it (a Setting): once per open, so "mark unread"
   // from the reader's menu holds until the next Thread opens. No toast and no
@@ -299,6 +323,7 @@ export function Inbox({
   const nowFn = useCallback(() => nowProp ?? new Date(), [nowProp]);
   const compose = useCompose({ composer, settings, now: nowFn });
   const cs = compose.strings;
+  const overlayExit = useExitValue(compose.overlay);
   const openNew = compose.openNew;
   const openDraft = compose.openDraft;
   const lastRequest = useRef(composeRequest);
@@ -500,7 +525,7 @@ export function Inbox({
     [thread, inbox, compose],
   );
 
-  // Action chips are tool calls (slice 13): reply and forward open compose and
+  // Action chips are tool calls (ADR 0002): reply and forward open compose and
   // never send, snooze and archive apply with Undo, a link opens outside.
   const defaultDuration = s["calendar.default_duration_minutes"];
   const actionRunner = useMemo(
@@ -509,7 +534,7 @@ export function Inbox({
         inbox,
         compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
         openLink: (url) => openExternal(url),
-        // The chip is the user's own click, so the Event goes straight on the calendar (slice 18).
+        // The chip is the user's own click, so the Event goes straight on the calendar.
         ...(calendar
           ? {
               calendar: async ({ title, start }) => {
@@ -569,11 +594,14 @@ export function Inbox({
       try {
         const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
         await saveDownload(meta?.name ?? attachmentId, bytes, mediaType);
-      } catch (error) {
-        compose.onError(error instanceof Error ? error.message : String(error));
+      } catch {
+        // Plain words, not the transport's: the toast names the file.
+        compose.onError(
+          fill(t("strings.reader.download_failed"), { name: meta?.name ?? attachmentId }),
+        );
       }
     },
-    [messages, inbox, compose],
+    [messages, inbox, compose, t],
   );
 
   const attachmentSrc = useCallback(
@@ -751,26 +779,30 @@ export function Inbox({
     ? fill(t("strings.inbox.selected"), { n: selection.length })
     : threads.length;
 
-  const batchThreads = batch
-    ? batch.ids.flatMap((id) => {
+  const shownBatch = batchExit.value;
+  const batchThreads = shownBatch
+    ? shownBatch.ids.flatMap((id) => {
         const th = inbox.thread(id);
         return th ? [th] : [];
       })
     : [];
-  const batchAction = batch
+  const batchAction = shownBatch
     ? t(
-        batch.kind === "archive"
+        shownBatch.kind === "archive"
           ? "strings.inbox.action.archive"
-          : batch.kind === "delete"
+          : shownBatch.kind === "delete"
             ? "strings.inbox.action.delete"
-            : batch.kind === "snooze"
+            : shownBatch.kind === "snooze"
               ? "strings.inbox.action.snooze"
               : "strings.inbox.action.read",
       )
     : "";
 
   return (
-    <div className={`main inbox ${stream && showReader ? "has-sheet" : ""}`} data-pane={pane}>
+    <div
+      className={`main inbox ${stream && readerExit.mounted ? "has-sheet" : ""}`}
+      data-pane={pane}
+    >
       <section className="col list" data-fields={fields} aria-label={listTitle}>
         <ColHead title={listTitle} count={headCount}>
           {stream ? (
@@ -782,7 +814,7 @@ export function Inbox({
             <DotsThreeIcon />
           </Btn>
         </ColHead>
-        {picker === "more" ? (
+        {pickerExit.value === "more" ? (
           <Picker
             label={t("strings.inbox.more")}
             items={[{ key: "read-all", label: t("strings.inbox.mark_all_read") }]}
@@ -791,9 +823,11 @@ export function Inbox({
               void markAllRead();
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {picker === "snooze" ? (
+        {pickerExit.value === "snooze" ? (
           <SnoozePicker
             settings={s}
             now={now}
@@ -802,9 +836,11 @@ export function Inbox({
               request("snooze", pickerIds, until);
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {picker === "move" ? (
+        {pickerExit.value === "move" ? (
           <Picker
             label={t("strings.inbox.move.title")}
             title={t("strings.inbox.move.title")}
@@ -819,6 +855,8 @@ export function Inbox({
               void moveTo(pickerIds, k === "" ? null : k);
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
         <div className="col-body" role="listbox" aria-label={listTitle}>
@@ -850,7 +888,9 @@ export function Inbox({
           {orderedSections.map((sec) =>
             sec.rows.length === 0 ? null : (
               <Fragment key={sec.id}>
-                <SectionLabel>{sec.name}</SectionLabel>
+                <SectionLabel className={sec.rows.every((r) => r.leaving) ? "leaving" : undefined}>
+                  {sec.name}
+                </SectionLabel>
                 {sec.rows.map(({ thread: th, leaving }) => (
                   <MessageRow
                     key={th.id}
@@ -878,25 +918,34 @@ export function Inbox({
         </div>
       </section>
 
-      {showReader && thread ? (
+      {shownThread ? (
         <Reader
           banner={
             calendar ? (
-              <ThreadInviteBar calendar={calendar} threadId={thread.id} settings={settings} />
+              <ThreadInviteBar calendar={calendar} threadId={shownThread.id} settings={settings} />
             ) : null
           }
-          thread={thread}
+          thread={shownThread}
           messages={messages}
           brief={brief}
-          tags={tagsOf(thread)}
+          tags={tagsOf(shownThread)}
           sheet={stream}
+          leaving={readerExit.leaving}
+          onLeft={readerExit.onEnd}
           now={now}
           collapseQuoted={s["reader.collapse_quoted"]}
           messageStrings={{
             showQuoted: t("strings.reader.show_quoted"),
             hideQuoted: t("strings.reader.hide_quoted"),
             showImages: t("strings.reader.show_images"),
-            loading: t("strings.reader.loading"),
+            loading:
+              unavailable === "offline"
+                ? t("strings.reader.offline_body")
+                : unavailable === "locked"
+                  ? t("strings.reader.locked")
+                  : unavailable === "failed"
+                    ? t("strings.reader.body_failed")
+                    : t("strings.reader.loading"),
           }}
           onReply={startReply}
           onBriefAction={(action) => void runBriefAction(action)}
@@ -904,14 +953,16 @@ export function Inbox({
           onOpenLink={(href) => void openExternal(href)}
           attachmentSrc={attachmentSrc}
           reply={
-            compose.reply && compose.reply.threadId === thread.id ? (
+            compose.reply && compose.reply.threadId === shownThread.id ? (
               <ReplyCompose
                 key={compose.reply.draftId}
                 composer={composer}
                 draftId={compose.reply.draftId}
                 initial={compose.reply.initial}
                 recipient={
-                  messages[messages.length - 1]?.from.name ?? thread.participants[0]?.name ?? ""
+                  messages[messages.length - 1]?.from.name ??
+                  shownThread.participants[0]?.name ??
+                  ""
                 }
                 strings={cs}
                 idleMs={compose.idleMs}
@@ -966,13 +1017,33 @@ export function Inbox({
           }}
           onClose={() => setReaderOpen(false)}
           onAsk={focusAgent}
-          onArchive={() => request("archive", [thread.id])}
-          onSnooze={() => openPicker("snooze", [thread.id])}
-          onMove={() => openPicker("move", [thread.id])}
-          onDelete={() => request("delete", [thread.id])}
-          onStar={() => void toggleStar([thread.id])}
-          onToggleRead={() => void toggleRead([thread.id])}
+          onArchive={() => request("archive", [shownThread.id])}
+          onSnooze={() => openPicker("snooze", [shownThread.id])}
+          onMove={() => openPicker("move", [shownThread.id])}
+          onDelete={() => request("delete", [shownThread.id])}
+          onStar={() => void toggleStar([shownThread.id])}
+          onToggleRead={() => void toggleRead([shownThread.id])}
         />
+      ) : !stream ? (
+        // The split list with nothing to open (an empty Inbox): the mock's empty reader.
+        <section className="col reader" aria-label={t("strings.reader.empty_title")}>
+          <div className="empty">
+            <h3>{t("strings.reader.empty_title")}</h3>
+            <p>
+              {t("strings.reader.empty_help")
+                .split(/(\{down\}|\{up\})/)
+                .map((part, i) =>
+                  part === "{down}" || part === "{up}" ? (
+                    <Kbd key={`${part}-${i}`}>
+                      {key(part === "{down}" ? "move.down" : "move.up")}
+                    </Kbd>
+                  ) : (
+                    <Fragment key={`${part}-${i}`}>{part}</Fragment>
+                  ),
+                )}
+            </p>
+          </div>
+        </section>
       ) : null}
 
       {shell.layout.agent === "bottom" && !aiOff ? (
@@ -1035,12 +1106,12 @@ export function Inbox({
         />
       ) : null}
 
-      {compose.overlay ? (
+      {overlayExit.value ? (
         <ComposeOverlay
-          key={compose.overlay.draftId}
+          key={overlayExit.value.draftId}
           composer={composer}
-          draftId={compose.overlay.draftId}
-          initial={compose.overlay.initial}
+          draftId={overlayExit.value.draftId}
+          initial={overlayExit.value.initial}
           strings={cs}
           idleMs={compose.idleMs}
           delaySeconds={compose.delaySeconds}
@@ -1049,25 +1120,34 @@ export function Inbox({
           onClose={compose.closeOverlay}
           onSent={compose.onSent}
           onError={compose.onError}
+          leaving={overlayExit.leaving}
+          onLeft={overlayExit.onEnd}
         />
       ) : null}
 
-      {batch ? (
+      {batchExit.value ? (
         <BatchPreview
-          title={fill(t("strings.inbox.batch.title"), { action: batchAction, n: batch.ids.length })}
+          title={fill(t("strings.inbox.batch.title"), {
+            action: batchAction,
+            n: batchExit.value.ids.length,
+          })}
           threads={batchThreads}
           applyLabel={t("strings.inbox.batch.apply")}
           cancelLabel={t("strings.inbox.batch.cancel")}
           onApply={() => void applyBatch()}
           onCancel={() => setBatch(null)}
+          leaving={batchExit.leaving}
+          onLeft={batchExit.onEnd}
         />
       ) : null}
 
-      {paletteOpen ? (
+      {paletteExit.mounted ? (
         <Palette
           query={paletteQuery}
           onQuery={setPaletteQuery}
           onClose={() => setPaletteOpen(false)}
+          leaving={paletteExit.leaving}
+          onLeft={paletteExit.onEnd}
           keymap={keymap}
           search={search}
           workspaceId={workspaceId}

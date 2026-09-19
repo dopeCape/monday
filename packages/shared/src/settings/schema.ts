@@ -2087,6 +2087,22 @@ export const settingsSchema = {
     "Brief chip: action unavailable",
     "That action is not available here",
   ),
+  "strings.reader.body_failed": str(
+    "routing",
+    "Body could not be read",
+    "Message text could not be loaded. Open the thread again to retry",
+  ),
+  "strings.reader.download_failed": str(
+    "routing",
+    "Attachment download failed",
+    "Could not download {name}",
+  ),
+  "strings.reader.empty_title": str("routing", "Empty reader heading", "Nothing open"),
+  "strings.reader.empty_help": str(
+    "routing",
+    "Empty reader line",
+    "Pick a conversation, or use {down} and {up}.",
+  ),
   "strings.agent.placeholder": str("ai", "Agent bar placeholder", "Ask or tell monday"),
   "strings.agent.placeholder_open": str(
     "ai",

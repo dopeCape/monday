@@ -28,6 +28,9 @@ export interface ComposeOverlayProps {
   onClose: () => void;
   onSent: (sent: { sendId: string; runAt: string; draftId: string; later?: boolean }) => void;
   onError: (message: string) => void;
+  /** On its way out (the screen's exit hook): the scrim runs its leave, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function ComposeOverlay({
@@ -42,6 +45,8 @@ export function ComposeOverlay({
   onClose,
   onSent,
   onError,
+  leaving,
+  onLeft,
 }: ComposeOverlayProps) {
   const editor = useDraftEditor({ composer, draftId, initial, idleMs });
   const [showCc, setShowCc] = useState(initial.cc.length > 0);
@@ -123,6 +128,8 @@ export function ComposeOverlay({
         note={suggestion?.note ? { text: suggestion.note } : undefined}
         formatting={formatting}
         canSend={editor.canSend}
+        leaving={leaving}
+        onLeft={onLeft}
         onClose={() => void close()}
         onSend={() => void send()}
         onLater={() => setLater((l) => !l)}

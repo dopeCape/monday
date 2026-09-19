@@ -12,6 +12,8 @@ export interface SnoozePickerProps {
   now: Date;
   onSnooze: (until: Date) => void;
   onClose: () => void;
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 const STRING_KEY: Record<SnoozePreset, keyof Settings> = {
@@ -21,7 +23,14 @@ const STRING_KEY: Record<SnoozePreset, keyof Settings> = {
   "pick-a-time": "strings.inbox.snooze.pick_a_time",
 };
 
-export function SnoozePicker({ settings, now, onSnooze, onClose }: SnoozePickerProps) {
+export function SnoozePicker({
+  settings,
+  now,
+  onSnooze,
+  onClose,
+  leaving,
+  onLeft,
+}: SnoozePickerProps) {
   const [picking, setPicking] = useState(false);
   const knobs = snoozeKnobs(settings);
   const presets = settings["inbox.snooze_presets"];
@@ -56,6 +65,8 @@ export function SnoozePicker({ settings, now, onSnooze, onClose }: SnoozePickerP
       items={items}
       onPick={pick}
       onClose={onClose}
+      leaving={leaving}
+      onLeft={onLeft}
     >
       {picking ? (
         <div className="pop-pick">

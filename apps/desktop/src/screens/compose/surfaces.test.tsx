@@ -344,8 +344,8 @@ describe("send and undo", () => {
     await until(() => bar()?.textContent?.includes("Sending in 1s") === true);
     t += 1500;
     await until(() => elapsed === 1);
-    expect(bar()?.querySelector(".btn")).toBeNull();
-    expect(bar()?.textContent).toBe("Sending");
+    // On its way: the bar has left (at once here, with no motion tokens on the page).
+    expect(bar()).toBeNull();
   });
 });
 

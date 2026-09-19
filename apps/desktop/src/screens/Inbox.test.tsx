@@ -3,7 +3,7 @@
 // DOM out. Mounted under a StaticShell over the fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { PartialSettings, Thread } from "@monday/shared";
+import type { Message, PartialSettings, Thread } from "@monday/shared";
 import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
@@ -48,6 +48,7 @@ function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
       watchMessages: inbox.watchMessages,
       openThread: inbox.openThread,
       brief: inbox.brief,
+      unavailable: inbox.unavailable,
       requestBrief: inbox.requestBrief,
       attachmentBytes: inbox.attachmentBytes,
       archive: wrap("archive"),
@@ -406,8 +407,73 @@ describe("keyboard triage", () => {
     expect(reader()).toBe("e1");
     expect(document.querySelector(".reader.sheet")).toBeNull();
   });
-});
 
+  test("the split list with nothing to open shows the empty reader with the move keys", async () => {
+    await mount({ inbox: fixtureInbox([]) }, { "layout.list": "split" });
+    expect(document.querySelector(".reader .empty h3")?.textContent).toBe("Nothing open");
+    expect(document.querySelector(".reader .empty p")?.textContent).toBe(
+      "Pick a conversation, or use J and K.",
+    );
+    expect([...document.querySelectorAll(".reader .empty kbd")].map((k) => k.textContent)).toEqual([
+      "J",
+      "K",
+    ]);
+  });
+
+  test("bodies missing for a reason say so in plain words, and come back online", async () => {
+    const base = fixtureInbox();
+    let why: "offline" | "locked" | "failed" | null = "offline";
+    let opened = 0;
+    // Stable snapshots, as the seam promises: the same array until something changes.
+    const bare = new Map<string, readonly Message[]>();
+    const inbox: InboxData = {
+      ...base,
+      messages: (id) => {
+        let list = bare.get(id);
+        if (!list) {
+          list = base.messages(id).map(({ bodyText: _b, ...m }) => m);
+          bare.set(id, list);
+        }
+        return list;
+      },
+      unavailable: () => why,
+      openThread: async () => {
+        opened += 1;
+      },
+    };
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    const render = (online: boolean) =>
+      act(async () =>
+        r.render(
+          <StaticShell settings={{ "ai.level": "automate" }}>
+            <Inbox
+              inbox={inbox}
+              now={new Date(2026, 8, 16, 10, 0)}
+              initialOpen="e1"
+              online={online}
+              timing={{ collapse: 0, toast: 60_000 }}
+            />
+          </StaticShell>,
+        ),
+      );
+    await render(false);
+    const line = () => document.querySelector(".reader .msg-body .faint")?.textContent;
+    expect(line()).toBe("Message text will load when you are back online");
+    // Back online: the screen opens the Thread again for what the Cache lacks.
+    const before = opened;
+    await render(true);
+    expect(opened).toBe(before + 1);
+    why = "locked";
+    await render(true);
+    expect(line()).toBe("Message text is unavailable while the server is locked");
+    why = "failed";
+    await render(false);
+    expect(line()).toBe("Message text could not be loaded. Open the thread again to retry");
+  });
+});
 describe("multi-select and batches", () => {
   test("X toggles rows into the selection and Shift-J extends it", async () => {
     await mount();

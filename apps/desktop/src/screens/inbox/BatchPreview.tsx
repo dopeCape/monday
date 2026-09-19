@@ -12,6 +12,9 @@ export interface BatchPreviewProps {
   cancelLabel: string;
   onApply: () => void;
   onCancel: () => void;
+  /** On its way out (the screen's exit hook): keys are let go, the scrim runs its leave, then onLeft. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function BatchPreview({
@@ -21,8 +24,11 @@ export function BatchPreview({
   cancelLabel,
   onApply,
   onCancel,
+  leaving,
+  onLeft,
 }: BatchPreviewProps) {
   useEffect(() => {
+    if (leaving) return;
     const on = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -39,10 +45,10 @@ export function BatchPreview({
     // Capture: the list keymap on the window must not see these keys.
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
-  }, [onApply, onCancel]);
+  }, [onApply, onCancel, leaving]);
 
   return (
-    <Scrim onClose={onCancel}>
+    <Scrim onClose={onCancel} leaving={leaving} onLeft={onLeft}>
       <div className="batch" role="dialog" aria-label={title}>
         <div className="batch-h">{title}</div>
         <div className="batch-list">
