@@ -100,6 +100,9 @@ _Avoid_: fallback calendar, offline calendar
 monday's single assistant persona, present in every Workspace. It can search, draft, send, delete, forward, reroute, change settings, and author Workflows and Groups.
 _Avoid_: AI, assistant, copilot, bot
 
+**AI level**:
+The user's choice of how much AI monday does, made on onboarding's first screen and changeable at any time: `off` (just mail: no agent bar, Briefs, routing, Workflows or model calls), `assist` (the agent bar and Briefs on open, nothing runs unasked), `automate` (routing, background Briefs and Workflows too). Setting `ai.level`. Lowering it disables, never deletes.
+
 **Runtime**:
 Where the Agent's model calls execute. There are two kinds.
 

@@ -29,6 +29,7 @@ Behaviors a tester can check. The settings schema lives in `packages/shared` and
 - Global thresholds, re-evaluation policy and lookback.
 
 ### AI and agent
+- The three level cards first (`ai.level`: just mail, mail with an assistant, mail that sorts and acts for me), exactly as onboarding shows them; the rest of this section is hidden under `off` and the automation parts under `assist`.
 - Runtime mode: Local CLI or Hosted, with the detected CLIs and their status, and the Hosted providers with key state.
 - Per provider: main and fast Roles, the "Let the server use this key" switch with its one-line threat model, and the key itself (add, replace, remove; never displayed).
 - Task-to-Role map with an exact-model override per Task, and effort per Task.
