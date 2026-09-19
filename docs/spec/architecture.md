@@ -51,9 +51,9 @@ All body-derived columns are ciphertext under envelope encryption: per-message d
 - `groups` (workspace, parent, name, rule sentence, predicate json, prompt_enc, thresholds) and `examples`
 - `section_rules` (workspace, name, order, rule as above)
 - `brief_policy` (workspace, rule as above, overrides, custom prompt)
-- `workflows` (workspace, document json, version, enabled, placement) and `workflow_versions`, `runs`, `run_steps`, `standing_approvals`
+- `workflows` (workspace, name, enabled, current version, standing approvals as step ids) and `workflow_versions` (one immutable document per version), `workflow_runs` (workflow, version, status, trigger, thread, current step, the waiting Activity row, the user's decision, the Steps' outputs for later templates) and `workflow_run_steps` (one row per Step's outcome, with the Activity row it ran as); a Run is a chain of `workflow-step` Jobs, arrivals and Thread events enter as `workflow-trigger` Jobs, schedules and silence checks are `workflow-schedule` Jobs that re-arm at the next cron minute
 - `sessions` (workspace, runtime, title, developer mode) and `session_events` (the transcript, in order), plus the LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) under the `langgraph` schema, created and versioned by the checkpointer's own setup right after our migrations at boot
-- `activity` (workspace, actor, tool, input summary, approval, result, undo ref, ts)
+- `activity` (workspace, actor, tool, input summary, approval, result, undo ref, ts; the session or run it belongs to, so a Workflow Step's Tool call is the Run's ledger entry)
 - `settings` (scope global or device, key, value json) and `devices` (token hash, name, last seen, cache key)
 - `jobs` (class, needs, payload, lease, attempts, run_at) and `heartbeats` (server id, mode, ts)
 - `drafts` (thread nullable, workspace, body_enc, blobs, provider draft id) and `scheduled_sends`
@@ -71,7 +71,7 @@ One HTTP JSON API on the Server, typed routes, a generated client in `packages/s
 - `/threads`, `/messages`, `/attachments`, `/labels`, `/tags`: read plus the write intents (archive, snooze, star, read, move, tag).
 - `/drafts`, `/send` (schedules a send Job), `/scheduled`.
 - `/groups`, `/sections`, `/routing/rerun`, `/routing/decisions`.
-- `/workflows`, `/workflows/:id/versions`, `/runs`, `/runs/:id/retry`, `/runs/:id/approve`.
+- `/workflows`, `/workflows/:id` (PUT is a new version), `/workflows/:id/versions/:n`, `/workflows/:id/enable`, `/workflows/:id/dry-run`, `/workflows/:id/run`, `/workflows/:id/approvals` (a Standing approval on a Step), `/workflows/runs`, `/workflows/runs/:id`, `/workflows/runs/:id/activity`, `/workflows/runs/:id/approvals` (answers a paused Run and resumes its Job).
 - `/sessions`, `/sessions/:id/turns` (the turn streams its events over SSE on the POST itself), `/sessions/:id/approvals/:activityId`, `/activity`, `/activity/:id/undo`, `/agent/tools`.
 - `/calendar/events`, `/calendar/invites/:id/rsvp`.
 - `/settings`, `/devices`, `/pair`, `/credentials`.
