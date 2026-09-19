@@ -187,11 +187,7 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
   const s = shell.settings;
   const repo = s["server.deploy_repo"];
   return (
-    <Card
-      title={s["strings.server.upgrade.title"]}
-      block
-      attrs={{ "data-panel": "upgrade" }}
-    >
+    <Card title={s["strings.server.upgrade.title"]} block attrs={{ "data-panel": "upgrade" }}>
       <div className="upgrade-cards">
         {PLATFORMS.map((p) => {
           const link = deployLink(p, repo);
