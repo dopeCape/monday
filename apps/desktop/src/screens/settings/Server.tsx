@@ -15,7 +15,7 @@ import {
   type EnvVar,
   type Settings,
 } from "@monday/shared";
-import { Btn, Input, SettingsField, Tag } from "@monday/ui";
+import { Btn, Input, Tag } from "@monday/ui";
 import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import {
   ApiError,
@@ -32,6 +32,7 @@ import {
 } from "../../platform/cloud.ts";
 import { platform } from "../../platform/tauri.ts";
 import { useShell } from "../../shell/Shell.tsx";
+import { Card } from "./render.tsx";
 import { fill } from "./wizard.ts";
 
 export interface ServerProps {
@@ -115,9 +116,9 @@ export function Server({
   const showServer = part !== "cloud";
   const showCloud = part !== "server";
   return (
-    <div data-panel={part ?? "server"}>
+    <div className="stack" data-panel={part ?? "server"}>
       {showServer ? (
-        <SettingsField label={s["strings.server.talking_to"]} hint={target}>
+        <Card title={s["strings.server.talking_to"]} hint={target} attrs={{ "data-panel": "mode" }}>
           <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
             {healthy === false ? s["strings.server.health.down"] : modeLabel}
           </Tag>
@@ -129,7 +130,7 @@ export function Server({
           >
             {s["strings.server.check"]}
           </Btn>
-        </SettingsField>
+        </Card>
       ) : null}
 
       {showCloud && topology === "sidecar" && !shell.cloud ? (
@@ -186,9 +187,7 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
   const s = shell.settings;
   const repo = s["server.deploy_repo"];
   return (
-    <div className="sect">
-      <h3>{s["strings.server.upgrade.title"]}</h3>
-      <p>{s["strings.server.upgrade.intro"]}</p>
+    <Card title={s["strings.server.upgrade.title"]} block attrs={{ "data-panel": "upgrade" }}>
       <div className="upgrade-cards">
         {PLATFORMS.map((p) => {
           const link = deployLink(p, repo);
@@ -221,7 +220,7 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -276,10 +275,42 @@ function Move({ upgrade, onDone }: { upgrade: UpgradeStatus | null; onDone: () =
   };
 
   return (
-    <div className="sect">
-      <h3>{s["strings.server.move.title"]}</h3>
+    <Card
+      title={s["strings.server.move.title"]}
+      hint={s["strings.server.move.db_help"]}
+      block
+      attrs={{ "data-panel": "move" }}
+      foot={
+        <>
+          {copied ? (
+            <span className="ok">
+              {fill(s["strings.server.move.copied"], {
+                tables: copied.tables.length,
+                rows: copied.tables.reduce((n, t) => n + t.rows, 0),
+              })}
+            </span>
+          ) : null}
+          {exported ? (
+            <span className="ok">
+              {fill(s["strings.server.move.exported"], { path: exported.path })}.{" "}
+              {s["strings.server.move.export_help"]}
+            </span>
+          ) : null}
+          {error ? <span className="err">{error}</span> : null}
+          <span className="sp" />
+          {upgrade?.canExport ? (
+            <Btn sm disabled={busy} onClick={() => void exportDump()}>
+              {s["strings.server.move.export"]}
+            </Btn>
+          ) : null}
+          <Btn sm primary disabled={busy || !dbUrl.trim()} onClick={() => void copy()}>
+            {busy ? s["strings.server.move.copying"] : s["strings.server.move.copy"]}
+          </Btn>
+        </>
+      }
+    >
       <div className="wizard-fields">
-        <Field label={s["strings.server.move.db_url"]} help={s["strings.server.move.db_help"]}>
+        <Field label={s["strings.server.move.db_url"]}>
           {(id) => (
             <Input
               id={id}
@@ -291,33 +322,8 @@ function Move({ upgrade, onDone }: { upgrade: UpgradeStatus | null; onDone: () =
             />
           )}
         </Field>
-        <div className="wizard-action">
-          <Btn primary disabled={busy || !dbUrl.trim()} onClick={() => void copy()}>
-            {busy ? s["strings.server.move.copying"] : s["strings.server.move.copy"]}
-          </Btn>
-          {upgrade?.canExport ? (
-            <Btn disabled={busy} onClick={() => void exportDump()}>
-              {s["strings.server.move.export"]}
-            </Btn>
-          ) : null}
-        </div>
-        {copied ? (
-          <div className="wizard-check ok">
-            {fill(s["strings.server.move.copied"], {
-              tables: copied.tables.length,
-              rows: copied.tables.reduce((n, t) => n + t.rows, 0),
-            })}
-          </div>
-        ) : null}
-        {exported ? (
-          <div className="wizard-check ok">
-            {fill(s["strings.server.move.exported"], { path: exported.path })}.{" "}
-            {s["strings.server.move.export_help"]}
-          </div>
-        ) : null}
-        {error ? <div className="wizard-check bad">{error}</div> : null}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -393,13 +399,59 @@ function Connect({
   };
 
   return (
-    <div className="sect">
-      <h3>{s["strings.server.connect.title"]}</h3>
+    <Card
+      title={s["strings.server.connect.title"]}
+      hint={
+        shell.cloud
+          ? fill(s["strings.server.connect.done"], { host: hostOf(shell.cloud.baseUrl) })
+          : s["strings.server.connect.code_help"]
+      }
+      block
+      attrs={{ "data-panel": "connect" }}
+      foot={
+        <>
+          {confirm ? (
+            <span>{fill(s["strings.server.connect.confirm"], { code: confirm.code })}</span>
+          ) : null}
+          {attach.done ? <span className="ok">{s["strings.server.connect.restart"]}</span> : null}
+          {error ? <span className="err">{error}</span> : null}
+          <span className="sp" />
+          {shell.cloud ? (
+            <>
+              {shell.sidecar?.running ? (
+                <Btn
+                  sm
+                  primary
+                  disabled={busy || !attach.dbUrl.trim()}
+                  onClick={() => void doAttach()}
+                >
+                  {s["strings.server.connect.attach"]}
+                </Btn>
+              ) : null}
+              <Btn
+                sm
+                onClick={() => {
+                  void shell.setCloud(null).then(onDone);
+                }}
+              >
+                {s["strings.server.connect.forget"]}
+              </Btn>
+            </>
+          ) : (
+            <Btn
+              sm
+              primary
+              disabled={busy || !url.trim() || !code.trim()}
+              onClick={() => void connect()}
+            >
+              {busy ? s["strings.server.connect.connecting"] : s["strings.server.connect.button"]}
+            </Btn>
+          )}
+        </>
+      }
+    >
       {shell.cloud ? (
         <div className="wizard-fields">
-          <div className="wizard-check ok">
-            {fill(s["strings.server.connect.done"], { host: hostOf(shell.cloud.baseUrl) })}
-          </div>
           {shell.sidecar?.running ? (
             <Field
               label={s["strings.server.connect.attach"]}
@@ -417,24 +469,6 @@ function Connect({
               )}
             </Field>
           ) : null}
-          <div className="wizard-action">
-            {shell.sidecar?.running ? (
-              <Btn primary disabled={busy || !attach.dbUrl.trim()} onClick={() => void doAttach()}>
-                {s["strings.server.connect.attach"]}
-              </Btn>
-            ) : null}
-            <Btn
-              onClick={() => {
-                void shell.setCloud(null).then(onDone);
-              }}
-            >
-              {s["strings.server.connect.forget"]}
-            </Btn>
-          </div>
-          {attach.done ? (
-            <div className="wizard-check ok">{s["strings.server.connect.restart"]}</div>
-          ) : null}
-          {error ? <div className="wizard-check bad">{error}</div> : null}
         </div>
       ) : (
         <div className="wizard-fields">
@@ -450,10 +484,7 @@ function Connect({
               />
             )}
           </Field>
-          <Field
-            label={s["strings.server.connect.code"]}
-            help={s["strings.server.connect.code_help"]}
-          >
+          <Field label={s["strings.server.connect.code"]}>
             {(id) => (
               <Input
                 id={id}
@@ -464,23 +495,8 @@ function Connect({
               />
             )}
           </Field>
-          <div className="wizard-action">
-            <Btn
-              primary
-              disabled={busy || !url.trim() || !code.trim()}
-              onClick={() => void connect()}
-            >
-              {busy ? s["strings.server.connect.connecting"] : s["strings.server.connect.button"]}
-            </Btn>
-          </div>
-          {confirm ? (
-            <div className="wizard-check checking">
-              {fill(s["strings.server.connect.confirm"], { code: confirm.code })}
-            </div>
-          ) : null}
-          {error ? <div className="wizard-check bad">{error}</div> : null}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

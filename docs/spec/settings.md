@@ -8,6 +8,9 @@ Behaviors a tester can check. The settings schema lives in `packages/shared` and
 - A control whose key is set in the Config file is Pinned: locked, showing "set in monday.toml" with the file value. Hovering shows the line. The Agent explains and offers to edit the file only after an explicit yes.
 - Changing a control writes the Setting through the Store and applies at once. Undo is available from the toast.
 - Invalid Config file lines show at the top of Appearance as warnings with line numbers and a "Fix with monday" button.
+- Every control is a card with its label, help, the control, and a footer with the scope (per device or every device), the Pinned line, the default with Reset when the value differs, and any validation error. Danger actions (remove, revoke, delete) ask inline before they run.
+- A search field at the top of the page finds Settings and panels by label, help, key, option labels and section or group names; results are the same cards grouped by section, with "Show in section" to jump to the card. `settings.search_key` focuses it; Escape clears it.
+- The right-hand "On this page" index lists the current section's groups and follows the scroll position; it hides under `settings.index_min_width`.
 
 ## Sections
 

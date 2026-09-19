@@ -1,4 +1,4 @@
-// Settings page pieces: a labelled field row and a palette swatch.
+// Settings page pieces: a settings card, a palette swatch and the choice cards.
 import { PlusIcon } from "@phosphor-icons/react";
 import type { CSSProperties, ReactNode } from "react";
 import { cx } from "../format.ts";
@@ -13,17 +13,32 @@ export interface SettingsFieldProps {
   hint?: string | undefined;
   /** The control on the right: a Seg, a Switch, a Btn, a Tag. */
   children?: ReactNode | undefined;
+  /** A wide control that sits under the text instead of beside it. */
+  block?: boolean | undefined;
+  /** The secondary line under the card: the scope, a default, an error. */
+  foot?: ReactNode | undefined;
   className?: string | undefined;
 }
 
-export function SettingsField({ label, hint, children, className }: SettingsFieldProps) {
+/** One settings card: title and hint on the left, the control on the right, a footer line. */
+export function SettingsField({
+  label,
+  hint,
+  children,
+  block,
+  foot,
+  className,
+}: SettingsFieldProps) {
   return (
-    <div className={cx("field", className)}>
-      <div className="l">
-        <b>{label}</b>
-        {hint ? <span>{hint}</span> : null}
+    <div className={cx("scard", block && "block", className)}>
+      <div className="scard-main">
+        <div className="scard-text">
+          <b className="scard-title">{label}</b>
+          {hint ? <span className="scard-hint">{hint}</span> : null}
+        </div>
+        {children ? <div className="scard-ctl">{children}</div> : null}
       </div>
-      {children}
+      {foot ? <div className="scard-foot">{foot}</div> : null}
     </div>
   );
 }

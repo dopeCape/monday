@@ -24,7 +24,7 @@ import {
   useContext,
   useEffect,
   useId,
-  useReducer,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -54,6 +54,7 @@ import {
   suggestedTopic,
   targetMinutes,
   validationKey,
+  type WizardAction,
   type WizardProvider,
   type WizardState,
 } from "./wizard.ts";
@@ -65,6 +66,8 @@ export interface AddAccountProps {
   initial?: AddAccountView | undefined;
   onAdded?: ((account: AccountView) => void) | undefined;
   onCancel?: (() => void) | undefined;
+  /** Done after an Account was added; back to the picker when absent. */
+  onDone?: (() => void) | undefined;
   /** Test seams: default to the Shell's api and the platform's browser opener. */
   api?: Api | undefined;
   openExternal?: ((url: string) => Promise<void>) | undefined;
@@ -76,15 +79,91 @@ export interface AddAccountProps {
   log?: ((line: string) => void) | undefined;
 }
 
+/** What the JMAP form holds; kept here so Back to the picker keeps it. */
+interface JmapDraft {
+  address: string;
+  sessionUrl: string;
+  token: string;
+}
+
+/** What the IMAP form holds; kept here so Back to the picker keeps it. */
+interface ImapDraft {
+  address: string;
+  password: string;
+  discovery: Discovery | null;
+  imap: HostPort;
+  smtp: HostPort;
+  username: string;
+}
+
 export function AddAccount(props: AddAccountProps) {
   const shell = useShell();
   const api = props.api ?? shell.api;
+  const now = props.now ?? (() => Date.now());
   const [view, setView] = useState<AddAccountView>(props.initial ?? "pick");
-  const [prefill, setPrefill] = useState<string>("");
+  const [done, setDone] = useState<AccountView | null>(null);
+  // Opened again at another provider: show that one, with a fresh outcome.
+  const initial = props.initial;
+  useEffect(() => {
+    if (initial) {
+      setView(initial);
+      setDone(null);
+    }
+  }, [initial]);
+  const [jmap, setJmap] = useState<JmapDraft>({
+    address: "",
+    sessionUrl: "https://api.fastmail.com/jmap/session",
+    token: "",
+  });
+  const [imap, setImap] = useState<ImapDraft>({
+    address: "",
+    password: "",
+    discovery: null,
+    imap: DEFAULT_IMAP,
+    smtp: DEFAULT_SMTP,
+    username: "",
+  });
+  const [wizards, setWizards] = useState<Record<WizardProvider, WizardState>>(() => ({
+    google: initialWizard("google", now()),
+    microsoft: initialWizard("microsoft", now()),
+  }));
+  const dispatchers = useMemo(() => {
+    const forProvider = (p: WizardProvider) => (action: WizardAction) =>
+      setWizards((w) => ({ ...w, [p]: reduceWizard(w[p], action) }));
+    return { google: forProvider("google"), microsoft: forProvider("microsoft") };
+  }, []);
   const s = shell.settings;
   const openExternal =
     props.openExternal ?? (async (url: string) => (await platform()).openExternal(url));
+  const finish = props.onDone ?? (() => setView("pick"));
+  // Opened straight at a provider from the Connect cards: Back leaves to them, not to an inner picker.
+  const back = props.initial && props.onCancel ? props.onCancel : () => setView("pick");
+  const added = (account: AccountView) => {
+    setDone(account);
+    props.onAdded?.(account);
+  };
 
+  if (done) {
+    return (
+      <div className="wizard" data-step="done">
+        <div className="wizard-step">
+          <div className="wizard-done">
+            <b>
+              <CheckCircleIcon /> {fill(s["strings.accounts.added"], { address: done.address })}
+            </b>
+          </div>
+        </div>
+        <div className="wizard-foot">
+          <div />
+          <div>
+            <Btn primary onClick={finish}>
+              {s["strings.accounts.wizard.done"]}
+            </Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (view === "pick") {
     return (
       <>
@@ -126,19 +205,17 @@ export function AddAccount(props: AddAccountProps) {
     );
   }
   if (view === "jmap") {
-    return <JmapForm api={api} onAdded={props.onAdded} onBack={() => setView("pick")} />;
+    return <JmapForm api={api} draft={jmap} onDraft={setJmap} onAdded={added} onBack={back} />;
   }
   if (view === "imap") {
     return (
       <ImapForm
         api={api}
-        initialAddress={prefill}
-        onAdded={props.onAdded}
-        onBack={() => setView("pick")}
-        onOAuth={(issuer, address) => {
-          setPrefill(address);
-          setView(issuer);
-        }}
+        draft={imap}
+        onDraft={setImap}
+        onAdded={added}
+        onBack={back}
+        onOAuth={(issuer) => setView(issuer)}
       />
     );
   }
@@ -146,15 +223,22 @@ export function AddAccount(props: AddAccountProps) {
     <Wizard
       key={view}
       provider={view}
+      state={wizards[view]}
+      dispatch={dispatchers[view]}
       api={api}
       openExternal={openExternal}
-      now={props.now ?? (() => Date.now())}
+      now={now}
       validateDebounceMs={props.validateDebounceMs ?? 400}
       pollMs={props.pollMs ?? 500}
       log={props.log ?? ((line) => console.debug(line))}
       onAdded={props.onAdded}
-      onBack={() => setView("pick")}
-      onEscape={() => setView("imap")}
+      onBack={back}
+      onDone={finish}
+      onEscape={() => {
+        // The escape is consumed: coming back to this wizard later starts where it left off.
+        setWizards((w) => ({ ...w, [view]: { ...w[view], escaped: false } }));
+        setView("imap");
+      }}
     />
   );
 }
@@ -198,17 +282,22 @@ function errorMessage(error: unknown): string {
 
 function JmapForm({
   api,
+  draft,
+  onDraft,
   onAdded,
   onBack,
 }: {
   api: Api;
-  onAdded: ((account: AccountView) => void) | undefined;
+  draft: JmapDraft;
+  onDraft: (next: JmapDraft) => void;
+  onAdded: (account: AccountView) => void;
   onBack: () => void;
 }) {
   const s = useShell().settings;
-  const [address, setAddress] = useState("");
-  const [sessionUrl, setSessionUrl] = useState("https://api.fastmail.com/jmap/session");
-  const [token, setToken] = useState("");
+  const { address, sessionUrl, token } = draft;
+  const setAddress = (address: string) => onDraft({ ...draft, address });
+  const setSessionUrl = (sessionUrl: string) => onDraft({ ...draft, sessionUrl });
+  const setToken = (token: string) => onDraft({ ...draft, token });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const connect = async () => {
@@ -221,7 +310,7 @@ function JmapForm({
         auth: { kind: "token", token: token.trim() },
         endpoint: { kind: "jmap", sessionUrl: sessionUrl.trim() },
       });
-      onAdded?.(account);
+      onAdded(account);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -231,7 +320,7 @@ function JmapForm({
   return (
     <div className="wizard">
       <div className="wizard-head">
-        <h1>{s["strings.accounts.pick.fastmail"]}</h1>
+        <h1 className="wizard-title">{s["strings.accounts.pick.fastmail"]}</h1>
       </div>
       <div className="wizard-step">
         <p className="wizard-sentence">{s["strings.accounts.jmap.help"]}</p>
@@ -273,24 +362,25 @@ const DEFAULT_SMTP: HostPort = { host: "", port: 465, tls: "tls" };
 
 function ImapForm({
   api,
-  initialAddress,
+  draft,
+  onDraft,
   onAdded,
   onBack,
   onOAuth,
 }: {
   api: Api;
-  initialAddress: string;
-  onAdded: ((account: AccountView) => void) | undefined;
+  draft: ImapDraft;
+  onDraft: (next: ImapDraft) => void;
+  onAdded: (account: AccountView) => void;
   onBack: () => void;
   onOAuth: (issuer: OAuthProvider, address: string) => void;
 }) {
   const s = useShell().settings;
-  const [address, setAddress] = useState(initialAddress);
-  const [password, setPassword] = useState("");
-  const [discovery, setDiscovery] = useState<Discovery | null>(null);
-  const [imap, setImap] = useState<HostPort>(DEFAULT_IMAP);
-  const [smtp, setSmtp] = useState<HostPort>(DEFAULT_SMTP);
-  const [username, setUsername] = useState("");
+  const { address, password, discovery, imap, smtp, username } = draft;
+  const patch = (next: Partial<ImapDraft>) => onDraft({ ...draft, ...next });
+  const setPassword = (password: string) => patch({ password });
+  const setImap = (imap: HostPort) => patch({ imap });
+  const setSmtp = (smtp: HostPort) => patch({ smtp });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -299,13 +389,10 @@ function ImapForm({
     setError(null);
     try {
       const found = await api.accounts.discover(address.trim());
-      setDiscovery(found);
       if (found.kind === "found") {
-        setImap(found.imap);
-        setSmtp(found.smtp);
-        setUsername(found.username);
+        patch({ discovery: found, imap: found.imap, smtp: found.smtp, username: found.username });
       } else {
-        setUsername(address.trim());
+        patch({ discovery: found, username: address.trim() });
       }
     } catch (e) {
       setError(errorMessage(e));
@@ -323,7 +410,7 @@ function ImapForm({
         auth: { kind: "password", user: username || address.trim(), password },
         endpoint: { kind: "imap", imap, smtp },
       });
-      onAdded?.(account);
+      onAdded(account);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -339,7 +426,7 @@ function ImapForm({
   return (
     <div className="wizard">
       <div className="wizard-head">
-        <h1>{s["strings.accounts.pick.imap"]}</h1>
+        <h1 className="wizard-title">{s["strings.accounts.pick.imap"]}</h1>
       </div>
       <div className="wizard-step">
         <div className="wizard-fields">
@@ -347,10 +434,7 @@ function ImapForm({
             <div className="wizard-action">
               <FieldInput
                 value={address}
-                onChange={(e) => {
-                  setAddress(e.target.value);
-                  setDiscovery(null);
-                }}
+                onChange={(e) => patch({ address: e.target.value, discovery: null })}
               />
               <Btn disabled={busy || !address.includes("@")} onClick={() => void find()}>
                 {s["strings.accounts.imap.find"]}
@@ -475,6 +559,9 @@ function FieldInput(props: ComponentProps<typeof Input>) {
 
 interface WizardProps {
   provider: WizardProvider;
+  /** The step machine's state and dispatch, owned by AddAccount so Back to the picker keeps it. */
+  state: WizardState;
+  dispatch: (action: WizardAction) => void;
   api: Api;
   openExternal: (url: string) => Promise<void>;
   now: () => number;
@@ -483,13 +570,14 @@ interface WizardProps {
   log: (line: string) => void;
   onAdded: ((account: AccountView) => void) | undefined;
   onBack: () => void;
+  /** Done after the sign-in finished. */
+  onDone: () => void;
   onEscape: () => void;
 }
 
 export function Wizard(props: WizardProps) {
-  const { provider, api, now } = props;
+  const { provider, api, now, state, dispatch } = props;
   const s = useShell().settings;
-  const [state, dispatch] = useReducer(reduceWizard, provider, (p) => initialWizard(p, now()));
   const [copied, setCopied] = useState(false);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -521,12 +609,21 @@ export function Wizard(props: WizardProps) {
       }
     }, props.validateDebounceMs);
     return () => clearTimeout(timer);
-  }, [validatable, key, state.validation.status, provider, api, props.validateDebounceMs]);
+  }, [
+    validatable,
+    key,
+    state.validation.status,
+    provider,
+    api,
+    props.validateDebounceMs,
+    dispatch,
+  ]);
 
   // The IMAP escape hatch: the parent switches views once the reducer records it.
+  const onEscape = props.onEscape;
   useEffect(() => {
-    if (state.escaped) props.onEscape();
-  }, [state.escaped, props.onEscape]);
+    if (state.escaped) onEscape();
+  }, [state.escaped, onEscape]);
 
   // Done: measure and log so the 15 and 10 minute targets are checkable by hand.
   const finished = state.step === "done";
@@ -588,7 +685,7 @@ export function Wizard(props: WizardProps) {
   return (
     <div className="wizard" data-step={state.step}>
       <div className="wizard-head">
-        <h1>{title}</h1>
+        <h1 className="wizard-title">{title}</h1>
         {!finished ? (
           <span className="wizard-progress">
             {fill(s["strings.accounts.wizard.step_of"], { n, total })}
@@ -646,7 +743,7 @@ export function Wizard(props: WizardProps) {
             </Btn>
           ) : null}
           {finished ? (
-            <Btn primary onClick={props.onBack}>
+            <Btn primary onClick={props.onDone}>
               {s["strings.accounts.wizard.done"]}
             </Btn>
           ) : state.step === "signin" ? null : (

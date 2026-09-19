@@ -4,7 +4,7 @@
 // component. Every keystroke is answered from memory and the Cache; nothing
 // here waits on the network or a model.
 
-import type { Settings, Thread } from "@monday/shared";
+import { SETTING_SECTIONS, type Settings, type Thread } from "@monday/shared";
 import {
   type CommandItem,
   CommandPalette,
@@ -195,20 +195,16 @@ export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[
     icon: "settings",
     featured: true,
   });
-  for (const section of [
-    "accounts",
-    "appearance",
-    "routing",
-    "ai",
-    "workflows",
-    "server",
-    "shortcuts",
-    "about",
-  ]) {
+  out.push({
+    target: "settings:search",
+    label: t("strings.palette.nav.settings_search"),
+    icon: "search",
+  });
+  for (const section of SETTING_SECTIONS) {
     out.push({
       target: `settings:${section}`,
       label: fill(t("strings.palette.nav.settings_page"), {
-        name: section.charAt(0).toUpperCase() + section.slice(1),
+        name: t(`strings.settings.section.${section}`),
       }),
       icon: "settings",
     });
