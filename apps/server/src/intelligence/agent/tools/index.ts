@@ -1,6 +1,6 @@
 // The MCP tool server (ADR 0002): one catalog, exposed in-process to the
-// LangGraph loop now and over stdio and streamable HTTP for the Local
-// runtimes and external MCP later (slices 15 and 19). Approvals live here,
+// LangGraph loop and over stdio and streamable HTTP to the Local runtimes
+// (slice 15) and the external MCP server (slice 19). Approvals live here,
 // inside call(): a tool above the free tier, or a reversible batch above the
 // preview threshold, asks through `ask` before it applies. Every call is a
 // row in the Activity log from the moment it starts, and a call id already

@@ -6,7 +6,8 @@
 // Locked servers: storeContent and readContent throw LockedError, so a content
 // write or read while no root key is in memory fails before any row is
 // touched. Header-only operations (listThreads, setLabels, setTags, applyIntent)
-// work locked. Queueing content writes for a locked Cloud is a later slice.
+// work locked; a content write on a locked Cloud is refused, not queued: the
+// Sidecar, which always holds the key, syncs the bodies when it is next up.
 //
 // Changes feed: every write a client cares about appends a row to `changes`
 // through recordChange, inside the same transaction, and NOTIFYs the in-process
@@ -37,25 +38,50 @@ import type {
   Workspace,
 } from "@monday/shared";
 import { FIELD_GROUP_OF, resolveWrite } from "@monday/shared";
-import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableName,
+  gt,
+  gte,
+  inArray,
+  lt,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { CHANGES_CHANNEL, encodeNotice } from "../changes/bus.ts";
 import { CHUNK_BYTES } from "../crypto/aead.ts";
 import { type Keys, LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
 import {
+  accountCredentials,
   accounts,
   activity,
   attachments,
   blobChunks,
   blobs,
+  briefs,
   changes,
+  drafts,
+  events,
+  groups,
+  integrationSecrets,
+  invites,
   labels,
   messages,
   PARTICIPANTS_TEXT_SQL,
+  providerKeys,
+  sessionEvents,
+  sessions,
   tags,
   threadLabels,
   threads,
   threadTags,
+  voiceProfiles,
   workspaces,
 } from "../db/schema.ts";
 import { type ContentStore, createContentStore } from "./content.ts";
@@ -172,6 +198,10 @@ export interface ListThreadsOptions {
   includeArchived?: boolean;
   /** Restrict to these Thread ids. */
   ids?: Id[];
+  /** Only unread (true) or only read (false) Threads. */
+  unread?: boolean;
+  /** Only Threads whose last activity is before this moment (exclusive). */
+  before?: IsoDate;
 }
 
 export interface ThreadPage {
@@ -1279,6 +1309,10 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
       const conditions = [eq(threads.workspaceId, workspaceId), eq(threads.deleted, false)];
       if (!options.includeArchived) conditions.push(eq(threads.archived, false));
       if (options.section !== undefined) conditions.push(eq(threads.section, options.section));
+      if (options.unread !== undefined) conditions.push(eq(threads.unread, options.unread));
+      if (options.before !== undefined) {
+        conditions.push(lt(threads.lastActivity, new Date(options.before)));
+      }
       if (options.ids !== undefined) {
         if (options.ids.length === 0) return { threads: [], cursor: null };
         conditions.push(inArray(threads.id, options.ids));
@@ -1406,54 +1440,178 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
     async rotateWorkspaceKey(workspaceId) {
       return keys.rotateWorkspaceKey(workspaceId, async (tx, rewrap) => {
         let count = 0;
-        const scope = eq(threads.workspaceId, workspaceId);
-        for (const row of await tx
-          .select({ id: threads.id, key: threads.subjectKey })
-          .from(threads)
-          .where(scope)) {
-          await tx
-            .update(threads)
-            .set({ subjectKey: rewrap(row.key) })
-            .where(eq(threads.id, row.id));
-          count += 1;
+        // Every column that holds a data key wrapped under K_ws, table by table.
+        // A table missing here would go dark after a rotation, so the test
+        // pins this list against the schema's *_key columns.
+        for (const spec of REWRAP_SPECS) {
+          const rows = await tx
+            .select({ id: spec.id, ...Object.fromEntries(spec.keys.map((k, i) => [`k${i}`, k])) })
+            .from(spec.table)
+            .where(eq(spec.workspace, workspaceId));
+          for (const row of rows as Array<Record<string, Uint8Array | string | null>>) {
+            const sets: SQL[] = [];
+            spec.keys.forEach((column, i) => {
+              const wrapped = row[`k${i}`];
+              if (wrapped instanceof Uint8Array) {
+                sets.push(sql`${sql.identifier(column.name)} = ${rewrap(wrapped)}`);
+                count += 1;
+              }
+            });
+            if (sets.length === 0) continue;
+            await tx.execute(
+              sql`update ${spec.table} set ${sql.join(sets, sql`, `)} where ${spec.id} = ${row.id}`,
+            );
+          }
         }
-        for (const row of await tx
-          .select({ id: messages.id, bodyKey: messages.bodyKey, snippetKey: messages.snippetKey })
-          .from(messages)
-          .where(eq(messages.workspaceId, workspaceId))) {
-          await tx
-            .update(messages)
-            .set({ bodyKey: rewrap(row.bodyKey), snippetKey: rewrap(row.snippetKey) })
-            .where(eq(messages.id, row.id));
-          count += 2;
-        }
-        for (const row of await tx
-          .select({ id: attachments.id, textKey: attachments.textKey })
-          .from(attachments)
-          .where(eq(attachments.workspaceId, workspaceId))) {
-          if (!row.textKey) continue;
-          await tx
-            .update(attachments)
-            .set({ textKey: rewrap(row.textKey) })
-            .where(eq(attachments.id, row.id));
-          count += 1;
-        }
-        for (const row of await tx
-          .select({ id: blobs.id, key: blobs.key })
-          .from(blobs)
-          .where(eq(blobs.workspaceId, workspaceId))) {
-          await tx
-            .update(blobs)
-            .set({ key: rewrap(row.key) })
-            .where(eq(blobs.id, row.id));
-          count += 1;
-        }
+        // LangGraph's sealed checkpoint blobs carry their wrapped key inside the
+        // blob (intelligence/agent/checkpointer.ts): u16 length, the key, the envelope.
+        count += await rewrapCheckpointBlobs(tx, workspaceId, rewrap);
         return count;
       });
     },
   };
 
   return store;
+}
+
+interface RewrapSpec {
+  table: PgTable;
+  id: AnyPgColumn;
+  workspace: AnyPgColumn;
+  /** The columns holding a wrapped data key; nullable ones are skipped when null. */
+  keys: AnyPgColumn[];
+}
+
+/** Every wrapped data key in the schema, by table (docs/spec/architecture.md, "Data model"). */
+const REWRAP_SPECS: readonly RewrapSpec[] = [
+  { table: threads, id: threads.id, workspace: threads.workspaceId, keys: [threads.subjectKey] },
+  {
+    table: messages,
+    id: messages.id,
+    workspace: messages.workspaceId,
+    keys: [messages.bodyKey, messages.snippetKey],
+  },
+  {
+    table: attachments,
+    id: attachments.id,
+    workspace: attachments.workspaceId,
+    keys: [attachments.textKey],
+  },
+  { table: blobs, id: blobs.id, workspace: blobs.workspaceId, keys: [blobs.key] },
+  {
+    table: accountCredentials,
+    id: accountCredentials.id,
+    workspace: accountCredentials.workspaceId,
+    keys: [accountCredentials.key],
+  },
+  {
+    table: drafts,
+    id: drafts.id,
+    workspace: drafts.workspaceId,
+    keys: [drafts.subjectKey, drafts.bodyKey],
+  },
+  {
+    table: providerKeys,
+    id: providerKeys.provider,
+    workspace: providerKeys.workspaceId,
+    keys: [providerKeys.key],
+  },
+  {
+    table: integrationSecrets,
+    id: integrationSecrets.integration,
+    workspace: integrationSecrets.workspaceId,
+    keys: [integrationSecrets.key],
+  },
+  {
+    table: briefs,
+    id: briefs.threadId,
+    workspace: briefs.workspaceId,
+    keys: [briefs.bulletsKey, briefs.actionsKey],
+  },
+  {
+    table: voiceProfiles,
+    id: voiceProfiles.workspaceId,
+    workspace: voiceProfiles.workspaceId,
+    keys: [voiceProfiles.profileKey],
+  },
+  { table: groups, id: groups.id, workspace: groups.workspaceId, keys: [groups.promptKey] },
+  { table: events, id: events.id, workspace: events.workspaceId, keys: [events.contentKey] },
+  {
+    table: invites,
+    id: invites.id,
+    workspace: invites.workspaceId,
+    keys: [invites.titleKey, invites.icalKey],
+  },
+];
+
+/** The (table, column) pairs the rotation re-wraps, for the test that pins them to the schema. */
+export function rewrappedColumns(): string[] {
+  return REWRAP_SPECS.flatMap((spec) =>
+    spec.keys.map((k) => `${getTableName(spec.table)}.${k.name}`),
+  ).concat([
+    "session_events.event_key",
+    "langgraph.checkpoint_blobs.blob",
+    "langgraph.checkpoint_writes.blob",
+  ]);
+}
+
+/**
+ * Re-wraps the sealed checkpoint blobs of the Workspace's graph threads, and
+ * the transcript events of its Sessions. Rows in the clear (from before
+ * migration 0014) are left as they are.
+ */
+async function rewrapCheckpointBlobs(
+  tx: Tx,
+  workspaceId: string,
+  rewrap: (wrapped: Uint8Array) => Uint8Array,
+): Promise<number> {
+  let count = 0;
+  const transcript = await tx
+    .select({ seq: sessionEvents.seq, key: sessionEvents.eventKey })
+    .from(sessionEvents)
+    .innerJoin(sessions, eq(sessions.id, sessionEvents.sessionId))
+    .where(eq(sessions.workspaceId, workspaceId));
+  for (const row of transcript) {
+    if (!row.key) continue;
+    await tx
+      .update(sessionEvents)
+      .set({ eventKey: rewrap(row.key) })
+      .where(eq(sessionEvents.seq, row.seq));
+    count += 1;
+  }
+  for (const table of ["checkpoint_blobs", "checkpoint_writes"] as const) {
+    const exists = await tx.execute<{ n: number }>(
+      sql`select count(*)::int as n from information_schema.tables where table_schema = 'langgraph' and table_name = ${table}`,
+    );
+    if (Number(exists[0]?.n ?? 0) === 0) continue;
+    const rows = await tx.execute<{ ctid: string; blob: Uint8Array }>(
+      sql.raw(
+        `select ctid::text as ctid, blob from langgraph.${table} where type like 'monday-sealed+%' and blob is not null and ${mineSql(workspaceId)}`,
+      ),
+    );
+    for (const row of rows) {
+      const bytes = new Uint8Array(row.blob);
+      const keyLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(0);
+      const wrapped = bytes.slice(2, 2 + keyLength);
+      const fresh = rewrap(wrapped);
+      if (fresh.length !== keyLength) throw new RangeError("re-wrapped key changed length");
+      const next = new Uint8Array(bytes.length);
+      next.set(bytes.subarray(0, 2), 0);
+      next.set(fresh, 2);
+      next.set(bytes.subarray(2 + keyLength), 2 + keyLength);
+      await tx.execute(
+        sql`update ${sql.raw(`langgraph.${table}`)} set blob = ${next} where ctid = ${row.ctid}::tid`,
+      );
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** The SQL predicate for checkpoint rows of the Workspace's Sessions and Runs; the id is quoted. */
+function mineSql(workspaceId: string): string {
+  const quoted = `'${workspaceId.replaceAll("'", "''")}'`;
+  return `((split_part(thread_id, '#', 1) in (select id from sessions where workspace_id = ${quoted})) or (thread_id like 'run:%' and split_part(thread_id, ':', 2) in (select id from workflow_runs where workspace_id = ${quoted})))`;
 }
 
 /** Recomputes the counters a Thread derives from its Messages. */

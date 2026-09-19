@@ -1,4 +1,4 @@
-// The fake Provider: the seam every later slice tests against. An in-memory
+// The fake Provider: the seam every module above the Providers tests against. An in-memory
 // mailbox loaded from a fixture, a change log that gives it JMAP-like state
 // tokens (with cannotCalculateChanges when history is forgotten), a scripted
 // push stream, and control methods that play the part of another client:

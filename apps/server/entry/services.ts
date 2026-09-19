@@ -65,7 +65,12 @@ export async function createServices(options: ServicesOptions): Promise<Services
   const firstBoot = !(await createAuth({ db }).hasDevices());
   let setupCode = env.MONDAY_SETUP_CODE || null;
   if (!setupCode && firstBoot) setupCode = randomCode();
-  const auth = createAuth({ db, sidecarToken: env.MONDAY_SIDECAR_TOKEN || null, setupCode });
+  const auth = createAuth({
+    db,
+    sidecarToken: env.MONDAY_SIDECAR_TOKEN || null,
+    setupCode,
+    codeTtlMs: async () => (await readGlobalSetting(db, "server.pairing_code_minutes")) * 60_000,
+  });
   if (setupCode && firstBoot) log(`setup code for the first device: ${setupCode}`);
 
   const keys = createKeys(db);

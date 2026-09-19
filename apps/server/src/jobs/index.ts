@@ -54,6 +54,8 @@ export interface JobsOptions {
 }
 
 export interface Jobs {
+  /** Attempts a job gets before it is marked failed; a step that wants a last word compares `job.attempts` to it. */
+  readonly maxAttempts: number;
   enqueue(cls: string, payload: unknown, options?: EnqueueOptions): Promise<string>;
   claim(owner: string, canServe: string[], budgetMs: number): Promise<Job | null>;
   complete(id: string, owner: string): Promise<void>;
@@ -104,6 +106,7 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
   });
 
   const api: Jobs = {
+    maxAttempts,
     async enqueue(cls, payload, opts = {}) {
       const id = opts.id ?? crypto.randomUUID();
       await db

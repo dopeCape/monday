@@ -41,7 +41,7 @@ import {
 import { createProviderRegistry } from "../src/providers/index.ts";
 import { composeMime, parseMime } from "../src/providers/mime.ts";
 import { createSyncEngine, mirrorRows, type SyncEngine } from "../src/providers/sync.ts";
-import type { Provider, Session } from "../src/providers/types.ts";
+import { type Provider, ProviderError, type Session } from "../src/providers/types.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const SIDECAR_TOKEN = "per-launch-token";
@@ -80,6 +80,9 @@ const smallAccount: Account = { ...account, id: "acct-small", provider: "jmap" }
 const SMALL_LIMIT = 2_000;
 
 /** Wraps a Provider so every Session reports a small send limit. */
+/** While true, every send through the limited Provider fails like a dropped connection. */
+let networkDown = false;
+
 function withLimit(inner: Provider, maxSendBytes: number): Provider {
   return {
     kind: inner.kind,
@@ -88,6 +91,10 @@ function withLimit(inner: Provider, maxSendBytes: number): Provider {
       const limited: Session = {
         ...session,
         capabilities: () => ({ ...session.capabilities(), maxSendBytes }),
+        send: (mime, options) => {
+          if (networkDown) throw new ProviderError("connection reset", "network");
+          return session.send(mime, options);
+        },
       };
       return limited;
     },
@@ -646,6 +653,38 @@ describe("drafts and scheduled sends", () => {
       sends: ScheduledSend[];
     };
     expect(listed.sends[0]?.error).toMatchObject({ code: "too_large" });
+  });
+
+  test("a send whose Provider stays unreachable is marked failed once its retries are spent", async () => {
+    await drafts.save({
+      id: "draft-down",
+      workspaceId: smallWorkspaceId,
+      at: clock.now().toISOString(),
+      content: content({ subject: "while the network is down" }),
+    });
+    const scheduled = await drafts.schedule("draft-down", { sendId: "send-down", delaySeconds: 0 });
+    expect(scheduled.applied).toBe(true);
+    networkDown = true;
+    try {
+      // Every attempt but the last rethrows, so the Job retries with backoff and the send stays scheduled.
+      for (let attempt = 1; attempt < jobs.maxAttempts; attempt++) {
+        expect(await runDue()).toContain(DELIVER_STEP);
+        expect((await drafts.getSend("send-down")).status).toBe("scheduled");
+        expect((await jobs.get("send-down"))?.status).toBe("queued");
+        clock.advance(60_000);
+      }
+      // The last attempt records the failure instead of leaving the send scheduled forever.
+      expect(await runDue()).toContain(DELIVER_STEP);
+      const failed = await drafts.getSend("send-down");
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toMatchObject({ code: "failed", message: "connection reset" });
+      expect((await drafts.get("draft-down")).status).toBe("open");
+      expect((await jobs.get("send-down"))?.status).toBe("done");
+      // Cancel has nothing to do; a new send can be scheduled once the network is back.
+      expect((await drafts.cancel("send-down")).applied).toBe(false);
+    } finally {
+      networkDown = false;
+    }
   });
 
   test("a Draft the Provider holds is imported on sync and not mirrored back", async () => {

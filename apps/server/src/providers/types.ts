@@ -3,7 +3,7 @@
 // seam. An adapter is a Provider; connect() yields a Session that speaks the
 // wire protocol; the sync engine (sync.ts) turns Session events into Mailstore
 // writes and never sees a protocol detail. The fake under fake/ is the seam
-// every later slice tests against.
+// every module above the Providers tests against.
 //
 // Ids are the Provider's own: a JMAP Email id, an IMAP "path:uidvalidity:uid",
 // a Gmail message id. They are opaque to everyone but the adapter that minted

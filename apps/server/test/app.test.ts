@@ -248,23 +248,29 @@ describe("app", () => {
       peer.address = "203.0.113.9";
     });
 
-    test("settings: global and per-device scope, any JSON value", async () => {
+    test("settings: global and per-device scope, keys and values the schema accepts", async () => {
       const put = (key: string, body: unknown, token: string) =>
         app.request(`/settings/${key}`, { ...json(body, token), method: "PUT" });
 
-      expect((await put("theme.mode", { value: "dark" }, firstToken)).status).toBe(200);
+      expect((await put("appearance.mode", { value: "dark" }, firstToken)).status).toBe(200);
       expect(
-        (await put("layout.density", { value: "compact", scope: "device" }, firstToken)).status,
+        (await put("appearance.density", { value: "compact", scope: "device" }, firstToken)).status,
       ).toBe(200);
-      expect((await put("theme.mode", { value: "light" }, firstToken)).status).toBe(200);
-      expect((await put("nested", { value: { a: [1, 2, { b: null }] } }, firstToken)).status).toBe(
-        200,
-      );
+      expect((await put("appearance.mode", { value: "light" }, firstToken)).status).toBe(200);
+      expect((await put("appearance.font_size", { value: 15 }, firstToken)).status).toBe(200);
 
-      const bad = await put("theme.mode", { nope: 1 }, firstToken);
+      const bad = await put("appearance.mode", { nope: 1 }, firstToken);
       expect(bad.status).toBe(400);
-      const badScope = await put("theme.mode", { value: 1, scope: "galaxy" }, firstToken);
+      const badScope = await put("appearance.mode", { value: 1, scope: "galaxy" }, firstToken);
       expect(badScope.status).toBe(400);
+      // A key the schema does not know, and a value its type refuses (ADR 0004: the schema is the contract).
+      const unknown = await put("nested", { value: { a: [1] } }, firstToken);
+      expect(unknown.status).toBe(400);
+      expect(await unknown.json()).toEqual({ error: "unknown_key", key: "nested" });
+      const invalid = await put("appearance.mode", { value: "sepia" }, firstToken);
+      expect(invalid.status).toBe(400);
+      expect(((await invalid.json()) as { error: string }).error).toBe("invalid_value");
+      expect((await put("sync.body_window_days", { value: -3 }, firstToken)).status).toBe(400);
       const notJson = await app.request("/settings/x", {
         method: "PUT",
         headers: { authorization: `Bearer ${firstToken}`, "content-type": "application/json" },
@@ -274,20 +280,20 @@ describe("app", () => {
 
       const mine = await app.request("/settings", bearer(firstToken));
       expect(await mine.json()).toEqual({
-        global: { "theme.mode": "light", nested: { a: [1, 2, { b: null }] } },
-        device: { "layout.density": "compact" },
+        global: { "appearance.mode": "light", "appearance.font_size": 15 },
+        device: { "appearance.density": "compact" },
       });
 
       // The sidecar principal sees the same globals and its own device scope.
       peer.address = "127.0.0.1";
       const sidecar = await app.request("/settings", bearer(SIDECAR_TOKEN));
       expect(await sidecar.json()).toEqual({
-        global: { "theme.mode": "light", nested: { a: [1, 2, { b: null }] } },
+        global: { "appearance.mode": "light", "appearance.font_size": 15 },
         device: {},
       });
       peer.address = "203.0.113.9";
 
-      const del = await app.request("/settings/layout.density?scope=device", {
+      const del = await app.request("/settings/appearance.density?scope=device", {
         method: "DELETE",
         ...bearer(firstToken),
       });

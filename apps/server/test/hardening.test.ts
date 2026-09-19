@@ -14,6 +14,7 @@ import { createAuth } from "../src/auth/index.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys, type Keys } from "../src/crypto/keys.ts";
 import { sessionEvents, sessions, voiceProfiles } from "../src/db/schema.ts";
+import { createDrafts } from "../src/drafts/index.ts";
 import {
   createSealedCheckpointer,
   decodeSealed,
@@ -22,10 +23,11 @@ import {
   SEALED_TYPE_PREFIX,
   type SealedPostgresSaver,
 } from "../src/intelligence/agent/checkpointer.ts";
+import { createServerToolHost } from "../src/intelligence/agent/host.ts";
 import { createSessionStore } from "../src/intelligence/agent/sessions.ts";
 import { createIntelligence, type Intelligence } from "../src/intelligence/index.ts";
 import { createFakeChat, createFakeConverse } from "../src/intelligence/runtime/fake/index.ts";
-import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
+import { createMailstore, type Mailstore, rewrappedColumns } from "../src/mailstore/index.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const SIDECAR_TOKEN = "per-launch-token";
@@ -471,5 +473,133 @@ describe("transcripts and checkpoints under the envelope", () => {
     await db.handle.sql`insert into workflow_runs (id, workflow_id, workspace_id, version, trigger)
         values ('run-1', 'wf-1', ${workspaceId}, 1, '{"kind":"manual"}'::jsonb)`;
     expect(await resolve("run:run-1:3")).toBe(workspaceId);
+  });
+
+  test("the Agent's host lists Groups by name and filters Threads in the query", async () => {
+    const parent = await intelligence.routing.createGroup(workspaceId, {
+      name: "Hiring",
+      sentence: "candidates and interviews",
+    });
+    const child = await intelligence.routing.createGroup(workspaceId, {
+      name: "Candidates",
+      sentence: "applications",
+      parentId: parent.id,
+    });
+    const host = createServerToolHost({
+      db: db.handle.db,
+      mailstore: store,
+      drafts: createDrafts({ db: db.handle.db, mailstore: store }),
+      workspaceId,
+    });
+    expect(await host.listGroups()).toEqual([
+      { id: parent.id, name: "Hiring" },
+      { id: child.id, name: "Hiring / Candidates" },
+    ]);
+    const old = new Date(NOW.getTime() - 30 * 86_400_000).toISOString();
+    for (let i = 1; i <= 3; i++) {
+      await store.upsertThread({
+        workspaceId,
+        providerThreadId: `filter-${i}`,
+        subject: `Filter ${i}`,
+        participants: [{ name: "F", email: "f@example.test" }],
+        lastActivity: i === 1 ? old : NOW.toISOString(),
+        unread: i !== 3,
+        section: "fyi",
+      });
+    }
+    const unread = await host.listThreads({ limit: 10, section: "fyi", unread: true });
+    expect(unread.map((t) => t.subject).sort()).toEqual(["Filter 1", "Filter 2"]);
+    const read = await host.listThreads({ limit: 10, section: "fyi", unread: false });
+    expect(read.map((t) => t.subject)).toEqual(["Filter 3"]);
+    const older = await host.listThreads({
+      limit: 10,
+      section: "fyi",
+      olderThan: new Date(NOW.getTime() - 86_400_000).toISOString(),
+    });
+    expect(older.map((t) => t.subject)).toEqual(["Filter 1"]);
+    // The Mailstore answers the same filters directly, so the host never pages the whole list.
+    const page = await store.listThreads(workspaceId, {
+      limit: 10,
+      section: "fyi",
+      unread: true,
+      before: new Date(NOW.getTime() - 86_400_000).toISOString(),
+    });
+    expect(page.threads.map((t) => t.subject)).toEqual(["filter 1"]);
+    await intelligence.routing.deleteGroup(parent.id);
+  });
+
+  test("rotating the Workspace key re-wraps every envelope in the schema, checkpoints and transcripts included", async () => {
+    // Everything sealed so far: threads, a transcript, checkpoint blobs, the
+    // Voice profile, integration secrets, the shared provider key; plus a Draft.
+    const draftId = crypto.randomUUID();
+    const saved = await send(
+      `/drafts/${draftId}`,
+      {
+        workspace: workspaceId,
+        content: {
+          threadId: null,
+          kind: "new",
+          inReplyToMessageId: null,
+          to: [{ name: "Sam", email: "sam@example.test" }],
+          cc: [],
+          bcc: [],
+          subject: "Rotation",
+          bodyText: "still readable after the rotation",
+          bodyHtml: "<p>still readable after the rotation</p>",
+          attachments: [],
+        },
+      },
+      "PUT",
+    );
+    expect(saved.status).toBe(200);
+    await send("/integrations/notion", { workspace: workspaceId, token: "ntn-rotate" }, "PUT");
+
+    // The list the rotation walks is exactly the schema's wrapped-key columns.
+    const columns = await db.handle.sql<{ table_name: string; column_name: string }[]>`
+      select table_name, column_name from information_schema.columns
+      where table_schema = 'public' and data_type = 'bytea'
+        and (column_name like '%\_key' or column_name = 'key')
+        and not (table_name = 'workspace_keys')
+      order by 1, 2
+    `;
+    const expected = columns.map((c) => `${c.table_name}.${c.column_name}`);
+    const walked = rewrappedColumns().filter((c) => !c.startsWith("langgraph."));
+    expect([...walked].sort()).toEqual([...expected].sort());
+
+    const [before] = await db.handle.sql<{ blob: Uint8Array }[]>`
+      select blob from langgraph.checkpoint_blobs where type like 'monday-sealed+%' limit 1
+    `;
+    const result = await store.rotateWorkspaceKey(workspaceId);
+    expect(result.version).toBe(2);
+    expect(result.rewrapped).toBeGreaterThan(10);
+    const [after] = await db.handle.sql<{ blob: Uint8Array }[]>`
+      select blob from langgraph.checkpoint_blobs where type like 'monday-sealed+%' limit 1
+    `;
+    expect(Buffer.from(after?.blob ?? []).equals(Buffer.from(before?.blob ?? []))).toBe(false);
+
+    // Everything still opens under the new key.
+    const draft = (await (await request(`/drafts/${draftId}`)).json()) as { bodyText: string };
+    expect(draft.bodyText).toBe("still readable after the rotation");
+    expect(await intelligence.integrationSecrets.load("notion")).toEqual({ token: "ntn-rotate" });
+    expect(await intelligence.keys.load("anthropic")).toBe("sk-ant-shared");
+    const voice = (await (await request(`/voice?workspace=${workspaceId}`)).json()) as {
+      description: string;
+    };
+    expect(voice.description).toBe("Short and warm.");
+    const sessionsList = (await (await request(`/sessions?workspace=${workspaceId}`)).json()) as {
+      sessions: SessionSummary[];
+    };
+    const first = sessionsList.sessions.find((s) => s.title.includes("zebra"));
+    expect(first).toBeDefined();
+    const history = (await (await request(`/sessions/${first?.id}`)).json()) as {
+      events: AgentEvent[];
+    };
+    expect(history.events[0]?.kind).toBe("user");
+    const tuple = await checkpointer.getTuple({
+      configurable: { thread_id: first?.id ?? "", checkpoint_ns: "" },
+    });
+    expect(tuple?.checkpoint.channel_values.messages).toBeDefined();
+    // A second rotation walks the same rows again.
+    expect((await store.rotateWorkspaceKey(workspaceId)).rewrapped).toBe(result.rewrapped);
   });
 });

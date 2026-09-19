@@ -107,8 +107,17 @@ export interface Drafts {
   getSend(id: string): Promise<ScheduledSend>;
   /** The mirror step's body, for tests and the step. */
   mirror(draftId: string): Promise<"mirrored" | "unchanged" | "skipped">;
-  /** The deliver step's body: sends, or records the typed failure. */
-  deliver(sendId: string, jobId: string | null): Promise<ScheduledSend>;
+  /**
+   * The deliver step's body: sends, or records the typed failure. A transient
+   * Provider failure is rethrown so the Job retries, unless `lastAttempt`
+   * says the retries are spent, in which case the send is marked failed so
+   * the client stops waiting on it.
+   */
+  deliver(
+    sendId: string,
+    jobId: string | null,
+    options?: { lastAttempt?: boolean },
+  ): Promise<ScheduledSend>;
   registerSteps(jobs: Jobs): void;
   /** Turns a Provider draft the engine found into a Server Draft. */
   importProviderDraft(draft: ProviderDraft): Promise<Draft>;
@@ -663,7 +672,7 @@ export function createDrafts(options: DraftsOptions): Drafts {
       return "mirrored";
     },
 
-    async deliver(sendId, jobId) {
+    async deliver(sendId, jobId, deliverOptions = {}) {
       const send = await requireSend(db, sendId);
       if (send.status !== "scheduled") return projectSend(send);
       const row = await requireRow(db, send.draftId);
@@ -726,8 +735,10 @@ export function createDrafts(options: DraftsOptions): Drafts {
         }
         if (error instanceof LockedError) throw error;
         if (error instanceof ProviderError && (error.code === "network" || error.code === "auth")) {
-          // Transient: let the Job retry with backoff.
-          throw error;
+          // Transient: let the Job retry with backoff, until the retries are spent.
+          if (!deliverOptions.lastAttempt) throw error;
+          log(`send ${sendId} failed on its last attempt: ${error.message}`);
+          return fail({ code: "failed", message: error.message });
         }
         log(`send ${sendId} failed: ${error instanceof Error ? error.message : String(error)}`);
         return fail({
@@ -771,7 +782,9 @@ export function createDrafts(options: DraftsOptions): Drafts {
         return "done";
       });
       jobs.registerStep<{ sendId: string }>(DELIVER_STEP, async (job) => {
-        await api.deliver(job.payload.sendId, job.id);
+        await api.deliver(job.payload.sendId, job.id, {
+          lastAttempt: job.attempts >= jobs.maxAttempts,
+        });
         return "done";
       });
     },

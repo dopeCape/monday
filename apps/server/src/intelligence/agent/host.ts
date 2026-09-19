@@ -15,10 +15,10 @@ import type {
   ToolHost,
 } from "@monday/shared";
 import { defaultSettings, isSettingKey, type Settings } from "@monday/shared";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { LockedError } from "../../crypto/keys.ts";
 import type { Db } from "../../db/client.ts";
-import { settings as settingsTable, threads } from "../../db/schema.ts";
+import { groups, settings as settingsTable } from "../../db/schema.ts";
 import type { Drafts } from "../../drafts/index.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { NotFoundError } from "../../mailstore/index.ts";
@@ -101,27 +101,16 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
           .slice(0, filter.limit);
         return Promise.all(kept.map(summarize));
       }
-      const out: ThreadSummary[] = [];
-      let cursor: string | null = null;
-      // Pages of the list until the limit is met; the filters not in the index are applied here.
-      while (out.length < filter.limit) {
-        const page = await mailstore.listThreads(workspaceId, {
-          limit: 500,
-          cursor,
-          includeArchived: filter.includeArchived ?? false,
-          ...(filter.section !== undefined ? { section: filter.section } : {}),
-          ...(filter.group !== undefined ? { group: filter.group } : {}),
-        });
-        for (const t of page.threads) {
-          if (filter.unread !== undefined && t.unread !== filter.unread) continue;
-          if (filter.olderThan !== undefined && t.lastActivity >= filter.olderThan) continue;
-          out.push(await summarize(t));
-          if (out.length >= filter.limit) break;
-        }
-        if (!page.cursor) break;
-        cursor = page.cursor;
-      }
-      return out;
+      // Every filter is the query's: the list never walks a mailbox to find the few Threads that match.
+      const page = await mailstore.listThreads(workspaceId, {
+        limit: filter.limit,
+        includeArchived: filter.includeArchived ?? false,
+        ...(filter.section !== undefined ? { section: filter.section } : {}),
+        ...(filter.group !== undefined ? { group: filter.group } : {}),
+        ...(filter.unread !== undefined ? { unread: filter.unread } : {}),
+        ...(filter.olderThan !== undefined ? { before: filter.olderThan } : {}),
+      });
+      return Promise.all(page.threads.map(summarize));
     },
 
     async threadsById(ids) {
@@ -163,11 +152,22 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async listGroups() {
+      // The Groups table, not the ids Threads happen to carry: names are what the model reads.
       const rows = await db
-        .selectDistinct({ id: threads.groupId })
-        .from(threads)
-        .where(and(eq(threads.workspaceId, workspaceId), isNotNull(threads.groupId)));
-      return rows.flatMap((r) => (r.id ? [{ id: r.id, name: r.id }] : []));
+        .select({ id: groups.id, name: groups.name, parentId: groups.parentId })
+        .from(groups)
+        .where(eq(groups.workspaceId, workspaceId))
+        .orderBy(asc(groups.createdAt), asc(groups.id));
+      // Each Group in creation order, its Sub-groups right under it.
+      const out: Array<{ id: string; name: string }> = [];
+      for (const g of rows) {
+        if (g.parentId) continue;
+        out.push({ id: g.id, name: g.name });
+        for (const c of rows) {
+          if (c.parentId === g.id) out.push({ id: c.id, name: `${g.name} / ${c.name}` });
+        }
+      }
+      return out;
     },
 
     async listSections() {

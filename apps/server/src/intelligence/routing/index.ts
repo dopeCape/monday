@@ -828,8 +828,15 @@ export function createRouting(options: RoutingOptions): Routing {
       const children = await db.select().from(groups).where(eq(groups.parentId, groupId));
       const ids = [groupId, ...children.map((c) => c.id)];
       // Threads fall back: out of a deleted Sub-group to its parent, out of a Group to none.
+      // The move keeps the placement's actor, so a Thread routing placed stays
+      // routing's to place again; only a user's own placement stays the user's.
       const placed = await db
-        .select({ id: threads.id, groupId: threads.groupId, subgroupId: threads.subgroupId })
+        .select({
+          id: threads.id,
+          groupId: threads.groupId,
+          subgroupId: threads.subgroupId,
+          writes: threads.writes,
+        })
         .from(threads)
         .where(
           and(
@@ -839,7 +846,12 @@ export function createRouting(options: RoutingOptions): Routing {
         );
       for (const t of placed) {
         const leavesGroup = t.groupId !== null && ids.includes(t.groupId);
-        await move(t.id, leavesGroup ? null : t.groupId, null, "user");
+        await move(
+          t.id,
+          leavesGroup ? null : t.groupId,
+          null,
+          t.writes.placement?.by === "user" ? "user" : "automation",
+        );
       }
       await db
         .update(threadRoutes)
