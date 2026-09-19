@@ -4354,13 +4354,19 @@ button.prov {
   padding: 0 12px 4px;
 }
 
+/* The Setting (appearance.transitions) and the system preference both stop motion. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
+  :root {
+    --t-fast: 0ms;
+    --t-med: 0ms;
+    --t-slow: 0ms;
   }
+}
+:root[data-transitions="off"] *,
+:root[data-transitions="off"] *::before,
+:root[data-transitions="off"] *::after {
+  animation-duration: 0ms !important;
+  transition-duration: 0ms !important;
 }
 /* the CalDAV link form under Settings, Accounts, Meetings (slice 18) */
 .caldav-account {

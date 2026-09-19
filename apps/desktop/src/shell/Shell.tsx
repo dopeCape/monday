@@ -252,6 +252,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const density = settings["appearance.density"];
   const mode = settings["appearance.mode"];
   const palette = settings["appearance.palette"];
+  const transitions = settings["appearance.transitions"];
 
   useEffect(() => {
     const r = document.documentElement;
@@ -261,7 +262,9 @@ export function Shell({ children }: { children: ReactNode }) {
     r.dataset.nav = layout.nav;
     r.dataset.agent = layout.agent;
     r.dataset.list = layout.list;
-  }, [mode, palette, density, layout.nav, layout.agent, layout.list]);
+    // "auto" still honours the system's reduce-motion preference (tokens.css); "off" stops everything.
+    r.dataset.transitions = transitions ? "auto" : "off";
+  }, [mode, palette, density, layout.nav, layout.agent, layout.list, transitions]);
 
   // The Type Settings: the families as the font tokens, and the base size as a
   // scale over the density's sizes, so the Settings page itself follows them.

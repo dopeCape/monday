@@ -464,6 +464,16 @@ export const settingsSchema = {
     help: "The scale of text, icons and rows. Per device.",
   }),
 
+  "appearance.transitions": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "device",
+    section: "appearance",
+    group: "Layout",
+    label: "Transitions",
+    help: "Short movements when screens, panels and buttons change. Off makes every change instant; the system's reduce-motion preference also turns them off. Per device.",
+  }),
+
   /* Views */
   "views.list": setting({
     type: z.array(viewShape),

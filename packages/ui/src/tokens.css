@@ -42,9 +42,18 @@
   --agent-w: 360px;
   --rail-w: 56px;
 
+  /* Motion: every transition and animation reads these, so one attribute stops them all. */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --t-fast: 120ms;
   --t-med: 220ms;
+  --t-slow: 320ms;
+}
+
+:root[data-transitions="off"] {
+  --t-fast: 0ms;
+  --t-med: 0ms;
+  --t-slow: 0ms;
 }
 
 :root[data-density="compact"] {
