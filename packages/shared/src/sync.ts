@@ -3,13 +3,17 @@
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
 import type {
+  Attendee,
   DraftAttachment,
   DraftKind,
   DraftStatus,
+  EventStatus,
   Group,
   Id,
+  InviteMethod,
   IsoDate,
   Person,
+  RsvpResponse,
   ScheduledSendStatus,
   SendError,
   Thread,
@@ -152,6 +156,22 @@ export function isDraftIntentKind(kind: string): kind is DraftIntentKind {
   return (DRAFT_INTENT_KINDS as readonly string[]).includes(kind);
 }
 
+/* ------------------------------ Invite intents (slice 18) ------------------------------ */
+
+/**
+ * The Outbox intent that answers an Invite: the Store marks the Invite and its
+ * Event locally, the Server answers through the calendar API where one exists
+ * and by an iMIP REPLY Message otherwise (docs/research/calendar-apis.md).
+ */
+export type InviteIntentArgs = { kind: "invite.rsvp"; response: RsvpResponse };
+export type InviteIntent = InviteIntentArgs & IntentStamp & { inviteId: Id };
+
+export const INVITE_INTENT_KINDS: readonly InviteIntentArgs["kind"][] = ["invite.rsvp"];
+
+export function isInviteIntentKind(kind: string): kind is InviteIntentArgs["kind"] {
+  return (INVITE_INTENT_KINDS as readonly string[]).includes(kind);
+}
+
 /** What the Server answers a send.schedule with, so the countdown follows the Server clock. */
 export interface ScheduleResult extends IntentResult {
   sendId?: Id;
@@ -199,7 +219,56 @@ export type ChangeKind =
   | "send"
   | "brief"
   | "group"
-  | "decision";
+  | "decision"
+  | "event"
+  | "invite";
+
+/**
+ * An Event as the feed carries it (slice 18): times, attendees, link and
+ * status in the clear; title, description and location are content and
+ * stay behind GET /calendar/events/:id. `deleted` removes the row.
+ */
+export interface EventChange {
+  id: Id;
+  calendarId: Id;
+  providerId: string;
+  uid: string | null;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  timeZone: string | null;
+  organizer: Person | null;
+  attendees: Attendee[];
+  link: string | null;
+  status: EventStatus;
+  recurrence: string | null;
+  recurringEventId: string | null;
+  response: RsvpResponse | null;
+  createdByAgent: boolean;
+  updatedAt: IsoDate;
+  deleted: boolean;
+}
+
+/** An Invite as the feed carries it: everything the invite bar shows but the title, which is content. */
+export interface InviteChange {
+  id: Id;
+  messageId: Id;
+  threadId: Id;
+  eventId: Id | null;
+  method: InviteMethod;
+  uid: string;
+  sequence: number;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  organizer: Person | null;
+  attendees: Attendee[];
+  response: RsvpResponse;
+  byMail: boolean;
+  senderMismatch: boolean;
+  receivedAt: IsoDate;
+  deleted: boolean;
+}
 
 /** Thread headers as the feed carries them: no subject, no snippet (those are content). */
 export interface ThreadChange extends Thread {
@@ -303,7 +372,9 @@ export type ChangePayload =
   | { kind: "send"; payload: SendChange }
   | { kind: "brief"; payload: BriefChange }
   | { kind: "group"; payload: GroupChange }
-  | { kind: "decision"; payload: DecisionChange };
+  | { kind: "decision"; payload: DecisionChange }
+  | { kind: "event"; payload: EventChange }
+  | { kind: "invite"; payload: InviteChange };
 
 export type Change = ChangePayload & {
   seq: number;

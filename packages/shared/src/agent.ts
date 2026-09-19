@@ -4,11 +4,17 @@
 // the Server's tool server and a Device's ToolHost share one vocabulary.
 
 import type {
+  CalendarEvent,
+  CalendarInfo,
   Draft,
+  EventInput,
   Id,
+  Invite,
   IsoDate,
   LocalCli,
+  MeetingLinkKind,
   Person,
+  RsvpResponse,
   Runtime,
   Thread,
   Tier,
@@ -61,6 +67,12 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   list_workflow_runs: "read",
   approve_workflow_step: "leaves_mailbox",
   run_workflow: "reversible",
+  // The calendar tools (slice 18): an invite goes out, so scheduling and answering ask first.
+  list_events: "read",
+  schedule_event: "leaves_mailbox",
+  rsvp: "leaves_mailbox",
+  update_event: "leaves_mailbox",
+  delete_event: "destructive",
 };
 
 /** The glossary Tier a tool tier renders as. */
