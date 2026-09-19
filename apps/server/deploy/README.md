@@ -22,7 +22,7 @@ Every Cloud mode reads these (see the header of `entry/cloud.ts`):
 - `DATABASE_URL`: the pooled connection string (Neon's `-pooler` host, Supabase port 6543, PgBouncer). Prepared statements are turned off when the URL looks pooled; `DATABASE_POOLED=1|0` forces it.
 - `DATABASE_URL_UNPOOLED`: the direct string, for migrations and the database copy. Falls back to `DATABASE_URL`.
 - `MONDAY_SETUP_CODE`: a one-time code of your choosing; the first Device pairs with it, then it stops working.
-- `MONDAY_PUBLIC_URL`: the `https://` origin the internet reaches the deployment at; Gmail and Microsoft push notifications are registered against it.
+- `MONDAY_PUBLIC_URL`: the `https://` origin the internet reaches the deployment at; Gmail and Microsoft push notifications are registered against it. Gmail push also needs the `sync.gmail_push_service_account` Setting (Settings, Accounts, Sync): the email of a service account in the Google project that Pub/Sub signs push deliveries as (grant the Pub/Sub service agent `roles/iam.serviceAccountTokenCreator` on it). The webhook verifies every delivery's OIDC token against it before the URL secret; without one no push subscription is registered and Gmail is polled on the reconcile interval.
 - `MONDAY_ROOT_KEY`: the base64 root key, only if the Cloud should decrypt mail for Briefs and Workflows while every device is off (the `server.share_root_key` Setting).
 - `MONDAY_SERVER_ID`: the heartbeat id. Optional; the platform's deployment id is used when it exposes one.
 
