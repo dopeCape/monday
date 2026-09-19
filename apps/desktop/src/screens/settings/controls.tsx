@@ -52,6 +52,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   chordLabel,
+  chordOf,
   conflicts,
   KEY_ACTIONS,
   type KeyAction,
@@ -65,13 +66,16 @@ import {
   AskInput,
   type ControlProps,
   controlKinds,
+  DangerAction,
   type DetectedCli,
   EnumPicker,
+  messageOf,
   optionLabel,
   RecordEditor,
   Row,
   SettingControl,
   useDraft,
+  useKeyStateVersion,
   useSetting,
   useSettingsScreen,
 } from "./render.tsx";
@@ -139,11 +143,11 @@ function PaletteControl({ k }: ControlProps) {
         ? "dark"
         : "light"
       : shell.mode;
-  const path = useDraft(custom ? current : "", (text) => {
-    if (text.trim()) void change(text.trim());
-  });
+  const path = useDraft(custom ? current : "", (text) =>
+    text.trim() ? change(text.trim()) : undefined,
+  );
   return (
-    <Row k={k} bare error={error}>
+    <Row k={k} block error={error}>
       <div className="swatches">
         {palettes.map((p) => (
           <Swatch
@@ -188,6 +192,7 @@ function LayoutPresetControl({ k }: ControlProps) {
   const screen = useSettingsScreen();
   const s = shell.settings;
   const entry = settingsSchema[k];
+  const [error, setError] = useState<string | null>(null);
   const current = presetForLayout(shell.layout);
   const options = [
     ...PRESET_NAMES.map((p) => ({ value: p, label: optionLabel(p) })),
@@ -196,22 +201,24 @@ function LayoutPresetControl({ k }: ControlProps) {
       : []),
   ];
   return (
-    <Row k={k}>
+    <Row k={k} error={error}>
       <Seg
         options={options}
         value={current}
         onChange={(p) => {
           const preset = PRESETS[p as keyof typeof PRESETS];
           if (!preset) return;
-          void screen.changeMany(
-            [
-              ["layout.preset", p],
-              ["layout.nav", preset.nav],
-              ["layout.agent", preset.agent],
-              ["layout.list", preset.list],
-            ],
-            entry.label,
-          );
+          void screen
+            .changeMany(
+              [
+                ["layout.preset", p],
+                ["layout.nav", preset.nav],
+                ["layout.agent", preset.agent],
+                ["layout.list", preset.list],
+              ],
+              entry.label,
+            )
+            .then((r) => setError(r.ok ? null : r.message));
         }}
       />
     </Row>
@@ -230,9 +237,9 @@ function FontControl({ k }: ControlProps) {
   const current = String(value);
   const known = choices.includes(current);
   const [other, setOther] = useState(!known);
-  const typed = useDraft(known ? "" : current, (text) => {
-    if (text.trim()) void change(text.trim());
-  });
+  const typed = useDraft(known ? "" : current, (text) =>
+    text.trim() ? change(text.trim()) : undefined,
+  );
   return (
     <Row k={k} error={error}>
       <span className="font-pick">
@@ -288,7 +295,7 @@ function ViewsControl({ k }: ControlProps) {
   const update = (id: string, patch: Partial<ViewSetting>) =>
     void change(views.map((v) => (v.id === id ? { ...v, ...patch } : v)));
   return (
-    <Row k={k} block hint={null} error={error}>
+    <Row k={k} block error={error}>
       <div className="views">
         {views.length === 0 ? (
           <div className="note">{s["strings.settings.views.empty"]}</div>
@@ -340,9 +347,14 @@ function ViewsControl({ k }: ControlProps) {
                 <Btn sm onClick={() => setRenaming({ id: v.id, name: v.name })}>
                   {s["strings.settings.views.rename"]}
                 </Btn>
-                <Btn sm onClick={() => void change(views.filter((x) => x.id !== v.id))}>
-                  {s["strings.settings.views.delete"]}
-                </Btn>
+                <DangerAction
+                  label={s["strings.settings.views.delete"]}
+                  confirm={fill(s["strings.settings.views.delete_confirm"], { name: v.name })}
+                  onConfirm={async () => {
+                    const ok = await change(views.filter((x) => x.id !== v.id));
+                    if (!ok) throw new Error(error ?? "not saved");
+                  }}
+                />
               </span>
             </div>
           );
@@ -543,7 +555,7 @@ function PerAccountControl({ k, shape }: ControlProps) {
                 const next = { ...current };
                 if (text.trim()) next[address] = text;
                 else delete next[address];
-                void change(next);
+                return change(next);
               }}
             />
           ))}
@@ -572,7 +584,7 @@ function PerAccountText({
 }: {
   address: string;
   text: string;
-  onCommit: (text: string) => void;
+  onCommit: (text: string) => Promise<boolean>;
 }) {
   const s = useShell().settings;
   const d = useDraft(text, onCommit);
@@ -602,7 +614,9 @@ function PerAccountText({
 export function useRuntimeConfigured(): boolean | null {
   const shell = useShell();
   const screen = useSettingsScreen();
+  const { version } = useKeyStateVersion();
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a key write bumps the version, which re-runs the check
   useEffect(() => {
     let live = true;
     const run = async () => {
@@ -623,7 +637,7 @@ export function useRuntimeConfigured(): boolean | null {
     return () => {
       live = false;
     };
-  }, [screen.runtimes, screen.keys, shell.api]);
+  }, [screen.runtimes, screen.keys, shell.api, version]);
   return configured;
 }
 
@@ -858,9 +872,10 @@ const PROVIDER_LG: Record<HostedProvider, string> = {
 function useKeyState() {
   const shell = useShell();
   const screen = useSettingsScreen();
+  const { version, bump } = useKeyStateVersion();
   const [onDevice, setOnDevice] = useState<Set<HostedProvider>>(new Set());
   const [shared, setShared] = useState<Set<HostedProvider>>(new Set());
-  const refresh = useCallback(async () => {
+  const read = useCallback(async () => {
     const keys = screen.keys;
     if (keys) {
       const have = await Promise.all(
@@ -874,10 +889,11 @@ function useKeyState() {
       setShared(new Set());
     }
   }, [screen.keys, shell.api]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every key write bumps the version so every reader re-reads
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
-  return { onDevice, shared, refresh };
+    void read();
+  }, [read, version]);
+  return { onDevice, shared, refresh: bump };
 }
 
 /** The Hosted provider list with key state; picking one makes it the runtime's provider. */
@@ -924,8 +940,8 @@ function RolesControl({ k }: ControlProps) {
   const { value, change, error, shell } = useSetting(k);
   const s = shell.settings;
   const roles = value as { main: string; fast: string };
-  const main = useDraft(roles.main, (text) => void change({ ...roles, main: text.trim() }));
-  const fast = useDraft(roles.fast, (text) => void change({ ...roles, fast: text.trim() }));
+  const main = useDraft(roles.main, (text) => change({ ...roles, main: text.trim() }));
+  const fast = useDraft(roles.fast, (text) => change({ ...roles, fast: text.trim() }));
   const field = (label: string, d: ReturnType<typeof useDraft>) => (
     <span className="role">
       <span>{label}</span>
@@ -970,19 +986,30 @@ function ProviderKeyControl({ k }: ControlProps) {
   const save = async () => {
     const key = draft.trim();
     if (!key || !screen.keys) return;
-    await screen.keys.set(provider, key);
+    setProblem(null);
+    try {
+      await screen.keys.set(provider, key);
+    } catch (e) {
+      setProblem(fill(s["strings.settings.keys.failed"], { message: messageOf(e) }));
+      return;
+    }
     setDraft("");
     setEditing(false);
-    await refresh();
+    refresh();
   };
   const remove = async () => {
     if (!screen.keys) return;
-    await screen.keys.remove(provider);
-    if (value) {
-      await screen.keys.unshare(shell.api, provider).catch(() => {});
-      await change(false);
+    setProblem(null);
+    try {
+      await screen.keys.remove(provider);
+      if (value) {
+        await screen.keys.unshare(shell.api, provider).catch(() => {});
+        await change(false);
+      }
+    } catch (e) {
+      setProblem(fill(s["strings.settings.keys.failed"], { message: messageOf(e) }));
     }
-    await refresh();
+    refresh();
   };
   const share = async (on: boolean) => {
     setProblem(null);
@@ -1002,10 +1029,10 @@ function ProviderKeyControl({ k }: ControlProps) {
       await screen.keys?.unshare(shell.api, provider).catch(() => {});
     }
     await change(on);
-    await refresh();
+    refresh();
   };
   return (
-    <Row k={k} error={problem ?? error}>
+    <Row k={k} error={problem ?? error} foot={<span>{s["strings.settings.keys.threat"]}</span>}>
       <span className="key-row">
         {editing ? (
           <>
@@ -1042,9 +1069,13 @@ function ProviderKeyControl({ k }: ControlProps) {
               {has ? s["strings.settings.keys.replace"] : s["strings.settings.keys.add"]}
             </Btn>
             {has ? (
-              <Btn sm onClick={() => void remove()}>
-                {s["strings.settings.keys.remove"]}
-              </Btn>
+              <DangerAction
+                label={s["strings.settings.keys.remove"]}
+                confirm={fill(s["strings.settings.keys.remove_confirm"], {
+                  provider: PROVIDER_LABELS[provider],
+                })}
+                onConfirm={remove}
+              />
             ) : null}
           </>
         )}
@@ -1064,7 +1095,7 @@ function TaskModelControl({ k }: ControlProps) {
   const s = shell.settings;
   const tm = value as TaskModel;
   const task = k.split(".").at(-1) ?? k;
-  const model = useDraft(tm.model, (text) => void change({ ...tm, model: text.trim() }));
+  const model = useDraft(tm.model, (text) => change({ ...tm, model: text.trim() }));
   return (
     <Row k={k} label={task} hint={null} error={error}>
       <span className="task-row">
@@ -1210,7 +1241,7 @@ function BindingsControl({ k }: ControlProps) {
     void change(next);
   };
   return (
-    <Row k={k} block hint={null} error={error}>
+    <Row k={k} block error={error}>
       {AREAS.map((area) => (
         <div className="bindings" key={area.key}>
           <h4>{s[`strings.settings.shortcuts.${area.key}` as SettingKey] as string}</h4>
@@ -1241,11 +1272,17 @@ function BindingsControl({ k }: ControlProps) {
                     value={editing.chord}
                     autoFocus
                     spellCheck={false}
+                    placeholder={s["strings.settings.shortcuts.press"]}
                     onChange={(e) => setEditing({ action, chord: e.target.value })}
                     onBlur={commit}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") commit();
-                      if (e.key === "Escape") setEditing(null);
+                      if (e.key === "Enter") return commit();
+                      if (e.key === "Escape") return setEditing(null);
+                      if (e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") return;
+                      // The key pressed is the chord: no need to spell "mod+shift+k".
+                      if (["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
+                      e.preventDefault();
+                      setEditing({ action, chord: chordOf(e) });
                     }}
                   />
                 ) : (
@@ -1334,9 +1371,14 @@ function McpServersControl({ k }: ControlProps) {
                 {m.tools.length > 0 ? m.tools.join(", ") : s["strings.settings.mcp.all_tools"]}
               </span>
             </span>
-            <Btn sm onClick={() => void change(servers.filter((_, j) => j !== i))}>
-              {s["strings.settings.mcp.remove"]}
-            </Btn>
+            <DangerAction
+              label={s["strings.settings.mcp.remove"]}
+              confirm={fill(s["strings.settings.mcp.remove_confirm"], { name: m.name })}
+              onConfirm={async () => {
+                const ok = await change(servers.filter((_, j) => j !== i));
+                if (!ok) throw new Error(error ?? "not saved");
+              }}
+            />
           </div>
         ))}
         <div className="mcp-add">

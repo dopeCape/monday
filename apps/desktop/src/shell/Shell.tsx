@@ -91,6 +91,40 @@ export function useShell(): ShellState {
   return s;
 }
 
+/** The tokens the base size scales; the schema default (14) is the comfortable --fs-md. */
+const SIZE_TOKENS = ["--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl", "--fs-2xl", "--fs-3xl"];
+const BASE_FONT_SIZE = 14;
+
+/**
+ * Writes the Type Settings onto the root: the font families as the two font
+ * tokens (with the shipped stacks as fallbacks), and the base size as a scale
+ * over the density's own sizes, read after the inline overrides are cleared
+ * so a density change re-derives them.
+ */
+export function applyType(
+  root: HTMLElement,
+  type: { font: string; mono: string; fontSize: number; density: Density },
+) {
+  const quote = (f: string) => (/[\s"']/.test(f) && !/^["']/.test(f) ? `"${f}"` : f);
+  root.style.setProperty(
+    "--font-sans",
+    `${quote(type.font)}, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`,
+  );
+  root.style.setProperty(
+    "--font-mono",
+    `${quote(type.mono)}, ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace`,
+  );
+  for (const t of SIZE_TOKENS) root.style.removeProperty(t);
+  root.dataset.density = type.density;
+  const scale = type.fontSize / BASE_FONT_SIZE;
+  if (Math.abs(scale - 1) < 0.001 || typeof getComputedStyle !== "function") return;
+  const computed = getComputedStyle(root);
+  for (const t of SIZE_TOKENS) {
+    const px = Number.parseFloat(computed.getPropertyValue(t));
+    if (Number.isFinite(px) && px > 0) root.style.setProperty(t, `${(px * scale).toFixed(2)}px`);
+  }
+}
+
 function resolveMode(mode: ThemeMode): "light" | "dark" {
   if (mode !== "system") return mode;
   return typeof matchMedia !== "undefined" && matchMedia("(prefers-color-scheme: dark)").matches
@@ -228,6 +262,15 @@ export function Shell({ children }: { children: ReactNode }) {
     r.dataset.agent = layout.agent;
     r.dataset.list = layout.list;
   }, [mode, palette, density, layout.nav, layout.agent, layout.list]);
+
+  // The Type Settings: the families as the font tokens, and the base size as a
+  // scale over the density's sizes, so the Settings page itself follows them.
+  const font = settings["appearance.font"];
+  const mono = settings["appearance.monospace"];
+  const fontSize = settings["appearance.font_size"];
+  useEffect(() => {
+    applyType(document.documentElement, { font, mono, fontSize, density });
+  }, [font, mono, fontSize, density]);
 
   useEffect(() => {
     if (mode !== "system") return;

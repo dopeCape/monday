@@ -1,13 +1,15 @@
 // The schema-driven Settings renderer (docs/spec/settings.md, ADR 0004). A page
-// is one section of the schema: its groups in SETTING_GROUPS order, one
-// control per key chosen from the key's control shape (switch, segmented
-// control or select, number with its range, text, list, record, JSON) or from
-// the `controls` registry when the schema names a special one (palette
-// swatches, the binding table, the task-to-Role map). Panels that are not
-// Settings (the Accounts list, the Meter, the Activity log) hang off a group
-// name. A Pinned key renders locked with "set in monday.toml" and the line it
-// is set on (ADR 0001). Every control carries data-setting with its key, which
-// is what the coverage test walks. There is no hand-built settings screen.
+// is one section of the schema: its groups in SETTING_GROUPS order, each a
+// stack of cards, one card per key, chosen from the key's control shape
+// (switch, segmented control or select, number with its range, text, list,
+// record, JSON) or from the `controls` registry when the schema names a
+// special one (palette swatches, the binding table, the task-to-Role map).
+// Panels that are not Settings (the Accounts list, the Meter, the Activity
+// log) hang off a group name and say what they are searchable by. A card's
+// footer carries the secondary line: the scope, the Pinned state with the
+// file line (ADR 0001), the default with Reset when changed, and any
+// validation error. Every control carries data-setting with its key, which is
+// what the coverage test walks. There is no hand-built settings screen.
 
 import {
   type AiLevel,
@@ -73,6 +75,10 @@ export interface SettingsScreen {
   now(): Date;
   /** The Server panel's seams (the pairing fetch, the Device name, the browser opener); tests script them. */
   serverProps?: ServerProps | undefined;
+  /** Opens a section and scrolls to a card or group; the search results' "Show in section". Absent outside the Settings page. */
+  navigate?: ((section: SettingSection, target?: string) => void) | undefined;
+  /** The newest release for "Check for updates"; GitHub's releases API by default. Tests script it. */
+  latestRelease?: ((source: string) => Promise<{ version: string; url: string }>) | undefined;
 }
 
 const ScreenContext = createContext<SettingsScreen | null>(null);
@@ -91,6 +97,91 @@ export function useSettingsScreen(): SettingsScreen {
   const s = useContext(ScreenContext);
   if (!s) throw new Error("useSettingsScreen outside a Settings screen");
   return s;
+}
+
+/* ------------------------------ Shared key state ------------------------------ */
+
+/**
+ * The Device's provider keys change from more than one card (the key itself,
+ * the provider list, the runtime step). Each write bumps a version every
+ * reader of the keychain re-checks on, so no card shows a stale "Add key".
+ */
+export interface KeyStateContext {
+  version: number;
+  bump(): void;
+}
+
+const KeyState = createContext<KeyStateContext>({ version: 0, bump: () => {} });
+
+export function KeyStateProvider({ children }: { children: ReactNode }) {
+  const [version, setVersion] = useState(0);
+  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const value = useMemo(() => ({ version, bump }), [version, bump]);
+  return <KeyState.Provider value={value}>{children}</KeyState.Provider>;
+}
+
+export function useKeyStateVersion(): KeyStateContext {
+  return useContext(KeyState);
+}
+
+/* ------------------------------ Highlighting ------------------------------ */
+
+/** The words the search results highlight in labels and help; empty on a page. */
+const Highlight = createContext<readonly string[]>([]);
+
+export function HighlightProvider({
+  words,
+  children,
+}: {
+  words: readonly string[];
+  children: ReactNode;
+}) {
+  return <Highlight.Provider value={words}>{children}</Highlight.Provider>;
+}
+
+/** The text with every occurrence of a highlighted word wrapped in a mark. */
+export function Highlighted({ text }: { text: string }) {
+  const words = useContext(Highlight);
+  const parts = useMemo(() => splitHighlights(text, words), [text, words]);
+  if (!parts.some((p) => p.hit)) return <>{text}</>;
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.hit ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the pieces are positional
+          <mark key={i}>{p.text}</mark>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the pieces are positional
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/** Splits text into plain and hit pieces for the given words, case-insensitively. */
+export function splitHighlights(
+  text: string,
+  words: readonly string[],
+): Array<{ text: string; hit: boolean }> {
+  const needles = words.map((w) => w.toLowerCase()).filter((w) => w.length > 0);
+  if (needles.length === 0 || !text) return [{ text, hit: false }];
+  const lower = text.toLowerCase();
+  const out: Array<{ text: string; hit: boolean }> = [];
+  let at = 0;
+  while (at < text.length) {
+    let best: { start: number; end: number } | null = null;
+    for (const n of needles) {
+      const i = lower.indexOf(n, at);
+      if (i >= 0 && (best === null || i < best.start)) best = { start: i, end: i + n.length };
+    }
+    if (!best) break;
+    if (best.start > at) out.push({ text: text.slice(at, best.start), hit: false });
+    out.push({ text: text.slice(best.start, best.end), hit: true });
+    at = best.end;
+  }
+  if (at < text.length) out.push({ text: text.slice(at), hit: false });
+  return out.length > 0 ? out : [{ text, hit: false }];
 }
 
 /* ------------------------------ Registries ------------------------------ */
@@ -120,12 +211,32 @@ export interface PanelProps {
 
 export type PanelComponent = (props: PanelProps) => ReactNode;
 
-/** Panels by section and group name: rendered above the group's controls. */
-export const panels: Partial<Record<SettingSection, Record<string, PanelComponent>>> = {};
+/** What the settings search knows about a panel: its title, a line, and extra words. */
+export interface PanelSearch {
+  /** The string key of the title shown in search results and the page index. */
+  title: SettingKey;
+  /** The string key of the one-line description under it. */
+  description?: SettingKey | undefined;
+  /** Extra words the panel answers to: "devices", "pairing", "revoke". */
+  searchTerms: readonly string[];
+}
 
-export function registerPanel(section: SettingSection, group: string, panel: PanelComponent) {
+export interface RegisteredPanel {
+  component: PanelComponent;
+  search: PanelSearch;
+}
+
+/** Panels by section and group name: rendered above the group's controls. */
+export const panels: Partial<Record<SettingSection, Record<string, RegisteredPanel>>> = {};
+
+export function registerPanel(
+  section: SettingSection,
+  group: string,
+  panel: PanelComponent,
+  search: PanelSearch,
+) {
   const bySection = panels[section] ?? {};
-  bySection[group] = panel;
+  bySection[group] = { component: panel, search };
   panels[section] = bySection;
 }
 
@@ -145,24 +256,32 @@ export function panelLevel(section: SettingSection, group: string): AiLevel {
   return PANEL_LEVELS[section]?.[group] ?? "off";
 }
 
+/** The groups a section page shows at an AI level: with keys, or with a panel the level allows. */
+export function pageGroups(section: SettingSection, level: AiLevel): SettingGroup[] {
+  return groupsInSectionAt(section, level).filter(
+    (g) =>
+      g.keys.length > 0 ||
+      g.advanced.length > 0 ||
+      (panels[section]?.[g.name] !== undefined && levelAtLeast(level, panelLevel(section, g.name))),
+  );
+}
+
+/** The DOM id of a group's anchor on its page. */
+export function groupId(group: string): string {
+  return `group-${group.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
+}
+
 export function SettingsPage({ section }: { section: SettingSection }) {
   const shell = useShell();
   const s = shell.settings;
   const level = s["ai.level"];
-  const groups = useMemo(
-    () =>
-      groupsInSectionAt(section, level).filter(
-        (g) =>
-          g.keys.length > 0 ||
-          g.advanced.length > 0 ||
-          levelAtLeast(level, panelLevel(section, g.name)),
-      ),
-    [section, level],
-  );
+  const groups = useMemo(() => pageGroups(section, level), [section, level]);
   return (
     <>
-      <h1>{s[`strings.settings.section.${section}`]}</h1>
-      <p>{s[`strings.settings.intro.${section}`]}</p>
+      <header className="settings-head">
+        <h1>{s[`strings.settings.section.${section}`]}</h1>
+        <p>{s[`strings.settings.intro.${section}`]}</p>
+      </header>
       {groups.map((group) => (
         <Group key={group.name} section={section} group={group} />
       ))}
@@ -178,27 +297,34 @@ function introKey(section: SettingSection, group: string): SettingKey | null {
 
 function Group({ section, group }: { section: SettingSection; group: SettingGroup }) {
   const s = useShell().settings;
-  const Panel = panels[section]?.[group.name];
+  const registered = panels[section]?.[group.name];
+  const Panel = registered?.component;
   const showHeading = group.keys.length > 0 || group.advanced.length > 0 || Panel;
   if (!showHeading) return null;
   const intro = introKey(section, group.name);
+  // A group named like its section (Accounts, About) is the page itself: no second heading.
+  const own = group.name === s[`strings.settings.section.${section}`];
   return (
-    <div className="sect" data-group={group.name}>
-      <h3>{group.name}</h3>
+    <section className="sgroup" id={groupId(group.name)} data-group={group.name}>
+      {own ? null : <h3>{group.name}</h3>}
       {intro ? <p>{String(s[intro])}</p> : null}
-      {Panel ? <Panel section={section} group={group} /> : null}
-      {group.keys.map((k) => (
-        <SettingControl key={k} k={k} />
-      ))}
-      {group.advanced.length > 0 ? (
-        <details className="advanced">
-          <summary>{s["strings.settings.advanced"]}</summary>
-          {group.advanced.map((k) => (
-            <SettingControl key={k} k={k} />
-          ))}
-        </details>
-      ) : null}
-    </div>
+      <div className="stack">
+        {Panel ? <Panel section={section} group={group} /> : null}
+        {group.keys.map((k) => (
+          <SettingControl key={k} k={k} />
+        ))}
+        {group.advanced.length > 0 ? (
+          <details className="advanced">
+            <summary>{s["strings.settings.advanced"]}</summary>
+            <div className="stack">
+              {group.advanced.map((k) => (
+                <SettingControl key={k} k={k} />
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -230,6 +356,50 @@ function ShapeControl({ k, entry, shape }: ControlProps) {
   }
 }
 
+/* ------------------------------ The card ------------------------------ */
+
+export interface CardProps {
+  /** The card's title. */
+  title: ReactNode;
+  /** The one-line description under it. */
+  hint?: ReactNode | undefined;
+  /** A wide control that sits under the text instead of beside it. */
+  block?: boolean | undefined;
+  /** Danger actions: the footer turns a subdued red. */
+  danger?: boolean | undefined;
+  /** The footer's contents; the scope, default and errors for a Setting. */
+  foot?: ReactNode | undefined;
+  className?: string | undefined;
+  /** data-* attributes and an id for the coverage test and the page index. */
+  attrs?: Record<string, string | undefined> | undefined;
+  children?: ReactNode | undefined;
+}
+
+/**
+ * One card: title and description on the left, the control on the right (or
+ * below when wide), and a footer for the secondary line. Panels use it for
+ * their own rows so every row on the page reads the same.
+ */
+export function Card({ title, hint, block, danger, foot, className, attrs, children }: CardProps) {
+  return (
+    <div
+      className={cx("scard", block && "block", danger && "danger", className)}
+      {...(attrs ?? {})}
+    >
+      <div className="scard-main">
+        <div className="scard-text">
+          <b className="scard-title">{title}</b>
+          {hint ? <span className="scard-hint">{hint}</span> : null}
+        </div>
+        {children !== undefined && children !== null ? (
+          <div className="scard-ctl">{children}</div>
+        ) : null}
+      </div>
+      {foot ? <div className="scard-foot">{foot}</div> : null}
+    </div>
+  );
+}
+
 /* ------------------------------ Row and Pinned ------------------------------ */
 
 export interface RowProps {
@@ -240,43 +410,130 @@ export interface RowProps {
   hint?: ReactNode | undefined;
   /** A wide control that sits under the label instead of beside it. */
   block?: boolean | undefined;
-  /** No label at all: the control is the whole row (the swatches, the runtime cards). */
+  /** No card chrome: the control is the whole row (the swatches, the level cards). */
   bare?: boolean | undefined;
-  /** A validation or save problem shown under the control. */
+  /** A validation or save problem shown in the footer. */
   error?: string | null | undefined;
+  /** Extra footer content after the standard line. */
+  foot?: ReactNode | undefined;
   children?: ReactNode | undefined;
 }
 
+/** Whether a value equals the schema default, by structure. */
+export function isDefault(k: SettingKey, value: unknown): boolean {
+  return JSON.stringify(value) === JSON.stringify(settingsSchema[k].default);
+}
+
+/** "google-meet" as "Google meet", "on_open" as "On open". */
+export function optionLabel(option: string): string {
+  const text = option.replaceAll(/[-_]/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The default of a key as a short phrase for the footer. */
+export function describeDefault(k: SettingKey, s: ShellState["settings"]): string {
+  const d = settingsSchema[k].default as unknown;
+  const shape = describeSetting(k);
+  if (shape.kind === "boolean") return d ? s["strings.settings.on"] : s["strings.settings.off"];
+  if (shape.kind === "enum") return optionLabel(String(d));
+  if (shape.kind === "number") return String(d);
+  if (shape.kind === "string") {
+    const text = String(d);
+    if (text === "") return s["strings.settings.default.empty"];
+    return text.length > 40 ? `${text.slice(0, 40)}...` : text;
+  }
+  if (Array.isArray(d)) {
+    if (d.length === 0) return s["strings.settings.default.none"];
+    const flat = d.every((x) => typeof x !== "object");
+    return flat && d.length <= 6
+      ? d.map(String).join(", ")
+      : fill(s["strings.settings.default.items"], { n: d.length });
+  }
+  if (d && typeof d === "object") {
+    const n = Object.keys(d).length;
+    if (shape.kind === "record") {
+      return n === 0
+        ? s["strings.settings.default.none"]
+        : fill(s["strings.settings.default.entries"], { n });
+    }
+    return s["strings.settings.default.custom"];
+  }
+  return String(d);
+}
+
 /**
- * The labelled row every control renders in: the same markup as the ui
- * package's SettingsField, plus data-setting and the Pinned lock.
+ * The card every control renders in: the schema label and help (highlighted
+ * in search results), the control, data-setting, and the footer with the
+ * scope, the Pinned lock, the default with Reset, and any error.
  */
-export function Row({ k, label, hint, block, bare, error, children }: RowProps) {
+export function Row({ k, label, hint, block, bare, error, foot, children }: RowProps) {
   const shell = useShell();
+  const screen = useSettingsScreen();
+  const s = shell.settings;
   const entry = settingsSchema[k] as SettingEntry;
-  const problem = error ? (
-    <span className="err">
-      {fill(shell.settings["strings.settings.invalid"], { message: error })}
-    </span>
-  ) : null;
-  return (
-    <div
-      className={cx("field", (block || bare) && "block", bare && "bare")}
-      data-setting={k}
-      data-scope={entry.scope}
-      data-pinned={shell.pinned.has(k) ? "true" : undefined}
-    >
-      {bare ? (
-        problem
-      ) : (
-        <div className="l">
-          <b>{label ?? entry.label}</b>
-          {hint === undefined ? <span>{entry.help}</span> : hint ? <span>{hint}</span> : null}
-          {problem}
+  const pinned = shell.pinned.has(k);
+  const value = shell.settings[k];
+  const changed = !isDefault(k, value);
+  const line = pinned ? pinnedLine(shell, k) : null;
+  const path = shell.config.file?.path ?? "monday.toml";
+  const footer = (
+    <>
+      <span className="scope">
+        {entry.scope === "device"
+          ? s["strings.settings.scope.device"]
+          : s["strings.settings.scope.global"]}
+      </span>
+      {pinned ? (
+        <span className="pinned-foot">
+          {line
+            ? fill(s["strings.settings.pinned_foot"], { path, line })
+            : fill(s["strings.settings.pinned_file"], { path })}
+        </span>
+      ) : null}
+      {error ? (
+        <span className="err">{fill(s["strings.settings.invalid"], { message: error })}</span>
+      ) : null}
+      {foot}
+      <span className="sp" />
+      <span className="dflt">
+        {fill(s["strings.settings.default"], { value: describeDefault(k, s) })}
+      </span>
+      {changed && !pinned ? (
+        <button
+          type="button"
+          className="link"
+          onClick={() => void screen.change(k, structuredClone(settingsSchema[k].default))}
+        >
+          {s["strings.settings.reset"]}
+        </button>
+      ) : null}
+    </>
+  );
+  const attrs = {
+    "data-setting": k,
+    "data-scope": entry.scope,
+    "data-pinned": pinned ? "true" : undefined,
+  };
+  if (bare) {
+    return (
+      <div className="scard bare" {...attrs}>
+        <div className="scard-main">
+          <Pinned k={k}>{children}</Pinned>
         </div>
-      )}
+        <div className="scard-foot">{footer}</div>
+      </div>
+    );
+  }
+  return (
+    <Card
+      title={<Highlighted text={label ?? entry.label} />}
+      hint={hint === undefined ? <Highlighted text={entry.help} /> : hint}
+      block={block}
+      foot={footer}
+      attrs={attrs}
+    >
       <Pinned k={k}>{children}</Pinned>
-    </div>
+    </Card>
   );
 }
 
@@ -299,7 +556,7 @@ export function Pinned({ k, children }: { k: SettingKey; children: ReactNode }) 
   const lineText = line ? (shell.config.file?.text.split("\n")[line - 1] ?? "").trim() : "";
   const title = line
     ? fill(shell.settings["strings.settings.pinned_line"], { path, line, text: lineText })
-    : `Set in ${path}`;
+    : fill(shell.settings["strings.settings.pinned_file"], { path });
   return (
     <span className="pinned" title={title}>
       <Tag>{shell.settings["strings.settings.pinned"]}</Tag>
@@ -332,8 +589,12 @@ export function useSetting<K extends SettingKey>(k: K) {
   return { value, change, error, shell };
 }
 
-/** Text that commits on blur or Enter, so typing does not write on every key. */
-export function useDraft(current: string, commit: (text: string) => void) {
+/**
+ * Text that commits on blur or Enter, so typing does not write on every key.
+ * A commit that was refused (`commit` resolves false) snaps the draft back to
+ * the value in effect, so the box never shows a number that was not saved.
+ */
+export function useDraft(current: string, commit: (text: string) => Promise<boolean> | undefined) {
   const [draft, setDraft] = useState(current);
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
@@ -346,15 +607,15 @@ export function useDraft(current: string, commit: (text: string) => void) {
   const flush = () => {
     if (!dirty) return;
     setDirty(false);
-    if (draft !== current) commit(draft);
+    if (draft === current) return;
+    const result = commit(draft);
+    if (result && typeof result.then === "function") {
+      void result.then((ok) => {
+        if (!ok) setDraft(current);
+      });
+    }
   };
   return { draft, onChange, flush };
-}
-
-/** "google-meet" as "Google meet", "on_open" as "On open". */
-export function optionLabel(option: string): string {
-  const text = option.replaceAll(/[-_]/g, " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /* ------------------------------ Generic controls ------------------------------ */
@@ -426,7 +687,7 @@ function NumberControl({ k, shape }: ControlProps) {
   const { value, change, error } = useSetting(k);
   const { draft, onChange, flush } = useDraft(String(value), (text) => {
     const n = Number(text);
-    void change(Number.isNaN(n) ? text : n);
+    return change(text.trim() === "" || Number.isNaN(n) ? text : n);
   });
   if (shape.kind !== "number") return null;
   const step = shape.integer ? 1 : shape.max !== null && shape.max <= 1 ? 0.05 : 0.1;
@@ -451,7 +712,7 @@ function NumberControl({ k, shape }: ControlProps) {
 
 function StringControl({ k, shape }: ControlProps) {
   const { value, change, error } = useSetting(k);
-  const { draft, onChange, flush } = useDraft(String(value), (text) => void change(text));
+  const { draft, onChange, flush } = useDraft(String(value), (text) => change(text));
   if (shape.kind !== "string") return null;
   return (
     <Row k={k} error={error}>
@@ -473,7 +734,7 @@ function StringControl({ k, shape }: ControlProps) {
 /** A multi-line string: a rule sentence, a prompt, a signature. Registered as "sentence". */
 export function SentenceControl({ k }: ControlProps) {
   const { value, change, error } = useSetting(k);
-  const { draft, onChange, flush } = useDraft(String(value), (text) => void change(text));
+  const { draft, onChange, flush } = useDraft(String(value), (text) => change(text));
   return (
     <Row k={k} block error={error}>
       <textarea
@@ -704,9 +965,10 @@ export function JsonControl({ k }: ControlProps) {
   const { draft, onChange, flush } = useDraft(JSON.stringify(value, null, 2), (text) => {
     try {
       setBad(null);
-      void change(JSON.parse(text));
+      return change(JSON.parse(text));
     } catch {
       setBad(shell.settings["strings.settings.json.invalid"]);
+      return Promise.resolve(true);
     }
   });
   return (
@@ -721,6 +983,76 @@ export function JsonControl({ k }: ControlProps) {
       />
     </Row>
   );
+}
+
+/* ------------------------------ Danger actions ------------------------------ */
+
+/**
+ * A destructive button that asks first, inline: the first click shows the
+ * question with Confirm and Cancel; the second runs the action. A failure
+ * shows its message in plain words next to the button.
+ */
+export function DangerAction({
+  label,
+  confirm,
+  onConfirm,
+  busy,
+  disabled,
+}: {
+  label: string;
+  /** The question shown before the action runs. */
+  confirm: string;
+  onConfirm: () => Promise<void> | void;
+  busy?: boolean | undefined;
+  disabled?: boolean | undefined;
+}) {
+  const s = useShell().settings;
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setError(null);
+    try {
+      await onConfirm();
+      setAsking(false);
+    } catch (e) {
+      setError(fill(s["strings.settings.failed"], { message: messageOf(e) }));
+    }
+  };
+  if (asking) {
+    return (
+      <span className="danger-ask" role="alertdialog">
+        <span className="q">{confirm}</span>
+        <Btn sm className="danger" disabled={busy} onClick={() => void run()}>
+          {s["strings.settings.confirm"]}
+        </Btn>
+        <Btn sm disabled={busy} onClick={() => setAsking(false)}>
+          {s["strings.settings.cancel"]}
+        </Btn>
+        {error ? <span className="err">{error}</span> : null}
+      </span>
+    );
+  }
+  return (
+    <span className="danger-ask">
+      <Btn sm className="danger" disabled={disabled || busy} onClick={() => setAsking(true)}>
+        {label}
+      </Btn>
+      {error ? <span className="err">{error}</span> : null}
+    </span>
+  );
+}
+
+/** The message of a thrown value, for the plain-words error lines. */
+export function messageOf(e: unknown): string {
+  if (e instanceof Error) {
+    try {
+      const body = JSON.parse(e.message) as { message?: string; error?: string };
+      return body.message ?? body.error ?? e.message;
+    } catch {
+      return e.message || "unknown error";
+    }
+  }
+  return String(e);
 }
 
 /* ------------------------------ Ask monday ------------------------------ */

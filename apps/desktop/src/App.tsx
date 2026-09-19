@@ -165,10 +165,11 @@ export function App({
   const [openThread, setOpenThread] = useState<string | null>(null);
   /** Text the agent bar opens with after a palette handoff. */
   const [agentText, setAgentText] = useState<string | undefined>(undefined);
-  /** The Settings section the palette or the URL asked for. */
+  /** The Settings section the palette or the URL asked for, and whether to open on the search field. */
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     () => new URLSearchParams(location.search).get("section") ?? undefined,
   );
+  const [settingsSearch, setSettingsSearch] = useState(0);
   /** The column composers' own text; the bottom bar's lives in the Inbox. */
   const [columnText, setColumnText] = useState("");
   const settingsRef = useRef(shell.settings);
@@ -411,15 +412,20 @@ export function App({
         }
         return;
       }
-      if (target === "settings" || target.startsWith("settings:")) {
+      if (target === "settings:search") {
+        setSettingsSearch((n) => n + 1);
+        setActive("settings");
+      } else if (target === "settings" || target.startsWith("settings:")) {
         if (target.startsWith("settings:")) setSettingsSection(target.slice("settings:".length));
         setActive("settings");
       } else if (target === "search") setActive("search");
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
       else if (target === "calendar") setActive("calendar");
-      else if (target === "activity") setActive("settings");
-      else if (target === "onboarding") openOnboarding(null, true);
+      else if (target === "activity") {
+        setSettingsSection("ai");
+        setActive("settings");
+      } else if (target === "onboarding") openOnboarding(null, true);
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
         setActive("inbox");
@@ -508,8 +514,9 @@ export function App({
   parts.push(
     active === "settings" ? (
       <Settings
-        key={`screen-${settingsSection ?? ""}`}
+        key={`screen-${settingsSection ?? ""}-${settingsSearch}`}
         initialSection={settingsSection}
+        initialSearch={settingsSearch > 0}
         workspaceId={ws.id}
         runtimes={detection ?? undefined}
         keys={keysProp ?? undefined}

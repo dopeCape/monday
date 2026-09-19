@@ -1,12 +1,17 @@
 /// <reference types="bun-types" />
 // The Settings screens through the DOM with happy-dom (docs/spec/settings.md,
 // slice 17): every control on every page comes from the schema and every
-// schema key lands on exactly one page; a Pinned key is locked with the file
-// line; a change writes through with Undo from the toast; "Ask monday" inputs
-// hand their text to the composer; the Devices, Storage, Meter and Activity
-// log panels over a scripted Api; and the Agent's change_setting tool (the
-// Server's own tool server over a fake ToolHost) changing one key per section
-// with the rendered control following after shell.refresh().
+// schema key lands on exactly one page (and at most once in search results);
+// a Pinned key is locked with the file line and refuses a write; a change
+// writes through with Undo from the toast for every kind of value; the card
+// footers show the scope, the default and Reset; the search finds settings
+// and panels by label, help, key, option and section with keyboard walking
+// and "Show in section"; "Ask monday" inputs hand their text to the composer;
+// the Accounts, Devices, Storage, Meter, Activity log and About panels over a
+// scripted Api with every button doing something; and the Agent's
+// change_setting tool (the Server's own tool server over a fake ToolHost)
+// changing one key per section with the rendered control following after
+// shell.refresh().
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
@@ -37,6 +42,7 @@ import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
 import { Settings, type SettingsProps } from "./Settings.tsx";
 import { controlKinds } from "./settings/render.tsx";
+import { buildSearchIndex, searchSettings } from "./settings/search.ts";
 
 let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
 beforeAll(async () => {
@@ -360,9 +366,10 @@ describe("Settings pages come from the schema", () => {
         seen.set(key, pages);
       }
       // Nothing on the page is a control outside the schema: every input, switch,
-      // select, segmented control and swatch sits inside a data-setting row or a panel.
+      // select, segmented control and swatch sits inside a data-setting row or a
+      // panel, apart from the page's own search field.
       for (const el of qa("input, textarea, select, .switch, .seg, .sw")) {
-        const inside = el.closest("[data-setting], [data-panel], .settings-nav");
+        const inside = el.closest("[data-setting], [data-panel], .settings-nav, .settings-search");
         expect(inside, `${section}: ${el.outerHTML.slice(0, 80)}`).not.toBeNull();
       }
       if (root) await act(async () => root?.unmount());
@@ -370,6 +377,23 @@ describe("Settings pages come from the schema", () => {
       host?.remove();
       host = null;
     }
+    // The search results are the same cards: every data-setting there is a
+    // schema key and no key appears twice, for a query that matches nearly everything.
+    await mount({ initialSection: "appearance" }, { api: scriptedApi().api });
+    await type(q<HTMLInputElement>(".settings-search input"), "e");
+    const results = qa(".settings-results [data-setting]").map(
+      (el) => el.getAttribute("data-setting") ?? "",
+    );
+    expect(results.length).toBeGreaterThan(10);
+    expect(new Set(results).size).toBe(results.length);
+    for (const key of results) expect(isSettingKey(key), key).toBe(true);
+    for (const el of qa(".settings-results input, .settings-results .switch")) {
+      expect(el.closest("[data-setting], [data-panel-result]")).not.toBeNull();
+    }
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    host = null;
     for (const key of settingKeys) {
       const entry = settingsSchema[key] as SettingEntry;
       if (isStringKey(key) || entry.hidden) {
@@ -405,9 +429,35 @@ describe("Settings pages come from the schema", () => {
     expect(row?.textContent).toContain("set in monday.toml");
     const lock = row?.querySelector<HTMLElement>(".pinned");
     expect(lock?.title).toBe('Set in ~/.config/monday/monday.toml, line 3: mode = "dark"');
+    expect(row?.querySelector(".scard-foot")?.textContent).toContain(
+      "Set in ~/.config/monday/monday.toml, line 3",
+    );
+    // No Reset on a pinned key: the file owns it.
+    expect(row?.querySelector(".scard-foot .link")).toBeNull();
     // The control is inert: clicking Light changes nothing.
     await clickText("Light", row ?? document);
     expect(captured?.settings["appearance.mode"]).toBe("system");
+    // And the Shell itself refuses the write, so no toast and no change.
+    const result = await captured?.set("appearance.mode", "light");
+    expect(result?.ok).toBe(false);
+    expect(captured?.settings["appearance.mode"]).toBe("system");
+    expect(q(".toast")).toBeNull();
+    // A preset that touches a pinned knob is refused whole, before anything is written.
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    const scripted = scriptedApi();
+    await mount(
+      { initialSection: "appearance" },
+      {
+        api: scripted.api,
+        pinned: new Set<SettingKey>(["layout.nav"]),
+        config: { file, values: { "layout.nav": "rail" }, warnings: [], error: null },
+      },
+    );
+    await clickText("Agent left", q('[data-setting="layout.preset"]') ?? document);
+    expect(scripted.calls.filter((c) => c.name === "settings.set")).toHaveLength(0);
+    expect(q('[data-setting="layout.preset"] .err')?.textContent).toContain("Set in");
   });
 
   test("a change applies at once and the toast undoes it", async () => {
@@ -431,11 +481,51 @@ describe("Settings pages come from the schema", () => {
     expect(captured?.settings["appearance.font_size"]).toBe(16);
     expect(q('[data-setting="appearance.font_size"] .err')?.textContent).toContain("Not saved");
 
+    // A refused number snaps the box back to the value in effect.
+    expect(size?.value).toBe("16");
+
     // A preset writes the three knobs as one change, and its Undo restores them.
     await clickText("Agent left", q('[data-setting="layout.preset"]') ?? document);
     expect(captured?.layout).toEqual({ nav: "rail", agent: "left", list: "split" });
     await clickText("Undo Z", q(".toast") ?? document);
     expect(captured?.layout).toEqual({ nav: "full", agent: "bottom", list: "stream" });
+
+    // The footer: the scope, the default, and Reset once the value differs.
+    const density = q('[data-setting="appearance.density"]');
+    expect(density?.querySelector(".scard-foot")?.textContent).toContain("Per device");
+    expect(density?.querySelector(".scard-foot")?.textContent).toContain("Default: Comfortable");
+    expect(density?.querySelector(".scard-foot .link")).toBeNull();
+    await clickText("Compact", density ?? document);
+    expect(captured?.settings["appearance.density"]).toBe("compact");
+    await click(density?.querySelector(".scard-foot .link"));
+    expect(captured?.settings["appearance.density"]).toBe("comfortable");
+    expect(q('[data-setting="appearance.font_size"] .scard-foot')?.textContent).toContain(
+      "Default: 14",
+    );
+  });
+
+  test("Undo restores a boolean, an array and a record, in one toast each", async () => {
+    await mount({ initialSection: "routing" }, { api: scriptedApi().api });
+    // A boolean.
+    await click(q('[data-setting="reader.load_remote_images"] .switch'));
+    expect(captured?.settings["reader.load_remote_images"]).toBe(true);
+    await clickText("Undo Z", q(".toast") ?? document);
+    expect(captured?.settings["reader.load_remote_images"]).toBe(false);
+    // An array: a list item added, then undone.
+    const senders = q('[data-setting="briefs.automated_senders"]');
+    await click(senders?.closest("details")?.querySelector("summary"));
+    const before = captured?.settings["briefs.automated_senders"] ?? [];
+    await type(senders?.querySelector<HTMLInputElement>(".set-list-add input") ?? null, "bot");
+    await clickText("Add", senders ?? document);
+    expect(captured?.settings["briefs.automated_senders"]).toEqual([...before, "bot"]);
+    await clickText("Undo Z", q(".toast") ?? document);
+    expect(captured?.settings["briefs.automated_senders"]).toEqual(before);
+    // A record: a per-Group policy added, then undone.
+    const policies = q('[data-setting="briefs.policy_groups"]');
+    await clickText("Add", policies ?? document);
+    expect(captured?.settings["briefs.policy_groups"]).toEqual({ "g-hiring": "always" });
+    await clickText("Undo Z", q(".toast") ?? document);
+    expect(captured?.settings["briefs.policy_groups"]).toEqual({});
   });
 
   test("Ask monday inputs hand their text to the composer, and Fix with monday carries the warnings", async () => {
@@ -451,7 +541,7 @@ describe("Settings pages come from the schema", () => {
       },
     );
     expect(text()).toContain("Line 2: unknown key");
-    await clickText("Fix with monday");
+    await clickText("Fix with monday", q('[data-panel="config"]') ?? document);
     expect(asked[0]).toContain("line 2: unknown key");
 
     const ask = q<HTMLInputElement>('[data-setting="views.list"] .set-ask input');
@@ -756,8 +846,6 @@ describe("Settings › AI › External access", () => {
         },
       ],
     });
-    let answer = false;
-    (globalThis as { confirm: (m?: string) => boolean }).confirm = () => answer;
     const copied: string[] = [];
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -779,15 +867,18 @@ describe("Settings › AI › External access", () => {
     expect(client?.textContent).toContain("Never used");
     expect(client?.textContent).toContain("Expired");
 
-    // Revoke asks first.
+    // Revoke asks first, inline: Cancel keeps it, Confirm revokes.
     await clickText("Revoke", key ?? document);
+    expect(key?.textContent).toContain("Revoke assistant?");
     expect(scripted.calls.find((c) => c.name === "external.revoke")).toBeUndefined();
-    answer = true;
+    await clickText("Cancel", key ?? document);
+    expect(key?.querySelector(".danger-ask .q")).toBeNull();
     await clickText("Revoke", key ?? document);
+    await clickText("Confirm", key ?? document);
     expect(scripted.calls).toContainEqual({ name: "external.revoke", args: ["c1"] });
 
     // A new key: name, scope, expiry; then the secret once, with Copy.
-    await clickText("New key", panel ?? document);
+    await clickText("New key");
     await type(q<HTMLInputElement>("#external-name"), "my assistant");
     await click(
       [...(q('[data-panel="external-new"]')?.querySelectorAll("button") ?? [])].find(
@@ -820,7 +911,7 @@ describe("Settings › AI › External access", () => {
       args: [{ id: "consent-1" }, null],
     });
     await type(q<HTMLInputElement>("#external-code"), "424242");
-    await clickText("Approve", q('[data-panel="external-consents"] .wizard-fields') ?? document);
+    await clickText("Approve", q('[data-panel="external-consents"] .wizard-action') ?? document);
     expect(scripted.calls).toContainEqual({
       name: "external.approve",
       args: [{ code: "424242" }, null],
@@ -842,12 +933,6 @@ describe("Settings › Sync server", () => {
         setupAvailable: false,
       },
     });
-    const confirms: string[] = [];
-    let answer = false;
-    (globalThis as { confirm: (m?: string) => boolean }).confirm = (m) => {
-      confirms.push(m ?? "");
-      return answer;
-    };
     await mount(
       { initialSection: "server" },
       {
@@ -857,12 +942,12 @@ describe("Settings › Sync server", () => {
       },
     );
     expect(q('[data-device="d1"]')?.textContent).toContain("This device");
+    expect(q('[data-device="d1"] .danger-ask')).toBeNull();
     expect(q('[data-device="d2"]')?.textContent).not.toContain("This device");
     await clickText("Revoke", q('[data-device="d2"]') ?? document);
-    expect(confirms[0]).toContain("Phone");
+    expect(q('[data-device="d2"]')?.textContent).toContain("Phone");
     expect(scripted.calls.find((c) => c.name === "revoke")).toBeUndefined();
-    answer = true;
-    await clickText("Revoke", q('[data-device="d2"]') ?? document);
+    await clickText("Confirm", q('[data-device="d2"]') ?? document);
     expect(scripted.calls).toContainEqual({ name: "revoke", args: ["d2"] });
 
     // A code another Device is showing, approved from here.
@@ -876,14 +961,22 @@ describe("Settings › Sync server", () => {
     expect(q('[data-setting="server.prefer"]')).not.toBeNull();
     expect(q('[data-setting="server.insecure_allowed"] .switch')).not.toBeNull();
 
-    // Storage: the count and size, the recovery file from the keychain, and import.
-    const storage = q('[data-panel="storage"]');
-    expect(storage?.textContent).toContain("12,418 messages, 1.9 GB");
-    expect(storage?.textContent).toContain("In the keychain");
-    await clickText("Import", storage ?? document);
-    await type(storage?.querySelector<HTMLTextAreaElement>("textarea") ?? null, "not a key");
-    await clickText("Import", storage?.querySelector(".voice-edit") ?? document);
-    expect(storage?.textContent).toContain("not a recovery key");
+    // Storage: the count and size, the recovery file from the keychain, export and import.
+    expect(q('[data-panel="storage"]')?.textContent).toContain("12,418 messages, 1.9 GB");
+    const recovery = q('[data-panel="recovery"]');
+    expect(recovery?.textContent).toContain("In the keychain");
+    // Export always shows the text with Copy, since a webview may not save files.
+    await clickText("Export", recovery ?? document);
+    const shown = q<HTMLTextAreaElement>('[data-panel="recovery-export"] textarea');
+    expect(shown?.value).toContain("monday recovery");
+    await clickText("Copy", q('[data-panel="recovery-export"]') ?? document);
+    expect(q('[data-panel="recovery-export"]')?.textContent).toContain("Copied");
+    await clickText("Import", recovery ?? document);
+    await type(q<HTMLTextAreaElement>('[data-panel="recovery-import"] textarea'), "not a key");
+    await clickText("Import", q('[data-panel="recovery-import"]') ?? document);
+    expect(recovery?.querySelector(".scard-foot .err")?.textContent).toContain(
+      "not a recovery key",
+    );
   });
 });
 
@@ -899,10 +992,13 @@ describe("Settings › Shortcuts", () => {
       "Select",
       "Views",
     ]);
-    await clickText("E", q('[data-action="thread.star"]') ?? document).catch(() => {});
     await click(q('[data-action="thread.star"] .chord-btn'));
     const input = q<HTMLInputElement>('[data-action="thread.star"] input');
-    await type(input, "e");
+    // The key pressed becomes the chord; no need to spell it.
+    await act(async () =>
+      input?.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })),
+    );
+    expect(input?.value).toBe("e");
     await blur(input);
     expect(captured?.settings["keyboard.bindings"]).toEqual({ "thread.star": "e" });
     expect(q('[data-action="thread.star"]')?.classList.contains("clash")).toBe(true);
@@ -914,6 +1010,459 @@ describe("Settings › Shortcuts", () => {
     await clickText("Gmail", q('[data-setting="keyboard.keymap"]') ?? document);
     expect(captured?.settings["keyboard.keymap"]).toBe("gmail");
     expect(q('[data-action="thread.open"] .kbd')?.textContent).toBe("O");
+  });
+});
+
+/* ------------------------------ Search and the page index ------------------------------ */
+
+describe("Settings › search", () => {
+  const names = Object.fromEntries(
+    SETTING_SECTIONS.map((n) => [
+      n,
+      String(settingsSchema[`strings.settings.section.${n}`].default),
+    ]),
+  ) as Record<(typeof SETTING_SECTIONS)[number], string>;
+  const index = () =>
+    buildSearchIndex(names, [
+      {
+        section: "server",
+        group: "Devices",
+        label: "Devices",
+        help: "Every device that holds a token.",
+        terms: ["pairing", "revoke"],
+        level: "off",
+      },
+    ]);
+  const keysOf = (query: string, current: (typeof SETTING_SECTIONS)[number] = "appearance") =>
+    searchSettings(index(), query, { level: "automate", current, limit: 40 }).map((h) =>
+      h.entry.kind === "setting" ? h.entry.key : `panel:${h.entry.group}`,
+    );
+
+  test("the index holds every rendered key once and the panels, and ranks label prefix over word over help over key", () => {
+    const idx = index();
+    const keys = idx.filter((e) => e.kind === "setting").map((e) => (e as { key: string }).key);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const key of settingKeys) {
+      const entry = settingsSchema[key] as SettingEntry;
+      const shown = !isStringKey(key) && !entry.hidden && !entry.renderedBy;
+      expect(keys.includes(key), key).toBe(shown);
+    }
+    expect(idx.find((e) => e.kind === "panel")?.terms).toContain("pairing");
+    // "density" is a label prefix on appearance.density; the help mentions of it come after.
+    expect(keysOf("density")[0]).toBe("appearance.density");
+    // "font" as a label prefix beats "Monospace font", a label word.
+    expect(keysOf("font").slice(0, 2)).toEqual(["appearance.font", "appearance.font_size"]);
+    expect(keysOf("font")).toContain("appearance.monospace");
+    // An option label finds its setting: vim is a keymap, dark is a mode, meet is a link kind.
+    expect(keysOf("vim")).toContain("keyboard.keymap");
+    expect(keysOf("dark")).toContain("appearance.mode");
+    expect(keysOf("meet")[0]).toBe("calendar.meeting_link");
+    // A raw key matches last, but matches.
+    expect(keysOf("undo_toast")).toEqual(["inbox.undo_toast_ms"]);
+    // A panel by its own terms and by its section name.
+    expect(keysOf("pairing")).toEqual(["panel:Devices"]);
+    expect(keysOf("sync server")).toContain("panel:Devices");
+    // Every word must match; blank finds nothing.
+    expect(keysOf("font monospace")).toEqual(["appearance.monospace"]);
+    expect(keysOf("   ")).toEqual([]);
+    // Ties go to the current section first: "seconds" appears in many helps.
+    const fromServer = keysOf("seconds", "server");
+    expect(settingsSchema[fromServer[0] as SettingKey].section).toBe("server");
+    // The AI level hides what it hides.
+    const atOff = searchSettings(index(), "brief", { level: "off", current: "routing", limit: 40 });
+    expect(atOff.some((h) => h.entry.kind === "setting" && h.entry.key.startsWith("briefs."))).toBe(
+      false,
+    );
+  });
+
+  test("results are the same cards grouped by section with highlights, Show in section jumps to the card, arrows and Enter walk them, Escape clears", async () => {
+    await mount({ initialSection: "appearance" }, { api: scriptedApi().api });
+    const search = q<HTMLInputElement>(".settings-search input");
+    await type(search, "keymap");
+    expect(q(".settings-in")?.dataset.searching).toBe("true");
+    const sections = qa("[data-result-section]").map((el) => el.dataset.resultSection);
+    expect(sections[0]).toBe("shortcuts");
+    const first = q('[data-result="0"]');
+    expect(first?.dataset.resultKey).toBe("keyboard.keymap");
+    expect(first?.querySelector("mark")?.textContent).toBe("Keymap");
+    expect(first?.classList.contains("active")).toBe(true);
+    // The card is the real control: changing it writes the Setting from the results.
+    await clickText("Gmail", first ?? document);
+    expect(captured?.settings["keyboard.keymap"]).toBe("gmail");
+    // Arrows move the active card; Enter focuses its control.
+    const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true });
+    await act(async () => search?.dispatchEvent(down));
+    expect(q('[data-result="1"]')?.classList.contains("active")).toBe(true);
+    await act(async () =>
+      search?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(document.activeElement?.closest('[data-result="1"]')).not.toBeNull();
+    // Show in section leaves the results for the section, at the card.
+    await clickText("Show in sectionShortcuts / Keymap", first ?? document);
+    expect(q(".settings-in")?.dataset.section).toBe("shortcuts");
+    expect(q(".settings-in")?.dataset.searching).toBe("false");
+    expect(q('[data-setting="keyboard.keymap"]')?.classList.contains("flash")).toBe(true);
+    expect(q(".settings-nav .nav-item.on")?.textContent).toBe("Shortcuts");
+    // A panel is findable by its terms, and a miss offers a suggestion.
+    await type(q<HTMLInputElement>(".settings-search input"), "pairing");
+    expect(q('[data-panel-result="Devices"]')).not.toBeNull();
+    await type(q<HTMLInputElement>(".settings-search input"), "zzzz");
+    expect(q('[data-panel="search-empty"]')?.textContent).toContain("Nothing matches zzzz.");
+    expect(q('[data-panel="search-empty"]')?.textContent).toContain("Try a word");
+    // Escape clears the field.
+    await act(async () =>
+      q(".settings-search input")?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(q<HTMLInputElement>(".settings-search input")?.value).toBe("");
+    expect(q(".settings-in")?.dataset.searching).toBe("false");
+    // The search key focuses the field from anywhere on the page.
+    await act(async () =>
+      q(".settings-content")?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "/", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(q(".settings-search input"));
+  });
+
+  test("the page index lists the section's groups, a click jumps to the group, and the palette can open the search", async () => {
+    await mount({ initialSection: "appearance" }, { api: scriptedApi().api });
+    const items = qa(".settings-index a").map((a) => a.textContent);
+    expect(items).toEqual([
+      "Theme",
+      "Palette",
+      "Layout",
+      "Views",
+      "Type",
+      "Config file",
+      "Inbox",
+      "Calendar",
+      "Search",
+      "Settings page",
+    ]);
+    expect(q(".settings-index a.on")?.textContent).toBe("Theme");
+    await click(q('.settings-index a[data-index-group="Type"]'));
+    expect(q(".settings-index a.on")?.textContent).toBe("Type");
+    expect(q("#group-type")).not.toBeNull();
+    // About has one group: no index.
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount({ initialSection: "about", initialSearch: true }, { api: scriptedApi().api });
+    expect(qa(".settings-index a")).toHaveLength(0);
+    expect(document.activeElement).toBe(q(".settings-search input"));
+  });
+});
+
+/* ------------------------------ Accounts ------------------------------ */
+
+describe("Settings › Accounts", () => {
+  test("a fresh install welcomes with Connect an account; a provider card opens the wizard inline; Back keeps what was typed; a connected Account lists and removes with a confirm", async () => {
+    const scripted = scriptedApi();
+    let accounts: Awaited<ReturnType<typeof scripted.api.accounts.list>>["accounts"] = [];
+    scripted.api.accounts.list = async () => ({ accounts });
+    scripted.api.accounts.add = async (body) => {
+      scripted.calls.push({ name: "accounts.add", args: [body] });
+      const account = {
+        id: "a-new",
+        workspaceId: "ws-2",
+        provider: body.provider,
+        address: body.address,
+        displayName: "",
+        capabilities: {
+          push: false,
+          labels: true,
+          snooze: false,
+          mute: false,
+          calendar: false,
+          meetingLink: null,
+        },
+        connected: true,
+        lastSync: null,
+        lastError: null,
+      };
+      accounts = [account];
+      return { account };
+    };
+    scripted.api.accounts.remove = async (id) => {
+      scripted.calls.push({ name: "accounts.remove", args: [id] });
+      accounts = [];
+      return {};
+    };
+    await mount({ initialSection: "accounts" }, { api: scripted.api });
+    const connect = q('[data-panel="connect"]');
+    expect(connect?.textContent).toContain("Connect an account");
+    expect(qa('[data-panel="connect"] .prov b').map((b) => b.textContent)).toEqual([
+      "Fastmail or JMAP",
+      "IMAP",
+      "Google",
+      "Microsoft",
+    ]);
+    expect(connect?.textContent).toContain("Needs an API token from Fastmail settings");
+    expect(connect?.textContent).toContain("Needs an app registration in Azure");
+    // The JMAP card opens its form inline; Back returns to the cards and keeps the draft.
+    await click(q('[data-provider="jmap"]'));
+    const sheet = q('[data-panel="add-account"]');
+    expect(sheet?.textContent).toContain("Fastmail or JMAP");
+    const inputs = () => [...(sheet?.querySelectorAll<HTMLInputElement>("input") ?? [])];
+    await type(inputs()[0] ?? null, "me@fastmail.com");
+    await clickText("Back", sheet ?? document);
+    expect(q('[data-panel="add-account"]')).toBeNull();
+    expect(q('[data-panel="connect"]')).not.toBeNull();
+    // The Google wizard keeps its step and fields across Back too.
+    await click(q('[data-provider="google"]'));
+    await type(q<HTMLInputElement>(".wizard-field input"), "monday-1");
+    await clickText("Next");
+    expect(q(".wizard")?.dataset.step).toBe("api");
+    await clickText("Back");
+    await clickText("Back");
+    expect(q('[data-panel="add-account"]')).toBeNull();
+    await click(q('[data-provider="google"]'));
+    expect(q(".wizard")?.dataset.step).toBe("project");
+    expect(q<HTMLInputElement>(".wizard-field input")?.value).toBe("monday-1");
+    await clickText("Back");
+    // Connect through JMAP: the form remembers the address; Done closes the sheet and lists the Account.
+    await click(q('[data-provider="jmap"]'));
+    const again = q('[data-panel="add-account"]');
+    const fields = [...(again?.querySelectorAll<HTMLInputElement>("input") ?? [])];
+    expect(fields[0]?.value).toBe("me@fastmail.com");
+    await type(fields[2] ?? null, "fmu1-token");
+    await clickText("Connect", again ?? document);
+    expect(scripted.calls.find((c) => c.name === "accounts.add")).toBeDefined();
+    expect(q('[data-panel="add-account"]')?.textContent).toContain(
+      "me@fastmail.com is connected. Mail starts syncing now.",
+    );
+    await clickText("Done", q('[data-panel="add-account"]') ?? document);
+    expect(q('[data-panel="add-account"]')).toBeNull();
+    const card = q('[data-account="a-new"]');
+    expect(card?.textContent).toContain("me@fastmail.com");
+    expect(card?.textContent).toContain("Polling");
+    expect(card?.textContent).toContain("Not synced yet");
+    expect(card?.querySelector(".tag")?.textContent).toBe("Connected");
+    expect(q('[data-panel="connect"]')?.textContent).toContain("Connect another account");
+    // Remove asks, says what is deleted, then removes.
+    await clickText("Remove", card ?? document);
+    expect(card?.textContent).toContain("Remove me@fastmail.com?");
+    expect(card?.textContent).toContain("mailbox itself is untouched");
+    expect(scripted.calls.find((c) => c.name === "accounts.remove")).toBeUndefined();
+    await clickText("Confirm", card ?? document);
+    expect(scripted.calls).toContainEqual({ name: "accounts.remove", args: ["a-new"] });
+    expect(q('[data-account="a-new"]')).toBeNull();
+  });
+
+  test("a failed remove and a last error show in plain words", async () => {
+    const scripted = scriptedApi();
+    const base = scripted.api.accounts.list;
+    scripted.api.accounts.list = async () => {
+      const r = await base();
+      return { accounts: r.accounts.map((a) => ({ ...a, lastError: "IMAP login refused" })) };
+    };
+    scripted.api.accounts.remove = async () => {
+      throw new Error("server says no");
+    };
+    await mount({ initialSection: "accounts" }, { api: scripted.api });
+    const card = q('[data-account="a1"]');
+    expect(card?.textContent).toContain("Last error: IMAP login refused");
+    await clickText("Remove", card ?? document);
+    await clickText("Confirm", card ?? document);
+    expect(card?.textContent).toContain("Could not remove the account: server says no");
+  });
+});
+
+/* ------------------------------ Panels: every button does something ------------------------------ */
+
+describe("Settings › panels", () => {
+  test("a saved key updates the provider list at once, and the runtime step continues once a key is added", async () => {
+    const scripted = scriptedApi();
+    const keys = fakeKeys();
+    await mount(
+      { initialSection: "ai", keys, runtimes: { detect: async () => [] } },
+      { api: scripted.api },
+      { "ai.level": "off" },
+    );
+    await click(q('[data-setting="ai.level"] .choice-card[data-value="assist"]'));
+    const step = q('[data-panel="runtime-step"]');
+    await click(step?.querySelector('[data-setting="ai.mode"] .mode button:nth-child(2)'));
+    await settle();
+    expect(q('[data-setting="ai.hosted.provider"] .prov.on')?.textContent).toContain("Add key");
+    const cont = () =>
+      [...(q('[data-panel="runtime-step"]')?.querySelectorAll("button") ?? [])].find(
+        (b) => b.textContent?.trim() === "Continue",
+      );
+    expect(cont()?.disabled).toBe(true);
+    const row = q('[data-setting="ai.share_key.anthropic"]');
+    await clickText("Add key", row ?? document);
+    await type(row?.querySelector<HTMLInputElement>("input") ?? null, "sk-ant-1");
+    await clickText("Save", row ?? document);
+    // The provider card and the Continue button follow the keychain without a reload.
+    expect(q('[data-setting="ai.hosted.provider"] .prov.on')?.textContent).toContain("Key set");
+    expect(cont()?.disabled).toBe(false);
+    await click(cont());
+    expect(captured?.settings["ai.level"]).toBe("assist");
+    // Remove asks first, then forgets the key and the card follows.
+    await clickText("Remove", q('[data-setting="ai.share_key.anthropic"]') ?? document);
+    await clickText("Confirm", q('[data-setting="ai.share_key.anthropic"]') ?? document);
+    expect(q('[data-setting="ai.hosted.provider"] .prov.on')?.textContent).toContain("Add key");
+  });
+
+  test("the Meter has a month picker, the Activity log shows a failed Undo, and Check for updates reports", async () => {
+    const months: string[] = [];
+    const scripted = scriptedApi({
+      activity: [
+        {
+          id: "act-1",
+          workspaceId: "ws-1",
+          sessionId: "s1",
+          runId: null,
+          tool: "archive_threads",
+          tier: "reversible",
+          inputSummary: "2 threads",
+          status: "done",
+          approvedBy: null,
+          result: "Archived 2 threads",
+          undoable: true,
+          actor: "agent",
+          callId: "c1",
+          input: null,
+          preview: null,
+          decision: "auto",
+          undoneAt: null,
+          at: "2026-09-17T09:00:00Z",
+        },
+      ],
+    });
+    scripted.api.meter.month = async (_ws, month) => {
+      months.push(month ?? "");
+      return { workspaceId: "ws-1", month: month ?? "", lines: [], costMicros: 0 };
+    };
+    scripted.api.agent.undo = async () => {
+      throw new Error("already gone");
+    };
+    const releases: string[] = [];
+    await mount(
+      {
+        initialSection: "ai",
+        latestRelease: async (source) => {
+          releases.push(source);
+          return { version: "v0.2.0", url: "https://example.test/releases/v0.2.0" };
+        },
+      },
+      { api: scripted.api },
+    );
+    const meter = q('[data-panel="meter"]');
+    expect(meter?.dataset.month).toBe("2026-09");
+    expect(meter?.textContent).toContain("September 2026");
+    await click(meter?.querySelector('button[aria-label="Previous month"]'));
+    expect(q('[data-panel="meter"]')?.dataset.month).toBe("2026-08");
+    expect(months.at(-1)).toBe("2026-08");
+    expect(q('[data-panel="meter"]')?.textContent).toContain("August 2026");
+    await clickText("This month", q('[data-panel="meter"]') ?? document);
+    expect(q('[data-panel="meter"]')?.dataset.month).toBe("2026-09");
+    expect(
+      q<HTMLButtonElement>('[data-panel="meter"] button[aria-label="Next month"]')?.disabled,
+    ).toBe(true);
+    // A failed Undo says so instead of doing nothing.
+    await clickText("Undo", q('[data-activity="act-1"]') ?? document);
+    expect(q('[data-panel="activity"]')?.textContent).toContain("Undo failed: already gone");
+
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(
+      {
+        initialSection: "about",
+        version: "0.1.0",
+        latestRelease: async (source) => {
+          releases.push(source);
+          return { version: "v0.2.0", url: "https://example.test/releases/v0.2.0" };
+        },
+      },
+      { api: scripted.api },
+    );
+    await clickText("Check for updates");
+    expect(releases).toEqual(["https://github.com/dopeCape/monday"]);
+    expect(q('[data-panel="about"]')?.textContent).toContain("v0.2.0 is available.");
+    expect(q('[data-panel="about"]')?.textContent).toContain("Release notes");
+  });
+
+  test("Check for updates reports up to date and a failure", async () => {
+    await mount(
+      {
+        initialSection: "about",
+        version: "0.2.0",
+        latestRelease: async () => ({ version: "v0.2.0", url: "" }),
+      },
+      { api: scriptedApi().api },
+    );
+    await clickText("Check for updates");
+    expect(q('[data-panel="about"]')?.textContent).toContain("You have the latest version.");
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(
+      {
+        initialSection: "about",
+        latestRelease: async () => {
+          throw new Error("offline");
+        },
+      },
+      { api: scriptedApi().api },
+    );
+    await clickText("Check for updates");
+    expect(q('[data-panel="about"]')?.textContent).toContain("Could not check: offline");
+  });
+
+  test("Views delete and MCP server remove ask first; the Voice profile switch writes and reports a failure", async () => {
+    const scripted = scriptedApi();
+    scripted.api.voice.put = async () => {
+      throw new Error("no server");
+    };
+    await mount(
+      { initialSection: "appearance" },
+      { api: scripted.api },
+      {
+        "ai.level": "automate",
+        "views.list": [
+          {
+            id: "v1",
+            name: "Triage",
+            layout: { nav: "hidden", agent: "bottom", list: "stream" },
+            shortcut: "mod+2",
+          },
+        ],
+      },
+    );
+    const view = q('[data-view="v1"]');
+    await clickText("Delete", view ?? document);
+    expect(view?.textContent).toContain("Delete the view Triage?");
+    expect(captured?.settings["views.list"]).toHaveLength(1);
+    await clickText("Confirm", view ?? document);
+    expect(captured?.settings["views.list"]).toHaveLength(0);
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(
+      { initialSection: "workflows" },
+      { api: scripted.api },
+      {
+        "ai.level": "automate",
+        "workflows.mcp_servers": [{ name: "notes", command: "notes-mcp", tools: [] }],
+      },
+    );
+    const mcp = q('[data-mcp="notes"]');
+    await clickText("Remove", mcp ?? document);
+    expect(mcp?.textContent).toContain("Remove notes?");
+    await clickText("Confirm", mcp ?? document);
+    expect(captured?.settings["workflows.mcp_servers"]).toEqual([]);
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount({ initialSection: "accounts" }, { api: scripted.api });
+    const voice = q('[data-panel="voice"]');
+    expect(voice?.textContent).toContain("Built");
+    await click(voice?.querySelector(".switch"));
+    expect(voice?.textContent).toContain("That did not work: no server");
   });
 });
 
