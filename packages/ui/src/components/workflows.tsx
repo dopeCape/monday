@@ -377,7 +377,7 @@ export interface SourceViewProps {
 }
 
 const SOURCE_STYLE: CSSProperties = {
-  fontFamily: "var(--mono)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--fs-xs)",
   lineHeight: 1.5,
   whiteSpace: "pre-wrap",

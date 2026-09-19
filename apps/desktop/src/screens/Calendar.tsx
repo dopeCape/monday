@@ -1,4 +1,4 @@
-// The Calendar screen (slice 18; design/js/screens/calendar.js): Week, Day,
+// The Calendar screen (issue 15; design/js/screens/calendar.js): Week, Day,
 // Month and Agenda over the Cache's Events, the Today panel and the calendar
 // list beside them, an Event added by hand, and "Schedule" handing the
 // composer a sentence so the scheduling tool does the rest. Recurring

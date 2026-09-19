@@ -6,7 +6,7 @@
 import type { ExternalPending, Settings, Thread, ToolCall } from "@monday/shared";
 import type { Suggestion } from "@monday/ui";
 
-/** A Workflow Run paused at a Step that asks (slice 16). */
+/** A Workflow Run paused at a Step that asks. */
 export interface PausedRunChip {
   workflowName: string;
   stepName: string;
@@ -20,7 +20,7 @@ export interface SuggestionInput {
   pausedRuns?: readonly PausedRunChip[] | undefined;
   /** Threads in Needs your reply. */
   needsReply: readonly Thread[];
-  /** External calls parked on an approval (slice 19); the chip opens the caller's Session, where the card waits. */
+  /** External calls parked on an approval (docs/spec/external-mcp.md); the chip opens the caller's Session, where the card waits. */
   external?: readonly ExternalPending[] | undefined;
 }
 

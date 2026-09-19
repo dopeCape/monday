@@ -1,4 +1,4 @@
-// The Device's AgentClient (slice 15): one client for the composer that
+// The Device's AgentClient: one client for the composer that
 // sends a Hosted Session's turns to the Server and drives a Local Session's
 // CLI itself, through the adapters behind the AgentSession seam. Sessions,
 // approvals, Undo and the Activity log are the Server's either way; only the

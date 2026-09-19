@@ -48,6 +48,7 @@ import {
   Seg,
   SettingsField,
   SideCard,
+  SourceView,
   Swatch,
   Switch,
   Tabs,
@@ -485,6 +486,13 @@ describe("settings and workflows", () => {
     expect(html).toContain('class="k">name, role, links<');
     expect(render(<FlowEdge />)).toContain('class="edge"');
     expect(render(<FlowNode kind="act" icon={SunIcon} label="Send" />)).toContain("node act");
+  });
+
+  test("SourceView prints the document as JSON in the mono face token", () => {
+    const html = render(<SourceView document={{ name: "Candidate intake", version: 3 }} />);
+    expect(html).toContain('class="source"');
+    expect(html).toContain("font-family:var(--font-mono)");
+    expect(html).toContain("&quot;name&quot;: &quot;Candidate intake&quot;");
   });
 });
 

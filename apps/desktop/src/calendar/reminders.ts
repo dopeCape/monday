@@ -1,4 +1,4 @@
-// Event reminders (slice 18): a desktop notification a Setting's number of
+// Event reminders (issue 15): a desktop notification a Setting's number of
 // minutes before an Event the user has not declined. Runs on the Device from
 // the Cache, so a reminder never needs the Server awake; one timer for the
 // next Event, re-armed whenever the Events or the Settings change. The

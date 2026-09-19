@@ -247,7 +247,7 @@ export interface Suggestion {
   label: string;
   /** Layout knobs the suggestion sets when picked. */
   layout?: Partial<Layout> | undefined;
-  /** A Session to open instead of sending the label: where an external caller's card waits (slice 19). */
+  /** A Session to open instead of sending the label: where an external caller's card waits. */
   session?: string | undefined;
 }
 
