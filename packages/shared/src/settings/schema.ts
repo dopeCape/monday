@@ -2363,6 +2363,31 @@ export const settingsSchema = {
     "Developer mode warning",
     "Developer mode gives the runtime its own shell, file and web tools. Mail content is untrusted and could direct them.",
   ),
+  "strings.agent.chip.pending": str(
+    "ai",
+    "Suggestion: a call waiting in the Session",
+    "Decide on the pending {tool}",
+  ),
+  "strings.agent.chip.external": str(
+    "ai",
+    "Suggestion: an external caller's call waiting",
+    "Decide on the {tool} that {credential} asks for",
+  ),
+  "strings.agent.chip.paused_run": str(
+    "ai",
+    "Suggestion: a Workflow Run waiting at a Step",
+    "Decide on the {step} step waiting in {workflow}",
+  ),
+  "strings.agent.chip.reply_one": str(
+    "ai",
+    "Suggestion: one Thread in Needs your reply",
+    "Reply to the thread waiting on me",
+  ),
+  "strings.agent.chip.reply_many": str(
+    "ai",
+    "Suggestion: Threads in Needs your reply",
+    "Reply to the {n} threads waiting on me",
+  ),
   "strings.agent.untitled_session": str(
     "ai",
     "A Session with no first message",
