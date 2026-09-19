@@ -103,3 +103,52 @@ export function humanize(id: string): string {
   const words = id.replace(/[_-]+/g, " ").trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+/** "Thu 18 Sep" for a day; "Thu 18 Sep, 15:00 to 15:45" for a timed span (slice 18). */
+export function formatSpan(startIso: string, endIso: string, allDay: boolean): string {
+  const s = new Date(startIso);
+  const e = new Date(endIso);
+  if (Number.isNaN(s.getTime())) return "";
+  const day = (d: Date) => `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  if (allDay) {
+    // An all-day span ends at midnight of the day after its last day.
+    const last = new Date(e.getTime() - 1);
+    const sameDay = Number.isNaN(e.getTime()) || startOfDay(s) === startOfDay(last);
+    return sameDay ? day(s) : `${day(s)} to ${day(last)}`;
+  }
+  const sameDay = startOfDay(s) === startOfDay(e);
+  return sameDay
+    ? `${day(s)}, ${clock(s)} to ${clock(e)}`
+    : `${day(s)} ${clock(s)} to ${day(e)} ${clock(e)}`;
+}
+
+const MONTHS_LONG = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** "September 2026". */
+export function formatMonth(d: Date): string {
+  return `${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** "Thursday 18" for the Agenda's day headings. */
+export function formatDayHeading(d: Date, now: Date = new Date()): string {
+  const long = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const days = daysBetween(now, d);
+  const prefix = days === 0 ? "Today, " : days === 1 ? "Tomorrow, " : "";
+  return `${prefix}${long[d.getDay()]} ${d.getDate()}`;
+}
+
+export const WEEKDAY_SHORT = WEEKDAYS;
+export const MONTH_SHORT = MONTHS;

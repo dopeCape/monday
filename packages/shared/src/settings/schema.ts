@@ -2078,6 +2078,26 @@ export const settingsSchema = {
   "strings.agent.preview_more": str("ai", "Preview overflow line", "and {n} more"),
   "strings.agent.preview_send": str("ai", "Send preview heading", "To {to}: {subject}"),
   "strings.agent.preview_setting": str("ai", "Setting preview line", "{key}: {from} to {to}"),
+  "strings.agent.preview_event.schedule": str("ai", "Event card: schedule", "Schedule"),
+  "strings.agent.preview_event.update": str("ai", "Event card: update", "Update"),
+  "strings.agent.preview_event.cancel": str("ai", "Event card: cancel", "Cancel"),
+  "strings.agent.preview_event.rsvp": str("ai", "Event card: answer", "Answer {response}"),
+  "strings.agent.preview_event.link": str("ai", "Event card: link line", "Link: {link}"),
+  "strings.agent.preview_event.by_provider": str(
+    "ai",
+    "Event card: the Provider mails",
+    "Invitations go out from your {source} account",
+  ),
+  "strings.agent.preview_event.by_monday": str(
+    "ai",
+    "Event card: monday mails",
+    "monday will mail the invitations",
+  ),
+  "strings.agent.preview_event.conflicts": str(
+    "ai",
+    "Event card: overlap line",
+    "Overlaps {titles}",
+  ),
   "strings.agent.no_session": str("ai", "Session unavailable", "monday cannot reach the server."),
   "strings.agent.pinned": str(
     "ai",

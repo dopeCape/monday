@@ -110,6 +110,7 @@ function transports(app: ReturnType<typeof createApp>): {
         ),
       intent: unused,
       draftIntent: unused,
+      inviteIntent: unused,
       async brief(threadId) {
         try {
           return await get<Brief>(`/threads/${threadId}/brief`);

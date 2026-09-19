@@ -15,6 +15,8 @@ import type {
   Id,
   Intent,
   IntentResult,
+  Invite,
+  InviteIntent,
   IsoDate,
   ScheduledSend,
   ScheduleResult,
@@ -71,6 +73,10 @@ export interface FakeServer {
   received: Intent[];
   /** Draft and send intents that arrived, in order. */
   receivedDrafts: DraftIntent[];
+  /** Invite answers that arrived, in order (slice 18). */
+  receivedInvites: InviteIntent[];
+  /** Invites the fake Server holds, by id, for the content route. */
+  invites: Map<Id, Invite>;
   drafts: Map<Id, Draft>;
   sends: Map<Id, ScheduledSend>;
   /** The undo window the fake applies to send.schedule; 30 s like the Setting. */
@@ -79,6 +85,7 @@ export interface FakeServer {
   runDueSends(now?: Date): number;
   applyIntent(intent: Intent): IntentResult;
   applyDraftIntent(intent: DraftIntent): ScheduleResult;
+  applyInviteIntent(intent: InviteIntent): IntentResult;
   /** Appends any change to the feed with the next seq and wakes the sockets. */
   record(change: Omit<Change, "seq" | "workspaceId" | "at">): number;
   /** Applies a write as the Server would from a sync or a Workflow and records the change. */
@@ -192,6 +199,8 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
     onBriefRequest: null,
     received: [],
     receivedDrafts: [],
+    receivedInvites: [],
+    invites: new Map(),
     drafts: draftsById,
     sends: sendsById,
     delaySeconds: 30,
@@ -221,6 +230,38 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
       recordBrief({ ...existing, computedAt: new Date().toISOString() }, true);
     },
 
+    applyInviteIntent(intent) {
+      server.receivedInvites.push(intent);
+      const invite = server.invites.get(intent.inviteId);
+      if (invite) {
+        const next = { ...invite, response: intent.response };
+        server.invites.set(invite.id, next);
+        server.record({
+          kind: "invite",
+          entityId: invite.id,
+          payload: {
+            id: next.id,
+            messageId: next.messageId,
+            threadId: next.threadId,
+            eventId: next.eventId,
+            method: next.method,
+            uid: next.uid,
+            sequence: next.sequence,
+            start: next.start,
+            end: next.end,
+            allDay: next.allDay,
+            organizer: next.organizer,
+            attendees: next.attendees,
+            response: next.response,
+            byMail: next.byMail,
+            senderMismatch: next.senderMismatch,
+            receivedAt: next.receivedAt,
+            deleted: false,
+          },
+        });
+      }
+      return { applied: true };
+    },
     applyDraftIntent(intent) {
       server.receivedDrafts.push(intent);
       const existing = draftsById.get(intent.draftId);
@@ -451,6 +492,14 @@ export function fakeTransport(server: FakeServer): StoreTransport {
     async draftIntent(_workspaceId, intent) {
       if (server.offline) throw offline();
       return server.applyDraftIntent(intent);
+    },
+    async inviteIntent(intent) {
+      if (server.offline) throw offline();
+      return server.applyInviteIntent(intent);
+    },
+    async invite(inviteId) {
+      if (server.offline) throw offline();
+      return server.invites.get(inviteId) ?? null;
     },
     async brief(threadId) {
       if (server.offline) throw offline();

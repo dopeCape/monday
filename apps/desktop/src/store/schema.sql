@@ -133,6 +133,70 @@ create table if not exists briefs (
   content_stale integer not null default 0
 );
 
+-- The calendar (slice 18). Calendars as the feed lists them; Events with
+-- their times, people, link and status from the feed and their title,
+-- description and location from POST /calendar/events/content (content_stale
+-- marks a row whose content lags its headers, warmed after every pull);
+-- Invites as the reader's invite bar renders them, the title content too.
+create table if not exists calendars (
+  id text primary key,
+  source text not null default 'local',
+  provider_id text not null default '',
+  name text not null default '',
+  "primary" integer not null default 0,
+  writable integer not null default 1,
+  visible integer not null default 1,
+  color text
+);
+
+create table if not exists events (
+  id text primary key,
+  calendar_id text not null,
+  provider_id text not null default '',
+  uid text,
+  title text not null default '',
+  description text not null default '',
+  location text not null default '',
+  start text not null,
+  "end" text not null,
+  all_day integer not null default 0,
+  time_zone text,
+  organizer text,
+  attendees text not null default '[]',
+  link text,
+  status text not null default 'confirmed',
+  recurrence text,
+  recurring_event_id text,
+  response text,
+  created_by_agent integer not null default 0,
+  content_stale integer not null default 1,
+  updated_at text not null default ''
+);
+create index if not exists events_window_idx on events (start, "end");
+create index if not exists events_uid_idx on events (uid);
+
+create table if not exists invites (
+  id text primary key,
+  message_id text not null,
+  thread_id text not null,
+  event_id text,
+  method text not null default 'REQUEST',
+  uid text not null default '',
+  sequence integer not null default 0,
+  title text not null default '',
+  start text not null,
+  "end" text not null,
+  all_day integer not null default 0,
+  organizer text,
+  attendees text not null default '[]',
+  response text not null default 'needs-action',
+  by_mail integer not null default 0,
+  sender_mismatch integer not null default 0,
+  received_at text not null default '',
+  content_stale integer not null default 1
+);
+create index if not exists invites_thread_idx on invites (thread_id);
+
 create table if not exists settings (
   key text primary key,
   value text not null

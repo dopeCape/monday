@@ -14,6 +14,8 @@ import type {
   Id,
   Intent,
   IntentResult,
+  Invite,
+  InviteIntent,
 } from "@monday/shared";
 import type {
   Api,
@@ -44,6 +46,15 @@ export interface StoreTransport {
    * Absent on a transport with no content routes; those rows stay unwarmed.
    */
   brief?(threadId: Id): Promise<Brief | null>;
+  /** An Invite's answer to its route (slice 18). */
+  inviteIntent(intent: InviteIntent): Promise<IntentResult>;
+  /** The titles of Events whose feed rows landed, in one call; absent on a transport without content routes. */
+  eventsContent?(
+    workspaceId: Id,
+    ids: readonly Id[],
+  ): Promise<Array<{ id: Id; title: string; description: string; location: string }>>;
+  /** An Invite whole (its title is content). Null when the Server has none. */
+  invite?(inviteId: Id): Promise<Invite | null>;
   connect(workspaceId: Id, handlers: WakeHandlers): WakeConnection;
 }
 
@@ -80,6 +91,9 @@ export function apiTransport(api: Api, capabilities: () => Capabilities | null):
     intent: (intent) => api.threads.intent(intent),
     draftIntent: (workspaceId, intent) => api.drafts.intent(workspaceId, intent),
     brief: (threadId) => api.briefs.get(threadId),
+    inviteIntent: (intent) => api.calendar.rsvp(intent),
+    eventsContent: (workspaceId, ids) => api.calendar.eventsContent(workspaceId, ids),
+    invite: (inviteId) => api.calendar.invite(inviteId),
     connect(workspaceId, handlers) {
       const realtime = capabilities()?.realtime ?? "polling";
       if (realtime === "websocket") return connectWebSocket(api, workspaceId, handlers);
