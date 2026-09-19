@@ -51,6 +51,8 @@ export interface AgentSession {
   developerMode: boolean;
   setDeveloperMode(on: boolean): void;
   send(text: string): Promise<void>;
+  /** Sends the last text again, after a turn the Server or the CLI refused; nothing when none was sent. */
+  retry(): Promise<void>;
   approve(activityId: string): Promise<void>;
   decline(activityId: string): Promise<void>;
   undo(activityId: string): Promise<ActivityRecord | null>;
@@ -76,6 +78,7 @@ export const NULL_SESSION: AgentSession = {
   developerMode: false,
   setDeveloperMode: () => {},
   send: async () => {},
+  retry: async () => {},
   approve: async () => {},
   decline: async () => {},
   undo: async () => null,
@@ -92,6 +95,9 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const [session, setSession] = useState<SessionSummary | null>(null);
   const [events, setEvents] = useState<TranscriptEvent[]>([]);
   const [busy, setBusy] = useState(false);
+  // The turn in flight, read synchronously: two clicks on one card in the same
+  // tick must not both reach the Server (the second would apply the call twice).
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
@@ -197,7 +203,8 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         setError(NO_CLIENT);
         return;
       }
-      if (busy) return;
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
       try {
@@ -208,10 +215,11 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
-    [client, busy, ensureSession, ensureRuntime, refreshHistory],
+    [client, ensureSession, ensureRuntime, refreshHistory],
   );
 
   const newSession = useCallback(async () => {
@@ -232,15 +240,22 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     }
   }, [client, workspaceId, refreshHistory, options.developerModeDefault]);
 
+  /** The last text sent, for Retry after a refused turn. */
+  const lastTextRef = useRef<string | null>(null);
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return Promise.resolve();
       if (trimmed === "/new") return newSession();
+      lastTextRef.current = trimmed;
       return run((s) => client?.turn(s.id, trimmed, turnContext(), onEvent) ?? Promise.resolve());
     },
     [client, run, onEvent, newSession, turnContext],
   );
+  const retry = useCallback(() => {
+    const text = lastTextRef.current;
+    return text ? send(text) : Promise.resolve();
+  }, [send]);
 
   const approve = useCallback(
     (activityId: string) =>
@@ -262,9 +277,12 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     [client, run, onEvent, turnContext],
   );
 
+  /** Undos in flight, so a second click on the same card is a no-op. */
+  const undoing = useRef(new Set<string>());
   const undo = useCallback(
     async (activityId: string): Promise<ActivityRecord | null> => {
-      if (!client) return null;
+      if (!client || undoing.current.has(activityId)) return null;
+      undoing.current.add(activityId);
       try {
         const result = await client.undo(activityId, sessionRef.current?.id ?? null);
         setEvents((current) =>
@@ -279,6 +297,8 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         return null;
+      } finally {
+        undoing.current.delete(activityId);
       }
     },
     [client],
@@ -293,12 +313,14 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         sessionRef.current = loaded.session;
         setEvents(applyEvents([], loaded.events));
         setRuntimeInfo(client.runtimeOf(loaded.session.id));
+        // Developer mode is per Session (CONTEXT.md): another Session starts from the default.
+        setDeveloperMode(options.developerModeDefault ?? false);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [client],
+    [client, options.developerModeDefault],
   );
 
   const waiting = useMemo(() => waitingCalls(events), [events]);
@@ -330,6 +352,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     developerMode,
     setDeveloperMode,
     send,
+    retry,
     approve,
     decline,
     undo,

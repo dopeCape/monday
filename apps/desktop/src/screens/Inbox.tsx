@@ -4,9 +4,8 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { BriefAction, ExternalPending, Settings } from "@monday/shared";
-import { Btn, ColHead, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
-import { account, groups, NOW, sections, tagsOf, workspace } from "@monday/ui/fixtures";
+import type { BriefAction, ExternalPending, Settings, Tag, Thread } from "@monday/shared";
+import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -33,6 +32,7 @@ import { openExternal, saveDownload } from "../platform/open.ts";
 import type { SearchModule } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
 import { type Composer, fixtureComposer } from "./compose/composer.ts";
@@ -57,6 +57,8 @@ import {
   targets,
   toggleSelected,
 } from "./inbox/triage.ts";
+import { useClock } from "./inbox/useClock.ts";
+import { useExit, useExitValue } from "./inbox/useExit.ts";
 import { reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
 import { Palette, type PaletteCommand } from "./Palette.tsx";
 
@@ -74,7 +76,11 @@ export interface InboxProps {
   syncing?: SyncProgress | null | undefined;
   /** Offline flips the agent bar's placeholder; the workspace dot is the App's. */
   online?: boolean | undefined;
-  /** The wall clock for relative times. Defaults to the fixtures' NOW. */
+  /**
+   * The wall clock for relative times, pinned by tests. Absent, the
+   * Workspace's clock (the design fixture's fixed one on the dev server) or
+   * the real one, refreshed every inbox.time_refresh_seconds.
+   */
   now?: Date | undefined;
   /** Opens this Thread in the reader on mount. Defaults to `?sel=` in the URL. */
   initialOpen?: string | null | undefined;
@@ -95,12 +101,17 @@ export interface InboxProps {
   onSearch?: ((query: string) => void) | undefined;
   /** Text the agent bar opens with, such as a palette handoff. */
   initialAgentText?: string | undefined;
-  /** The composer's Session (slice 14); inert without an Agent host. */
+  /** The composer's Session; inert without an Agent host. */
   agent?: AgentSession | undefined;
-  /** External calls parked on an approval (slice 19), for the chips. */
+  /** External calls parked on an approval, for the chips. */
   externalPending?: readonly ExternalPending[] | undefined;
-  /** The calendar seam (slice 18): the reader's invite bar and its overlap line. Absent, no bar. */
+  /** The calendar seam: the reader's invite bar and its overlap line. Absent, no bar. */
   calendar?: CalendarSource | undefined;
+  /**
+   * A Group lens (CONTEXT.md "Group"): only the Threads in this Group or
+   * Sub-group, under the Group's name. Absent, the whole Inbox.
+   */
+  group?: string | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -109,6 +120,12 @@ type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
 
 const defaultInbox = fixtureInbox();
 const defaultComposer = fixtureComposer();
+
+/** "needs-reply" as a heading when no strings.section.* Setting names it. */
+function sectionFallbackName(id: string): string {
+  const words = id.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 /** The Messages of the open Thread, from the reader seam, fetched on open. */
 function useThreadMessages(inbox: InboxData, threadId: string | null) {
@@ -138,6 +155,16 @@ function useThreadBrief(inbox: InboxData, threadId: string | null) {
   return useSyncExternalStore(subscribe, get, get);
 }
 
+/** Why the open Thread's bodies are missing, from the reader seam; null when they are not. */
+function useThreadUnavailable(inbox: InboxData, threadId: string | null) {
+  const subscribe = useCallback(
+    (listener: () => void) => (threadId ? inbox.watchMessages(threadId, listener) : () => {}),
+    [inbox, threadId],
+  );
+  const get = useCallback(() => (threadId ? inbox.unavailable(threadId) : null), [inbox, threadId]);
+  return useSyncExternalStore(subscribe, get, get);
+}
+
 function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
@@ -147,23 +174,28 @@ export function Inbox({
   composer = defaultComposer,
   syncing = null,
   online = true,
-  now = NOW,
+  now: nowProp,
   initialOpen,
   initialSelection,
   timing,
   composeRequest = 0,
   initialCompose,
   search = null,
-  workspaceId = workspace.id,
+  workspaceId: workspaceIdProp,
   onNavigate,
   onSearch,
   initialAgentText,
   agent = NULL_SESSION,
   externalPending,
   calendar,
+  group,
 }: InboxProps) {
   const shell = useShell();
+  const ws = useWorkspace();
+  const workspaceId = workspaceIdProp ?? ws.id;
   const { settings } = shell;
+  const clock = useClock(settings["inbox.time_refresh_seconds"], nowProp ?? ws.now);
+  const now = nowProp ?? ws.now ?? clock;
   const stream = shell.layout.list === "stream";
   // Just mail (CONTEXT.md "AI level"): no agent bar, and `/` does nothing.
   const aiOff = settings["ai.level"] === "off";
@@ -173,18 +205,33 @@ export function Inbox({
 
   /* ------------------------------ Data ------------------------------ */
 
-  const threads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const allThreads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const groups = useSyncExternalStore(inbox.subscribe, inbox.groups, inbox.groups);
+  const tags = useSyncExternalStore(inbox.subscribe, inbox.tags, inbox.tags);
+  const lens = group ? groups.find((g) => g.id === group) : undefined;
+  const threads = useMemo(
+    () =>
+      lens ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id) : allThreads,
+    [allThreads, lens],
+  );
+  const tagsOf = useCallback(
+    (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
+    [tags],
+  );
   const collapseMs = timing?.collapse ?? (reducedMotion() ? 0 : settings["inbox.row_collapse_ms"]);
   const toastMs = timing?.toast ?? settings["inbox.undo_toast_ms"];
   const rows = useLeavingRows(threads, collapseMs);
 
+  // The Sections are the rules in Settings (ADR 0004): the order Setting says
+  // which show and in what order, a rule may hide its Section, and the heading
+  // is the strings.section.<id> Setting where one exists.
   const orderedSections = useMemo(() => {
-    const byId = new Map(sections.map((s) => [s.id, s]));
+    const rules = new Map(settings["sections.rules"].map((r) => [r.id, r]));
     return settings["sections.order"].flatMap((id) => {
-      const s = byId.get(id);
-      if (!s || s.hidden) return [];
+      if (rules.get(id)?.hidden) return [];
       const nameKey = `strings.section.${id}`;
-      const name = nameKey in settings ? String(settings[nameKey as keyof Settings]) : s.name;
+      const name =
+        nameKey in settings ? String(settings[nameKey as keyof Settings]) : sectionFallbackName(id);
       return [{ id, name, rows: rows.filter((r) => r.thread.section === id) }];
     });
   }, [rows, settings]);
@@ -244,14 +291,39 @@ export function Inbox({
   const thread = focus ? inbox.thread(focus) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
-  const messages = useThreadMessages(inbox, openThreadId);
-  const brief = useThreadBrief(inbox, openThreadId);
+  // The sheet slides out over the Thread it showed, so that Thread's rows are
+  // held until the leave ends; the split reader never leaves.
+  const readerExit = useExitValue(showReader && thread ? thread : null);
+  const shownThread = readerExit.value;
+  const shownThreadId = shownThread?.id ?? null;
+  const messages = useThreadMessages(inbox, shownThreadId);
+  const brief = useThreadBrief(inbox, shownThreadId);
+  const unavailable = useThreadUnavailable(inbox, shownThreadId);
+  // Back online with a Thread open: read again what the Cache still lacks.
+  useEffect(() => {
+    if (online && shownThreadId && unavailable === "offline") void inbox.openThread(shownThreadId);
+  }, [online, shownThreadId, unavailable, inbox]);
+  const batchExit = useExitValue(batch);
+  const pickerExit = useExitValue(picker, "--t-fast");
+  const paletteExit = useExit(paletteOpen);
+
+  // Opening a Thread reads it (a Setting): once per open, so "mark unread"
+  // from the reader's menu holds until the next Thread opens. No toast and no
+  // undo token: reading is not an action to take back.
+  const markReadOnOpen = settings["reader.mark_read_on_open"];
+  useEffect(() => {
+    if (!markReadOnOpen || openThreadId === null) return;
+    if (inbox.thread(openThreadId)?.unread) void inbox.markRead([openThreadId]);
+  }, [markReadOnOpen, openThreadId, inbox]);
 
   /* ------------------------------ Compose ------------------------------ */
 
-  const nowFn = useCallback(() => (now === NOW ? new Date() : now), [now]);
+  // Compose runs on the real clock unless a test pins one: a send counts down
+  // from the Server's run time, never from the fixtures' day.
+  const nowFn = useCallback(() => nowProp ?? new Date(), [nowProp]);
   const compose = useCompose({ composer, settings, now: nowFn });
   const cs = compose.strings;
+  const overlayExit = useExitValue(compose.overlay);
   const openNew = compose.openNew;
   const openDraft = compose.openDraft;
   const lastRequest = useRef(composeRequest);
@@ -303,11 +375,27 @@ export function Inbox({
     [t],
   );
 
+  /**
+   * After Threads leave the list: the selection advances in the Setting's
+   * direction and, in the sheet, the next Thread opens or the sheet closes
+   * (docs/spec/inbox.md, "After archive, snooze or delete").
+   */
+  const advanceAfter = useCallback(
+    (ids: readonly string[]) => {
+      const next = nextFocus(order, focus, ids, s["inbox.after_action.direction"]);
+      setSelection([]);
+      setFocus(next);
+      if (stream && readerOpen && focus !== null && ids.includes(focus)) {
+        if (!s["inbox.after_action.open_next"] || next === null) setReaderOpen(false);
+      }
+    },
+    [order, focus, s, stream, readerOpen],
+  );
+
   /** Runs one removing action on ids, advances the focus and shows the toast. */
   const remove = useCallback(
     async (kind: RemovingKind, ids: readonly string[], until?: Date) => {
       if (ids.length === 0) return;
-      const next = nextFocus(order, focus, ids, s["inbox.after_action.direction"]);
       let token: UndoToken;
       let text: string;
       if (kind === "archive") {
@@ -321,14 +409,10 @@ export function Inbox({
         token = await inbox.snooze(ids, when);
         text = fill(t("strings.inbox.toast.snoozed"), { when: formatWake(when, now) });
       }
-      setSelection([]);
-      setFocus(next);
-      if (stream && readerOpen && focus !== null && ids.includes(focus)) {
-        if (!s["inbox.after_action.open_next"] || next === null) setReaderOpen(false);
-      }
+      advanceAfter(ids);
       showToast(countText(text, ids.length), token);
     },
-    [order, focus, s, t, inbox, now, stream, readerOpen, showToast, countText],
+    [t, inbox, now, advanceAfter, showToast, countText],
   );
 
   /** Previews a batch above the Setting, else runs it. */
@@ -397,7 +481,7 @@ export function Inbox({
         token,
       );
     },
-    [inbox, showToast, countText, t],
+    [inbox, groups, showToast, countText, t],
   );
 
   const undo = useCallback(async () => {
@@ -441,7 +525,7 @@ export function Inbox({
     [thread, inbox, compose],
   );
 
-  // Action chips are tool calls (slice 13): reply and forward open compose and
+  // Action chips are tool calls (ADR 0002): reply and forward open compose and
   // never send, snooze and archive apply with Undo, a link opens outside.
   const defaultDuration = s["calendar.default_duration_minutes"];
   const actionRunner = useMemo(
@@ -450,7 +534,7 @@ export function Inbox({
         inbox,
         compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
         openLink: (url) => openExternal(url),
-        // The chip is the user's own click, so the Event goes straight on the calendar (slice 18).
+        // The chip is the user's own click, so the Event goes straight on the calendar.
         ...(calendar
           ? {
               calendar: async ({ title, start }) => {
@@ -488,8 +572,10 @@ export function Inbox({
           null,
         );
       } else if (outcome.call.tool === "thread.archive") {
+        advanceAfter([thread.id]);
         showToast(t("strings.inbox.toast.archived"), outcome.undo);
       } else if (outcome.call.tool === "thread.snooze") {
+        advanceAfter([thread.id]);
         showToast(
           fill(t("strings.inbox.toast.snoozed"), {
             when: formatWake(new Date(outcome.call.args.until), now),
@@ -498,7 +584,7 @@ export function Inbox({
         );
       }
     },
-    [thread, actionRunner, showToast, t, now],
+    [thread, actionRunner, advanceAfter, showToast, t, now],
   );
 
   const openAttachment = useCallback(
@@ -508,11 +594,14 @@ export function Inbox({
       try {
         const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
         await saveDownload(meta?.name ?? attachmentId, bytes, mediaType);
-      } catch (error) {
-        compose.onError(error instanceof Error ? error.message : String(error));
+      } catch {
+        // Plain words, not the transport's: the toast names the file.
+        compose.onError(
+          fill(t("strings.reader.download_failed"), { name: meta?.name ?? attachmentId }),
+        );
       }
     },
-    [messages, inbox, compose],
+    [messages, inbox, compose, t],
   );
 
   const attachmentSrc = useCallback(
@@ -578,7 +667,7 @@ export function Inbox({
     "thread.delete": () => !overlay && request("delete", acting()),
     "thread.star": () => !overlay && void toggleStar(acting()),
     "thread.label": () => {
-      if (overlay) return;
+      if (overlay) return false;
       setPaletteQuery(t("strings.inbox.action.label"));
       setPaletteOpen(true);
     },
@@ -589,19 +678,20 @@ export function Inbox({
     "compose.forward": () => !overlay && focus && startReply("forward"),
     "select.toggle": () => !overlay && focus && setSelection(toggleSelected(selection, focus)),
     "select.extend_down": () => {
-      if (overlay) return;
+      if (overlay) return false;
       const r = extendSelection(order, selection, focus, 1);
       setSelection(r.selection);
       setFocus(r.focus);
     },
     "select.extend_up": () => {
-      if (overlay) return;
+      if (overlay) return false;
       const r = extendSelection(order, selection, focus, -1);
       setSelection(r.selection);
       setFocus(r.focus);
     },
-    undo: () => {
-      if (overlay) return;
+    undo: ({ typing }) => {
+      // In a field the field's own undo wins (the Natural keymap binds mod+z).
+      if (overlay || typing) return false;
       if (compose.pending) void compose.undo(openThreadId);
       else void undo();
     },
@@ -660,7 +750,7 @@ export function Inbox({
     setFocus(id);
     setReaderOpen(true);
   }
-  const runtime = runtimeLine(agent.runtimeInfo, s, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, s, ws.address);
   const agentStrings = useMemo(() => composerStrings(s), [s]);
   const chips = useMemo(
     () =>
@@ -672,6 +762,11 @@ export function Inbox({
       }),
     [s, agent.waiting, externalPending, threads],
   );
+  /** The same chips as lines in the palette's "Ask the agent" section. */
+  const paletteSuggestions = useMemo(
+    () => chips.map((c, i) => ({ key: `chip-${i}`, label: c.label })),
+    [chips],
+  );
   /** A chip that names Layout knobs applies them here; the sentence still goes to the Agent. */
   const applySuggestionLayout = (sg: Suggestion) => {
     if (!sg.layout) return;
@@ -679,31 +774,41 @@ export function Inbox({
     if (sg.layout.agent) void shell.set("layout.agent", sg.layout.agent);
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
-  const listTitle = t("strings.inbox.title");
+  const listTitle = lens?.name ?? t("strings.inbox.title");
+  /** The row's hover actions, worded from Settings with the keymap's keys. */
+  const rowTitles = {
+    archive: `${t("strings.inbox.action.archive")} (${key("thread.archive")})`,
+    snooze: `${t("strings.inbox.action.snooze")} (${key("thread.snooze")})`,
+    ask: t("strings.inbox.action.ask"),
+  };
   const headCount = selection.length
     ? fill(t("strings.inbox.selected"), { n: selection.length })
     : threads.length;
 
-  const batchThreads = batch
-    ? batch.ids.flatMap((id) => {
+  const shownBatch = batchExit.value;
+  const batchThreads = shownBatch
+    ? shownBatch.ids.flatMap((id) => {
         const th = inbox.thread(id);
         return th ? [th] : [];
       })
     : [];
-  const batchAction = batch
+  const batchAction = shownBatch
     ? t(
-        batch.kind === "archive"
+        shownBatch.kind === "archive"
           ? "strings.inbox.action.archive"
-          : batch.kind === "delete"
+          : shownBatch.kind === "delete"
             ? "strings.inbox.action.delete"
-            : batch.kind === "snooze"
+            : shownBatch.kind === "snooze"
               ? "strings.inbox.action.snooze"
               : "strings.inbox.action.read",
       )
     : "";
 
   return (
-    <div className={`main inbox ${stream && showReader ? "has-sheet" : ""}`} data-pane={pane}>
+    <div
+      className={`main inbox ${stream && readerExit.mounted ? "has-sheet" : ""}`}
+      data-pane={pane}
+    >
       <section className="col list" data-fields={fields} aria-label={listTitle}>
         <ColHead title={listTitle} count={headCount}>
           {stream ? (
@@ -715,7 +820,7 @@ export function Inbox({
             <DotsThreeIcon />
           </Btn>
         </ColHead>
-        {picker === "more" ? (
+        {pickerExit.value === "more" ? (
           <Picker
             label={t("strings.inbox.more")}
             items={[{ key: "read-all", label: t("strings.inbox.mark_all_read") }]}
@@ -724,9 +829,11 @@ export function Inbox({
               void markAllRead();
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {picker === "snooze" ? (
+        {pickerExit.value === "snooze" ? (
           <SnoozePicker
             settings={s}
             now={now}
@@ -735,9 +842,11 @@ export function Inbox({
               request("snooze", pickerIds, until);
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {picker === "move" ? (
+        {pickerExit.value === "move" ? (
           <Picker
             label={t("strings.inbox.move.title")}
             title={t("strings.inbox.move.title")}
@@ -752,6 +861,8 @@ export function Inbox({
               void moveTo(pickerIds, k === "" ? null : k);
             }}
             onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
           />
         ) : null}
         <div className="col-body" role="listbox" aria-label={listTitle}>
@@ -783,7 +894,9 @@ export function Inbox({
           {orderedSections.map((sec) =>
             sec.rows.length === 0 ? null : (
               <Fragment key={sec.id}>
-                <SectionLabel>{sec.name}</SectionLabel>
+                <SectionLabel className={sec.rows.every((r) => r.leaving) ? "leaving" : undefined}>
+                  {sec.name}
+                </SectionLabel>
                 {sec.rows.map(({ thread: th, leaving }) => (
                   <MessageRow
                     key={th.id}
@@ -796,6 +909,7 @@ export function Inbox({
                         .join(" ") || undefined
                     }
                     now={now}
+                    titles={rowTitles}
                     onOpen={open}
                     onArchive={(id) => request("archive", [id])}
                     onSnooze={(id) => openPicker("snooze", [id])}
@@ -811,25 +925,34 @@ export function Inbox({
         </div>
       </section>
 
-      {showReader && thread ? (
+      {shownThread ? (
         <Reader
           banner={
             calendar ? (
-              <ThreadInviteBar calendar={calendar} threadId={thread.id} settings={settings} />
+              <ThreadInviteBar calendar={calendar} threadId={shownThread.id} settings={settings} />
             ) : null
           }
-          thread={thread}
+          thread={shownThread}
           messages={messages}
           brief={brief}
-          tags={tagsOf(thread)}
+          tags={tagsOf(shownThread)}
           sheet={stream}
+          leaving={readerExit.leaving}
+          onLeft={readerExit.onEnd}
           now={now}
           collapseQuoted={s["reader.collapse_quoted"]}
           messageStrings={{
             showQuoted: t("strings.reader.show_quoted"),
             hideQuoted: t("strings.reader.hide_quoted"),
             showImages: t("strings.reader.show_images"),
-            loading: t("strings.reader.loading"),
+            loading:
+              unavailable === "offline"
+                ? t("strings.reader.offline_body")
+                : unavailable === "locked"
+                  ? t("strings.reader.locked")
+                  : unavailable === "failed"
+                    ? t("strings.reader.body_failed")
+                    : t("strings.reader.loading"),
           }}
           onReply={startReply}
           onBriefAction={(action) => void runBriefAction(action)}
@@ -837,17 +960,20 @@ export function Inbox({
           onOpenLink={(href) => void openExternal(href)}
           attachmentSrc={attachmentSrc}
           reply={
-            compose.reply && compose.reply.threadId === thread.id ? (
+            compose.reply && compose.reply.threadId === shownThread.id ? (
               <ReplyCompose
                 key={compose.reply.draftId}
                 composer={composer}
                 draftId={compose.reply.draftId}
                 initial={compose.reply.initial}
                 recipient={
-                  messages[messages.length - 1]?.from.name ?? thread.participants[0]?.name ?? ""
+                  messages[messages.length - 1]?.from.name ??
+                  shownThread.participants[0]?.name ??
+                  ""
                 }
                 strings={cs}
                 idleMs={compose.idleMs}
+                delaySeconds={compose.delaySeconds}
                 replyAll={compose.reply.replyAll}
                 onReplyAll={compose.setReplyAll}
                 onForward={() => startReply("forward")}
@@ -898,13 +1024,35 @@ export function Inbox({
           }}
           onClose={() => setReaderOpen(false)}
           onAsk={focusAgent}
-          onArchive={() => request("archive", [thread.id])}
-          onSnooze={() => openPicker("snooze", [thread.id])}
-          onMove={() => openPicker("move", [thread.id])}
-          onDelete={() => request("delete", [thread.id])}
-          onStar={() => void toggleStar([thread.id])}
-          onToggleRead={() => void toggleRead([thread.id])}
+          onArchive={() => request("archive", [shownThread.id])}
+          onSnooze={() => openPicker("snooze", [shownThread.id])}
+          onMove={() => openPicker("move", [shownThread.id])}
+          onDelete={() => request("delete", [shownThread.id])}
+          onStar={() => void toggleStar([shownThread.id])}
+          onToggleRead={() => void toggleRead([shownThread.id])}
         />
+      ) : !stream ? (
+        // The split list with nothing to open (an empty Inbox): the mock's empty reader.
+        <section className="col reader" aria-label={t("strings.reader.empty_title")}>
+          <div className="empty">
+            <h3>{t("strings.reader.empty_title")}</h3>
+            <p>
+              {t("strings.reader.empty_help")
+                .split(/(\{down\}|\{up\})/)
+                .map((part, i) =>
+                  part === "{down}" || part === "{up}" ? (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a split of one static string; the position is the identity
+                    <Kbd key={`${part}-${i}`}>
+                      {key(part === "{down}" ? "move.down" : "move.up")}
+                    </Kbd>
+                  ) : (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: same split; text parts can repeat
+                    <Fragment key={`${part}-${i}`}>{part}</Fragment>
+                  ),
+                )}
+            </p>
+          </div>
+        </section>
       ) : null}
 
       {shell.layout.agent === "bottom" && !aiOff ? (
@@ -931,6 +1079,7 @@ export function Inbox({
             else onNavigate?.(`thread:${id}`);
           }}
           onSuggest={applySuggestionLayout}
+          onOpenRuntime={() => onNavigate?.("settings:ai")}
         />
       ) : null}
 
@@ -938,6 +1087,8 @@ export function Inbox({
         <UndoBar
           key={compose.pending.sendId}
           runAt={compose.pending.runAt}
+          later={compose.pending.later}
+          stayMs={toastMs}
           now={nowFn}
           strings={cs.undo}
           undoKey={key("undo")}
@@ -965,42 +1116,54 @@ export function Inbox({
         />
       ) : null}
 
-      {compose.overlay ? (
+      {overlayExit.value ? (
         <ComposeOverlay
-          key={compose.overlay.draftId}
+          key={overlayExit.value.draftId}
           composer={composer}
-          draftId={compose.overlay.draftId}
-          initial={compose.overlay.initial}
+          draftId={overlayExit.value.draftId}
+          initial={overlayExit.value.initial}
           strings={cs}
           idleMs={compose.idleMs}
+          delaySeconds={compose.delaySeconds}
           laterPresetsHours={compose.laterPresetsHours}
           now={nowFn}
           onClose={compose.closeOverlay}
           onSent={compose.onSent}
           onError={compose.onError}
+          leaving={overlayExit.leaving}
+          onLeft={overlayExit.onEnd}
         />
       ) : null}
 
-      {batch ? (
+      {batchExit.value ? (
         <BatchPreview
-          title={fill(t("strings.inbox.batch.title"), { action: batchAction, n: batch.ids.length })}
+          title={fill(t("strings.inbox.batch.title"), {
+            action: batchAction,
+            n: batchExit.value.ids.length,
+          })}
           threads={batchThreads}
           applyLabel={t("strings.inbox.batch.apply")}
           cancelLabel={t("strings.inbox.batch.cancel")}
           onApply={() => void applyBatch()}
           onCancel={() => setBatch(null)}
+          leaving={batchExit.leaving}
+          onLeft={batchExit.onEnd}
         />
       ) : null}
 
-      {paletteOpen ? (
+      {paletteExit.mounted ? (
         <Palette
           query={paletteQuery}
           onQuery={setPaletteQuery}
           onClose={() => setPaletteOpen(false)}
+          leaving={paletteExit.leaving}
+          onLeft={paletteExit.onEnd}
           keymap={keymap}
           search={search}
           workspaceId={workspaceId}
-          recentThreads={threads.slice(0, 20)}
+          recentThreads={allThreads.slice(0, 20)}
+          groups={groups}
+          suggestions={paletteSuggestions}
           now={now}
           onCommand={runCommand}
           onAsk={handoff}

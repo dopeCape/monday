@@ -3,7 +3,7 @@
 //! Precedence: MONDAY_CONFIG, then ~/.config/monday/monday.toml on every platform
 //! if it exists, then the platform's own config directory.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
@@ -18,7 +18,9 @@ pub fn resolve_path(env: &dyn Fn(&str) -> Option<String>, platform_dir: Option<P
     if let Some(explicit) = env("MONDAY_CONFIG") {
         return PathBuf::from(explicit);
     }
-    if let Some(home) = env("HOME") {
+    // Windows has no HOME; USERPROFILE stands in, as packages/shared's paths.ts does.
+    let home = env("HOME").or_else(|| env("USERPROFILE"));
+    if let Some(home) = home.clone() {
         let dot = PathBuf::from(home).join(".config").join(APP_DIR).join(FILE_NAME);
         if dot.exists() {
             return dot;
@@ -33,10 +35,39 @@ pub fn resolve_path(env: &dyn Fn(&str) -> Option<String>, platform_dir: Option<P
     if let Some(dir) = platform_dir {
         return dir.join(APP_DIR).join(FILE_NAME);
     }
-    if let Some(home) = env("HOME") {
+    if let Some(home) = home {
         return PathBuf::from(home).join(".config").join(APP_DIR).join(FILE_NAME);
     }
     PathBuf::from(FILE_NAME)
+}
+
+/// Where a palette path points: `~` expands to HOME, a relative path is under
+/// the config directory, an absolute one is itself. Pure, so it can be tested.
+pub fn resolve_palette_path(path: &str, home: Option<&str>, config_dir: &Path) -> PathBuf {
+    let trimmed = path.trim();
+    if trimmed == "~" || trimmed.starts_with("~/") || trimmed.starts_with("~\\") {
+        if let Some(h) = home {
+            let rest = trimmed.trim_start_matches('~').trim_start_matches(['/', '\\']);
+            return PathBuf::from(h).join(rest);
+        }
+    }
+    let p = PathBuf::from(trimmed);
+    if p.is_absolute() {
+        p
+    } else {
+        config_dir.join(p)
+    }
+}
+
+/// Read the palette file `appearance.palette` names: token TOML or base16 YAML.
+/// Read only; the app never writes it (ADR 0001).
+#[tauri::command]
+pub fn read_palette_file(app: AppHandle, path: String) -> ConfigFile {
+    let config_dir = config_path(&app).parent().map(Path::to_path_buf).unwrap_or_default();
+    let home = std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok());
+    let resolved = resolve_palette_path(&path, home.as_deref(), &config_dir);
+    let text = std::fs::read_to_string(&resolved).unwrap_or_default();
+    ConfigFile { exists: resolved.is_file(), path: resolved.to_string_lossy().into_owned(), text }
 }
 
 pub fn config_path(app: &AppHandle) -> PathBuf {
@@ -118,6 +149,33 @@ mod tests {
         m.insert("HOME", "/home/u".to_string());
         let p = resolve_path(&env(&m), Some(PathBuf::from("/plat")));
         assert_eq!(p, PathBuf::from("/x/y.toml"));
+    }
+
+    #[test]
+    fn userprofile_stands_in_for_home() {
+        let mut m = HashMap::new();
+        m.insert("USERPROFILE", "/nonexistent-profile".to_string());
+        let p = resolve_path(&env(&m), None);
+        assert_eq!(p, PathBuf::from("/nonexistent-profile/.config/monday/monday.toml"));
+    }
+
+    #[test]
+    fn palette_paths_expand_home_and_fall_under_the_config_dir() {
+        let dir = Path::new("/home/u/.config/monday");
+        assert_eq!(
+            resolve_palette_path("~/palettes/x.toml", Some("/home/u"), dir),
+            PathBuf::from("/home/u/palettes/x.toml")
+        );
+        assert_eq!(
+            resolve_palette_path("x.toml", Some("/home/u"), dir),
+            PathBuf::from("/home/u/.config/monday/x.toml")
+        );
+        assert_eq!(resolve_palette_path("/abs/x.yaml", None, dir), PathBuf::from("/abs/x.yaml"));
+        // Without a HOME the tilde path is taken as written, under the config dir.
+        assert_eq!(
+            resolve_palette_path("~/x.toml", None, dir),
+            PathBuf::from("/home/u/.config/monday/~/x.toml")
+        );
     }
 
     #[test]

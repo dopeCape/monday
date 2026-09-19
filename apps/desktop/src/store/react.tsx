@@ -33,6 +33,9 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
   const [store, setStore] = useState<Store | null>(null);
   const [content, setContent] = useState<ContentTransport | null>(null);
   const caps = useRef<Capabilities | null>(null);
+  // The transport reads its Settings live, so a change applies on the next connection.
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
 
   useEffect(() => {
     let disposed = false;
@@ -45,11 +48,17 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
           import("./driver.ts"),
           import("./transport.ts"),
         ]);
+        const log = (m: string) => console.warn(`[store] ${m}`);
         opened = await createStore({
           workspaceId,
           driver: await tauriDriver(workspaceId),
-          transport: apiTransport(shell.api, () => caps.current),
-          log: (m) => console.warn(`[store] ${m}`),
+          transport: apiTransport(shell.api, {
+            capabilities: () => caps.current,
+            pollSeconds: () => settingsRef.current["server.poll_seconds"],
+            fallbackAfter: () => settingsRef.current["server.wake_fallback_after"],
+            log,
+          }),
+          log,
         });
         if (!disposed) setContent(apiContent(shell.api));
       } else {
@@ -76,22 +85,46 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
   // The wake transport follows the Server the Shell picked (the Sidecar or the
   // Cloud): its capabilities choose WebSocket, SSE or polling, and a switch of
   // target reconnects.
+  const probeSeconds = shell.settings["server.probe_seconds"];
   useEffect(() => {
     if (!store) return;
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    // Unknown capabilities (the Server was down when asked) read as polling;
+    // they are asked for again every reachability check, and once they answer
+    // the wake connection is remade so the offered push mode takes over.
+    const learn = async (): Promise<boolean> => {
+      if (!shell.server) return false;
+      caps.current = await shell.api.capabilities().catch(() => null);
+      return caps.current !== null;
+    };
+    const keepLearning = () => {
+      if (cancelled || caps.current !== null || !shell.server) return;
+      retry = setTimeout(() => {
+        void learn().then((known) => {
+          if (cancelled) return;
+          if (known) {
+            unsubscribe?.();
+            unsubscribe = store.subscribe();
+          } else {
+            keepLearning();
+          }
+        });
+      }, probeSeconds * 1000);
+    };
     void (async () => {
-      if (shell.server) {
-        caps.current = await shell.api.capabilities().catch(() => null);
-      }
+      const known = await learn();
       if (cancelled) return;
       unsubscribe = store.subscribe();
+      if (!known) keepLearning();
     })();
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
       unsubscribe?.();
     };
-  }, [store, shell.server, shell.api]);
+  }, [store, shell.server, shell.api, probeSeconds]);
 
   if (!store) return <>{fallback}</>;
   return (

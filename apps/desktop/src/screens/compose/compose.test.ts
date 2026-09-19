@@ -17,7 +17,7 @@ import {
   shouldReplyAll,
   signatureFor,
 } from "./reply.ts";
-import { isLater, secondsLeft } from "./UndoBar.tsx";
+import { secondsLeft } from "./UndoBar.tsx";
 
 /** A fake timer queue the autosave schedules into. */
 function fakeTimers() {
@@ -317,8 +317,6 @@ describe("undo bar countdown", () => {
     expect(secondsLeft(runAt, new Date("2026-09-16T10:00:00.000Z"))).toBe(30);
     expect(secondsLeft(runAt, new Date("2026-09-16T10:00:29.100Z"))).toBe(1);
     expect(secondsLeft(runAt, new Date("2026-09-16T10:00:31.000Z"))).toBe(0);
-    expect(isLater(runAt, new Date("2026-09-16T10:00:00.000Z"))).toBe(false);
-    expect(isLater("2026-09-16T14:00:00.000Z", new Date("2026-09-16T10:00:00.000Z"))).toBe(true);
   });
 });
 

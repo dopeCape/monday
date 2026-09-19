@@ -21,6 +21,8 @@ export interface ReplyComposeProps {
   recipient: string;
   strings: ComposeUiStrings;
   idleMs: number;
+  /** The undo window Send schedules with (send.delay_seconds); zero sends at once. */
+  delaySeconds: number;
   replyAll: boolean;
   /** The toggle; the parent answers with the recipients for the new mode, or null to keep them. */
   onReplyAll: (replyAll: boolean) => { to: Person[]; cc: Person[] } | null;
@@ -39,6 +41,7 @@ export function ReplyCompose({
   recipient,
   strings,
   idleMs,
+  delaySeconds,
   replyAll,
   onReplyAll,
   onForward,
@@ -59,7 +62,7 @@ export function ReplyCompose({
 
   const send = useCallback(async () => {
     try {
-      const result = await editor.send();
+      const result = await editor.send({ delaySeconds });
       onSent({ ...result, draftId });
     } catch (error) {
       onError(
@@ -68,7 +71,7 @@ export function ReplyCompose({
           : String(error),
       );
     }
-  }, [editor, onSent, onError, draftId, strings.noRecipients]);
+  }, [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients]);
 
   const toggleOriginals = (on: boolean) => {
     const without = content.attachments.filter(
@@ -182,6 +185,7 @@ export function ReplyCompose({
             attachments={content.attachments}
             uploads={editor.uploads}
             onRemove={editor.removeAttachment}
+            onDismissUpload={editor.dismissUpload}
             strings={{ uploading: strings.uploading, remove: strings.removeAttachment }}
           />
         }

@@ -132,6 +132,20 @@ describe("transcript", () => {
       needsReply: [],
     });
     expect(capped.map((c) => c.label)).toEqual(["One", "Two"]);
+    // Every sentence is a Setting: reworded, the chips follow.
+    const reworded = suggestionsFor({
+      settings: {
+        ...strings,
+        "strings.agent.chip.pending": "Answer the {tool}",
+        "strings.agent.chip.reply_one": "One thread waits",
+      },
+      waiting: [call({ status: "waiting", tool: "send_draft" })],
+      needsReply: [thread],
+    });
+    expect(reworded.map((c) => c.label).slice(0, 2)).toEqual([
+      "Answer the send draft",
+      "One thread waits",
+    ]);
   });
 
   test("the header line names the Runtime and the address", () => {

@@ -1,4 +1,4 @@
-// The invite bar (slice 18; CONTEXT.md "Invite"; design/js/screens/calendar.js
+// The invite bar (CONTEXT.md "Invite"; design/js/screens/calendar.js
 // "Invite in a thread"): the text/calendar part of a Thread as one bar under
 // the Brief: the title, the slot, the organizer, an overlap with the user's
 // own calendar, and Accept, Tentative, Decline. The answer is an Outbox
@@ -39,7 +39,7 @@ export function InviteBar({ invites, overlaps, strings: s, onRsvp }: InviteBarPr
   const updated = !cancelled && invites.filter((i) => i.method === "REQUEST").length > 1;
   const organizer = invite.organizer?.name || invite.organizer?.email || "";
   const answered = invite.response !== "needs-action";
-  const overlap = overlaps.find((o) => o.id !== invite.eventId);
+  const overlap = overlaps.find((o) => o.id !== invite.eventId && o.uid !== invite.uid);
   return (
     <div className="invite" data-invite={invite.id}>
       <div className="inv-h">

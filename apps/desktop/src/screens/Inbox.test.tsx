@@ -3,7 +3,8 @@
 // DOM out. Mounted under a StaticShell over the fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { PartialSettings } from "@monday/shared";
+import type { Message, PartialSettings, Thread } from "@monday/shared";
+import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -40,11 +41,14 @@ function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
     inbox: {
       threads: inbox.threads,
       thread: inbox.thread,
+      groups: inbox.groups,
+      tags: inbox.tags,
       subscribe: inbox.subscribe,
       messages: inbox.messages,
       watchMessages: inbox.watchMessages,
       openThread: inbox.openThread,
       brief: inbox.brief,
+      unavailable: inbox.unavailable,
       requestBrief: inbox.requestBrief,
       attachmentBytes: inbox.attachmentBytes,
       archive: wrap("archive"),
@@ -123,6 +127,62 @@ describe("Inbox rendering", () => {
       "Pending",
     ]);
     expect(rowIds()).toEqual(["e10", "e11", "e4", "e5"]);
+  });
+
+  test("a user-defined Section renders from its rule; a hidden rule hides its Section", async () => {
+    const custom = fixtureInbox([
+      { ...fixtureThreads[0], id: "p1", section: "projects" } as Thread,
+      { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
+    ]);
+    await mount(
+      { inbox: custom },
+      {
+        "sections.order": ["projects", "waiting"],
+        "sections.rules": [
+          { id: "projects", when: { groups: ["hiring"] } },
+          { id: "waiting", when: { lastFrom: "others" }, hidden: true },
+        ],
+      },
+    );
+    // No strings.section.projects Setting: the id reads as a heading.
+    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual(["Projects"]);
+    expect(rowIds()).toEqual(["p1"]);
+  });
+
+  test("a Group lens shows only that Group's Threads under the Group's name", async () => {
+    await mount({ group: "hiring" });
+    expect(document.querySelector(".col-head h2")?.textContent).toBe("Hiring");
+    expect(rowIds()).toEqual(["e1", "e3"]);
+    expect(document.querySelector(".col-head .count")?.textContent).toBe("2");
+  });
+
+  test("row labels and the move picker come from the seam's Tags and Groups, not the fixtures", async () => {
+    const custom = fixtureInbox([{ ...fixtureThreads[0], tags: ["t-mine"] } as Thread], {
+      tags: [{ id: "t-mine", workspaceId: "ws", name: "Mine" }],
+      groups: [
+        {
+          id: "g-only",
+          workspaceId: "ws",
+          parentId: null,
+          name: "Only group",
+          rule: { sentence: "", predicate: {}, prompt: "" },
+          threshold: null,
+          briefPolicy: null,
+        },
+      ],
+    });
+    await mount({ inbox: custom });
+    expect(document.querySelector(".row .lbl")?.textContent).toBe("Mine");
+    await press("m");
+    expect(
+      [...document.querySelectorAll(".pop-item span:first-child")].map((s) => s.textContent),
+    ).toEqual(["Only group", "No group"]);
+  });
+
+  test("without a pinned clock the rows read the Workspace's clock, the design fixture's here", async () => {
+    await mount({ now: undefined });
+    // e1 was written at 09:41 on the fixtures' day, which the fixture Workspace's clock makes today.
+    expect(document.querySelector(".row .time")?.textContent).toBe("09:41");
   });
 
   test("an empty Inbox shows one line from Settings and nothing else", async () => {
@@ -218,6 +278,19 @@ describe("keyboard triage", () => {
     expect(rowIds()[0]).toBe("e1");
   });
 
+  test("the toast fades after the Setting's delay, counted from when it appeared, not from the last render", async () => {
+    await mount({ timing: { collapse: 0, toast: 40 } });
+    await press("e");
+    expect(toast()).toBe("ArchivedUndo Z");
+    // Renders keep coming (J moves the focus) inside the window; none restarts the clock.
+    await act(async () => Bun.sleep(15));
+    await press("j");
+    await act(async () => Bun.sleep(15));
+    await press("k");
+    await act(async () => Bun.sleep(20));
+    expect(toast()).toBeNull();
+  });
+
   test("a row collapses with a transition before it leaves the list", async () => {
     await mount({ timing: { collapse: 30, toast: 60_000 } });
     await press("e");
@@ -309,6 +382,10 @@ describe("keyboard triage", () => {
     expect(calls).toEqual(['archive:["e1"]']);
     await press("b");
     expect(document.querySelector(".pop")).not.toBeNull();
+    // The row's hover actions name the same keys.
+    expect(
+      [...(rows()[0]?.querySelectorAll<HTMLElement>(".actions .btn") ?? [])].map((b) => b.title),
+    ).toEqual(["Archive (Y)", "Snooze (B)", "Ask"]);
   });
 
   test("Cmd-K toggles the palette and Cmd-N applies a saved View", async () => {
@@ -334,8 +411,73 @@ describe("keyboard triage", () => {
     expect(reader()).toBe("e1");
     expect(document.querySelector(".reader.sheet")).toBeNull();
   });
-});
 
+  test("the split list with nothing to open shows the empty reader with the move keys", async () => {
+    await mount({ inbox: fixtureInbox([]) }, { "layout.list": "split" });
+    expect(document.querySelector(".reader .empty h3")?.textContent).toBe("Nothing open");
+    expect(document.querySelector(".reader .empty p")?.textContent).toBe(
+      "Pick a conversation, or use J and K.",
+    );
+    expect([...document.querySelectorAll(".reader .empty kbd")].map((k) => k.textContent)).toEqual([
+      "J",
+      "K",
+    ]);
+  });
+
+  test("bodies missing for a reason say so in plain words, and come back online", async () => {
+    const base = fixtureInbox();
+    let why: "offline" | "locked" | "failed" | null = "offline";
+    let opened = 0;
+    // Stable snapshots, as the seam promises: the same array until something changes.
+    const bare = new Map<string, readonly Message[]>();
+    const inbox: InboxData = {
+      ...base,
+      messages: (id) => {
+        let list = bare.get(id);
+        if (!list) {
+          list = base.messages(id).map(({ bodyText: _b, ...m }) => m);
+          bare.set(id, list);
+        }
+        return list;
+      },
+      unavailable: () => why,
+      openThread: async () => {
+        opened += 1;
+      },
+    };
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    const render = (online: boolean) =>
+      act(async () =>
+        r.render(
+          <StaticShell settings={{ "ai.level": "automate" }}>
+            <Inbox
+              inbox={inbox}
+              now={new Date(2026, 8, 16, 10, 0)}
+              initialOpen="e1"
+              online={online}
+              timing={{ collapse: 0, toast: 60_000 }}
+            />
+          </StaticShell>,
+        ),
+      );
+    await render(false);
+    const line = () => document.querySelector(".reader .msg-body .faint")?.textContent;
+    expect(line()).toBe("Message text will load when you are back online");
+    // Back online: the screen opens the Thread again for what the Cache lacks.
+    const before = opened;
+    await render(true);
+    expect(opened).toBe(before + 1);
+    why = "locked";
+    await render(true);
+    expect(line()).toBe("Message text is unavailable while the server is locked");
+    why = "failed";
+    await render(false);
+    expect(line()).toBe("Message text could not be loaded. Open the thread again to retry");
+  });
+});
 describe("multi-select and batches", () => {
   test("X toggles rows into the selection and Shift-J extends it", async () => {
     await mount();
@@ -435,14 +577,53 @@ describe("the reader", () => {
     await mount({ inbox, initialOpen: "e2" });
     const buttons = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")];
     const byTitle = (t: string) => buttons.find((b) => b.title.startsWith(t));
+    // Opening e2 read it (the Setting); the toolbar then acts on the open Thread.
+    expect(calls).toEqual(['markRead:["e2"]']);
     await act(async () => byTitle("Delete")?.click());
-    expect(calls).toEqual(['delete:["e2"]']);
+    expect(calls).toEqual(['markRead:["e2"]', 'delete:["e2"]']);
     expect(toast()).toBe("DeletedUndo Z");
     expect(reader()).toBe("e3");
     await act(async () => byTitle("Archive")?.click());
-    expect(calls[1]).toBe('archive:["e3"]');
+    expect(calls[2]).toBe('archive:["e3"]');
     expect(toast()).toBe("ArchivedUndo Z");
     expect(reader()).toBe("e4");
+  });
+
+  test("opening marks the Thread read once (a Setting); mark unread from the menu holds", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: null });
+    expect(inbox.thread("e1")?.unread).toBe(true);
+    await press("Enter");
+    expect(reader()).toBe("e1");
+    expect(calls).toEqual(['markRead:["e1"]']);
+    expect(document.querySelector(".row[data-thread=e1]")?.classList.contains("unread")).toBe(
+      false,
+    );
+    // The More menu offers Mark unread, and the open Thread stays unread afterwards.
+    const more = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")].find(
+      (b) => b.title === "More",
+    );
+    await act(async () => more?.click());
+    const item = [...document.querySelectorAll<HTMLButtonElement>(".reader .pop-item")].find((b) =>
+      b.textContent?.includes("Mark unread"),
+    );
+    await act(async () => item?.click());
+    expect(calls).toEqual(['markRead:["e1"]', 'markUnread:["e1"]']);
+    expect(inbox.thread("e1")?.unread).toBe(true);
+    // The next unread Thread reads on its own open.
+    await press("Escape");
+    await press("j");
+    await press("Enter");
+    expect(calls.length).toBe(3);
+    expect(calls[2]).toBe('markRead:["e2"]');
+  });
+
+  test("with reader.mark_read_on_open off, opening leaves the Thread unread", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: "e1" }, { "reader.mark_read_on_open": false });
+    expect(reader()).toBe("e1");
+    expect(calls).toEqual([]);
+    expect(inbox.thread("e1")?.unread).toBe(true);
   });
 
   test("the reader's Archive button acts on the open Thread", async () => {
@@ -462,6 +643,21 @@ describe("the reader", () => {
       document.querySelector<HTMLButtonElement>(".reader .msg.collapsed")?.click(),
     );
     expect(document.querySelectorAll(".reader .msg.collapsed").length).toBe(1);
+  });
+
+  test("a Brief chip that archives advances the reader like the toolbar does", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: "e10" });
+    // e10's Brief carries an archive chip; a click applies it with Undo and moves on.
+    const chip = [
+      ...document.querySelectorAll<HTMLButtonElement>(".reader .brief-actions .chip"),
+    ].find((b) => b.textContent === "Archive");
+    expect(chip).not.toBeUndefined();
+    await act(async () => chip?.click());
+    expect(calls).toContain('archive:["e10"]');
+    expect(toast()).toBe("ArchivedUndo Z");
+    expect(reader()).toBe("e11");
+    expect(focusRow()).toBe("e11");
   });
 
   test("the reader's More menu stars and marks unread", async () => {

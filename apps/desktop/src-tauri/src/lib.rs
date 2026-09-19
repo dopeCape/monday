@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod notify;
 mod rootkey;
 mod power;
 mod runtimes;
@@ -14,11 +15,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(sidecar::SidecarState::default())
         .manage(db::DbState::default())
         .invoke_handler(tauri::generate_handler![
             config::read_config,
             config::write_config,
+            config::read_palette_file,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
@@ -32,6 +35,7 @@ pub fn run() {
             power::power_info,
             power::network_info,
             runtimes::env_path,
+            notify::notify,
         ])
         .setup(|app| {
             config::watch(app.handle().clone());
@@ -42,7 +46,12 @@ pub fn run() {
                         use tauri::Emitter;
                         let _ = handle.emit("sidecar:ready", info);
                     }
-                    Err(e) => eprintln!("[monday] sidecar failed to start: {e}"),
+                    Err(e) => {
+                        use tauri::Emitter;
+                        eprintln!("[monday] sidecar failed to start: {e}");
+                        // The webview shows the Server section instead of a blank window.
+                        let _ = handle.emit("sidecar:failed", e);
+                    }
                 }
             });
             Ok(())
@@ -52,6 +61,13 @@ pub fn run() {
                 sidecar::stop(window.app_handle());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Quitting without closing the window (the dock, Cmd+Q) must still
+            // stop the sidecar and its Postgres; stop() is idempotent.
+            if let tauri::RunEvent::Exit = event {
+                sidecar::stop(app);
+            }
+        });
 }

@@ -4,7 +4,15 @@
 // selects, Tab hands the text to the Agent, Escape closes.
 import type { Thread } from "@monday/shared";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
-import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
+import {
+  type AnimationEvent,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+} from "react";
 import { cx } from "../format.ts";
 import { Icon, type IconComponent } from "./icon.tsx";
 import { MessageRow } from "./message-row.tsx";
@@ -34,16 +42,29 @@ export interface ScrimProps {
   onClose?: (() => void) | undefined;
   children?: ReactNode | undefined;
   className?: string | undefined;
+  /** On its way out: the leave animation runs and clicks no longer land. */
+  leaving?: boolean | undefined;
+  /** The leave animation ended (the scrim's own, not a child's). */
+  onLeft?: (() => void) | undefined;
 }
 
 /** The dimmed backdrop under an overlay. Clicking it closes the overlay. */
-export function Scrim({ onClose, children, className }: ScrimProps) {
+export function Scrim({ onClose, children, className, leaving, onLeft }: ScrimProps) {
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (leaving) return;
     if (e.target === e.currentTarget) onClose?.();
+  };
+  const onAnimationEnd = (e: AnimationEvent<HTMLDivElement>) => {
+    if (leaving && e.target === e.currentTarget) onLeft?.();
   };
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop closes; Escape is the Shell's
-    <div className={cx("scrim", className)} onClick={onClick} role="presentation">
+    <div
+      className={cx("scrim", leaving && "leaving", className)}
+      onClick={onClick}
+      onAnimationEnd={onAnimationEnd}
+      role="presentation"
+    >
       {children}
     </div>
   );
@@ -84,6 +105,9 @@ export interface CommandPaletteProps {
   /** For Thread rows' relative times. */
   now?: Date | undefined;
   className?: string | undefined;
+  /** On its way out: the input lets go of the focus and the scrim runs its leave. */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
 }
 
 export function CommandPalette({
@@ -100,8 +124,16 @@ export function CommandPalette({
   strings: overrides,
   now,
   className,
+  leaving,
+  onLeft,
 }: CommandPaletteProps) {
   const s = { ...DEFAULT_STRINGS, ...overrides };
+  const input = useRef<HTMLInputElement>(null);
+  // On the way out the input lets go of the keys; opened again mid-leave it takes them back.
+  useEffect(() => {
+    if (leaving) input.current?.blur();
+    else input.current?.focus();
+  }, [leaving]);
   const first = sections[0]?.items[0]?.key;
   const active = activeKey ?? first;
   const activeItem = sections.flatMap((sec) => sec.items).find((it) => it.key === active);
@@ -125,11 +157,12 @@ export function CommandPalette({
   };
 
   return (
-    <Scrim onClose={onClose}>
+    <Scrim onClose={onClose} leaving={leaving} onLeft={onLeft}>
       <div className={cx("cmdk", className)} role="dialog" aria-label={s.placeholder}>
         <div className="cmdk-in">
           <Icon icon={MagnifyingGlassIcon} />
           <input
+            ref={input}
             // biome-ignore lint/a11y/noAutofocus: the palette opens to take typing
             autoFocus
             placeholder={s.placeholder}

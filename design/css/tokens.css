@@ -45,9 +45,20 @@
   --agent-w: 360px;
   --rail-w: 56px;
 
+  /* Motion: every transition and animation reads these; the app's appearance.transitions Setting zeroes them. */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --t-fast: 120ms;
   --t-med: 220ms;
+  --t-slow: 320ms;
+  --t-spin: 1000ms;
+}
+
+:root[data-transitions="off"] {
+  --t-fast: 0ms;
+  --t-med: 0ms;
+  --t-slow: 0ms;
+  --t-spin: 0ms;
 }
 
 :root[data-density="compact"] {

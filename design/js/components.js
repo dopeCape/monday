@@ -27,7 +27,7 @@ export function navSidebar(route) {
   const auto = nav.automation.map(it => item({ ...it, n: 0, href: `#/${it.key}` }, route.screen === it.key)).join("");
   return `
   <aside class="nav">
-    <button class="ws" title="Synced 12 seconds ago">
+    <button class="ws" title="Connected">
       <span class="avatar sq" style="--c:var(--fg)">${workspace.initials}<span class="live"></span></span>
       <span class="ws-name">${workspace.name}</span>
       ${ic("ph-caret-up-down")}
@@ -72,8 +72,10 @@ const titles = { inbox: "Inbox", hiring: "Hiring", candidates: "Candidates", int
 
 export function messageList(route, ui) {
   const title = titles[route.folder || "inbox"] || "Inbox";
+  // An open thread reads itself (the app's reader.mark_read_on_open), so the selected row drops its dot.
+  const unread = e => e.unread && !(ui.readerOpen && ui.selected === e.id);
   const row = e => `
-    <div class="row ${e.unread ? "unread" : ""} ${ui.selected === e.id ? "on" : ""}" data-open="${e.id}">
+    <div class="row ${unread(e) ? "unread" : ""} ${ui.selected === e.id ? "on" : ""}" data-open="${e.id}">
       <span class="dot"></span>
       <span class="from">${e.from.name}${e.count > 1 ? ` <span class="cnt">${e.count}</span>` : ""}</span>
       <span class="subj"><b>${e.subject}</b><span class="snip">${e.snippet}</span></span>

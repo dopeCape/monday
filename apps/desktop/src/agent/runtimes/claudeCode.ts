@@ -315,7 +315,14 @@ export function createClaudeCodeSession(deps: LocalRuntimeDeps): AgentSession {
         spawnedFor.webFetch === next.webFetch;
       if (process && same) return;
       await kill();
-      await spawn(next);
+      try {
+        await spawn(next);
+      } catch (error) {
+        // A CLI that spawned but never opened its session is not half-started: the
+        // next turn spawns it again instead of talking to a session that is not there.
+        await kill();
+        throw error;
+      }
     },
 
     async send(text, onEvent): Promise<TurnOutcome> {

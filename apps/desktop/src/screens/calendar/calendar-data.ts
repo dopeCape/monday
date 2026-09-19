@@ -1,5 +1,5 @@
 // The seam between the Calendar screen, the Today panel, the invite bar and
-// the data under them (slice 18): calendars, Events and Invites as the Cache
+// the data under them: calendars, Events and Invites as the Cache
 // holds them (the feed keeps them current, the Store warms titles), handed
 // out as one stable external store, plus the writes: visibility through the
 // API, an Event made by hand through the API, an Invite's answer through the

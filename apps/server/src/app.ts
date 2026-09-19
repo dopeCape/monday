@@ -407,6 +407,9 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     "/",
     mailRoutes(mailstore, {
       bodyStates,
+      ...(options.sync
+        ? { fetchBody: (id) => options.sync?.fetchBody(id) ?? Promise.resolve() }
+        : {}),
       placement,
       // A user's move is a correction routing learns from (ADR 0005: it beats automation).
       onMove: (intent, previous) => intelligence.routing.observeMove(intent, previous),

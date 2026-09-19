@@ -215,7 +215,7 @@ export interface AskBoxProps {
 
 const HELP_STYLE: CSSProperties = { fontSize: "var(--fs-xs)", margin: "8px 0 0", lineHeight: 1.5 };
 
-/** "Ask for a group": the agent proposes a rule; the Agent host wires it in slice 14. */
+/** "Ask for a group": the sentence goes to the composer, where the Agent proposes a rule and shows what would move. */
 export function AskBox({ placeholder, help, value, onChange, onSubmit, className }: AskBoxProps) {
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -293,7 +293,7 @@ export interface DecisionRowProps {
   className?: string | undefined;
 }
 
-/** One Thread in Needs a decision: its candidates as buttons, and an X to leave it alone. */
+/** One Thread in Needs a decision: its candidates as buttons, and an X to leave it out of every Group. */
 export function DecisionRow({
   threadId,
   name,
@@ -317,7 +317,7 @@ export function DecisionRow({
               {c.label}
             </Btn>
           ))}
-          {onLeave && shown.length < 2 ? (
+          {onLeave ? (
             <Btn
               sm
               icon

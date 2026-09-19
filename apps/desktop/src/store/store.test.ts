@@ -8,7 +8,13 @@ import { bunDriver } from "./bun-driver.ts";
 import { createFakeStore, type FakeStore } from "./fake.ts";
 import { INBOX_THREADS_SQL, rowToThread, THREAD_BY_ID_SQL } from "./queries.ts";
 import { fixtureSeed } from "./seed.ts";
-import { localStatements, tablesRead, tablesWritten } from "./store.ts";
+import {
+  applySchema,
+  localStatements,
+  SCHEMA_VERSION,
+  tablesRead,
+  tablesWritten,
+} from "./store.ts";
 
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -63,6 +69,38 @@ describe("schema", () => {
     // A second open over the same file is a no-op.
     const again = await createFakeStore({ driver, seed: null });
     expect(again.store.workspaceId).toBe(store.workspaceId);
+  });
+
+  test("an older Cache is rebuilt from the feed: content dropped, cursor reset, Outbox and meta kept", async () => {
+    const driver = bunDriver();
+    await applySchema(driver);
+    await driver.batch([
+      {
+        sql: "insert into threads (id, subject, participants, last_activity, message_count, unread, starred, archived, deleted, snoozed_until, section, group_id, subgroup_id, has_attachments, bulk, snippet, updated_at) values ('t1', 'Old', '[]', '2026-09-01T00:00:00Z', 1, 1, 0, 0, 0, null, 'needs-reply', null, null, 0, 0, '', '2026-09-01T00:00:00Z')",
+      },
+      { sql: "insert into meta (key, value) values ('cursor', '42')" },
+      {
+        sql: "insert into outbox (thread_id, kind, payload, at, actor) values ('t1', 'archive', '{}', '2026-09-02T00:00:00Z', 'user')",
+      },
+      // The Cache was written by an older schema.
+      {
+        sql: "update meta set value = ? where key = 'schema_version'",
+        params: [SCHEMA_VERSION - 1],
+      },
+    ]);
+    await applySchema(driver);
+    expect(await driver.query("select id from threads")).toEqual([]);
+    expect(await driver.query("select value from meta where key = 'cursor'")).toEqual([]);
+    expect(await driver.query("select kind from outbox")).toEqual([{ kind: "archive" }]);
+    expect(await driver.query("select value from meta where key = 'schema_version'")).toEqual([
+      { value: String(SCHEMA_VERSION) },
+    ]);
+    // The same version leaves everything alone.
+    await driver.exec("insert into meta (key, value) values ('cursor', '7')");
+    await applySchema(driver);
+    expect(await driver.query("select value from meta where key = 'cursor'")).toEqual([
+      { value: "7" },
+    ]);
   });
 
   test("seeds the fixtures once and indexes subjects and participants", async () => {

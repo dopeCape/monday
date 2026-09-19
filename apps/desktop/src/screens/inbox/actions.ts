@@ -2,11 +2,17 @@
 // Threads through InboxSource and acts through InboxActions; every action
 // returns an undo token that undo(token) reverses (docs/spec/inbox.md).
 //
-// fixtureInbox() is the in-memory implementation over packages/ui fixtures.
-// Slice 6 replaces it with the Store: same interface, the screen stays.
+// fixtureInbox() is the in-memory implementation over packages/ui fixtures,
+// for tests; store-inbox.ts is the Store's, with the same interface.
 
-import type { Brief, Message, Thread } from "@monday/shared";
-import { briefOf, threads as fixtureThreads, messagesOf } from "@monday/ui/fixtures";
+import type { Brief, Group, Message, Tag, Thread } from "@monday/shared";
+import {
+  briefOf,
+  groups as fixtureGroups,
+  tags as fixtureTags,
+  threads as fixtureThreads,
+  messagesOf,
+} from "@monday/ui/fixtures";
 
 export type UndoToken = string;
 
@@ -30,6 +36,10 @@ export interface InboxSource {
   threads(): readonly Thread[];
   /** One Thread by id, wherever it is. */
   thread(id: string): Thread | undefined;
+  /** Every Group of the Workspace, top-level first, for the move picker. Stable between changes. */
+  groups(): readonly Group[];
+  /** Every Tag of the Workspace, so a row can name the ones its Thread carries. Stable between changes. */
+  tags(): readonly Tag[];
   subscribe(listener: () => void): () => void;
 }
 
@@ -42,15 +52,23 @@ export interface ThreadReader {
   /**
    * Fetches headers, attachments and bodies into the Cache (within its
    * rules), then asks for a Brief under the brief policy when the Cache has
-   * none or a stale one (slice 13). Never throws.
+   * none or a stale one (docs/spec/inbox.md, Briefs). Never throws.
    */
   openThread(threadId: string): Promise<void>;
   /** The Brief the Cache holds for a Thread, computed before or after open; undefined when none. */
   brief(threadId: string): Brief | undefined;
+  /**
+   * Why the last open left bodies missing: the Server did not answer
+   * (offline), it is locked, or the read failed; null when nothing went
+   * wrong. Changes reach watchMessages listeners. The reader words it.
+   */
+  unavailable(threadId: string): BodyUnavailable | null;
   /** Asks the Server for a Brief by hand ("or when the user asks"). Never throws. */
   requestBrief(threadId: string): Promise<void>;
   attachmentBytes(attachmentId: string): Promise<{ bytes: Uint8Array; mediaType: string }>;
 }
+
+export type BodyUnavailable = "offline" | "locked" | "failed";
 
 export type Inbox = InboxActions & InboxSource & ThreadReader;
 
@@ -61,7 +79,17 @@ interface Row {
   deleted: boolean;
 }
 
-export function fixtureInbox(seed: readonly Thread[] = fixtureThreads): Inbox {
+export interface FixtureInboxOptions {
+  groups?: readonly Group[] | undefined;
+  tags?: readonly Tag[] | undefined;
+}
+
+export function fixtureInbox(
+  seed: readonly Thread[] = fixtureThreads,
+  options: FixtureInboxOptions = {},
+): Inbox {
+  const groupList = options.groups ?? fixtureGroups;
+  const tagList = options.tags ?? fixtureTags;
   const rows = new Map<string, Row>();
   for (const t of seed) rows.set(t.id, { thread: structuredClone(t), deleted: false });
   const listeners = new Set<() => void>();
@@ -111,6 +139,7 @@ export function fixtureInbox(seed: readonly Thread[] = fixtureThreads): Inbox {
     },
     openThread: async () => {},
     brief: (threadId) => briefOf(threadId),
+    unavailable: () => null,
     requestBrief: async () => {},
     attachmentBytes: async (attachmentId) => ({
       bytes: new TextEncoder().encode(attachmentId),
@@ -126,6 +155,8 @@ export function fixtureInbox(seed: readonly Thread[] = fixtureThreads): Inbox {
       return cache;
     },
     thread: (id) => rows.get(id)?.thread,
+    groups: () => groupList,
+    tags: () => tagList,
     subscribe(listener) {
       listeners.add(listener);
       return () => {

@@ -5,6 +5,7 @@ import {
   PALETTE_TOKENS,
   paletteFromBase16,
   parseBase16,
+  parsePaletteFile,
   parsePaletteToml,
   REQUIRED_TOKENS,
 } from "./palette.ts";
@@ -206,5 +207,43 @@ describe("palette files", () => {
   test("no scheme at all is a problem", () => {
     const result = paletteFromBase16({});
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("parsePaletteFile", () => {
+  test("a .toml path (or anything without base16 slots) reads as token TOML", () => {
+    const result = parsePaletteFile(tokenToml, "~/.config/monday/graphite-copy.toml");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.palette.name).toBe("Graphite copy");
+  });
+
+  test("a .yaml path reads as one base16 scheme whose other half mirrors it", () => {
+    const result = parsePaletteFile(base16Dark, "/schemes/default-dark.yaml");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.palette.name).toBe("Default Dark");
+    expect(result.palette.dark.bg).toBe("#181818");
+    expect(result.palette.light.panel).toBe("#181818");
+  });
+
+  test("base16 slots in a file without an extension are still a scheme, named after the file", () => {
+    const anonymous = base16Dark.replace(/^scheme:.*\n/, "");
+    const result = parsePaletteFile(anonymous, "/schemes/moonlight");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.palette.name).toBe("moonlight");
+  });
+
+  test("a token file without a name takes the file's stem", () => {
+    const result = parsePaletteFile(`[light]${light}\n[dark]${dark}`, "/p/mine.toml");
+    expect(result.ok && result.palette.name).toBe("mine");
+  });
+
+  test("problems come back rather than throwing", () => {
+    const result = parsePaletteFile("not = [toml", "/p/broken.toml");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems[0]?.message).toContain("Line");
   });
 });

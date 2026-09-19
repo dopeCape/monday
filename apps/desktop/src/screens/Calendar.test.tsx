@@ -174,7 +174,13 @@ async function mount(element: React.ReactNode) {
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell settings={{ "calendar.day_start_hour": 8, "calendar.day_end_hour": 18 }}>
+      <StaticShell
+        settings={{
+          "calendar.day_start_hour": 8,
+          "calendar.day_end_hour": 18,
+          "ai.level": "assist",
+        }}
+      >
         {element}
       </StaticShell>,
     );
@@ -259,6 +265,26 @@ describe("the Calendar screen", () => {
     await click(day18);
     expect(el.querySelectorAll(".cal-day")).toHaveLength(1);
     expect(el.querySelector(".cal-dh")?.textContent).toContain("Fri 18");
+    // The head names the one day, not a span that ends the day before.
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Fri 18 Sep");
+    // Previous and next step one day; Today comes back to the 17th.
+    await click(el.querySelector('.col-head button[title="Previous"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Sat 19 Sep");
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
+    );
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
+    // Month steps a month at a time and Today returns to September.
+    await click([...el.querySelectorAll(".seg button")].find((b) => b.textContent === "Month"));
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("October 2026");
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
+    );
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("September 2026");
   });
 
   test("the calendar list hides a calendar; the form adds an Event; Schedule hands the composer a sentence", async () => {
@@ -290,6 +316,88 @@ describe("the Calendar screen", () => {
     );
     expect(asked).toEqual(["Set up a call with "]);
   });
+
+  test("Just mail: no agent bar and no Schedule handoff on the Calendar; both are back at assist", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const render = (level: "off" | "assist") =>
+      act(async () => {
+        root?.render(
+          <StaticShell settings={{ "ai.level": level, "layout.agent": "bottom" }}>
+            <Calendar source={source} now={NOW} onAsk={() => {}} />
+          </StaticShell>,
+        );
+      });
+    await render("off");
+    await act(tick);
+    const el = host as HTMLElement;
+    expect(el.querySelector(".agent-dock")).toBeNull();
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.includes("Schedule")),
+    ).toBe(false);
+    // The calendar itself is untouched: the views, Today and the Event form stay.
+    expect(el.querySelectorAll(".cal-day")).toHaveLength(7);
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.trim() === "Event"),
+    ).toBe(true);
+    await render("assist");
+    await act(tick);
+    expect(el.querySelector(".agent-dock")).not.toBeNull();
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.includes("Schedule")),
+    ).toBe(true);
+  });
+
+  test("an Event whose end is not after its start is refused in plain words and nothing is created", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.trim() === "Event"),
+    );
+    const form = el.querySelector<HTMLFormElement>("form.cal-form");
+    if (!form) throw new Error("no form");
+    await act(async () => {
+      (form.elements.namedItem("title") as HTMLInputElement).value = "Backwards";
+      (form.elements.namedItem("start") as HTMLInputElement).value = "2026-09-17T16:00";
+      (form.elements.namedItem("end") as HTMLInputElement).value = "2026-09-17T15:00";
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(tick);
+    expect(source.log).toEqual([]);
+    expect(el.querySelector(".cal-error")?.textContent).toBe(
+      "The end has to come after the start.",
+    );
+    // Cancel closes the form and forgets the complaint.
+    await click(
+      [...form.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel"),
+    );
+    expect(el.querySelector("form.cal-form")).toBeNull();
+    expect(el.querySelector(".cal-error")).toBeNull();
+  });
+
+  test("an answer from the Agenda that the seam refuses shows why, in plain words", async () => {
+    const inner = fixtureCalendar({ calendars, events, invites });
+    const source = {
+      ...inner,
+      respond: async () => {
+        throw new Error("the Provider is unreachable");
+      },
+    };
+    await mount(<Calendar source={source} now={NOW} initialView="agenda" />);
+    const el = host as HTMLElement;
+    const podcast = [...el.querySelectorAll(".ag-row")].find((r) =>
+      r.textContent?.includes("Podcast recording"),
+    );
+    await click(
+      [...(podcast?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Accept"),
+    );
+    expect(el.querySelector(".cal-answer-error")?.textContent).toBe(
+      "Could not send your answer: the Provider is unreachable",
+    );
+  });
 });
 
 describe("the invite bar", () => {
@@ -315,6 +423,44 @@ describe("the invite bar", () => {
     );
     expect(source.log).toEqual(["rsvp inv-1 accepted"]);
     expect(el.querySelector(".invite .tag")?.textContent).toBe("Accepted");
+  });
+
+  test("the invite's own Event, not yet linked but holding the same uid, is not an overlap", async () => {
+    // The Provider added the meeting to the calendar before the Server linked the Invite to it.
+    const unlinked: Invite = {
+      ...podcastInvite,
+      id: "inv-4",
+      threadId: "t-unlinked",
+      eventId: null,
+    };
+    const source = fixtureCalendar({
+      calendars,
+      events: events.map((e) => (e.id === "podcast" ? { ...e, uid: "podcast@lindqvist" } : e)),
+      invites: [unlinked],
+    });
+    await mount(<ThreadInviteBar calendar={source} threadId="t-unlinked" settings={S} />);
+    const bar = (host as HTMLElement).querySelector(".invite");
+    expect(bar?.textContent).toContain("Podcast recording");
+    expect(bar?.querySelector(".inv-c")).toBeNull();
+  });
+
+  test("the invite's own Event, not yet linked but holding the same uid, is not an overlap", async () => {
+    // The Provider added the meeting to the calendar before the Server linked the Invite to it.
+    const unlinked: Invite = {
+      ...podcastInvite,
+      id: "inv-4",
+      threadId: "t-unlinked",
+      eventId: null,
+    };
+    const source = fixtureCalendar({
+      calendars,
+      events: events.map((e) => (e.id === "podcast" ? { ...e, uid: "podcast@lindqvist" } : e)),
+      invites: [unlinked],
+    });
+    await mount(<ThreadInviteBar calendar={source} threadId="t-unlinked" settings={S} />);
+    const bar = (host as HTMLElement).querySelector(".invite");
+    expect(bar?.textContent).toContain("Podcast recording");
+    expect(bar?.querySelector(".inv-c")).toBeNull();
   });
 
   test("a forged sender gets the warning and no buttons; a CANCEL shows cancelled", async () => {
@@ -381,5 +527,38 @@ describe("reminders", () => {
     expect(fired).toHaveLength(1);
     expect(fired[0]).toMatch(/^Aoife Brennan, take-home\|Aoife Brennan, take-home starts at /);
     stop();
+  });
+
+  test("an Event removed or declined before its reminder is not announced; the next one is armed instead; stop cancels all", async () => {
+    const source = fixtureCalendar({ calendars, events });
+    const fired: string[] = [];
+    const clock = new Date(2026, 8, 17, 14, 49, 59, 950);
+    const stop = scheduleReminders(
+      source,
+      () => ({
+        "notifications.enabled": true,
+        "notifications.calendar_lead_minutes": 10,
+        "strings.calendar.reminder": "{title} starts at {time}",
+      }),
+      { notify: async (title) => void fired.push(title) },
+      () => clock,
+    );
+    // Aoife's meeting at 15:00 is armed for 14:50; the user removes it first.
+    await source.remove("aoife");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(fired).toEqual([]);
+    // The next candidate is tomorrow's podcast; declining it re-arms past it too.
+    await source.respond("podcast", "declined");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fired).toEqual([]);
+    stop();
+    // After stop nothing fires, whatever the source does.
+    await source.create({
+      title: "Right away",
+      start: new Date(2026, 8, 17, 14, 59).toISOString(),
+      end: new Date(2026, 8, 17, 15, 30).toISOString(),
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fired).toEqual([]);
   });
 });

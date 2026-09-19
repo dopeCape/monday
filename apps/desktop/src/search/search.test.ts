@@ -147,6 +147,21 @@ describe("ranking", () => {
     const r = await search.search("zebra ready", { workspace: "ws-a" });
     expect(ids(r.hits)).toEqual(["stale"]);
   });
+
+  test("a hit carries its Thread's Tags resolved from the Cache, in the order applied", async () => {
+    const { store } = await open();
+    await store.write([
+      { sql: "insert into tags (id, name) values ('t-plan', 'Plan'), ('t-zoo', 'Zoo')" },
+      {
+        sql: "insert into thread_tags (thread_id, tag_id) values ('fresh', 't-zoo'), ('fresh', 't-plan')",
+      },
+    ]);
+    const search = moduleOver([{ store, account: "a" }]);
+    const r = await search.search("zebra ready", { workspace: "ws-a" });
+    const fresh = r.hits.find((h) => h.thread.id === "fresh");
+    expect(fresh?.tags.map((t) => t.name)).toEqual(["Zoo", "Plan"]);
+    expect(r.hits.find((h) => h.thread.id === "stale")?.tags).toEqual([]);
+  });
 });
 
 describe("matching", () => {

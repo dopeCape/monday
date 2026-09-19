@@ -10,9 +10,9 @@
 // "all accounts" toggle runs the same query across every Workspace Cache the
 // module knows, labelling each hit with its account.
 
-import type { Id, MessageBodiesPage, Person, Thread } from "@monday/shared";
+import type { Id, MessageBodiesPage, Person, Tag, Thread } from "@monday/shared";
 import type { Row, SqlParam } from "../store/driver.ts";
-import { rowToThread } from "../store/queries.ts";
+import { rowToTag, rowToThread, TAGS_SQL } from "../store/queries.ts";
 import type { Store } from "../store/store.ts";
 import {
   type CompiledQuery,
@@ -30,6 +30,8 @@ export interface SearchSource {
 
 export interface SearchHit {
   thread: Thread;
+  /** The Thread's Tags, resolved, in the order they were applied; the first one is the row label. */
+  tags: Tag[];
   workspaceId: Id;
   account: string;
   /** The matched passage from the best Message body, or the Thread snippet. */
@@ -336,6 +338,7 @@ export function scoreCandidates(
     const preview = c.rid === null ? "" : (previews.get(c.rid) ?? "");
     out.push({
       thread,
+      tags: [],
       workspaceId,
       account,
       snippet: preview.trim() !== "" ? preview : thread.snippet,
@@ -500,6 +503,20 @@ export function createSearch(options: SearchModuleOptions): SearchModule {
     if (compiled.match === null) {
       // A pure filter is a list, not a ranking: newest first, nothing pinned.
       hits = hits.map((h) => ({ ...h, pinned: false, score: 0 }));
+    }
+    // The Tags a row names, from the Cache's own table; one small read, only when a hit carries any.
+    if (hits.some((h) => h.thread.tags.length > 0)) {
+      const tagRows = await store.query<Row>(TAGS_SQL);
+      const tagById = new Map(
+        tagRows.map((r) => rowToTag(r, store.workspaceId)).map((t) => [t.id, t]),
+      );
+      hits = hits.map((h) => ({
+        ...h,
+        tags: h.thread.tags.flatMap((id) => {
+          const tag = tagById.get(id);
+          return tag ? [tag] : [];
+        }),
+      }));
     }
 
     let older: OlderMail | null = null;

@@ -37,11 +37,19 @@ export interface Platform {
   /** Only after the user explicitly asked (ADR 0001). */
   writeConfig(text: string): Promise<void>;
   onConfigChanged(cb: (file: ConfigFile) => void): () => void;
+  /**
+   * The palette file `appearance.palette` names (a token TOML or a base16
+   * YAML): `~` expands, a relative path is under the config directory. Read
+   * only, never written; `exists` is false when there is no such file.
+   */
+  readPaletteFile(path: string): Promise<ConfigFile>;
   secretGet(key: string): Promise<string | null>;
   secretSet(key: string, value: string): Promise<void>;
   secretDelete(key: string): Promise<void>;
   sidecarInfo(): Promise<SidecarInfo>;
   onSidecarReady(cb: (info: SidecarInfo) => void): () => void;
+  /** The Sidecar could not start (no Postgres, a bad data directory); the message is the host's. */
+  onSidecarFailed(cb: (message: string) => void): () => void;
   /** Opens a URL in the system browser (the OAuth wizards, deep links into consoles). */
   openExternal(url: string): Promise<void>;
   network(): Promise<NetworkInfo>;
@@ -53,6 +61,12 @@ export interface Platform {
   recoveryFile(): Promise<string>;
   /** Replaces the root key from a recovery file; a new Device joining an existing Server. */
   importRecoveryKey(text: string): Promise<void>;
+  /**
+   * A desktop notification (a calendar reminder, a Workflow failure) through
+   * the host: the notification plugin in the app, the web Notification API in
+   * a browser. The caller has already checked the notifications.* Settings.
+   */
+  notify(title: string, body: string): Promise<void>;
   /**
    * Spawns one of the Local runtime CLIs (CONTEXT.md, Local runtime) through
    * the shell plugin. `command` is a scope name from the capability
@@ -128,16 +142,19 @@ async function tauriPlatform(): Promise<Platform> {
     readConfig: () => invoke<ConfigFile>("read_config"),
     writeConfig: (text) => invoke("write_config", { text }),
     onConfigChanged: (cb) => sub<ConfigFile>("config:changed", cb),
+    readPaletteFile: (path) => invoke<ConfigFile>("read_palette_file", { path }),
     secretGet: (key) => invoke<string | null>("secret_get", { key }),
     secretSet: (key, value) => invoke("secret_set", { key, value }),
     secretDelete: (key) => invoke("secret_delete", { key }),
     sidecarInfo: () => invoke<SidecarInfo>("sidecar_info"),
     onSidecarReady: (cb) => sub<SidecarInfo>("sidecar:ready", cb),
+    onSidecarFailed: (cb) => sub<string>("sidecar:failed", cb),
     openExternal: (url) => openUrl(url),
     network: () => invoke<NetworkInfo>("network_info"),
     power: () => invoke<PowerInfo>("power_info"),
     recoveryFile: () => invoke<string>("recovery_file"),
     importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
+    notify: (title, body) => invoke("notify", { title, body }),
     spawn,
   };
 }
@@ -151,6 +168,10 @@ export interface FakePlatformOptions {
   rootKey?: string | null;
   /** The processes the fake spawns; none by default, so every CLI reads as not installed. */
   spawn?: ProcessRunner;
+  /** Receives what the fake would have shown as a desktop notification. */
+  notified?: (title: string, body: string) => void;
+  /** Palette files by path, as `appearance.palette` would name them. */
+  files?: Record<string, string>;
 }
 
 /** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
@@ -198,6 +219,10 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
+    readPaletteFile: async (path) => {
+      const content = options.files?.[path];
+      return { path, exists: content !== undefined, text: content ?? "" };
+    },
     secretGet: async (k) => secrets.get(k) ?? null,
     secretSet: async (k, v) => {
       secrets.set(k, v);
@@ -207,6 +232,7 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     },
     sidecarInfo: async () => ({ port: 0, token: "", running: false }),
     onSidecarReady: () => () => {},
+    onSidecarFailed: () => () => {},
     openExternal: async (url) => {
       if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
     },
@@ -221,6 +247,13 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       if (!key) throw new Error("not a recovery key");
       rootKey = key;
     },
+    notify: async (title, body) => {
+      if (options.notified) {
+        options.notified(title, body);
+        return;
+      }
+      await webNotify(title, body);
+    },
     spawn:
       options.spawn ??
       (async (command) => {
@@ -228,6 +261,23 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       }),
   };
 }
+
+/** The web Notification API for a browser, asking once; silent where there is none. */
+async function webNotify(title: string, body: string): Promise<void> {
+  if (typeof Notification === "undefined") return;
+  let permission = Notification.permission;
+  if (permission === "default") permission = await Notification.requestPermission();
+  if (permission !== "granted") return;
+  new Notification(title, { body });
+}
+
+/** Desktop notifications through whichever platform is running; the shape reminders take. */
+export const platformNotifier = {
+  async notify(title: string, body: string): Promise<void> {
+    const p = await platform();
+    await p.notify(title, body);
+  },
+};
 
 /** A fixed 32-byte key so the browser dev server's recovery file is stable. */
 const FAKE_ROOT_KEY = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) % 256);

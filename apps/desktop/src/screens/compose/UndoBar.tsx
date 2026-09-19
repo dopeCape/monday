@@ -1,9 +1,11 @@
 // The Undo bar after Send: "Sending in 30s" counting down from the send's
 // run time, with Undo (ADR 0010). Uses the toast's classes so it sits where
-// the undo toasts sit. A send later shows the time instead of a countdown.
+// the undo toasts sit. A send later shows its time instead of a countdown and
+// stays as long as an undo toast would; the Scheduled view keeps the Cancel.
 
 import { Btn, formatWhen, Kbd } from "@monday/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useExit } from "../inbox/useExit.ts";
 
 export interface UndoBarStrings {
   /** "Sending in {n}s" */
@@ -18,11 +20,15 @@ export interface UndoBarStrings {
 export interface UndoBarProps {
   /** ISO time the Job runs. */
   runAt: string;
+  /** The user picked a time from the Later menu: show it, no countdown. */
+  later?: boolean | undefined;
+  /** How long a later send's bar stays before it clears; the undo toast Setting. */
+  stayMs?: number | undefined;
   now?: (() => Date) | undefined;
   strings: UndoBarStrings;
   undoKey?: string | undefined;
   onUndo: () => void;
-  /** Called once the countdown passes zero (the send is on its way). */
+  /** Called once the countdown passes zero (the send is on its way), or once a later send's bar has stayed. */
   onElapsed?: (() => void) | undefined;
   /** Milliseconds between ticks; tests shorten it. */
   tickMs?: number | undefined;
@@ -33,13 +39,10 @@ export function secondsLeft(runAt: string, at: Date): number {
   return Math.max(0, Math.ceil((Date.parse(runAt) - at.getTime()) / 1000));
 }
 
-/** A run time more than a few minutes out is a send later, shown as a time. */
-export function isLater(runAt: string, at: Date, thresholdSeconds = 600): boolean {
-  return Date.parse(runAt) - at.getTime() > thresholdSeconds * 1000;
-}
-
 export function UndoBar({
   runAt,
+  later = false,
+  stayMs,
   now = () => new Date(),
   strings,
   undoKey,
@@ -48,23 +51,32 @@ export function UndoBar({
   tickMs = 250,
 }: UndoBarProps) {
   const [left, setLeft] = useState(() => secondsLeft(runAt, now()));
-  const later = isLater(runAt, now());
+  // Once the send is on its way (or a later send's bar has stayed) the bar
+  // slides out on the motion tokens, then tells the screen.
+  const [shown, setShown] = useState(true);
+  const elapsed = useRef(onElapsed);
+  elapsed.current = onElapsed;
+  const exit = useExit(shown, "--t-fast", () => elapsed.current?.());
 
   useEffect(() => {
-    if (later) return;
+    if (later) {
+      if (stayMs === undefined) return;
+      const timer = setTimeout(() => setShown(false), stayMs);
+      return () => clearTimeout(timer);
+    }
     let fired = false;
     const tick = () => {
       const n = secondsLeft(runAt, now());
       setLeft(n);
       if (n === 0 && !fired) {
         fired = true;
-        onElapsed?.();
+        setShown(false);
       }
     };
     tick();
     const timer = setInterval(tick, tickMs);
     return () => clearInterval(timer);
-  }, [runAt, now, later, onElapsed, tickMs]);
+  }, [runAt, now, later, stayMs, tickMs]);
 
   const text = later
     ? strings.scheduledFor.replace("{when}", formatWhen(runAt, now()))
@@ -72,8 +84,14 @@ export function UndoBar({
       ? strings.sendingIn.replace("{n}", String(left))
       : strings.sendingNow;
 
+  if (!exit.mounted) return null;
   return (
-    <div className="toast" role="status" data-send-undo>
+    <div
+      className={exit.leaving ? "toast leaving" : "toast"}
+      role="status"
+      data-send-undo
+      onAnimationEnd={exit.onEnd}
+    >
       <span className="count">{text}</span>
       {later || left > 0 ? (
         <Btn sm onClick={onUndo}>

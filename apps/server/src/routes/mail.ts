@@ -75,6 +75,12 @@ export interface MailRouteOptions {
   /** Per Message id, whether the body is fetched, pending or deferred (the sync mirror knows). */
   bodyStates?: (messageIds: string[]) => Promise<Map<string, BodyState>>;
   /**
+   * Fetches one body from the Provider now, for a reader that opened a Thread
+   * the sync has not reached yet; the sync engine's own pacing applies. A
+   * failure leaves the body as it was and the route answers what it has.
+   */
+  fetchBody?: (messageId: string) => Promise<void>;
+  /**
    * Called after a move intent lands, with where the Thread was. Routing
    * learns from it (slice 12: a user move is a correction). Runs after the
    * answer is decided; a failure is logged, never surfaced to the client.
@@ -187,6 +193,14 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
   // history wrapped so it can be folded, remote images blocked by default.
   app.get("/messages/:id/body", async (c) => {
     const messageId = c.req.param("id");
+    // A body the sync has not fetched yet is fetched on demand, so an open
+    // Thread never waits for the pass to come around to it.
+    if (options.fetchBody && options.bodyStates) {
+      const state = (await options.bodyStates([messageId])).get(messageId);
+      if (state === "pending" || state === "deferred") {
+        await options.fetchBody(messageId).catch(() => {});
+      }
+    }
     const body = await mailstore.readMessageBody(messageId);
     const header = await mailstore.findMessage(messageId);
     const allowRemoteImages = c.req.query("images") === "1";

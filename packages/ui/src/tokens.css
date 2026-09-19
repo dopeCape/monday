@@ -48,12 +48,15 @@
   --t-fast: 120ms;
   --t-med: 220ms;
   --t-slow: 320ms;
+  /* one turn of a spinner; off stops it still like everything else */
+  --t-spin: 1000ms;
 }
 
 :root[data-transitions="off"] {
   --t-fast: 0ms;
   --t-med: 0ms;
   --t-slow: 0ms;
+  --t-spin: 0ms;
 }
 
 :root[data-density="compact"] {

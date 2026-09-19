@@ -16,6 +16,8 @@ export interface MessageRowProps {
   now?: Date | undefined;
   /** The account the Thread belongs to, shown in the all-accounts search view. */
   account?: string | undefined;
+  /** The hover actions' titles, with their keys; the app words them from Settings and the keymap. */
+  titles?: { archive?: string; snooze?: string; ask?: string } | undefined;
   onOpen?: ((threadId: string) => void) | undefined;
   onArchive?: ((threadId: string) => void) | undefined;
   onSnooze?: ((threadId: string) => void) | undefined;
@@ -29,6 +31,7 @@ export function MessageRow({
   selected,
   now,
   account,
+  titles,
   onOpen,
   onArchive,
   onSnooze,
@@ -73,13 +76,13 @@ export function MessageRow({
       </span>
       <span className="time">{formatListTime(thread.lastActivity, now)}</span>
       <span className="actions">
-        <Btn icon title="Archive (E)" onClick={act(onArchive)}>
+        <Btn icon title={titles?.archive ?? "Archive (E)"} onClick={act(onArchive)}>
           <Icon icon={ArchiveIcon} />
         </Btn>
-        <Btn icon title="Snooze (H)" onClick={act(onSnooze)}>
+        <Btn icon title={titles?.snooze ?? "Snooze (H)"} onClick={act(onSnooze)}>
           <Icon icon={ClockIcon} />
         </Btn>
-        <Btn icon title="Ask about this" onClick={act(onAsk)}>
+        <Btn icon title={titles?.ask ?? "Ask about this"} onClick={act(onAsk)}>
           <Mark small />
         </Btn>
       </span>

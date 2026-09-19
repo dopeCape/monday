@@ -92,6 +92,31 @@ async function errorOf(response: Response): Promise<GmailApiError> {
   return new GmailApiError(response.status, reason, `Gmail ${response.status}: ${message}`);
 }
 
+/** Gmail says "quota" three ways: a 429, or a 403 with one of the rate-limit reasons. */
+export function isRateLimit(status: number, reason: string | null | undefined): boolean {
+  if (status === 429) return true;
+  return (
+    status === 403 &&
+    (reason === "rateLimitExceeded" ||
+      reason === "userRateLimitExceeded" ||
+      reason === "dailyLimitExceeded" ||
+      reason === "quotaExceeded")
+  );
+}
+
+/** The `reason` of a Gmail error body, or null when the body is not one. */
+export function reasonOf(body: string | null | undefined): string | null {
+  if (!body) return null;
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { errors?: Array<{ reason?: string }>; status?: string };
+    };
+    return parsed.error?.errors?.[0]?.reason ?? parsed.error?.status ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function backoffMs(attempt: number, random: () => number): number {
   return Math.min(2 ** attempt * 1000 + Math.floor(random() * 1000), MAX_BACKOFF_MS);
 }
@@ -157,11 +182,9 @@ export class GmailClient {
         continue;
       }
       const error = await errorOf(response);
-      const retryable =
-        response.status === 429 ||
-        (response.status === 403 &&
-          (error.reason === "rateLimitExceeded" || error.reason === "userRateLimitExceeded")) ||
-        response.status >= 500;
+      const rateLimited = isRateLimit(response.status, error.reason);
+      if (rateLimited) this.quota.penalize();
+      const retryable = rateLimited || response.status >= 500;
       if (retryable && attempt < this.maxRetries) {
         await this.sleep(backoffMs(attempt, this.random));
         continue;
@@ -213,7 +236,9 @@ export class GmailClient {
         }
         if (!response.ok) {
           const error = await errorOf(response);
-          if ((response.status === 429 || response.status >= 500) && attempt < this.maxRetries) {
+          const rateLimited = isRateLimit(response.status, error.reason);
+          if (rateLimited) this.quota.penalize();
+          if ((rateLimited || response.status >= 500) && attempt < this.maxRetries) {
             await this.sleep(backoffMs(attempt, this.random));
             continue;
           }
@@ -228,11 +253,19 @@ export class GmailClient {
           const index = Number(/item(\d+)/.exec(part.contentId)?.[1] ?? -1);
           const target = chunk[index];
           if (!target) continue;
-          if (part.status === 429) rateLimited = true;
+          // A part refused for quota (429, or a 403 with the rate-limit reason, which
+          // Gmail sends for "Units per minute per user") is retried, never dropped.
+          if (
+            part.status === 429 ||
+            (part.status === 403 && isRateLimit(403, reasonOf(part.body)))
+          ) {
+            rateLimited = true;
+          }
           if (part.status >= 200 && part.status < 300 && part.body) {
             out.set(target.id, JSON.parse(part.body) as T);
           }
         }
+        if (rateLimited) this.quota.penalize();
         if (rateLimited && attempt < this.maxRetries) {
           // Retry only what is still missing.
           const missing = chunk.filter((p) => !out.has(p.id));

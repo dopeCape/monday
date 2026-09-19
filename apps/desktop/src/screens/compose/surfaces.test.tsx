@@ -7,6 +7,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { PartialSettings } from "@monday/shared";
+import type { Editor as TiptapEditor } from "@tiptap/core";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { StaticShell } from "../../shell/Shell.tsx";
@@ -232,6 +233,72 @@ describe("send and undo", () => {
     expect(document.querySelector(".toast")?.textContent).toContain("Send cancelled");
   });
 
+  test("Send schedules with the delay Setting even when the Composer applies none itself", async () => {
+    // The Store composer runs the send Job at `now` plus what it is told; a
+    // surface that told it nothing left no undo window (the bar read 0s).
+    const composer = fixtureComposer({ now: () => NOW, delaySeconds: 0 });
+    await mount({ composer, initialOpen: "e1" }, { "send.delay_seconds": 45 });
+    await press("r");
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    await click(document.querySelector(".reply-bottom .btn.primary"));
+    await until(() => document.querySelector("[data-send-undo]") !== null);
+    expect(document.querySelector("[data-send-undo]")?.textContent).toContain("Sending in 45s");
+    expect(composer.sends()[0]?.runAt).toBe(new Date(NOW.getTime() + 45_000).toISOString());
+  });
+
+  test("a send later shows its time with Undo, then clears after the toast delay so other toasts show", async () => {
+    const composer = fixtureComposer({ now: () => NOW, delaySeconds: 30 });
+    await mount(
+      { composer, timing: { collapse: 0, toast: 40 } },
+      { "send.later_presets_hours": [2] },
+    );
+    await press("c");
+    await until(() => overlay() !== null);
+    const to = overlay()?.querySelector<HTMLInputElement>("#compose-to");
+    if (!to) throw new Error("no To field");
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(to, "aoife@northlight.dev");
+      to.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      to.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
+    });
+    const later = [...(overlay()?.querySelectorAll<HTMLButtonElement>(".c-foot .btn") ?? [])].find(
+      (b) => b.textContent?.includes("Later"),
+    );
+    await click(later ?? null);
+    await click(document.querySelector(".pop.later .pop-item"));
+    await until(() => document.querySelector("[data-send-undo]") !== null);
+    const bar = document.querySelector("[data-send-undo]");
+    expect(bar?.textContent).toContain("Sending Today 12:00");
+    expect(bar?.querySelector(".btn")?.textContent).toContain("Undo");
+    expect(composer.sends()[0]?.runAt).toBe(new Date(NOW.getTime() + 2 * 3_600_000).toISOString());
+    await until(() => document.querySelector("[data-send-undo]") === null);
+    expect(composer.sends()[0]?.status).toBe("scheduled");
+  });
+
+  test("Escape on a reply with unsaved text saves it instead of dropping it", async () => {
+    const composer = fixtureComposer({ now: () => NOW });
+    await mount({ composer, initialOpen: "e1" }, { "send.draft_autosave_ms": 60_000 });
+    await press("r");
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    const box = document.querySelector<HTMLElement & { editor?: TiptapEditor }>(".reply .tiptap");
+    if (!box?.editor) throw new Error("no editor");
+    // Type through the editor (Tiptap hangs itself on its element), inside the idle window.
+    const editor = box.editor;
+    await act(async () => {
+      editor.chain().focus("start").insertContent("Hi Aoife").run();
+    });
+    expect(box.textContent).toContain("Hi Aoife");
+    expect(composer.drafts()).toHaveLength(0);
+    await press("Escape");
+    await until(() => composer.drafts().length === 1);
+    expect(composer.drafts()[0]?.bodyText).toContain("Hi Aoife");
+  });
+
   test("Z during the undo window cancels the send instead of the last triage action", async () => {
     const composer = fixtureComposer({ now: () => NOW, delaySeconds: 30 });
     await mount({ composer, initialOpen: "e1" });
@@ -277,12 +344,37 @@ describe("send and undo", () => {
     await until(() => bar()?.textContent?.includes("Sending in 1s") === true);
     t += 1500;
     await until(() => elapsed === 1);
-    expect(bar()?.querySelector(".btn")).toBeNull();
-    expect(bar()?.textContent).toBe("Sending");
+    // On its way: the bar has left (at once here, with no motion tokens on the page).
+    expect(bar()).toBeNull();
   });
 });
 
 describe("attachments", () => {
+  test("a failed upload says so, can be dismissed, and does not block Send", async () => {
+    const composer = fixtureComposer({ now: () => NOW });
+    composer.upload = async () => {
+      throw new Error("Too large for this account");
+    };
+    await mount({ composer, initialOpen: "e1" });
+    await press("r");
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    const input = document.querySelector<HTMLInputElement>("input[type=file]");
+    if (!input) throw new Error("no file input");
+    const file = new File([new Uint8Array([1, 2, 3])], "big.zip", { type: "application/zip" });
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await until(() => document.querySelector(".c-atts .att.failed") !== null);
+    const failed = document.querySelector<HTMLElement>(".c-atts .att.failed");
+    expect(failed?.textContent).toContain("Too large for this account");
+    expect(document.querySelector<HTMLButtonElement>(".reply-bottom .btn.primary")?.disabled).toBe(
+      false,
+    );
+    await click(failed?.querySelector(".x") ?? null);
+    expect(document.querySelector(".c-atts .att.failed")).toBeNull();
+  });
+
   test("an upload in flight shows its progress and a done one its size", async () => {
     host = document.createElement("div");
     document.body.appendChild(host);

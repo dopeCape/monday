@@ -118,9 +118,19 @@ export function Server({
   return (
     <div className="stack" data-panel={part ?? "server"}>
       {showServer ? (
-        <Card title={s["strings.server.talking_to"]} hint={target} attrs={{ "data-panel": "mode" }}>
-          <Tag kind={healthy === false ? "warn" : healthy ? "ok" : undefined}>
-            {healthy === false ? s["strings.server.health.down"] : modeLabel}
+        <Card
+          title={s["strings.server.talking_to"]}
+          hint={
+            shell.sidecarError && !shell.server
+              ? fill(s["strings.server.sidecar_failed"], { message: shell.sidecarError })
+              : target
+          }
+          attrs={{ "data-panel": "mode" }}
+        >
+          <Tag kind={healthy === false || shell.sidecarError ? "warn" : healthy ? "ok" : undefined}>
+            {healthy === false || (shell.sidecarError && !shell.server)
+              ? s["strings.server.health.down"]
+              : modeLabel}
           </Tag>
           <Btn
             sm

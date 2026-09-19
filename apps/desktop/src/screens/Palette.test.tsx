@@ -192,13 +192,30 @@ describe("palette in the Inbox", () => {
     expect(document.querySelector(".agent-panel")).not.toBeNull();
   });
 
-  test("a suggestion goes to the agent as well", async () => {
+  test("the composer's suggestion chips are the Ask lines; one goes to the agent", async () => {
     await mount();
     await press("k", { metaKey: true });
+    // Three Threads sit in Needs your reply, then the evergreen prompts (docs/spec/agent-composer.md).
+    const asks = [...document.querySelectorAll<HTMLElement>(".cmdk-item")]
+      .filter((el) => el.querySelector(".mk"))
+      .map((el) => el.querySelector("span:not(.mk)")?.textContent);
+    expect(asks).toEqual([
+      "Reply to the 3 threads waiting on me",
+      "Summarize what I missed since yesterday",
+      "Archive newsletters older than a week",
+    ]);
     const first = document.querySelector<HTMLElement>(".cmdk-item");
     await act(async () => first?.click());
     const bar = document.querySelector<HTMLInputElement>("input[name=ask]");
-    expect(bar?.value).toBe("Summarize what I missed since yesterday");
+    expect(bar?.value).toBe("Reply to the 3 threads waiting on me");
+  });
+
+  test("the scrim covers the window, not the screen column", async () => {
+    await mount();
+    await press("k", { metaKey: true });
+    const scrim = document.querySelector<HTMLElement>(".scrim");
+    expect(scrim?.parentElement).toBe(document.body);
+    expect(scrim?.closest(".main")).toBeNull();
   });
 
   test("every palette command type is handled", () => {

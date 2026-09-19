@@ -1354,8 +1354,9 @@ export const commands: CommandSection[] = [
   {
     label: "Ask the agent",
     items: [
+      { key: "ask-reply", label: "Reply to the 3 threads waiting on me", ai: true },
       { key: "ask-missed", label: "Summarize what I missed since yesterday", ai: true },
-      { key: "ask-kenji", label: "Draft a reply to Kenji accepting the pro-rata cap", ai: true },
+      { key: "ask-newsletters", label: "Archive newsletters older than a week", ai: true },
     ],
   },
   {

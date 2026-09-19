@@ -786,4 +786,51 @@ describe("drafts and scheduled sends", () => {
     };
     expect(json.display.html.startsWith("<p>") || json.display.html === "").toBe(true);
   });
+
+  test("a body the sync has not fetched yet is fetched on demand by the body route", async () => {
+    // A Message arrives and only its headers are synced: a reader opening the
+    // Thread must not wait for the body pass to come around.
+    const providerId = fake.deliver({
+      mailbox: "inbox",
+      threadKey: "on-demand",
+      from: { name: "Aoife", email: "aoife@northlight.dev" },
+      to: [fixture.owner],
+      cc: [],
+      subject: "Opened before the body pass",
+      date: clock.now().toISOString(),
+      messageId: "on-demand@fixture.monday.test",
+      inReplyTo: null,
+      references: [],
+      seen: false,
+      flagged: false,
+      answered: false,
+      headers: {},
+      text: "The body the reader asked for.",
+      html: null,
+      attachments: [],
+    });
+    let report = await engine.syncAccount(account.id, { headersOnly: true });
+    for (let i = 0; i < 50 && report.more; i++) {
+      report = await engine.syncAccount(account.id, { headersOnly: true });
+    }
+    const pending = await db.handle.db.query.syncMessages.findFirst({
+      where: (t, { eq: is }) => is(t.providerId, providerId),
+    });
+    if (!pending) throw new Error("the delivered message was not synced");
+    expect(pending.bodyState).toBe("pending");
+    const before = fake.calls.fetchMessage ?? 0;
+    const body = await request(`/messages/${pending.messageId}/body`);
+    expect(body.status).toBe(200);
+    const json = (await body.json()) as { text: string; display: { html: string } };
+    expect(json.text).toContain("The body the reader asked for.");
+    expect(fake.calls.fetchMessage ?? 0).toBeGreaterThan(before);
+    const after = await db.handle.db.query.syncMessages.findFirst({
+      where: (t, { eq: is }) => is(t.messageId, pending.messageId),
+    });
+    expect(after?.bodyState).toBe("fetched");
+    // Asking again fetches nothing: the body is there.
+    const again = fake.calls.fetchMessage ?? 0;
+    await request(`/messages/${pending.messageId}/body`);
+    expect(fake.calls.fetchMessage ?? 0).toBe(again);
+  });
 });
