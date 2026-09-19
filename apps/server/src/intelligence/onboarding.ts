@@ -11,7 +11,6 @@ import type {
   GroupInput,
   GroupView,
   Id,
-  Person,
   ProposedMove,
   RoutingApplied,
   RoutingPreview,
