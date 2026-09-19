@@ -623,6 +623,16 @@ export const settingsSchema = {
     label: "Highlight after a jump",
     help: "Milliseconds a card stays highlighted after Show in section or the page index scrolls to it.",
   }),
+  "settings.index_hold_ms": setting({
+    type: z.int().min(0).max(10_000),
+    default: 1200,
+    scope: "global",
+    section: "appearance",
+    group: "Settings page",
+    advanced: true,
+    label: "Index hold after a jump",
+    help: "Milliseconds the On this page index keeps the group you clicked active while the scroll settles, before following the scroll position again.",
+  }),
 
   /* Sections */
   "sections.order": setting({

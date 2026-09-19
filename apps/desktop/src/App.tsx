@@ -552,7 +552,7 @@ export function App({
         initialSearch={settingsSearch > 0}
         workspaceId={ws.id}
         runtimes={detection ?? undefined}
-        keys={keysProp ?? undefined}
+        keys={keys ?? undefined}
         onAsk={(text) => {
           setAgentText(text);
           setActive("inbox");

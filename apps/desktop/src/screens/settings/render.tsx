@@ -46,7 +46,7 @@ import { fill } from "./wizard.ts";
 
 /* ------------------------------ The screen's seam ------------------------------ */
 
-/** One installed command-line agent as the Runtime group lists it (slice 15 fills this in). */
+/** One installed command-line agent as the Runtime group lists it. */
 export interface DetectedCli {
   cli: "claude-code" | "codex" | "opencode";
   version: string | null;
@@ -54,7 +54,7 @@ export interface DetectedCli {
   status: "connected" | "available" | "missing";
 }
 
-/** The Local runtime detection seam. Slice 15 provides the real one; without it every CLI reads as not found. */
+/** The Local runtime detection seam: what this Device found of the three CLIs; without it every CLI reads as not found. */
 export interface RuntimeDetection {
   detect(): Promise<DetectedCli[]>;
 }

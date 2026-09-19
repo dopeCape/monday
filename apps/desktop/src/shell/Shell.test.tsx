@@ -19,6 +19,7 @@ import {
   applyType,
   isShippedPalette,
   loadPalette,
+  mergeStored,
   Shell,
   type ShellState,
   useShell,
@@ -221,6 +222,77 @@ describe("palettes", () => {
     const r = document.documentElement;
     expect(r.dataset.palette).toBe("graphite");
     expect(r.style.getPropertyValue("--accent")).toBe("#123456");
+  });
+});
+
+describe("the Server layer", () => {
+  test("mergeStored keeps global rows, this Device's rows for per-device keys, and nothing unknown", () => {
+    const merged = mergeStored(
+      { "appearance.density": "compact", "appearance.mode": "dark", "gone.key": 1 },
+      { "appearance.density": "spacious", "appearance.mode": "light", "other.gone": 2 },
+    );
+    expect(merged).toEqual({ "appearance.density": "spacious", "appearance.mode": "dark" });
+  });
+
+  test("a write the Server cannot take yet is applied here and sent on the next contact", async () => {
+    const p = fakePlatform("");
+    // A Sidecar that answers /health and records Setting writes.
+    const writes: Array<{ key: string; value: unknown }> = [];
+    let up = false;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!up) throw new TypeError("connection refused");
+      if (url.endsWith("/health")) return Response.json({ ok: true });
+      if (url.includes("/settings/") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { value: unknown };
+        writes.push({
+          key: decodeURIComponent(url.split("/settings/")[1] ?? ""),
+          value: body.value,
+        });
+        return Response.json({});
+      }
+      if (url.endsWith("/settings")) {
+        return Response.json({
+          global: {},
+          device: Object.fromEntries(writes.map((w) => [w.key, w.value])),
+        });
+      }
+      return Response.json({}, { status: 404 });
+    }) as typeof fetch;
+    try {
+      p.sidecarInfo = async () => ({ port: 1, token: "t", running: true });
+      host = document.createElement("div");
+      document.body.appendChild(host);
+      root = createRoot(host);
+      await act(async () => {
+        root?.render(
+          <Shell host={p}>
+            <Probe />
+          </Shell>,
+        );
+      });
+      await settle();
+      // Down: the change applies at once and reads as queued.
+      let result: unknown;
+      await act(async () => {
+        result = await seen?.set("appearance.density", "compact");
+      });
+      expect(result).toEqual({ ok: true, queued: true });
+      expect(seen?.settings["appearance.density"]).toBe("compact");
+      expect(writes).toEqual([]);
+      // Up again: the picker re-probes, the queued write goes out, and a refresh keeps it.
+      up = true;
+      await act(async () => {
+        await seen?.refreshServers();
+      });
+      await settle();
+      await settle();
+      expect(writes).toEqual([{ key: "appearance.density", value: "compact" }]);
+      expect(seen?.settings["appearance.density"]).toBe("compact");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
 

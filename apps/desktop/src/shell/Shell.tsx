@@ -7,6 +7,7 @@ import {
   type ConfigWarning,
   type Density,
   defaultSettings,
+  isSettingKey,
   type Layout,
   PALETTE_TOKENS,
   type Palette,
@@ -151,6 +152,26 @@ export function applyType(
     const px = Number.parseFloat(computed.getPropertyValue(t));
     if (Number.isFinite(px) && px > 0) root.style.setProperty(t, `${(px * scale).toFixed(2)}px`);
   }
+}
+
+/**
+ * The Server's two buckets as one layer (ADR 0001): the global row for every
+ * key, and this Device's own row on top for the keys the schema scopes per
+ * device. A device row for a global key (a leftover from an older schema) is
+ * ignored, and keys the schema no longer has are dropped rather than carried.
+ */
+export function mergeStored(
+  global: Record<string, unknown>,
+  device: Record<string, unknown>,
+): PartialSettings {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(global)) {
+    if (isSettingKey(key)) out[key] = value;
+  }
+  for (const [key, value] of Object.entries(device)) {
+    if (isSettingKey(key) && settingScope(key) === "device") out[key] = value;
+  }
+  return out as PartialSettings;
 }
 
 function systemPrefersDark(): boolean {
@@ -321,14 +342,6 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     return unsubscribe;
   }, [picker]);
 
-  const probeSeconds = settings["server.probe_seconds"];
-  useEffect(() => {
-    if (!cloud) return; // one target needs no probing; a failed request already says enough
-    const timer = setInterval(() => void picker.refresh(), probeSeconds * 1000);
-    void picker.refresh();
-    return () => clearInterval(timer);
-  }, [picker, cloud, probeSeconds]);
-
   const api = useMemo(
     () =>
       createApi(() => picker.current()?.target ?? null, {
@@ -339,15 +352,17 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
 
   // Writes the Server has not taken yet (offline, or no Server picked): they
   // stay in effect here, ride over every refresh, and go out once a Server
-  // answers, so a change made offline is not lost on the next pull.
+  // answers, so a change made offline is not lost on the next pull. The count
+  // is state so the probe below runs while any wait.
   const pendingWrites = useRef(new Map<SettingKey, unknown>());
+  const [pendingCount, setPendingCount] = useState(0);
+  const notePending = useCallback(() => setPendingCount(pendingWrites.current.size), []);
 
   const refresh = useCallback(async () => {
     try {
       const { global, device } = await api.settings.all();
       setStored({
-        ...global,
-        ...device,
+        ...mergeStored(global, device),
         ...Object.fromEntries(pendingWrites.current),
       } as PartialSettings);
     } catch {
@@ -362,15 +377,32 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
         pendingWrites.current.delete(key);
       } catch (e) {
         if (e instanceof ApiError && e.permanent) pendingWrites.current.delete(key);
-        else return;
+        else break;
       }
     }
+    setPendingCount(pendingWrites.current.size);
   }, [api]);
 
   useEffect(() => {
     if (!server) return;
     void flushPending().then(refresh);
   }, [flushPending, refresh, server]);
+
+  // Reachability: both targets are probed on a timer while a Cloud is configured
+  // (so the picker can move between them) or while writes wait for a Server; a
+  // single Sidecar with nothing pending needs no probing, a failed request says
+  // enough. Every probe also pushes what waits.
+  const probeSeconds = settings["server.probe_seconds"];
+  const probe = useCallback(async () => {
+    await picker.refresh();
+    if (pendingWrites.current.size > 0) await flushPending().then(refresh);
+  }, [picker, flushPending, refresh]);
+  useEffect(() => {
+    if (!cloud && pendingCount === 0) return;
+    const timer = setInterval(() => void probe(), probeSeconds * 1000);
+    void probe();
+    return () => clearInterval(timer);
+  }, [probe, cloud, pendingCount, probeSeconds]);
 
   const setCloud = useCallback(
     async (target: CloudTarget | null) => {
@@ -382,8 +414,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   );
 
   const refreshServers = useCallback(async () => {
-    await picker.refresh();
-  }, [picker]);
+    await probe();
+  }, [probe]);
   const nav = settings["layout.nav"];
   const agent = settings["layout.agent"];
   const list = settings["layout.list"];
@@ -505,11 +537,15 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       try {
         await api.settings.set(key, value, settingScope(key));
         pendingWrites.current.delete(key);
+        // A Server that took this one takes what waited too.
+        if (pendingWrites.current.size > 0) void flushPending();
+        else notePending();
         return { ok: true };
       } catch (e) {
         if (e instanceof ApiError && e.permanent) {
           // The Server refused the value for good: nothing to retry, and it never applied there.
           pendingWrites.current.delete(key);
+          notePending();
           setStored((s) => {
             const { [key]: _gone, ...rest } = s;
             return rest as PartialSettings;
@@ -517,10 +553,11 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
           return { ok: false, reason: "invalid", message: e.message };
         }
         // Offline, or no Server picked yet: applied here, sent when one answers.
+        notePending();
         return { ok: true, queued: true };
       }
     },
-    [api, resolved.pinned],
+    [api, resolved.pinned, flushPending, notePending],
   );
 
   const value = useMemo<ShellState>(
@@ -629,7 +666,7 @@ export function StaticShell({
     if (!scripted) return;
     try {
       const { global, device } = await api.settings.all();
-      setLocal((s) => ({ ...s, ...global, ...device }) as PartialSettings);
+      setLocal((s) => ({ ...s, ...mergeStored(global, device) }) as PartialSettings);
     } catch {
       // Offline: the Settings in hand stay.
     }

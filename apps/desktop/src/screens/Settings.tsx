@@ -91,7 +91,7 @@ export interface SettingsProps {
   initialSearch?: boolean | undefined;
   /** Routes an "Ask monday" text to the composer, prefilled. Inert when absent. */
   onAsk?: ((text: string) => void) | undefined;
-  /** The Local runtime detection seam (slice 15). */
+  /** The Local runtime detection seam: what this Device found of the three CLIs. */
   runtimes?: RuntimeDetection | undefined;
   /** This Device's provider keys; defaults to the platform keychain. */
   keys?: DeviceProviderKeys | undefined;
@@ -435,6 +435,7 @@ export function PageIndex({
   onJump: (group: string) => void;
 }) {
   const s = useShell().settings;
+  const holdMs = s["settings.index_hold_ms"];
   const [active, setActive] = useState<string | null>(groups[0] ?? null);
   const holdUntil = useRef(0);
   const key = groups.join("\n");
@@ -472,7 +473,7 @@ export function PageIndex({
           data-index-group={g}
           onClick={(e) => {
             e.preventDefault();
-            holdUntil.current = Date.now() + 1200;
+            holdUntil.current = Date.now() + holdMs;
             setActive(g);
             onJump(g);
           }}
