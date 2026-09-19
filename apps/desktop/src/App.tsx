@@ -16,10 +16,12 @@ import {
   workspace,
 } from "@monday/ui/fixtures";
 import { ClockIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
-import { runtimeLine } from "./agent/runtimeLine.ts";
+import { deviceAgentClient } from "./agent/deviceClient.ts";
+import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
+import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
@@ -101,20 +103,50 @@ export function App({
   );
   /** The column composers' own text; the bottom bar's lives in the Inbox. */
   const [columnText, setColumnText] = useState("");
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
+  const sidecarRef = useRef(shell.sidecar);
+  sidecarRef.current = shell.sidecar;
+  // What this Device found of the three CLIs; null where nothing can be spawned.
+  const runtimes = useLocalRuntimes(shell.spawn, shell.settings);
+  const runtimesRef = useRef(runtimes);
+  runtimesRef.current = runtimes;
+  // In the app the Device client drives a Local runtime itself and sends Hosted turns
+  // to the Server; the browser dev server, with no processes to spawn, stays Hosted.
   const client = useMemo(
     () =>
-      agentClient !== undefined ? agentClient : shell.server ? apiAgentClient(shell.api) : null,
-    [agentClient, shell.server, shell.api],
+      agentClient !== undefined
+        ? agentClient
+        : shell.server
+          ? shell.spawn
+            ? deviceAgentClient({
+                api: shell.api,
+                runner: shell.spawn,
+                sidecar: () => {
+                  const s = sidecarRef.current;
+                  return s?.running ? { port: s.port, token: s.token } : null;
+                },
+                settings: () => settingsRef.current,
+                address: () => account.address,
+                statusOf: (cli) => runtimesRef.current?.[cli] ?? null,
+                log: (line) => console.warn(line),
+              })
+            : apiAgentClient(shell.api)
+          : null,
+    [agentClient, shell.server, shell.api, shell.spawn],
   );
   const pinned = shell.pinned;
+  const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
   const agent = useAgentSession({
     client,
     workspaceId: workspace.id,
     context: () => ({ pinned: [...pinned] }),
     newAfterHours: shell.settings["ai.session.new_after_hours"],
+    runtime: wantedRuntime,
+    developerModeDefault: shell.settings["ai.developer_mode_default"],
     onSettingsChanged: () => void shell.refresh(),
   });
-  const runtime = runtimeLine(agent.session, shell.settings, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address, runtimes);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
   // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
   // Agent's approve_workflow_step tool then shows the card in the composer.

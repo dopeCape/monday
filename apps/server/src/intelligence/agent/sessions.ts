@@ -15,6 +15,8 @@ export interface SessionStore {
   get(id: string): Promise<SessionSummary | null>;
   /** Marks activity; sets the title when the Session has none yet. */
   touch(id: string, title?: string): Promise<void>;
+  /** A Runtime switch mid-Session (docs/spec/agent-composer.md, Sessions). */
+  setRuntime(id: string, runtime: Runtime): Promise<void>;
   append(id: string, event: AgentEvent): Promise<void>;
   /** The transcript in order, with each tool card collapsed to its latest state. */
   events(id: string): Promise<AgentEvent[]>;
@@ -88,6 +90,9 @@ export function createSessionStore(db: Db, options: { now?: () => Date } = {}): 
         .set({ lastActivity: now(), ...(title && !row.title ? { title } : {}) })
         .where(eq(sessions.id, id));
     },
+    async setRuntime(id, runtime) {
+      await db.update(sessions).set({ runtime, lastActivity: now() }).where(eq(sessions.id, id));
+    },
     async append(id, event) {
       await db.insert(sessionEvents).values({ sessionId: id, event, at: now() });
     },
@@ -134,6 +139,12 @@ export function createMemorySessionStore(options: { now?: () => Date } = {}): Se
       if (!s) return;
       s.lastActivity = now().toISOString();
       if (title && !s.title) s.title = title;
+    },
+    async setRuntime(id, runtime) {
+      const s = rows.get(id);
+      if (!s) return;
+      s.runtime = runtime;
+      s.lastActivity = now().toISOString();
     },
     async append(id, event) {
       events.get(id)?.push(event);

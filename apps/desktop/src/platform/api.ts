@@ -32,6 +32,7 @@ import type {
   RoutingApplied,
   RoutingDecision,
   RoutingPreview,
+  Runtime,
   RunView,
   ScheduledSend,
   ScheduleResult,
@@ -518,8 +519,39 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         request<{ sessions: SessionSummary[] }>(
           `/sessions?${new URLSearchParams({ workspace: workspaceId })}`,
         ),
-      createSession: (workspaceId: Id) =>
-        request<SessionSummary>("/sessions", json("POST", { workspace: workspaceId })),
+      /** A Session on the Hosted runtime, or on the Local runtime this Device names. */
+      createSession: (workspaceId: Id, runtime?: Runtime) =>
+        request<SessionSummary>(
+          "/sessions",
+          json("POST", { workspace: workspaceId, ...(runtime ? { runtime } : {}) }),
+        ),
+      /** Moves a Session to another Runtime; the line the thread shows comes back. */
+      switchRuntime: (sessionId: Id, runtime: Runtime) =>
+        request<AgentEvent>(
+          `/sessions/${encodeURIComponent(sessionId)}/runtime`,
+          json("PATCH", { runtime }),
+        ),
+      /** What a Local runtime's CLI said, persisted in the Session's transcript. */
+      appendEvent: (sessionId: Id, event: AgentEvent) =>
+        request<{ ok: boolean }>(
+          `/sessions/${encodeURIComponent(sessionId)}/events`,
+          json("POST", { event }),
+        ).then(() => undefined),
+      /**
+       * The Server's own events for a Session as they happen (the tool cards
+       * of a Local runtime's MCP calls). Returns the unsubscribe.
+       */
+      live: (sessionId: Id, onEvent: (event: AgentEvent) => void): (() => void) => {
+        const controller = new AbortController();
+        void raw(`/sessions/${encodeURIComponent(sessionId)}/live`, {
+          signal: controller.signal,
+        })
+          .then((res) => readEvents(res, onEvent))
+          .catch(() => {
+            // Aborted by the unsubscribe, or the Server went away; the next turn reconnects.
+          });
+        return () => controller.abort();
+      },
       session: (sessionId: Id) =>
         request<{ session: SessionSummary; events: AgentEvent[] }>(
           `/sessions/${encodeURIComponent(sessionId)}`,

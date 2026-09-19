@@ -7,7 +7,7 @@
 // nothing, Esc collapses the panel, and /new starts a fresh Session.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { AgentEvent, ToolCall } from "@monday/shared";
+import type { AgentEvent, Runtime, ToolCall } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -78,12 +78,13 @@ const archiveTurn = (): AgentEvent[] => [
   ),
 ];
 
-function Harness({ client }: { client: FakeAgentClient }) {
+function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runtime | undefined }) {
   const agent = useAgentSession({
     client,
     workspaceId: "ws-genai",
     context: () => ({ pinned: ["appearance.mode"] }),
     newAfterHours: 24,
+    runtime,
     now: () => NOW,
   });
   return (
@@ -97,7 +98,7 @@ function Harness({ client }: { client: FakeAgentClient }) {
   );
 }
 
-async function mount(client: FakeAgentClient) {
+async function mount(client: FakeAgentClient, runtime?: Runtime) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -105,7 +106,7 @@ async function mount(client: FakeAgentClient) {
   await act(async () =>
     r.render(
       <StaticShell>
-        <Harness client={client} />
+        <Harness client={client} runtime={runtime} />
       </StaticShell>,
     ),
   );
@@ -208,7 +209,8 @@ describe("the composer in bottom-bar mode", () => {
       {
         sessionId: session,
         text: "archive every newsletter older than a week",
-        context: { pinned: ["appearance.mode"] },
+        // Developer mode is off by default (CONTEXT.md); every turn says so.
+        context: { pinned: ["appearance.mode"], developerMode: false },
       },
     ]);
     expect(document.querySelector(".agent-thread .u")?.textContent).toBe(
@@ -339,5 +341,94 @@ describe("the composer in bottom-bar mode", () => {
     expect(document.querySelector(".agent-thread .u")?.textContent).toBe(
       "Archive newsletters older than a week",
     );
+  });
+  test("a Session on a Local runtime: the header names it, Developer mode is a switch with its warning, the CLI's own tool is a marked card, and a switch shows as a line", async () => {
+    const client = fakeAgentClient({
+      turns: [
+        () => [
+          toolEvent({
+            id: "b1",
+            tool: "Bash",
+            tier: "always-ask",
+            status: "done",
+            inputSummary: "command: ls ~",
+            approvedBy: "user",
+            result: "Desktop",
+            builtin: true,
+          }),
+          { kind: "text", id: "t9", text: "Two folders." },
+        ],
+      ],
+    });
+    // The Settings ask for Claude Code: the Session starts on it and the header says so.
+    await mount(client, { kind: "local", cli: "claude-code" });
+    await typeInBar("what is in my home folder?");
+    await submitBar();
+    expect(client.sessions[0]?.runtime).toEqual({ kind: "local", cli: "claude-code" });
+    expect(document.querySelector(".agent-panel .col-head .count")?.textContent).toBe(
+      "Claude Code · tejas@genai-labs.io",
+    );
+    // Developer mode is off by default; the chip turns it on and the warning appears.
+    const chip = [...document.querySelectorAll<HTMLElement>(".agent-developer .chip")][0];
+    expect(chip?.textContent).toBe("Developer mode");
+    expect(chip?.classList.contains("on")).toBe(false);
+    expect(document.querySelector(".agent-developer .warn")).toBeNull();
+    await click(chip);
+    expect(document.querySelector(".agent-developer .chip")?.classList.contains("on")).toBe(true);
+    expect(document.querySelector(".agent-developer .warn")?.textContent).toContain(
+      "Developer mode gives the runtime its own shell, file and web tools.",
+    );
+    await typeInBar("again");
+    await submitBar();
+    expect(client.sent.at(-1)?.context.developerMode).toBe(true);
+    // The CLI's own tool renders as a card with the warning glyph and the Developer mode title.
+    const bash = document.querySelector<HTMLElement>('.tool[data-builtin="true"]');
+    expect(bash?.querySelector(".t")?.textContent).toBe("Developer mode: Bash");
+    expect(bash?.querySelector(".t i, .t svg")).not.toBeNull();
+  });
+
+  test("switching the Runtime mid-Session puts a line in the thread before the next turn", async () => {
+    const client = fakeAgentClient();
+    await mount(client, { kind: "local", cli: "claude-code" });
+    await typeInBar("hello");
+    await submitBar();
+    expect(client.sessions[0]?.runtime).toEqual({ kind: "local", cli: "claude-code" });
+    // The Settings now ask for a Hosted provider: the same Session moves, with the line.
+    await act(async () => {
+      root?.render(
+        <StaticShell>
+          <Harness
+            client={client}
+            runtime={{ kind: "hosted", provider: "anthropic", model: "claude-sonnet-5" }}
+          />
+        </StaticShell>,
+      );
+    });
+    await typeInBar("and again");
+    await submitBar();
+    expect(client.sessions).toHaveLength(1);
+    expect(client.sessions[0]?.runtime).toEqual({
+      kind: "hosted",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+    });
+    const lines = [...document.querySelectorAll(".agent-thread .a .line")].map(
+      (l) => l.textContent,
+    );
+    expect(lines).toEqual(["Now answering: Anthropic claude-sonnet-5"]);
+    expect(document.querySelector(".agent-panel .col-head .count")?.textContent).toBe(
+      "Anthropic claude-sonnet-5 · tejas@genai-labs.io",
+    );
+    // The transcript keeps the line between the two runtimes' turns.
+    const transcript = (await client.load(client.sessions[0]?.id ?? "")).events;
+    expect(transcript.map((e) => e.kind)).toEqual([
+      "user",
+      "text",
+      "done",
+      "runtime",
+      "user",
+      "text",
+      "done",
+    ]);
   });
 });

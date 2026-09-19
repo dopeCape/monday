@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { defaultSettings, type ToolCall } from "@monday/shared";
 import { readEvents } from "../platform/api.ts";
 import { toolEvent } from "./client.ts";
-import { runtimeLine } from "./runtimeLine.ts";
+import { desiredRuntime, runtimeLine, sameRuntime } from "./runtimeLine.ts";
 import { suggestionsFor } from "./suggestions.ts";
 import { applyEvents, cardActions, statusLabel, toolTitle, waitingCalls } from "./transcript.ts";
 
@@ -123,17 +123,80 @@ describe("transcript", () => {
     expect(
       runtimeLine(
         {
-          id: "s",
-          workspaceId: "w",
           runtime: { kind: "hosted", provider: "anthropic", model: "claude-sonnet-5" },
-          title: "",
-          startedAt: "",
-          lastActivity: "",
+          model: "claude-sonnet-5",
         },
         strings,
         "me@example.test",
       ),
     ).toBe("Anthropic claude-sonnet-5 · me@example.test");
+    // A Local runtime names its model once the CLI reported it.
+    expect(
+      runtimeLine(
+        { runtime: { kind: "local", cli: "claude-code" }, model: null },
+        strings,
+        "me@example.test",
+      ),
+    ).toBe("Claude Code · me@example.test");
+    expect(
+      runtimeLine(
+        { runtime: { kind: "local", cli: "codex" }, model: "gpt-5.6-sol" },
+        strings,
+        "me@example.test",
+      ),
+    ).toBe("Codex (gpt-5.6-sol) · me@example.test");
+    // A CLI detection ruled out says so in the header (docs/spec/agent-composer.md).
+    const missing = {
+      cli: "claude-code" as const,
+      command: "claude",
+      installed: false,
+      version: null,
+      loggedIn: null,
+      reason: "not here",
+    };
+    expect(runtimeLine(null, strings, "me@example.test", { "claude-code": missing })).toBe(
+      "Claude Code not available · me@example.test",
+    );
+    expect(
+      runtimeLine(null, strings, "me@example.test", {
+        "claude-code": {
+          ...missing,
+          installed: true,
+          version: "2.1.223",
+          loggedIn: true,
+          reason: null,
+        },
+      }),
+    ).toBe("Claude Code · me@example.test");
+  });
+
+  test("the Runtime the Settings ask for, and what counts as the same one", () => {
+    expect(desiredRuntime(strings)).toEqual({ kind: "local", cli: "claude-code" });
+    expect(desiredRuntime({ ...strings, "ai.local.model.claude-code": "opus" })).toEqual({
+      kind: "local",
+      cli: "claude-code",
+      model: "opus",
+    });
+    expect(desiredRuntime({ ...strings, "ai.mode": "hosted" })).toEqual({
+      kind: "hosted",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+    });
+    expect(
+      sameRuntime(
+        { kind: "local", cli: "claude-code" },
+        { kind: "local", cli: "claude-code", model: "claude-opus-5" },
+      ),
+    ).toBe(true);
+    expect(
+      sameRuntime({ kind: "local", cli: "claude-code" }, { kind: "local", cli: "codex" }),
+    ).toBe(false);
+    expect(
+      sameRuntime(
+        { kind: "hosted", provider: "anthropic", model: "a" },
+        { kind: "local", cli: "codex" },
+      ),
+    ).toBe(false);
   });
 
   test("the SSE reader yields each frame as it arrives, across chunk boundaries", async () => {

@@ -1,0 +1,5 @@
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"monday","version":"0.1.0"}}}
+{"method":"initialized"}
+{"id":2,"method":"thread/start","params":{"cwd":"/home/user/cwd","ephemeral":true,"sandbox":"read-only","approvalPolicy":"never","baseInstructions":"You are monday, an email assistant. Use the monday tools. Be brief.","config":{"mcp_servers":{"monday":{"command":"bun","args":["/home/user/fake-mcp.ts"],"default_tools_approval_mode":"auto"}},"features":{"shell_tool":false,"unified_exec":false,"apps":false,"browser_use":false,"computer_use":false,"image_generation":false,"plugins":false,"skill_search":false,"in_app_browser":false},"web_search":"disabled","tools":{"view_image":false}}}}
+{"id":3,"method":"turn/start","params":{"threadId":"01a0b940-3422-7050-bcff-77478fb2b5c5","input":[{"type":"text","text":"archive every newsletter older than a week"}]}}
+{"id":0,"result":{"action":"accept","content":{}}}

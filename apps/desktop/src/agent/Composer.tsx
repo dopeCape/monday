@@ -19,6 +19,7 @@ import {
   type Suggestion,
 } from "@monday/ui";
 import { type ReactNode, useMemo, useState } from "react";
+import { runtimeLabel } from "./runtimeLine.ts";
 import type { TranscriptEvent } from "./transcript.ts";
 import { type AgentStrings, cardActions, statusLabel, toolTitle } from "./transcript.ts";
 import { type AgentSession, NO_CLIENT } from "./useAgentSession.ts";
@@ -35,6 +36,10 @@ export type ComposerStrings = AgentStrings &
     | "strings.agent.preview_send"
     | "strings.agent.preview_setting"
     | "strings.agent.no_session"
+    | "strings.agent.runtime_switched"
+    | "strings.agent.builtin_tool"
+    | "strings.agent.developer_mode"
+    | "strings.agent.developer_warning"
   >;
 
 export function composerStrings(settings: Settings): ComposerStrings {
@@ -59,6 +64,10 @@ export function composerStrings(settings: Settings): ComposerStrings {
     "strings.agent.preview_send": settings["strings.agent.preview_send"],
     "strings.agent.preview_setting": settings["strings.agent.preview_setting"],
     "strings.agent.no_session": settings["strings.agent.no_session"],
+    "strings.agent.runtime_switched": settings["strings.agent.runtime_switched"],
+    "strings.agent.builtin_tool": settings["strings.agent.builtin_tool"],
+    "strings.agent.developer_mode": settings["strings.agent.developer_mode"],
+    "strings.agent.developer_warning": settings["strings.agent.developer_warning"],
   };
 }
 
@@ -154,11 +163,23 @@ export function turnsOf(events: readonly TranscriptEvent[], options: TurnsOption
       case "text":
         if (event.text) agentTurn().push({ kind: "text", text: event.text });
         break;
+      case "runtime":
+        // The switch line sits between the two runtimes' turns.
+        parts = null;
+        agentTurn().push({
+          kind: "line",
+          text: fill(strings["strings.agent.runtime_switched"], {
+            runtime: runtimeLabel(event.runtime),
+          }),
+        });
+        break;
       case "tool":
         agentTurn().push({
           kind: "tool",
           call: event.call,
-          title: toolTitle(event.call),
+          title: event.call.builtin
+            ? fill(strings["strings.agent.builtin_tool"], { tool: event.call.tool })
+            : toolTitle(event.call),
           statusLabel: statusLabel(event.call, strings),
           preview: event.preview ? (
             <PreviewView preview={event.preview} strings={strings} now={now} />
@@ -298,8 +319,22 @@ export function Composer({
     </div>
   ) : null;
 
+  const local = agent.runtimeInfo?.runtime.kind === "local";
   const thread = (
     <>
+      {local ? (
+        <div className="agent-developer">
+          <Chip
+            on={agent.developerMode}
+            onClick={() => agent.setDeveloperMode(!agent.developerMode)}
+          >
+            {strings["strings.agent.developer_mode"]}
+          </Chip>
+          {agent.developerMode ? (
+            <span className="warn">{strings["strings.agent.developer_warning"]}</span>
+          ) : null}
+        </div>
+      ) : null}
       <AgentThread
         turns={turns}
         now={now}

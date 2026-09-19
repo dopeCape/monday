@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod rootkey;
 mod power;
+mod runtimes;
 mod secrets;
 mod sidecar;
 
@@ -30,6 +31,7 @@ pub fn run() {
             db::db_close,
             power::power_info,
             power::network_info,
+            runtimes::env_path,
         ])
         .setup(|app| {
             config::watch(app.handle().clone());

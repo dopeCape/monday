@@ -1,6 +1,10 @@
 // The seam between the webview and Rust. Everything the app needs from the host
 // goes through this one module, so tests and the browser dev server can fake it.
 
+import type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
+
+export type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
+
 export interface ConfigFile {
   path: string;
   exists: boolean;
@@ -49,6 +53,13 @@ export interface Platform {
   recoveryFile(): Promise<string>;
   /** Replaces the root key from a recovery file; a new Device joining an existing Server. */
   importRecoveryKey(text: string): Promise<void>;
+  /**
+   * Spawns one of the Local runtime CLIs (CONTEXT.md, Local runtime) through
+   * the shell plugin. `command` is a scope name from the capability
+   * (`claude`, `codex`, `opencode` and their detection variants), never a
+   * free path; a path override from Settings goes in front of PATH.
+   */
+  spawn: ProcessRunner;
   isTauri: boolean;
 }
 
@@ -60,6 +71,46 @@ async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
   const { openUrl } = await import("@tauri-apps/plugin-opener");
+  const { Command } = await import("@tauri-apps/plugin-shell");
+  const spawn: ProcessRunner = async (command, options: SpawnOptions): Promise<Process> => {
+    const env: Record<string, string> = { ...(options.env ?? {}) };
+    if (options.pathPrefix) {
+      const separator = navigator.platform.startsWith("Win") ? ";" : ":";
+      env.PATH = `${options.pathPrefix}${separator}${await invoke<string>("env_path")}`;
+    }
+    const cmd = Command.create(command, [...options.args], {
+      env,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    });
+    const stdout = new Set<(line: string) => void>();
+    const stderr = new Set<(line: string) => void>();
+    const strip = (line: string) => line.replace(/\r?\n$/, "");
+    cmd.stdout.on("data", (line) => {
+      for (const l of stdout) l(strip(line));
+    });
+    cmd.stderr.on("data", (line) => {
+      for (const l of stderr) l(strip(line));
+    });
+    const exited = new Promise<number | null>((resolve) => {
+      cmd.on("close", (payload) => resolve(payload.code));
+      cmd.on("error", () => resolve(null));
+    });
+    const child = await cmd.spawn();
+    return {
+      pid: child.pid,
+      exited,
+      onStdout: (listener) => {
+        stdout.add(listener);
+        return () => stdout.delete(listener);
+      },
+      onStderr: (listener) => {
+        stderr.add(listener);
+        return () => stderr.delete(listener);
+      },
+      write: (text) => child.write(text),
+      kill: () => child.kill(),
+    };
+  };
   const sub = <T>(name: string, cb: (p: T) => void) => {
     let un: (() => void) | undefined;
     let cancelled = false;
@@ -87,6 +138,7 @@ async function tauriPlatform(): Promise<Platform> {
     power: () => invoke<PowerInfo>("power_info"),
     recoveryFile: () => invoke<string>("recovery_file"),
     importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
+    spawn,
   };
 }
 
@@ -97,6 +149,8 @@ export interface FakePlatformOptions {
   power?: PowerInfo;
   /** The fake's root key, base64 of 32 bytes; null plays an unavailable keychain. */
   rootKey?: string | null;
+  /** The processes the fake spawns; none by default, so every CLI reads as not installed. */
+  spawn?: ProcessRunner;
 }
 
 /** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
@@ -167,6 +221,11 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       if (!key) throw new Error("not a recovery key");
       rootKey = key;
     },
+    spawn:
+      options.spawn ??
+      (async (command) => {
+        throw new Error(`${command}: command not found`);
+      }),
   };
 }
 

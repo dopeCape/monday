@@ -9,6 +9,8 @@ import type {
   AgentEvent,
   ApprovalDecision,
   Id,
+  Runtime,
+  RuntimeInfo,
   SessionSummary,
   ToolCall,
   ToolPreview,
@@ -18,8 +20,13 @@ import type { Api } from "../platform/api.ts";
 
 export interface AgentClient {
   listSessions(workspaceId: Id): Promise<SessionSummary[]>;
-  createSession(workspaceId: Id): Promise<SessionSummary>;
+  /** A Session on the Hosted runtime, or on the Runtime the Settings name. */
+  createSession(workspaceId: Id, runtime?: Runtime): Promise<SessionSummary>;
   load(sessionId: Id): Promise<{ session: SessionSummary; events: AgentEvent[] }>;
+  /** Moves an open Session to another Runtime; the thread shows the line that comes back. */
+  switchRuntime(sessionId: Id, runtime: Runtime): Promise<AgentEvent>;
+  /** Which Runtime and model answers the Session now, once known. */
+  runtimeOf(sessionId: Id): RuntimeInfo | null;
   /** Streams the turn's events; resolves when the turn ends or pauses for an approval. */
   turn(
     sessionId: Id,
@@ -40,8 +47,10 @@ export interface AgentClient {
 export function apiAgentClient(api: Api): AgentClient {
   return {
     listSessions: async (workspaceId) => (await api.agent.sessions(workspaceId)).sessions,
-    createSession: (workspaceId) => api.agent.createSession(workspaceId),
+    createSession: (workspaceId, runtime) => api.agent.createSession(workspaceId, runtime),
     load: (sessionId) => api.agent.session(sessionId),
+    switchRuntime: (sessionId, runtime) => api.agent.switchRuntime(sessionId, runtime),
+    runtimeOf: () => null,
     turn: (sessionId, text, context, onEvent) => api.agent.turn(sessionId, text, context, onEvent),
     approve: (sessionId, activityId, decision, context, onEvent) =>
       api.agent.approve(sessionId, activityId, decision, context, onEvent),
@@ -124,11 +133,11 @@ export function fakeAgentClient(options: FakeAgentClientOptions = {}): FakeAgent
     async listSessions(workspaceId) {
       return sessions.filter((s) => s.workspaceId === workspaceId);
     },
-    async createSession(workspaceId) {
+    async createSession(workspaceId, runtime) {
       const session: SessionSummary = {
         id: `session-${++fakeSeq}`,
         workspaceId,
-        runtime: { kind: "hosted", provider: "anthropic", model: "claude-sonnet-5" },
+        runtime: runtime ?? { kind: "hosted", provider: "anthropic", model: "claude-sonnet-5" },
         title: "",
         startedAt: now().toISOString(),
         lastActivity: now().toISOString(),
@@ -141,6 +150,25 @@ export function fakeAgentClient(options: FakeAgentClientOptions = {}): FakeAgent
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) throw new Error(`session ${sessionId} not found`);
       return { session, events: [...(transcripts.get(sessionId) ?? [])] };
+    },
+    async switchRuntime(sessionId, runtime) {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) throw new Error(`session ${sessionId} not found`);
+      session.runtime = runtime;
+      const event: AgentEvent = { kind: "runtime", id: `r-${++fakeSeq}`, runtime };
+      transcripts.get(sessionId)?.push(event);
+      return event;
+    },
+    runtimeOf(sessionId) {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) return null;
+      return {
+        runtime: session.runtime,
+        model:
+          session.runtime.kind === "hosted"
+            ? session.runtime.model
+            : (session.runtime.model ?? null),
+      };
     },
     async turn(sessionId, text, context, onEvent) {
       sent.push({ sessionId, text, context });
