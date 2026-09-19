@@ -1,3 +1,5 @@
+export type { ControlShape } from "./describe.ts";
+export { describeSetting, describeType } from "./describe.ts";
 export type { HostedSettingKey, HostedSettings, ModelChoice } from "./hosted.ts";
 export {
   estimateCostMicros,
@@ -10,10 +12,13 @@ export {
 } from "./hosted.ts";
 export type {
   Effort,
+  McpServerSetting,
+  MeetingLink,
   ModelPrice,
   PartialSettings,
   Pricing,
   SettingEntry,
+  SettingGroup,
   SettingKey,
   SettingScope,
   SettingSection,
@@ -25,11 +30,17 @@ export type {
 } from "./schema.ts";
 export {
   defaultSettings,
+  groupsInSection,
   HOSTED_PROVIDERS,
   isSettingKey,
+  isStringKey,
   keysInSection,
+  mcpServerShape,
+  PROVIDER_LABELS,
+  SETTING_GROUPS,
   SETTING_SECTIONS,
   sectionRuleShape,
+  settingGroup,
   settingKeys,
   settingScope,
   settingSection,

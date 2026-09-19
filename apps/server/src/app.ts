@@ -56,6 +56,7 @@ import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
 import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
+import { storageRoutes } from "./routes/storage.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 
@@ -219,6 +220,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/pair", pairRoutes(auth));
   app.route("/settings", settingsRoutes(db));
   app.route("/devices", devicesRoutes(auth));
+  app.route("/", storageRoutes(db));
   app.route("/", unlockRoutes(keys));
   app.route(
     "/",

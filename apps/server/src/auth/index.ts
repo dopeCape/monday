@@ -7,7 +7,7 @@
 // Runtime-neutral: Web Crypto only.
 
 import type { Device } from "@monday/shared";
-import { and, desc, eq, isNotNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { devices, pairingCodes } from "../db/schema.ts";
 
@@ -44,6 +44,13 @@ export type PairClaimResult =
   | { status: "pending"; expiresAt: Date }
   | { status: "paired"; deviceId: string; token: string };
 
+/** A pairing code waiting for an existing Device to approve it. */
+export interface PendingCode {
+  code: string;
+  name: string;
+  expiresAt: Date;
+}
+
 export interface AuthOptions {
   db: Db;
   /** Per-launch token from the Tauri parent (env MONDAY_SIDECAR_TOKEN). */
@@ -64,6 +71,8 @@ export interface Auth {
   listDevices(): Promise<Device[]>;
   revokeDevice(id: string): Promise<boolean>;
   hasDevices(): Promise<boolean>;
+  /** Codes new Devices are showing right now: started, not yet confirmed, not expired. */
+  listPendingCodes(): Promise<PendingCode[]>;
   /** Whether the setup code would currently be accepted. */
   setupAvailable(): Promise<boolean>;
 }
@@ -225,6 +234,21 @@ export function createAuth(options: AuthOptions): Auth {
     async hasDevices() {
       const row = await db.select({ id: devices.id }).from(devices).limit(1);
       return row.length > 0;
+    },
+
+    async listPendingCodes() {
+      const rows = await db
+        .select()
+        .from(pairingCodes)
+        .where(
+          and(
+            eq(pairingCodes.used, false),
+            isNull(pairingCodes.confirmedAt),
+            gt(pairingCodes.expiresAt, now()),
+          ),
+        )
+        .orderBy(desc(pairingCodes.createdAt));
+      return rows.map((r) => ({ code: r.code, name: r.deviceName, expiresAt: r.expiresAt }));
     },
 
     async setupAvailable() {

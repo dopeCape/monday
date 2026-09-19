@@ -155,6 +155,16 @@ describe("app", () => {
       expect(pending.status).toBe(202);
       expect(await pending.json()).toMatchObject({ status: "pending" });
 
+      // The existing device sees the code waiting, and knows which device it is (slice 17).
+      const waiting = await app.request("/devices/pending", bearer(firstToken));
+      expect(waiting.status).toBe(200);
+      expect(await waiting.json()).toMatchObject({
+        pending: [{ code: started.code, name: "Phone" }],
+        setupAvailable: false,
+      });
+      const me = await app.request("/devices/me", bearer(firstToken));
+      expect(await me.json()).toEqual({ id: firstId, kind: "device" });
+
       // Unknown code from the confirming device.
       const unknown = await app.request("/pair/confirm", json({ code: "999999" }, firstToken));
       expect(unknown.status).toBe(404);
@@ -182,6 +192,18 @@ describe("app", () => {
       expect(list.status).toBe(200);
       const devices = (await list.json()) as { id: string; name: string }[];
       expect(devices.map((d) => d.name)).toEqual(["Laptop", "Phone"]);
+
+      // Once claimed the code is no longer pending.
+      const after = await app.request("/devices/pending", bearer(firstToken));
+      expect(await after.json()).toMatchObject({ pending: [] });
+    });
+
+    test("storage reports the message count and the database size", async () => {
+      const res = await app.request("/storage", bearer(firstToken));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { messages: number; bytes: number };
+      expect(body.messages).toBe(0);
+      expect(body.bytes).toBeGreaterThan(0);
     });
 
     test("an expired code cannot be confirmed", async () => {

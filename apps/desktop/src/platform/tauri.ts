@@ -42,6 +42,13 @@ export interface Platform {
   openExternal(url: string): Promise<void>;
   network(): Promise<NetworkInfo>;
   power(): Promise<PowerInfo>;
+  /**
+   * The recovery file text: one line saying what it is, then the root key from
+   * this Device's keychain (ADR 0005). Rejects when the keychain is unavailable.
+   */
+  recoveryFile(): Promise<string>;
+  /** Replaces the root key from a recovery file; a new Device joining an existing Server. */
+  importRecoveryKey(text: string): Promise<void>;
   isTauri: boolean;
 }
 
@@ -78,6 +85,8 @@ async function tauriPlatform(): Promise<Platform> {
     openExternal: (url) => openUrl(url),
     network: () => invoke<NetworkInfo>("network_info"),
     power: () => invoke<PowerInfo>("power_info"),
+    recoveryFile: () => invoke<string>("recovery_file"),
+    importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
   };
 }
 
@@ -86,6 +95,28 @@ export interface FakePlatformOptions {
   network?: NetworkInfo;
   /** The fake's power; `?battery=1` in the dev server flips it. */
   power?: PowerInfo;
+  /** The fake's root key, base64 of 32 bytes; null plays an unavailable keychain. */
+  rootKey?: string | null;
+}
+
+/** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
+export function recoveryFileText(key: string): string {
+  return `monday recovery key. This unlocks every message on your server. Keep it private; without it, a new install cannot read your mail.\n${key}\n`;
+}
+
+/** The key inside a recovery file, or null when the text is not one. */
+export function recoveryKeyOf(text: string): string | null {
+  const key = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .at(-1);
+  if (!key || !/^[A-Za-z0-9+/]+=*$/.test(key)) return null;
+  try {
+    return atob(key).length === 32 ? key : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Browser dev server and tests: in-memory config, no sidecar, unmetered and on mains unless told otherwise. */
@@ -93,6 +124,8 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
   let text = initialConfig;
   const network = options.network ?? { online: true, metered: false };
   const power = options.power ?? { mains: true, level: null };
+  let rootKey =
+    options.rootKey === undefined ? btoa(String.fromCharCode(...FAKE_ROOT_KEY)) : options.rootKey;
   const listeners = new Set<(f: ConfigFile) => void>();
   const secrets = new Map<string, string>();
   const file = (): ConfigFile => ({
@@ -125,8 +158,20 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     },
     network: async () => ({ ...network }),
     power: async () => ({ ...power }),
+    recoveryFile: async () => {
+      if (!rootKey) throw new Error("keychain unavailable");
+      return recoveryFileText(rootKey);
+    },
+    importRecoveryKey: async (t) => {
+      const key = recoveryKeyOf(t);
+      if (!key) throw new Error("not a recovery key");
+      rootKey = key;
+    },
   };
 }
+
+/** A fixed 32-byte key so the browser dev server's recovery file is stable. */
+const FAKE_ROOT_KEY = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) % 256);
 
 let cached: Promise<Platform> | undefined;
 export function platform(): Promise<Platform> {

@@ -2,9 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { PRESETS } from "../domain.ts";
 import {
   defaultSettings,
+  describeSetting,
+  groupsInSection,
   isSettingKey,
+  isStringKey,
   keysInSection,
+  SETTING_GROUPS,
   SETTING_SECTIONS,
+  type SettingEntry,
+  type SettingKey,
+  settingGroup,
   settingKeys,
   settingScope,
   settingSection,
@@ -111,5 +118,96 @@ describe("settings schema", () => {
     for (const section of SETTING_SECTIONS) {
       expect(keysInSection(section).length, section).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("settings screen metadata (slice 17)", () => {
+  test("every key that is not a string lands in exactly one group of its section, or says why it is hidden", () => {
+    const seen = new Map<string, number>();
+    for (const section of SETTING_SECTIONS) {
+      for (const group of groupsInSection(section)) {
+        for (const key of [...group.keys, ...group.advanced]) {
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    for (const key of settingKeys) {
+      if (isStringKey(key)) {
+        expect(seen.has(key), key).toBe(false);
+        continue;
+      }
+      const entry = settingsSchema[key] as SettingEntry;
+      if (entry.hidden) {
+        expect(entry.hidden.length, key).toBeGreaterThan(0);
+        expect(seen.has(key), key).toBe(false);
+      } else if (entry.renderedBy) {
+        expect(isSettingKey(entry.renderedBy), key).toBe(true);
+        expect(settingSection(entry.renderedBy as SettingKey), key).toBe(entry.section);
+        expect(seen.has(key), key).toBe(false);
+      } else {
+        expect(seen.get(key), key).toBe(1);
+      }
+    }
+  });
+
+  test("groups follow SETTING_GROUPS, and a key without metadata gets a group from its prefix", () => {
+    const names = groupsInSection("appearance").map((g) => g.name);
+    expect(names.slice(0, SETTING_GROUPS.appearance.length)).toEqual([
+      ...SETTING_GROUPS.appearance,
+    ]);
+    expect(settingGroup("appearance.mode")).toBe("Theme");
+    expect(settingGroup("keyboard.keymap")).toBe("Keymap");
+  });
+
+  test("advanced keys fold under their group and a panel group may hold no keys", () => {
+    const briefs = groupsInSection("routing").find((g) => g.name === "Briefs");
+    expect(briefs?.keys).toContain("briefs.policy");
+    expect(briefs?.advanced).toContain("briefs.bullets_max");
+    const meter = groupsInSection("ai").find((g) => g.name === "Meter");
+    expect(meter).toEqual({ name: "Meter", keys: [], advanced: [] });
+  });
+
+  test("describeSetting reads the control shape out of the zod type", () => {
+    expect(describeSetting("appearance.mode")).toEqual({
+      kind: "enum",
+      options: ["system", "light", "dark"],
+    });
+    expect(describeSetting("appearance.font_size")).toEqual({
+      kind: "number",
+      integer: true,
+      min: 10,
+      max: 24,
+    });
+    expect(describeSetting("routing.threshold.route")).toEqual({
+      kind: "number",
+      integer: false,
+      min: 0,
+      max: 1,
+    });
+    expect(describeSetting("briefs.background")).toEqual({ kind: "boolean" });
+    expect(describeSetting("ai.endpoint.kimi")).toEqual({
+      kind: "string",
+      url: true,
+      maxLength: null,
+    });
+    expect(describeSetting("agent.system_prompt")).toEqual({
+      kind: "string",
+      url: false,
+      maxLength: 20_000,
+    });
+    expect(describeSetting("briefs.automated_senders")).toEqual({
+      kind: "list",
+      item: { kind: "string", url: false, maxLength: null },
+    });
+    expect(describeSetting("inbox.snooze_presets")).toMatchObject({
+      kind: "list",
+      item: { kind: "enum" },
+    });
+    expect(describeSetting("briefs.policy_groups")).toEqual({
+      kind: "record",
+      value: { kind: "enum", options: ["always", "on_open", "never"] },
+    });
+    expect(describeSetting("ai.roles.anthropic")).toEqual({ kind: "json" });
+    expect(describeSetting("inbox.rows")).toEqual({ kind: "json" });
   });
 });
