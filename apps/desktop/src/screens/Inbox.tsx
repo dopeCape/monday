@@ -1041,10 +1041,12 @@ export function Inbox({
                 .split(/(\{down\}|\{up\})/)
                 .map((part, i) =>
                   part === "{down}" || part === "{up}" ? (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a split of one static string; the position is the identity
                     <Kbd key={`${part}-${i}`}>
                       {key(part === "{down}" ? "move.down" : "move.up")}
                     </Kbd>
                   ) : (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: same split; text parts can repeat
                     <Fragment key={`${part}-${i}`}>{part}</Fragment>
                   ),
                 )}
