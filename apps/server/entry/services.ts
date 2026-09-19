@@ -69,7 +69,7 @@ export async function createServices(options: ServicesOptions): Promise<Services
     db,
     sidecarToken: env.MONDAY_SIDECAR_TOKEN || null,
     setupCode,
-    codeTtlMs: async () => (await readGlobalSetting(db, "server.pairing_code_minutes")) * 60_000,
+    codeTtlMs: async () => (await readGlobalSetting(db, "server.device_code_minutes")) * 60_000,
   });
   if (setupCode && firstBoot) log(`setup code for the first device: ${setupCode}`);
 

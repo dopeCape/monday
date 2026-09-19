@@ -13,8 +13,8 @@ import type { Db } from "../db/client.ts";
 import { devices, pairingCodes } from "../db/schema.ts";
 
 export const SIDECAR_DEVICE_ID = "local";
-/** The shipped default of server.pairing_code_minutes, as milliseconds. */
-export const PAIRING_CODE_TTL_MS = settingsSchema["server.pairing_code_minutes"].default * 60_000;
+/** The shipped default of server.device_code_minutes, as milliseconds. */
+export const PAIRING_CODE_TTL_MS = settingsSchema["server.device_code_minutes"].default * 60_000;
 /** How often a Device's last_seen is written. */
 export const LAST_SEEN_RESOLUTION_MS = 60_000;
 
@@ -61,7 +61,7 @@ export interface AuthOptions {
   sidecarToken?: string | null;
   /** One-time code that pairs the very first Device. */
   setupCode?: string | null;
-  /** How long a pairing code lives; the Setting server.pairing_code_minutes when read from the table. */
+  /** How long a pairing code lives; the Setting server.device_code_minutes when read from the table. */
   codeTtlMs?: number | (() => Promise<number> | number);
   now?: () => Date;
 }

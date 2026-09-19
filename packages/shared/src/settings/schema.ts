@@ -1991,15 +1991,15 @@ export const settingsSchema = {
     label: "Allowed origins",
     help: "Web origins the Server answers browser requests from. The desktop app's own origins are here by default; add one to serve another client.",
   }),
-  "server.pairing_code_minutes": setting({
+  "server.device_code_minutes": setting({
     type: z.int().min(1).max(60),
     default: 10,
     scope: "global",
     section: "server",
     group: "Devices",
     advanced: true,
-    label: "Pairing code lifetime",
-    help: "Minutes a new Device's pairing code stays valid before it has to show a fresh one.",
+    label: "Device code lifetime",
+    help: "Minutes the short code a new Device shows stays valid before it has to show a fresh one.",
   }),
   "server.probe_seconds": setting({
     type: z.int().min(5).max(600),
