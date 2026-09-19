@@ -288,8 +288,16 @@ export type BriefAction = { label: string } & (
 
 /* ------------------------------ The agent ------------------------------ */
 
+/** The command-line agents a Local runtime can be (CONTEXT.md, Local runtime). */
+export type LocalCli = "claude-code" | "codex" | "opencode";
+
 export type Runtime =
-  | { kind: "local"; cli: "claude-code" | "codex" | "opencode" }
+  | {
+      kind: "local";
+      cli: LocalCli;
+      /** The model the CLI reported once it started; unknown before that. */
+      model?: string | undefined;
+    }
   | { kind: "hosted"; provider: HostedProvider; model: string };
 
 export type HostedProvider = "anthropic" | "gemini" | "openai" | "kimi" | "openrouter";
@@ -391,6 +399,8 @@ export interface ToolCall {
   undoneAt?: IsoDate | null;
   /** The user declined the approval; nothing ran. */
   declined?: boolean;
+  /** A Local runtime's own built-in tool, used in Developer mode; the card carries the warning glyph. */
+  builtin?: boolean;
 }
 
 export interface ActivityEntry extends ToolCall {

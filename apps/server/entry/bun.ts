@@ -27,6 +27,10 @@
 //   MONDAY_PUBLIC_URL     the HTTPS origin the internet reaches this Server at (Cloud modes);
 //                         Gmail and Graph push subscriptions point here. Falls back to the
 //                         server.public_url Setting; absent, push-only providers are polled.
+//
+// `monday-server mcp ...` runs the stdio MCP launcher instead (entry/mcp.ts):
+// monday's tools for a Local runtime that only speaks stdio, proxied to the
+// Sidecar's loopback endpoint.
 
 import { join } from "node:path";
 import type { DeploymentMode } from "@monday/shared";
@@ -246,7 +250,15 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  log(error instanceof Error ? (error.stack ?? error.message) : String(error));
-  process.exit(1);
-});
+if (process.argv[2] === "mcp") {
+  const { runMcpLauncher } = await import("./mcp.ts");
+  runMcpLauncher(process.argv.slice(3)).catch((error) => {
+    log(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  });
+} else {
+  main().catch((error) => {
+    log(error instanceof Error ? (error.stack ?? error.message) : String(error));
+    process.exit(1);
+  });
+}

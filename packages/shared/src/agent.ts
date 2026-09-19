@@ -3,7 +3,17 @@
 // the events a Session streams, and the Activity log rows. Runtime-neutral so
 // the Server's tool server and a Device's ToolHost share one vocabulary.
 
-import type { Draft, Id, IsoDate, Person, Runtime, Thread, Tier, ToolCall } from "./domain.ts";
+import type {
+  Draft,
+  Id,
+  IsoDate,
+  LocalCli,
+  Person,
+  Runtime,
+  Thread,
+  Tier,
+  ToolCall,
+} from "./domain.ts";
 import type { Actor, DraftContent, Intent, IntentArgs } from "./sync.ts";
 
 /* ------------------------------ Tiers ------------------------------ */
@@ -178,7 +188,9 @@ export type AgentEvent =
   | { kind: "text"; id: Id; text: string }
   | { kind: "tool"; call: ToolCall; preview: ToolPreview | null; threads?: PreviewThread[] }
   | { kind: "error"; id: Id; message: string; code?: string | undefined }
-  | { kind: "done"; id: Id; waiting: string | null };
+  | { kind: "done"; id: Id; waiting: string | null }
+  /** The Session moved to another Runtime; the thread shows it as a line. */
+  | { kind: "runtime"; id: Id; runtime: Runtime };
 
 /** What the Device tells the Server with each turn: things only it knows. */
 export interface TurnContext {
@@ -186,4 +198,107 @@ export interface TurnContext {
   pinned?: string[] | undefined;
   /** The Thread the reader shows, for "About this thread". */
   threadId?: Id | null | undefined;
+}
+
+/* ------------------------------ AgentSession seam ------------------------------ */
+
+/** What a turn ends with: the Activity row that waits for approval, or nothing. */
+export interface TurnOutcome {
+  waiting: string | null;
+}
+
+/** Everything a runtime needs before its first turn on a Session. */
+export interface SessionStartContext extends TurnContext {
+  workspaceId: Id;
+  sessionId: Id;
+  /** The Workspace's address, for the system prompt. */
+  address: string;
+  /** How many times the Session changed Runtime; a new epoch hands the transcript over. */
+  epoch: number;
+  /** The transcript so far, handed to a runtime that did not produce it. */
+  transcript: readonly AgentEvent[];
+  /** The Local runtime keeps its own shell, file and web tools (CONTEXT.md, Developer mode). */
+  developerMode: boolean;
+  /** Whether the Agent may fetch web pages. */
+  webFetch: boolean;
+}
+
+/** Which Runtime is answering, and with which model when known. */
+export interface RuntimeInfo {
+  runtime: Runtime;
+  model: string | null;
+}
+
+/**
+ * One Session on one Runtime (ADR 0002, ADR 0007): the Hosted loop on the
+ * Server and the three Local adapters on a Device implement it alike, so the
+ * composer and the Activity log see identical turns. `send` and `resume`
+ * stream events until the model stops or a tool asks; `resume` answers the
+ * waiting call and runs on. `start` is idempotent and carries the turn
+ * context; a new epoch replays the transcript to the runtime as context.
+ */
+export interface AgentSession {
+  start(context: SessionStartContext): Promise<void>;
+  send(text: string, onEvent: (event: AgentEvent) => void): Promise<TurnOutcome>;
+  resume(
+    activityId: Id,
+    decision: ApprovalDecision,
+    onEvent: (event: AgentEvent) => void,
+  ): Promise<TurnOutcome>;
+  cancel(): Promise<void>;
+  runtime(): RuntimeInfo;
+}
+
+/* ------------------------------ Local runtime detection ------------------------------ */
+
+/** What a Device found out about one command-line agent. */
+export interface RuntimeStatus {
+  cli: LocalCli;
+  /** The binary the Device would spawn: the Setting's path override or the name on PATH. */
+  command: string;
+  installed: boolean;
+  version: string | null;
+  /** Null when the CLI does not expose a login state. */
+  loggedIn: boolean | null;
+  /** Why the runtime cannot start, in the user's language, when it cannot. */
+  reason: string | null;
+}
+
+/**
+ * The transcript so far as plain text, for a runtime that did not produce it
+ * (a Runtime switch mid-Session). Tool calls already made are listed, never
+ * repeated (docs/spec/agent-composer.md, Sessions).
+ */
+export function transcriptAsContext(events: readonly AgentEvent[]): string {
+  const lines: string[] = [];
+  for (const event of events) {
+    switch (event.kind) {
+      case "user":
+        lines.push(`User: ${event.text}`);
+        break;
+      case "text":
+        if (event.text) lines.push(`Assistant: ${event.text}`);
+        break;
+      case "tool": {
+        const outcome =
+          event.call.status === "done"
+            ? event.call.declined
+              ? "declined by the user"
+              : (event.call.result ?? "done")
+            : event.call.status;
+        lines.push(`Tool ${event.call.tool} (${event.call.inputSummary}): ${outcome}`);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return lines.join("\n");
+}
+
+/** A user turn with the handed-over transcript in front of it, for the first turn of a new epoch. */
+export function withHandover(text: string, transcript: readonly AgentEvent[]): string {
+  const context = transcriptAsContext(transcript);
+  if (!context) return text;
+  return `The conversation so far, from another runtime. Tool calls listed here already happened; do not repeat them.\n\n${context}\n\nThe user continues:\n${text}`;
 }

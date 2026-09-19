@@ -14,6 +14,7 @@ import type {
   Density,
   HostedProvider,
   Layout,
+  LocalCli,
   Role,
   Roles,
   Task,
@@ -245,6 +246,36 @@ function aiPricing(provider: HostedProvider, table: Pricing) {
     section: "ai",
     label: `${provider} prices`,
     help: `USD per million tokens by model id on ${provider}: input, output and cached input. The Meter multiplies these by the tokens each call reports. A model missing here meters at zero cost.`,
+  });
+}
+
+const CLI_NAME: Record<LocalCli, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+};
+
+/** The binary a Device spawns for a Local runtime: a name on PATH by default, or a full path. */
+function aiLocalPath(cli: LocalCli, binary: string) {
+  return setting({
+    type: z.string().min(1),
+    default: binary,
+    scope: "device",
+    section: "ai",
+    label: `${CLI_NAME[cli]} command`,
+    help: `The ${CLI_NAME[cli]} binary to run on this device: a name found on PATH or a full path. Per device.`,
+  });
+}
+
+/** The model a Local runtime is asked for; empty means the CLI's own default. */
+function aiLocalModel(cli: LocalCli) {
+  return setting({
+    type: z.string(),
+    default: "",
+    scope: "device",
+    section: "ai",
+    label: `${CLI_NAME[cli]} model`,
+    help: `The model ${CLI_NAME[cli]} is asked to use, in that CLI's own naming. Empty means the CLI's default. Per device.`,
   });
 }
 
@@ -1038,6 +1069,20 @@ export const settingsSchema = {
     label: "Web fetch",
     help: "Let the Agent fetch web pages through a monday tool.",
   }),
+  "ai.local.path.claude-code": aiLocalPath("claude-code", "claude"),
+  "ai.local.path.codex": aiLocalPath("codex", "codex"),
+  "ai.local.path.opencode": aiLocalPath("opencode", "opencode"),
+  "ai.local.model.claude-code": aiLocalModel("claude-code"),
+  "ai.local.model.codex": aiLocalModel("codex"),
+  "ai.local.model.opencode": aiLocalModel("opencode"),
+  "ai.local.tool_timeout_seconds": setting({
+    type: z.int().min(30).max(86_400),
+    default: 3600,
+    scope: "device",
+    section: "ai",
+    label: "Local runtime tool timeout",
+    help: "How long a Local runtime waits for a monday tool, which includes the time an approval card waits for you. Per device.",
+  }),
   "ai.session.new_after_hours": setting({
     type: z.int().min(1),
     default: 24,
@@ -1480,6 +1525,28 @@ export const settingsSchema = {
   ),
   "strings.agent.offline": str("ai", "Agent offline line", "Offline, hosted work paused"),
   "strings.agent.unavailable": str("ai", "Local runtime unavailable", "{runtime} not available"),
+  "strings.agent.not_installed": str(
+    "ai",
+    "Local runtime not installed",
+    "{runtime} is not installed on this computer. Install it or pick another runtime in Settings.",
+  ),
+  "strings.agent.not_logged_in": str(
+    "ai",
+    "Local runtime not logged in",
+    "{runtime} is installed but not logged in. Sign in from a terminal, then try again.",
+  ),
+  "strings.agent.needs_developer_mode": str(
+    "ai",
+    "Local runtime cannot strip built-ins",
+    "{runtime} cannot turn off its own tools. Turn on Developer mode to use it anyway.",
+  ),
+  "strings.agent.runtime_switched": str("ai", "Runtime switch line", "Now answering: {runtime}"),
+  "strings.agent.builtin_tool": str(
+    "ai",
+    "Developer mode built-in card title",
+    "Developer mode: {tool}",
+  ),
+  "strings.agent.cli_model": str("ai", "Local runtime line", "{runtime} ({model})"),
   "strings.agent.ask_about_thread": str("ai", "Ask about this Thread", "About this thread"),
   "strings.agent.approve": str("ai", "Approval card: approve", "Approve"),
   "strings.agent.apply": str("ai", "Batch preview: apply", "Apply"),

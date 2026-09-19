@@ -6,12 +6,21 @@
 // below is reached through seams (ToolHost, ActivityLog, SessionStore, the
 // checkpointer, the runtime) so the whole loop runs in a test without a
 // network, and with or without Postgres.
+//
+// Slice 15: the Hosted loop sits behind the AgentSession seam, and a Session
+// on a Local runtime (a CLI a Device drives) shares the same Sessions and
+// Activity log. Its tool calls arrive over MCP (`call`), approvals wait in
+// `resume` exactly as a Hosted interrupt does, and the tool cards reach the
+// Device through `live`.
 
 import { type BaseCheckpointSaver, MemorySaver } from "@langchain/langgraph";
 import type {
   ActivityRecord,
   AgentEvent,
+  AgentSession,
   ApprovalDecision,
+  Runtime,
+  SessionStartContext,
   SessionSummary,
   ToolCall,
   ToolHost,
@@ -20,15 +29,23 @@ import type {
 import type { HostedRuntime } from "../runtime/index.ts";
 import { type ActivityLog, type ActivityRow, publicActivity } from "./activity.ts";
 import { type AgentGraph, createAgentGraph, type RunContext } from "./graph.ts";
+import { createHostedSession, SessionNotFoundError, TurnBusyError } from "./session-runtime.ts";
 import type { SessionStore } from "./sessions.ts";
-import { createToolServer, type ToolServer } from "./tools/index.ts";
+import { createToolServer, type ToolOutcome, type ToolServer } from "./tools/index.ts";
 
 export type { ActivityLog, ActivityRow } from "./activity.ts";
 export { createActivityLog, createMemoryActivityLog, publicActivity } from "./activity.ts";
 export { createServerToolHost } from "./host.ts";
+export { createMondayMcpServer, type McpContext, mcpResultOf } from "./mcp.ts";
+export {
+  createHostedSession,
+  graphThreadId,
+  SessionNotFoundError,
+  TurnBusyError,
+} from "./session-runtime.ts";
 export type { SessionStore } from "./sessions.ts";
 export { collapseEvents, createMemorySessionStore, createSessionStore } from "./sessions.ts";
-export type { ToolServer } from "./tools/index.ts";
+export type { ToolOutcome, ToolServer } from "./tools/index.ts";
 export { createToolServer, TOOL_CATALOG } from "./tools/index.ts";
 
 export interface AgentSettings {
@@ -37,6 +54,8 @@ export interface AgentSettings {
   alwaysAsk: string[];
   maxSteps: number;
   searchLimit: number;
+  /** Whether the Agent may fetch web pages (ai.web_fetch). */
+  webFetch?: boolean | undefined;
 }
 
 export interface AgentHostOptions {
@@ -58,24 +77,29 @@ export interface TurnResult {
   waiting: string | null;
 }
 
-export class SessionNotFoundError extends Error {
-  readonly status = 404;
+/** A turn was sent to the Server for a Session a Device's Local runtime drives. */
+export class LocalSessionError extends Error {
+  readonly status = 409;
   constructor(readonly sessionId: string) {
-    super(`session ${sessionId} not found`);
-    this.name = "SessionNotFoundError";
+    super(`session ${sessionId} runs on a Local runtime; its turns come from the Device`);
+    this.name = "LocalSessionError";
   }
 }
 
-export class TurnBusyError extends Error {
-  readonly status = 409;
-  constructor(readonly sessionId: string) {
-    super(`session ${sessionId} is already running a turn`);
-    this.name = "TurnBusyError";
-  }
+/** One tool call from a Local runtime, over an MCP transport. */
+export interface LocalCall {
+  workspaceId: string;
+  sessionId: string | null;
+  name: string;
+  args: unknown;
+  /** The CLI's own id for the call when it has one; generated otherwise. */
+  callId?: string | undefined;
+  pinned?: readonly string[] | undefined;
 }
 
 export interface AgentHost {
-  createSession(workspaceId: string): Promise<SessionSummary>;
+  /** A Session on the Hosted runtime by default, or on the Local runtime a Device names. */
+  createSession(workspaceId: string, runtime?: Runtime): Promise<SessionSummary>;
   listSessions(workspaceId: string): Promise<SessionSummary[]>;
   getSession(id: string): Promise<{ session: SessionSummary; events: AgentEvent[] } | null>;
   /** Runs one user turn, streaming events, until the model stops or a tool asks. */
@@ -93,6 +117,16 @@ export interface AgentHost {
     context: TurnContext,
     onEvent: (event: AgentEvent) => void,
   ): Promise<TurnResult>;
+  /** Moves the Session to another Runtime; the thread gets a line and the next turn hands the transcript over. */
+  switchRuntime(sessionId: string, runtime: Runtime): Promise<AgentEvent>;
+  /** A Device's Local runtime persists what its CLI said; tool cards come from `call`. */
+  appendEvent(sessionId: string, event: AgentEvent): Promise<void>;
+  /** Server-side events for a Session as they happen: the tool cards of MCP calls. */
+  live(sessionId: string, listener: (event: AgentEvent) => void): () => void;
+  /** One tool call from a Local runtime: tiers and approvals inside, the same Activity row. */
+  call(input: LocalCall): Promise<ToolOutcome>;
+  /** Everything a runtime needs before a turn on this Session. */
+  startContext(sessionId: string, context: TurnContext): Promise<SessionStartContext>;
   listActivity(
     workspaceId: string,
     options?: { limit?: number; sessionId?: string },
@@ -125,12 +159,25 @@ export function toolCallOf(row: ActivityRow): ToolCall {
   };
 }
 
+/** How many times a transcript switched Runtime. */
+export function epochOf(events: readonly AgentEvent[]): number {
+  return events.filter((e) => e.kind === "runtime").length;
+}
+
 export function createAgentHost(options: AgentHostOptions): AgentHost {
   const { runtime, activity, sessions } = options;
   const now = options.now ?? (() => new Date());
   const checkpointer = options.checkpointer ?? new MemorySaver();
   const toolServers = new Map<string, ToolServer>();
   const running = new Map<string, RunContext>();
+  const hosted = new Map<string, { runtime: string; session: AgentSession }>();
+  /** Approvals a Local runtime's tool call waits on, by Activity row. */
+  const pending = new Map<string, (decision: ApprovalDecision) => void>();
+  /** Decisions that arrived before the call registered its wait. */
+  const decided = new Map<string, ApprovalDecision>();
+  /** Who waits for a waiting row to move on, by Activity row. */
+  const settled = new Map<string, Array<(row: ActivityRow) => void>>();
+  const listeners = new Map<string, Set<(event: AgentEvent) => void>>();
 
   const tools = (workspaceId: string): ToolServer => {
     let server = toolServers.get(workspaceId);
@@ -156,9 +203,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
   const graph: AgentGraph = createAgentGraph({
     runtime,
     checkpointer,
-    contextFor: (sessionId) => {
-      const ctx = running.get(sessionId);
-      if (!ctx) throw new Error(`no run context for session ${sessionId}`);
+    contextFor: (threadId) => {
+      const ctx = running.get(threadId);
+      if (!ctx) throw new Error(`no run context for thread ${threadId}`);
       return ctx;
     },
   });
@@ -169,64 +216,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     preview: row.preview,
   });
 
-  /** Drives the graph for one turn or resume, translating what happens into events. */
-  const drive = async (
-    session: SessionSummary,
-    context: TurnContext,
-    onEvent: (event: AgentEvent) => void,
-    run: () => Promise<Awaited<ReturnType<AgentGraph["turn"]>>>,
-  ): Promise<TurnResult> => {
-    if (running.has(session.id)) throw new TurnBusyError(session.id);
-    const emit = (event: AgentEvent) => {
-      onEvent(event);
-      if (event.kind !== "delta") void sessions.append(session.id, event);
-    };
-    const settings = await options.settings();
-    const address = await options.workspaceAddress(session.workspaceId);
-    let textId = crypto.randomUUID();
-    running.set(session.id, {
-      workspaceId: session.workspaceId,
-      sessionId: session.id,
-      system: `${settings.systemPrompt}\n\nWorkspace: ${address}. Today is ${now().toISOString()}.`,
-      pinned: context.pinned ?? [],
-      maxSteps: settings.maxSteps,
-      tools: tools(session.workspaceId),
-      onText: (delta) => onEvent({ kind: "delta", id: textId, text: delta }),
-      onAssistant: (text) => {
-        emit({ kind: "text", id: textId, text });
-        textId = crypto.randomUUID();
-      },
-      onTool: (row) => emit(toolEvent(row)),
-    });
-    const doneId = crypto.randomUUID();
-    try {
-      const result = await run();
-      const waiting = result.interrupted?.activityId ?? null;
-      if (!waiting && result.state.steps >= settings.maxSteps) {
-        const last = result.state.messages.at(-1);
-        if (last?.role !== "assistant" || last.toolCalls.length > 0) {
-          emit({
-            kind: "text",
-            id: crypto.randomUUID(),
-            text: `Stopped after ${settings.maxSteps} steps. Ask me to continue if you want more.`,
-          });
-        }
-      }
-      emit({ kind: "done", id: doneId, waiting });
-      return { waiting };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code =
-        error instanceof Error && "provider" in error && error.name === "NoProviderKeyError"
-          ? "no_shared_key"
-          : undefined;
-      emit({ kind: "error", id: doneId, message, ...(code ? { code } : {}) });
-      emit({ kind: "done", id: crypto.randomUUID(), waiting: null });
-      return { waiting: null };
-    } finally {
-      running.delete(session.id);
-      await sessions.touch(session.id);
-    }
+  const publish = (sessionId: string, event: AgentEvent) => {
+    for (const listener of listeners.get(sessionId) ?? []) listener(event);
   };
 
   const requireSession = async (id: string): Promise<SessionSummary> => {
@@ -235,10 +226,85 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     return session;
   };
 
+  const startContext = async (
+    session: SessionSummary,
+    context: TurnContext,
+  ): Promise<SessionStartContext> => {
+    const transcript = await sessions.events(session.id);
+    const settings = await options.settings();
+    return {
+      ...context,
+      workspaceId: session.workspaceId,
+      sessionId: session.id,
+      address: await options.workspaceAddress(session.workspaceId),
+      epoch: epochOf(transcript),
+      transcript,
+      developerMode: false,
+      webFetch: settings.webFetch ?? false,
+    };
+  };
+
+  /** The Hosted AgentSession for a Session, recreated when its Runtime changed. */
+  const hostedFor = (session: SessionSummary): AgentSession => {
+    if (session.runtime.kind !== "hosted") throw new LocalSessionError(session.id);
+    const key = JSON.stringify(session.runtime);
+    const cached = hosted.get(session.id);
+    if (cached && cached.runtime === key) return cached.session;
+    const created = createHostedSession({
+      session,
+      graph,
+      sessions,
+      activity,
+      tools: tools(session.workspaceId),
+      settings: async () => {
+        const s = await options.settings();
+        return { systemPrompt: s.systemPrompt, maxSteps: s.maxSteps };
+      },
+      bind: (threadId, ctx) => {
+        if (running.has(threadId)) throw new TurnBusyError(session.id);
+        running.set(threadId, ctx);
+        return () => running.delete(threadId);
+      },
+      toolEvent,
+      now,
+    });
+    hosted.set(session.id, { runtime: key, session: created });
+    return created;
+  };
+
+  /** A Local runtime's approval: answers the waiting call and streams the card as it moves on. */
+  const resumeLocal = async (
+    session: SessionSummary,
+    activityId: string,
+    decision: ApprovalDecision,
+    onEvent: (event: AgentEvent) => void,
+  ): Promise<TurnResult> => {
+    const row = await activity.get(activityId);
+    if (!row || row.sessionId !== session.id || row.status !== "waiting") {
+      throw new SessionNotFoundError(activityId);
+    }
+    const moved = new Promise<ActivityRow>((resolve) => {
+      settled.set(activityId, [...(settled.get(activityId) ?? []), resolve]);
+    });
+    const resolve = pending.get(activityId);
+    if (resolve) {
+      pending.delete(activityId);
+      resolve(decision);
+    } else {
+      decided.set(activityId, decision);
+    }
+    const next = await moved;
+    onEvent(toolEvent(next));
+    onEvent({ kind: "done", id: crypto.randomUUID(), waiting: null });
+    await sessions.touch(session.id);
+    return { waiting: null };
+  };
+
   return {
     tools,
 
-    async createSession(workspaceId) {
+    async createSession(workspaceId, requested) {
+      if (requested) return sessions.create(workspaceId, requested);
       const choice = await runtime.resolve("composer");
       return sessions.create(workspaceId, {
         kind: "hosted",
@@ -257,20 +323,91 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
     async turn(sessionId, text, context, onEvent) {
       const session = await requireSession(sessionId);
-      const userEvent: AgentEvent = { kind: "user", id: crypto.randomUUID(), text };
-      onEvent(userEvent);
-      await sessions.append(session.id, userEvent);
-      await sessions.touch(session.id, text.slice(0, 120));
-      return drive(session, context, onEvent, () => graph.turn(session.id, text));
+      const agent = hostedFor(session);
+      await agent.start(await startContext(session, context));
+      return agent.send(text, onEvent);
     },
 
     async resume(sessionId, activityId, decision, context, onEvent) {
       const session = await requireSession(sessionId);
-      const row = await activity.get(activityId);
-      if (!row || row.sessionId !== session.id || row.status !== "waiting") {
-        throw new SessionNotFoundError(activityId);
+      if (session.runtime.kind === "local") {
+        return resumeLocal(session, activityId, decision, onEvent);
       }
-      return drive(session, context, onEvent, () => graph.resume(session.id, decision));
+      const agent = hostedFor(session);
+      await agent.start(await startContext(session, context));
+      return agent.resume(activityId, decision, onEvent);
+    },
+
+    async switchRuntime(sessionId, next) {
+      const session = await requireSession(sessionId);
+      await sessions.setRuntime(session.id, next);
+      hosted.delete(session.id);
+      const event: AgentEvent = { kind: "runtime", id: crypto.randomUUID(), runtime: next };
+      await sessions.append(session.id, event);
+      return event;
+    },
+
+    async appendEvent(sessionId, event) {
+      const session = await requireSession(sessionId);
+      if (event.kind === "delta") return;
+      await sessions.append(session.id, event);
+      await sessions.touch(
+        session.id,
+        event.kind === "user" ? event.text.slice(0, 120) : undefined,
+      );
+    },
+
+    live(sessionId, listener) {
+      const set = listeners.get(sessionId) ?? new Set();
+      set.add(listener);
+      listeners.set(sessionId, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(sessionId);
+      };
+    },
+
+    async call(input) {
+      const server = tools(input.workspaceId);
+      const sessionId = input.sessionId;
+      const emit = (row: ActivityRow) => {
+        const event = toolEvent(row);
+        if (sessionId) {
+          publish(sessionId, event);
+          void sessions.append(sessionId, event);
+        }
+        if (row.status !== "waiting") {
+          const waiters = settled.get(row.id);
+          if (waiters) {
+            settled.delete(row.id);
+            for (const w of waiters) w(row);
+          }
+        }
+      };
+      return server.call(
+        {
+          name: input.name,
+          args: input.args,
+          callId: input.callId ?? crypto.randomUUID(),
+          sessionId,
+          pinned: input.pinned,
+        },
+        {
+          ask: (row) => {
+            const early = decided.get(row.id);
+            if (early) {
+              decided.delete(row.id);
+              return Promise.resolve(early);
+            }
+            return new Promise<ApprovalDecision>((resolve) => pending.set(row.id, resolve));
+          },
+          onUpdate: emit,
+        },
+      );
+    },
+
+    async startContext(sessionId, context) {
+      return startContext(await requireSession(sessionId), context);
     },
 
     async listActivity(workspaceId, opts) {
