@@ -359,7 +359,8 @@ describe("the routes a Device uses for a local Session", () => {
     ]);
     const transport = new StreamableHTTPClientTransport(new URL("http://127.0.0.1:1/mcp/local"), {
       requestInit: { headers: mcpHeaders(args) },
-      fetch: (input, init) => app.request(input instanceof Request ? input : String(input), init),
+      fetch: async (input, init) =>
+        app.request(input instanceof Request ? input : String(input), init),
     }) as unknown as Transport;
     const client = new Client({ name: "cli", version: "0" });
     await client.connect(transport);

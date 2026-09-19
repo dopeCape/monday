@@ -1573,6 +1573,7 @@ export const settingsSchema = {
     "Setting refused because pinned",
     "{key} is set in monday.toml; the file wins. Edit the file to change it.",
   ),
+  "strings.agent.developer_mode": str("ai", "Developer mode toggle", "Developer mode"),
   "strings.agent.developer_warning": str(
     "ai",
     "Developer mode warning",

@@ -208,7 +208,8 @@ describe("the composer in bottom-bar mode", () => {
       {
         sessionId: session,
         text: "archive every newsletter older than a week",
-        context: { pinned: ["appearance.mode"] },
+        // Developer mode is off by default (CONTEXT.md); every turn says so.
+        context: { pinned: ["appearance.mode"], developerMode: false },
       },
     ]);
     expect(document.querySelector(".agent-thread .u")?.textContent).toBe(

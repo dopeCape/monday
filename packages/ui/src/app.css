@@ -1044,6 +1044,22 @@ button.msg {
 .a p {
   margin: 0;
 }
+.a .line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.a .line.warn {
+  color: var(--warning);
+}
+.tool[data-builtin] .t {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning);
+}
 .tool {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -1164,6 +1180,16 @@ button.msg {
   padding: 0 var(--pad) 12px;
   font-size: var(--fs-xs);
   color: var(--danger);
+}
+.agent-developer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--pad) 0;
+  font-size: var(--fs-xs);
+}
+.agent-developer .warn {
+  color: var(--warning);
 }
 .results {
   display: flex;

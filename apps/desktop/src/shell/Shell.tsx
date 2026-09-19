@@ -35,7 +35,12 @@ import {
   type Picked,
   saveCloudTarget,
 } from "../platform/cloud.ts";
-import { type ConfigFile, platform, type SidecarInfo } from "../platform/tauri.ts";
+import {
+  type ConfigFile,
+  type ProcessRunner,
+  platform,
+  type SidecarInfo,
+} from "../platform/tauri.ts";
 
 export interface ConfigState {
   file: ConfigFile | null;
@@ -54,6 +59,8 @@ export interface ShellState {
   palette: string;
   config: ConfigState;
   sidecar: SidecarInfo | null;
+  /** Spawns a Local runtime's CLI on this Device; null where there is no host to spawn from. */
+  spawn: ProcessRunner | null;
   /** The Cloud this Device paired with (ADR 0008), or null on a Sidecar-only install. */
   cloud: CloudTarget | null;
   /** Where requests go right now: the Sidecar or the Cloud, by preference and reachability. */
@@ -109,6 +116,7 @@ export function Shell({ children }: { children: ReactNode }) {
   });
   const [stored, setStored] = useState<PartialSettings>({});
   const [sidecar, setSidecar] = useState<SidecarInfo | null>(null);
+  const [spawn, setSpawn] = useState<ProcessRunner | null>(null);
   const [cloud, setCloudState] = useState<CloudTarget | null>(null);
   const [server, setServer] = useState<Picked | null>(null);
   const configRef = useRef(config);
@@ -117,6 +125,8 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => {
     let dispose: Array<() => void> = [];
     void platform().then(async (p) => {
+      // Only a Tauri host can spawn a Local runtime's CLI; the browser dev server cannot.
+      if (p.isTauri) setSpawn(() => p.spawn);
       const first = await p.readConfig();
       setConfig((last) => parseFile(first, last));
       dispose.push(p.onConfigChanged((f) => setConfig((last) => parseFile(f, last))));
@@ -262,6 +272,7 @@ export function Shell({ children }: { children: ReactNode }) {
       palette,
       config,
       sidecar,
+      spawn,
       cloud,
       server,
       api,
@@ -279,6 +290,7 @@ export function Shell({ children }: { children: ReactNode }) {
       palette,
       config,
       sidecar,
+      spawn,
       cloud,
       server,
       api,
@@ -304,7 +316,7 @@ export function StaticShell({
   settings?: PartialSettings | undefined;
   /** Connection state for a test: a scripted api, a Sidecar, a Cloud target, a spy setCloud. */
   shell?:
-    | Partial<Pick<ShellState, "api" | "sidecar" | "cloud" | "server" | "setCloud">>
+    | Partial<Pick<ShellState, "api" | "sidecar" | "spawn" | "cloud" | "server" | "setCloud">>
     | undefined;
   children: ReactNode;
 }) {
@@ -337,6 +349,7 @@ export function StaticShell({
       palette: settings["appearance.palette"],
       config: { file: null, values: {}, warnings: [], error: null },
       sidecar: null,
+      spawn: null,
       cloud: null,
       server: null,
       api,

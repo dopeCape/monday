@@ -8,6 +8,7 @@ import {
   ClockCounterClockwiseIcon,
   PlusIcon,
   WarningCircleIcon,
+  WarningIcon,
 } from "@phosphor-icons/react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { cx, formatListTime, humanize } from "../format.ts";
@@ -57,8 +58,15 @@ export function ToolCard({
     statusLabel ??
     (call.status === "done" && call.result ? call.result : STATUS_LABEL[call.status]);
   return (
-    <div className={cx("tool", STATUS_CLASS[call.status], className)} data-tier={call.tier}>
-      <span className="t">{title ?? humanize(call.tool)}</span>
+    <div
+      className={cx("tool", STATUS_CLASS[call.status], className)}
+      data-tier={call.tier}
+      data-builtin={call.builtin ? "true" : undefined}
+    >
+      <span className="t">
+        {call.builtin ? <Icon icon={WarningIcon} /> : null}
+        {title ?? humanize(call.tool)}
+      </span>
       <span className="st">
         {call.status === "done" ? <Icon icon={CheckIcon} /> : null}
         {call.status === "running" ? <Icon icon={CircleNotchIcon} /> : null}
@@ -155,6 +163,8 @@ export function AgentBar({
 
 export type AgentPart =
   | { kind: "text"; text: string }
+  /** A one-line note in the thread: a Runtime switch, the Developer mode warning. */
+  | { kind: "line"; text: string; warning?: boolean | undefined }
   | {
       kind: "tool";
       call: ToolCall;
@@ -201,6 +211,13 @@ export function AgentThread({
             {turn.parts.map((part, i) => {
               const key = partKey(part, i);
               if (part.kind === "text") return <p key={key}>{part.text}</p>;
+              if (part.kind === "line")
+                return (
+                  <div key={key} className={cx("line", part.warning && "warn")}>
+                    {part.warning ? <Icon icon={WarningIcon} /> : null}
+                    <span>{part.text}</span>
+                  </div>
+                );
               if (part.kind === "results")
                 return (
                   <ResultsList key={key} threads={part.threads} now={now} onOpen={onOpenThread} />

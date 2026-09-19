@@ -198,6 +198,8 @@ export interface TurnContext {
   pinned?: string[] | undefined;
   /** The Thread the reader shows, for "About this thread". */
   threadId?: Id | null | undefined;
+  /** The Session's Developer mode switch (CONTEXT.md); only a Local runtime reads it. */
+  developerMode?: boolean | undefined;
 }
 
 /* ------------------------------ AgentSession seam ------------------------------ */

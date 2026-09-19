@@ -1,6 +1,10 @@
 // The seam between the webview and Rust. Everything the app needs from the host
 // goes through this one module, so tests and the browser dev server can fake it.
 
+import type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
+
+export type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
+
 export interface ConfigFile {
   path: string;
   exists: boolean;
@@ -42,6 +46,13 @@ export interface Platform {
   openExternal(url: string): Promise<void>;
   network(): Promise<NetworkInfo>;
   power(): Promise<PowerInfo>;
+  /**
+   * Spawns one of the Local runtime CLIs (CONTEXT.md, Local runtime) through
+   * the shell plugin. `command` is a scope name from the capability
+   * (`claude`, `codex`, `opencode` and their detection variants), never a
+   * free path; a path override from Settings goes in front of PATH.
+   */
+  spawn: ProcessRunner;
   isTauri: boolean;
 }
 
@@ -53,6 +64,46 @@ async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
   const { openUrl } = await import("@tauri-apps/plugin-opener");
+  const { Command } = await import("@tauri-apps/plugin-shell");
+  const spawn: ProcessRunner = async (command, options: SpawnOptions): Promise<Process> => {
+    const env: Record<string, string> = { ...(options.env ?? {}) };
+    if (options.pathPrefix) {
+      const separator = navigator.platform.startsWith("Win") ? ";" : ":";
+      env.PATH = `${options.pathPrefix}${separator}${await invoke<string>("env_path")}`;
+    }
+    const cmd = Command.create(command, [...options.args], {
+      env,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    });
+    const stdout = new Set<(line: string) => void>();
+    const stderr = new Set<(line: string) => void>();
+    const strip = (line: string) => line.replace(/\r?\n$/, "");
+    cmd.stdout.on("data", (line) => {
+      for (const l of stdout) l(strip(line));
+    });
+    cmd.stderr.on("data", (line) => {
+      for (const l of stderr) l(strip(line));
+    });
+    const exited = new Promise<number | null>((resolve) => {
+      cmd.on("close", (payload) => resolve(payload.code));
+      cmd.on("error", () => resolve(null));
+    });
+    const child = await cmd.spawn();
+    return {
+      pid: child.pid,
+      exited,
+      onStdout: (listener) => {
+        stdout.add(listener);
+        return () => stdout.delete(listener);
+      },
+      onStderr: (listener) => {
+        stderr.add(listener);
+        return () => stderr.delete(listener);
+      },
+      write: (text) => child.write(text),
+      kill: () => child.kill(),
+    };
+  };
   const sub = <T>(name: string, cb: (p: T) => void) => {
     let un: (() => void) | undefined;
     let cancelled = false;
@@ -78,6 +129,7 @@ async function tauriPlatform(): Promise<Platform> {
     openExternal: (url) => openUrl(url),
     network: () => invoke<NetworkInfo>("network_info"),
     power: () => invoke<PowerInfo>("power_info"),
+    spawn,
   };
 }
 
@@ -86,6 +138,8 @@ export interface FakePlatformOptions {
   network?: NetworkInfo;
   /** The fake's power; `?battery=1` in the dev server flips it. */
   power?: PowerInfo;
+  /** The processes the fake spawns; none by default, so every CLI reads as not installed. */
+  spawn?: ProcessRunner;
 }
 
 /** Browser dev server and tests: in-memory config, no sidecar, unmetered and on mains unless told otherwise. */
@@ -125,6 +179,11 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     },
     network: async () => ({ ...network }),
     power: async () => ({ ...power }),
+    spawn:
+      options.spawn ??
+      (async (command) => {
+        throw new Error(`${command}: command not found`);
+      }),
   };
 }
 

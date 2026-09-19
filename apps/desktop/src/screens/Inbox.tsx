@@ -630,7 +630,7 @@ export function Inbox({
     setFocus(id);
     setReaderOpen(true);
   }
-  const runtime = runtimeLine(agent.session, s, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, s, account.address);
   const agentStrings = useMemo(() => composerStrings(s), [s]);
   const chips = useMemo(
     () =>

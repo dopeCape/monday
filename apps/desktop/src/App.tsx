@@ -16,10 +16,11 @@ import {
   workspace,
 } from "@monday/ui/fixtures";
 import { ClockIcon } from "@phosphor-icons/react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
-import { runtimeLine } from "./agent/runtimeLine.ts";
+import { deviceAgentClient } from "./agent/deviceClient.ts";
+import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
@@ -92,20 +93,45 @@ export function App({
   const [agentText, setAgentText] = useState<string | undefined>(undefined);
   /** The column composers' own text; the bottom bar's lives in the Inbox. */
   const [columnText, setColumnText] = useState("");
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
+  const sidecarRef = useRef(shell.sidecar);
+  sidecarRef.current = shell.sidecar;
+  // In the app the Device client drives a Local runtime itself and sends Hosted turns
+  // to the Server; the browser dev server, with no processes to spawn, stays Hosted.
   const client = useMemo(
     () =>
-      agentClient !== undefined ? agentClient : shell.server ? apiAgentClient(shell.api) : null,
-    [agentClient, shell.server, shell.api],
+      agentClient !== undefined
+        ? agentClient
+        : shell.server
+          ? shell.spawn
+            ? deviceAgentClient({
+                api: shell.api,
+                runner: shell.spawn,
+                sidecar: () => {
+                  const s = sidecarRef.current;
+                  return s?.running ? { port: s.port, token: s.token } : null;
+                },
+                settings: () => settingsRef.current,
+                address: () => account.address,
+                log: (line) => console.warn(line),
+              })
+            : apiAgentClient(shell.api)
+          : null,
+    [agentClient, shell.server, shell.api, shell.spawn],
   );
   const pinned = shell.pinned;
+  const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
   const agent = useAgentSession({
     client,
     workspaceId: workspace.id,
     context: () => ({ pinned: [...pinned] }),
     newAfterHours: shell.settings["ai.session.new_after_hours"],
+    runtime: wantedRuntime,
+    developerModeDefault: shell.settings["ai.developer_mode_default"],
     onSettingsChanged: () => void shell.refresh(),
   });
-  const runtime = runtimeLine(agent.session, shell.settings, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
   const chips = useMemo(
     () =>
