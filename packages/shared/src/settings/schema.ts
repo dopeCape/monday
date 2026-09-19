@@ -976,6 +976,16 @@ export const settingsSchema = {
     label: "Sync batch",
     help: "Messages fetched per step during the first sync. Larger is faster; smaller shows progress sooner.",
   }),
+  "sync.poll_seconds": setting({
+    type: z.int().min(5).max(600),
+    default: 30,
+    scope: "device",
+    section: "server",
+    group: "Storage",
+    advanced: true,
+    label: "Change polling",
+    help: "Seconds between asks for changes on a Server that cannot push them (Vercel or Netlify without a wake channel). Per device.",
+  }),
   "sync.graph_poll_seconds": setting({
     type: z.int().min(30).max(600),
     default: 90,

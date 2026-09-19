@@ -382,6 +382,10 @@ describe("keyboard triage", () => {
     expect(calls).toEqual(['archive:["e1"]']);
     await press("b");
     expect(document.querySelector(".pop")).not.toBeNull();
+    // The row's hover actions name the same keys.
+    expect(
+      [...(rows()[0]?.querySelectorAll<HTMLElement>(".actions .btn") ?? [])].map((b) => b.title),
+    ).toEqual(["Archive (Y)", "Snooze (B)", "Ask"]);
   });
 
   test("Cmd-K toggles the palette and Cmd-N applies a saved View", async () => {

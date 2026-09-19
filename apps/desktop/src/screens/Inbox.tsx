@@ -775,6 +775,12 @@ export function Inbox({
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
   const listTitle = lens?.name ?? t("strings.inbox.title");
+  /** The row's hover actions, worded from Settings with the keymap's keys. */
+  const rowTitles = {
+    archive: `${t("strings.inbox.action.archive")} (${key("thread.archive")})`,
+    snooze: `${t("strings.inbox.action.snooze")} (${key("thread.snooze")})`,
+    ask: t("strings.inbox.action.ask"),
+  };
   const headCount = selection.length
     ? fill(t("strings.inbox.selected"), { n: selection.length })
     : threads.length;
@@ -903,6 +909,7 @@ export function Inbox({
                         .join(" ") || undefined
                     }
                     now={now}
+                    titles={rowTitles}
                     onOpen={open}
                     onArchive={(id) => request("archive", [id])}
                     onSnooze={(id) => openPicker("snooze", [id])}
