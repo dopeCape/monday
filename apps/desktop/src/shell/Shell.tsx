@@ -82,6 +82,8 @@ export interface ShellState {
   customPalette: CustomPalette | null;
   config: ConfigState;
   sidecar: SidecarInfo | null;
+  /** Why the Sidecar did not start, from the host; null while it is starting or once it runs. */
+  sidecarError: string | null;
   /** Spawns a Local runtime's CLI on this Device; null where there is no host to spawn from. */
   spawn: ProcessRunner | null;
   /**
@@ -273,6 +275,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   });
   const [stored, setStored] = useState<PartialSettings>({});
   const [sidecar, setSidecar] = useState<SidecarInfo | null>(null);
+  const [sidecarError, setSidecarError] = useState<string | null>(null);
   const [spawn, setSpawn] = useState<ProcessRunner | null>(null);
   const [hostKind, setHostKind] = useState<"tauri" | "browser" | null>(null);
   const [cloud, setCloudState] = useState<CloudTarget | null>(null);
@@ -305,7 +308,13 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       const info = await p.sidecarInfo();
       if (!alive) return;
       if (info.running) setSidecar(info);
-      keep(p.onSidecarReady(setSidecar));
+      keep(
+        p.onSidecarReady((i) => {
+          setSidecarError(null);
+          setSidecar(i);
+        }),
+      );
+      keep(p.onSidecarFailed(setSidecarError));
     });
     return () => {
       alive = false;
@@ -572,6 +581,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       customPalette,
       config,
       sidecar,
+      sidecarError,
       spawn,
       host: hostKind,
       cloud,
@@ -593,6 +603,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       customPalette,
       config,
       sidecar,
+      sidecarError,
       spawn,
       hostKind,
       cloud,
@@ -627,6 +638,7 @@ export function StaticShell({
           ShellState,
           | "api"
           | "sidecar"
+          | "sidecarError"
           | "spawn"
           | "host"
           | "cloud"
@@ -687,6 +699,7 @@ export function StaticShell({
       customPalette: null,
       config: { file: null, values: {}, warnings: [], error: null },
       sidecar: null,
+      sidecarError: null,
       spawn: null,
       host: "browser",
       cloud: null,

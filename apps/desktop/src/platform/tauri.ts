@@ -48,6 +48,8 @@ export interface Platform {
   secretDelete(key: string): Promise<void>;
   sidecarInfo(): Promise<SidecarInfo>;
   onSidecarReady(cb: (info: SidecarInfo) => void): () => void;
+  /** The Sidecar could not start (no Postgres, a bad data directory); the message is the host's. */
+  onSidecarFailed(cb: (message: string) => void): () => void;
   /** Opens a URL in the system browser (the OAuth wizards, deep links into consoles). */
   openExternal(url: string): Promise<void>;
   network(): Promise<NetworkInfo>;
@@ -146,6 +148,7 @@ async function tauriPlatform(): Promise<Platform> {
     secretDelete: (key) => invoke("secret_delete", { key }),
     sidecarInfo: () => invoke<SidecarInfo>("sidecar_info"),
     onSidecarReady: (cb) => sub<SidecarInfo>("sidecar:ready", cb),
+    onSidecarFailed: (cb) => sub<string>("sidecar:failed", cb),
     openExternal: (url) => openUrl(url),
     network: () => invoke<NetworkInfo>("network_info"),
     power: () => invoke<PowerInfo>("power_info"),
@@ -229,6 +232,7 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     },
     sidecarInfo: async () => ({ port: 0, token: "", running: false }),
     onSidecarReady: () => () => {},
+    onSidecarFailed: () => () => {},
     openExternal: async (url) => {
       if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
     },

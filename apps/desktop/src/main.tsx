@@ -226,9 +226,9 @@ function WorkspaceGate() {
     return first ? { id: first.workspaceId, accountId: first.id, address: first.address } : null;
   }, [shell.host, server, accounts]);
 
-  // In the app a Server that has not answered within one reachability check
-  // is a Sidecar that failed to start: the Server section says so and offers
-  // the Cloud, rather than a blank window.
+  // In the app a Sidecar that reported a failure, or a Server that has not
+  // answered within one reachability check, shows the Server section (which
+  // says what happened and offers the Cloud) rather than a blank window.
   const waitMs = shell.settings["server.probe_seconds"] * 1000;
   const [waited, setWaited] = useState(false);
   useEffect(() => {
@@ -243,7 +243,7 @@ function WorkspaceGate() {
   // The host is unknown, the Sidecar is still starting, or the Accounts have not answered.
   if (shell.host === null || (server && accounts === null)) return null;
   if (shell.host === "tauri" && !server) {
-    if (!waited) return null;
+    if (!waited && !shell.sidecarError) return null;
     return (
       <div className="app" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
         <Settings initialSection="server" />

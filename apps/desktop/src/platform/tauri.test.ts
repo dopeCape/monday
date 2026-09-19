@@ -40,6 +40,7 @@ describe("fakePlatform", () => {
       "secretDelete",
       "sidecarInfo",
       "onSidecarReady",
+      "onSidecarFailed",
       "openExternal",
       "network",
       "power",

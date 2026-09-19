@@ -126,7 +126,7 @@ interface Mounted {
 
 async function mount(
   props: Partial<ServerProps> = {},
-  shell: Partial<Pick<ShellState, "sidecar" | "cloud" | "server">> = {},
+  shell: Partial<Pick<ShellState, "sidecar" | "cloud" | "server" | "sidecarError">> = {},
   apiOver: Parameters<typeof fakeApi>[0] = {},
 ): Promise<Mounted> {
   host = document.createElement("div");
@@ -136,11 +136,12 @@ async function mount(
   const opened: string[] = [];
   const clouds: Array<CloudTarget | null> = [];
   const { api, calls } = fakeApi(apiOver);
-  const sidecar = shell.sidecar ?? { port: 4242, token: "t", running: true };
-  const server = shell.server ?? {
-    kind: "sidecar" as const,
-    target: { baseUrl: "http://127.0.0.1:4242", token: "t" },
-  };
+  const sidecar =
+    shell.sidecar !== undefined ? shell.sidecar : { port: 4242, token: "t", running: true };
+  const server =
+    shell.server !== undefined
+      ? shell.server
+      : { kind: "sidecar" as const, target: { baseUrl: "http://127.0.0.1:4242", token: "t" } };
   await act(async () =>
     r.render(
       <StaticShell
@@ -148,6 +149,7 @@ async function mount(
           api,
           sidecar,
           server,
+          sidecarError: shell.sidecarError ?? null,
           cloud: shell.cloud ?? null,
           setCloud: async (t) => {
             clouds.push(t);
@@ -383,5 +385,20 @@ describe("Settings › Server once a Cloud is paired", () => {
     await clickText("Disconnect");
     await settle();
     expect(m.clouds).toEqual([null]);
+  });
+});
+
+describe("Settings › Server when the Sidecar failed to start", () => {
+  test("the mode card says what happened and reads as down, with the Cloud cards still offered", async () => {
+    await mount(
+      {},
+      { sidecar: null, server: null, sidecarError: "sidecar exited before listening (code 1)" },
+    );
+    const mode = q('[data-panel="mode"]');
+    expect(mode?.textContent).toContain(
+      "The built-in server could not start: sidecar exited before listening (code 1). Connect a Cloud below, or quit and open monday again.",
+    );
+    expect(mode?.querySelector(".tag")?.textContent).toBe("Unreachable");
+    expect(q(".upgrade-cards")).not.toBeNull();
   });
 });

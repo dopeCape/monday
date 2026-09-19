@@ -3632,6 +3632,11 @@ export const settingsSchema = {
   "strings.server.target.sidecar": str("server", "Target: Sidecar", "Sidecar on port {port}"),
   "strings.server.target.cloud": str("server", "Target: Cloud", "Cloud at {host}"),
   "strings.server.target.none": str("server", "Target: none", "No server yet"),
+  "strings.server.sidecar_failed": str(
+    "server",
+    "Sidecar failed line",
+    "The built-in server could not start: {message}. Connect a Cloud below, or quit and open monday again.",
+  ),
   "strings.server.health.ok": str("server", "Health: reachable", "Healthy"),
   "strings.server.health.down": str("server", "Health: unreachable", "Unreachable"),
   "strings.server.check": str("server", "Check now button", "Check now"),

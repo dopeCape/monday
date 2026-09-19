@@ -46,7 +46,12 @@ pub fn run() {
                         use tauri::Emitter;
                         let _ = handle.emit("sidecar:ready", info);
                     }
-                    Err(e) => eprintln!("[monday] sidecar failed to start: {e}"),
+                    Err(e) => {
+                        use tauri::Emitter;
+                        eprintln!("[monday] sidecar failed to start: {e}");
+                        // The webview shows the Server section instead of a blank window.
+                        let _ = handle.emit("sidecar:failed", e);
+                    }
                 }
             });
             Ok(())
@@ -56,6 +61,13 @@ pub fn run() {
                 sidecar::stop(window.app_handle());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Quitting without closing the window (the dock, Cmd+Q) must still
+            // stop the sidecar and its Postgres; stop() is idempotent.
+            if let tauri::RunEvent::Exit = event {
+                sidecar::stop(app);
+            }
+        });
 }
