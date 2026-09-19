@@ -446,6 +446,14 @@ export async function replayUndo(
       for (const id of undo.groupIds) await onboarding.deleteGroup(id);
       return `Undone: ${plural(undo.groupIds.length, "Group")} removed and ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
     }
+    case "voice": {
+      const voice = extensions?.voice;
+      if (!voice) return "Cannot undo: the Voice profile is not available from this host.";
+      await voice.put(undo.workspaceId, undo.previous);
+      return undo.previous.description
+        ? "Undone: the previous voice profile is back."
+        : "Undone: the voice profile is empty again.";
+    }
     case "event": {
       const calendar = extensions?.calendar;
       if (!calendar) return "Cannot undo: the calendar is not available from this host.";

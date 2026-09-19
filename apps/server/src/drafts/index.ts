@@ -75,6 +75,8 @@ export interface VoicePatch {
   description?: string | undefined;
   excerpts?: string[] | undefined;
   enabled?: boolean | undefined;
+  /** When the profile was last built from sent mail. */
+  builtAt?: string | undefined;
 }
 
 export interface ScheduleOutcome extends IntentResult {
@@ -854,6 +856,7 @@ export function createDrafts(options: DraftsOptions): Drafts {
         description: "",
         excerpts: [],
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.builtAt !== undefined ? { builtAt: new Date(patch.builtAt) } : {}),
         updatedAt: now(),
       };
       await db

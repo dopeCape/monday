@@ -93,6 +93,9 @@ export interface External extends ExternalSeam {
   oauth: OAuthServer;
 }
 
+/** How often a credential's last use is written. */
+export const LAST_USE_RESOLUTION_MS = 60_000;
+
 /** The title an external credential's Session carries, so the history names the caller. */
 export function externalSessionTitle(name: string): string {
   return `${name} (external)`;
@@ -175,9 +178,8 @@ export function createExternal(options: ExternalOptions): External {
   const fromRow = async (activityId: string): Promise<ExternalPending | null> => {
     const meta = calls.get(activityId);
     if (!meta) return null;
-    const rows = await agent.listActivity(meta.workspaceId, { sessionId: meta.sessionId });
-    const row = rows.find((r) => r.id === activityId);
-    if (!row) return null;
+    const row = await agent.activityRecord(activityId);
+    if (!row || row.sessionId !== meta.sessionId) return null;
     return {
       activityId,
       workspaceId: meta.workspaceId,
@@ -201,7 +203,9 @@ export function createExternal(options: ExternalOptions): External {
       if (!credential) return { ok: false, reason: "unknown" };
       if (credential.revokedAt) return { ok: false, reason: "revoked" };
       if (!credentialLive(credential, now())) return { ok: false, reason: "expired" };
-      await store.touch(credential.id);
+      // Last use is a minute's resolution: one write per credential per minute, not one per call.
+      const lastUsed = credential.lastUsedAt ? Date.parse(credential.lastUsedAt) : 0;
+      if (now().getTime() - lastUsed >= LAST_USE_RESOLUTION_MS) await store.touch(credential.id);
       return { ok: true, credential: { ...credential, lastUsedAt: now().toISOString() } };
     },
 

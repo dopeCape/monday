@@ -53,6 +53,7 @@ import {
   type KeysResolver,
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
+import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
 export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
 export {
@@ -154,6 +155,8 @@ export interface Intelligence {
   onboarding: OnboardingSeam;
   /** The sealed integration secrets the Workflow steps post with; the routes set and clear them. */
   integrationSecrets: IntegrationSecretStore;
+  /** The Voice profile builder the build_voice_profile tool acts through. */
+  voice: VoiceSeam;
   /**
    * Seals what earlier versions wrote in the clear (transcripts, Voice
    * profiles, integration secrets in the Setting). Needs the root key; the
@@ -215,6 +218,13 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.dry_run.recent",
   "workflows.silence.check_cron",
   "strings.workflows.failed_notice",
+] as const;
+
+const VOICE_SETTING_KEYS = [
+  "voice.sample_messages",
+  "voice.excerpt_chars",
+  "voice.excerpts_max",
+  "voice.prompt",
 ] as const;
 
 const ROUTING_SETTING_KEYS = [
@@ -342,8 +352,24 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       servers: async () =>
         (await readGlobalSettings(db, ["workflows.mcp_servers"]))["workflows.mcp_servers"],
     });
+  const voice = createVoiceBuilder({
+    db,
+    mailstore,
+    drafts,
+    runtime,
+    now,
+    settings: async (): Promise<VoiceSettings> => {
+      const s = await readGlobalSettings(db, VOICE_SETTING_KEYS);
+      return {
+        sampleMessages: s["voice.sample_messages"],
+        excerptChars: s["voice.excerpt_chars"],
+        excerptsMax: s["voice.excerpts_max"],
+        prompt: s["voice.prompt"],
+      };
+    },
+  });
   // Filled once the Workflows module exists; the tool server reads it per call.
-  const extensions: ToolExtensions = { integrations, mcp };
+  const extensions: ToolExtensions = { integrations, mcp, voice };
   const agent = createAgentHost({
     runtime,
     activity,
@@ -432,6 +458,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     extensions,
     onboarding,
     integrationSecrets,
+    voice,
     level,
     async sealLegacy() {
       let transcripts = 0;

@@ -203,6 +203,8 @@ export interface AgentHost {
     workspaceId: string,
     options?: { limit?: number; sessionId?: string },
   ): Promise<ActivityRecord[]>;
+  /** One Activity row by id, as the API shows it; null when unknown. */
+  activityRecord(id: string): Promise<ActivityRecord | null>;
   /** Undo from a card or the Activity page; the Session, when given, gets the event. */
   undo(activityId: string, sessionId?: string | null): Promise<ActivityRecord>;
   /** The tool server for a Workspace, for the loopback MCP transports. */
@@ -559,6 +561,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     async listActivity(workspaceId, opts) {
       const rows = await activity.list(workspaceId, opts);
       return rows.map(publicActivity);
+    },
+
+    async activityRecord(id) {
+      const row = await activity.get(id);
+      return row ? publicActivity(row) : null;
     },
 
     async undo(activityId, sessionId = null) {

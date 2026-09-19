@@ -70,6 +70,7 @@ describe("transcripts and checkpoints under the envelope", () => {
   let app: Hono<AppEnv>;
   let workspaceId = "";
   const converse = createFakeConverse();
+  const chat = createFakeChat("");
   const rootKey = randomKey();
 
   const request = (path: string, init: RequestInit = {}) =>
@@ -97,7 +98,7 @@ describe("transcripts and checkpoints under the envelope", () => {
       level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
-      chat: createFakeChat("").chat,
+      chat: chat.chat,
       converse: converse.converse,
       checkpointer,
       now: () => NOW,
@@ -621,6 +622,103 @@ describe("transcripts and checkpoints under the envelope", () => {
       "PUT",
     );
     expect(missing.status).toBe(404);
+  });
+
+  test("build_voice_profile reads the user's sent mail, stores the profile sealed, and Undo puts the old one back", async () => {
+    // Three sent messages, one of them a reply over quoted history.
+    const sent = await store.upsertThread({
+      workspaceId,
+      providerThreadId: "sent-1",
+      subject: "Re: the plan",
+      participants: [{ name: "Me", email: "me@example.test" }],
+      lastActivity: NOW.toISOString(),
+    });
+    const bodies = [
+      "Hi Sam,\n\nThanks, this works for me. Let's go with Thursday and I'll bring the numbers.\n\nCheers,\nMe",
+      "Morning both,\n\nQuick one: I'd rather we keep the scope small this round. Happy to talk it through if that helps.\n\nMe",
+      "Sounds good, thank you.\n\nMe\n\nOn Tue, Sam wrote:\n> Can we do Thursday?\n> Sam",
+    ];
+    for (const [i, text] of bodies.entries()) {
+      await store.upsertMessage({
+        threadId: sent,
+        providerMessageId: `sent-m${i}`,
+        from: { name: "Me", email: "ME@example.test" },
+        to: [{ name: "Sam", email: "sam@example.test" }],
+        cc: [],
+        date: new Date(NOW.getTime() - i * 60_000).toISOString(),
+        headers: {},
+        bodyText: text,
+        bodyHtml: null,
+        snippet: text.slice(0, 20),
+      });
+    }
+    chat.answer((call) => {
+      // The model sees only the user's own words: nothing under the "wrote" line.
+      expect(call.prompt).toContain("keep the scope small");
+      expect(call.prompt).not.toContain("Can we do Thursday");
+      expect(call.system).toContain("how one person writes");
+      return 'Here it is.\n{"description": "Short, warm and direct; signs off with Me.", "excerpts": ["Thanks, this works for me.", "I\'d rather we keep the scope small this round."]}';
+    });
+    const before = (await (await request(`/voice?workspace=${workspaceId}`)).json()) as {
+      description: string;
+      excerpts: string[];
+      enabled: boolean;
+    };
+    converse.script(
+      { toolCalls: [{ id: "v1", name: "build_voice_profile", args: {} }] },
+      "Your voice profile is ready.",
+    );
+    const created = await send("/sessions", { workspace: workspaceId });
+    const session = (await created.json()) as SessionSummary;
+    const turn = await send(`/sessions/${session.id}/turns`, {
+      text: "learn my voice from my sent mail",
+    });
+    expect(turn.status).toBe(200);
+    const events = eventsOf(await turn.text());
+    const card = events.filter((e) => e.kind === "tool").at(-1);
+    if (card?.kind !== "tool") throw new Error("no tool card");
+    expect(card.call).toMatchObject({
+      tool: "build_voice_profile",
+      status: "done",
+      tier: "reversible",
+    });
+    expect(card.call.result).toContain("Short, warm and direct");
+    const built = (await (await request(`/voice?workspace=${workspaceId}`)).json()) as {
+      description: string;
+      excerpts: string[];
+      builtAt: string | null;
+    };
+    expect(built.description).toBe("Short, warm and direct; signs off with Me.");
+    expect(built.excerpts).toEqual([
+      "Thanks, this works for me.",
+      "I'd rather we keep the scope small this round.",
+    ]);
+    expect(built.builtAt).toBe(NOW.toISOString());
+    // Sealed like before: the excerpts are not in the plaintext columns.
+    const [row] = await db.handle.db
+      .select()
+      .from(voiceProfiles)
+      .where(eq(voiceProfiles.workspaceId, workspaceId));
+    expect(row?.description).toBe("");
+    expect(row?.excerpts).toEqual([]);
+    // Metered as the summarize Task.
+    const meter = (await (await request(`/meter?workspace=${workspaceId}`)).json()) as {
+      lines: Array<{ task: string; calls: number }>;
+    };
+    expect(meter.lines.find((l) => l.task === "summarize")?.calls).toBe(1);
+    // Undo restores what was there.
+    const undone = await send(`/activity/${card.call.id}/undo`, { session: session.id });
+    expect(undone.status).toBe(200);
+    const after = (await (await request(`/voice?workspace=${workspaceId}`)).json()) as {
+      description: string;
+      excerpts: string[];
+      enabled: boolean;
+    };
+    expect(after).toMatchObject({
+      description: before.description,
+      excerpts: before.excerpts,
+      enabled: before.enabled,
+    });
   });
 
   test("the hot request paths have the indexes they need (explain)", async () => {

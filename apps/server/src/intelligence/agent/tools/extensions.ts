@@ -18,6 +18,7 @@ import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
+import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
 
@@ -70,6 +71,8 @@ export interface ExternalSeam {
 }
 
 export interface ToolExtensions {
+  /** The Voice profile builder (intelligence/voice.ts). */
+  voice?: VoiceSeam | undefined;
   integrations?: IntegrationsSeam | undefined;
   mcp?: McpSeam | undefined;
   workflows?: WorkflowsSeam | undefined;
@@ -589,6 +592,55 @@ const createExternalKey: ToolDefinition<{
   },
 };
 
+const buildVoiceProfile: ToolDefinition<Record<string, never>> = {
+  name: "build_voice_profile",
+  description:
+    "Learn how the user writes from the mail they sent: reads their newest sent messages, describes their voice and keeps a few verbatim excerpts, so drafts can match it. Only when the user asked or said yes. Reversible: undo puts the old profile back.",
+  tier: "reversible",
+  input: z.object({}),
+  summarize: () => "from sent mail",
+  async run(_input, ctx) {
+    const seam = ctx.extensions?.voice;
+    if (!seam)
+      return { kind: "refused", text: "The Voice profile is not available from this host." };
+    const workspaceId = ctx.host.workspaceId;
+    const previous = await seam.get(workspaceId);
+    return {
+      kind: "action",
+      preview: text(
+        previous.builtAt
+          ? "Rebuild the voice profile from the newest sent mail, replacing the current one."
+          : "Build a voice profile from the newest sent mail.",
+      ),
+      count: 1,
+      apply: async () => {
+        let built: Awaited<ReturnType<VoiceSeam["build"]>>;
+        try {
+          built = await seam.build(workspaceId);
+        } catch (error) {
+          if (error instanceof NoSentMailError) {
+            return { text: `${error.message}.`, data: null, undo: null };
+          }
+          throw error;
+        }
+        return {
+          text: `Voice profile built from sent mail: ${built.description}${built.excerpts.length ? ` (${built.excerpts.length} excerpt${built.excerpts.length === 1 ? "" : "s"})` : ""}.`,
+          data: { description: built.description, excerpts: built.excerpts },
+          undo: {
+            kind: "voice",
+            workspaceId,
+            previous: {
+              description: previous.description,
+              excerpts: previous.excerpts,
+              enabled: previous.enabled,
+            },
+          },
+        };
+      },
+    };
+  },
+};
+
 export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   postToSlack,
   postToDiscord,
@@ -605,6 +657,7 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   approveWorkflowStep,
   runWorkflow,
   createExternalKey,
+  buildVoiceProfile,
   ...CALENDAR_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
