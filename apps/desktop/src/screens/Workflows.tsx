@@ -76,8 +76,6 @@ function ago(iso: string, now: Date): string {
   return formatWhen(iso, now);
 }
 
-const defaultApi = fixtureWorkflowsApi();
-
 function runTitle(run: RunView, s: Strings): string {
   if (run.subject) return run.subject;
   switch (run.trigger.kind) {
@@ -112,7 +110,12 @@ export function Workflows({
   // Just mail (CONTEXT.md "AI level"): the Workflows stay listed, nothing here asks the Agent.
   const aiOff = settings["ai.level"] === "off";
   // The fixture stands in on the browser dev server only, where no Server exists.
-  const api = apiOverride ?? (shell.server ? shell.api.workflows : defaultApi);
+  const server = shell.server !== null;
+  const fallbackApi = useMemo(
+    () => (server ? shell.api.workflows : fixtureWorkflowsApi()),
+    [server, shell.api],
+  );
+  const api = apiOverride ?? fallbackApi;
   const s = useMemo(() => workflowStrings(settings), [settings]);
   const now = nowProp ?? new Date();
 

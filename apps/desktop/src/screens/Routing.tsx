@@ -61,12 +61,6 @@ export interface RoutingProps {
 
 export type RoutingApi = Api["routing"];
 
-/** The design fixtures stand in on the browser dev server only, where no Server exists. */
-const devRouting = fixtureRouting();
-const devInbox = fixtureInbox();
-const emptyRouting = fixtureRouting([], []);
-const emptyInbox = fixtureInbox([]);
-
 type Strings = Record<string, string>;
 
 function routingStrings(settings: Settings): Strings {
@@ -156,9 +150,17 @@ export function Routing({
   const { settings } = shell;
   const current = useWorkspace();
   const workspaceId = workspaceIdProp ?? current.id;
-  const routing = routingProp ?? (shell.server ? emptyRouting : devRouting);
-  const inbox = inboxProp ?? (shell.server ? emptyInbox : devInbox);
-  const groupIcon = groupIconProp ?? (shell.server ? undefined : fixtureGroupIcon);
+  // Without the Store's seams (the App always passes them), the design fixtures stand in on the
+  // browser dev server only, where no Server exists; with a Server the page starts empty.
+  const server = shell.server !== null;
+  const fallbackRouting = useMemo(
+    () => (server ? fixtureRouting([], []) : fixtureRouting()),
+    [server],
+  );
+  const fallbackInbox = useMemo(() => (server ? fixtureInbox([]) : fixtureInbox()), [server]);
+  const routing = routingProp ?? fallbackRouting;
+  const inbox = inboxProp ?? fallbackInbox;
+  const groupIcon = groupIconProp ?? (server ? undefined : fixtureGroupIcon);
   const keys = keysProp === undefined ? (shell.server ? shell.api.keys : null) : keysProp;
   const api = apiOverride ?? shell.api.routing;
   const s = useMemo(() => routingStrings(settings), [settings]);
