@@ -2909,7 +2909,11 @@ export const settingsSchema = {
     "AI level card: assist, body",
     "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking.",
   ),
-  "strings.ai.level.automate": str("ai", "AI level card: automate", "Mail that sorts and acts for me"),
+  "strings.ai.level.automate": str(
+    "ai",
+    "AI level card: automate",
+    "Mail that sorts and acts for me",
+  ),
   "strings.ai.level.automate_sub": str(
     "ai",
     "AI level card: automate, body",
@@ -2949,7 +2953,11 @@ export const settingsSchema = {
   "strings.onboarding.skip": str("accounts", "Onboarding skip", "Skip"),
   "strings.onboarding.skip_rest": str("accounts", "Onboarding skip the rest", "Skip the rest"),
   "strings.onboarding.done": str("accounts", "Onboarding done", "Done"),
-  "strings.onboarding.keymap_title": str("accounts", "Keymap question", "How do you like your keys?"),
+  "strings.onboarding.keymap_title": str(
+    "accounts",
+    "Keymap question",
+    "How do you like your keys?",
+  ),
   "strings.onboarding.keymap_intro": str(
     "accounts",
     "Keymap question body",
