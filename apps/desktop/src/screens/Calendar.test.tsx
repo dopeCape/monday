@@ -174,7 +174,13 @@ async function mount(element: React.ReactNode) {
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell settings={{ "calendar.day_start_hour": 8, "calendar.day_end_hour": 18 }}>
+      <StaticShell
+        settings={{
+          "calendar.day_start_hour": 8,
+          "calendar.day_end_hour": 18,
+          "ai.level": "assist",
+        }}
+      >
         {element}
       </StaticShell>,
     );
@@ -289,6 +295,88 @@ describe("the Calendar screen", () => {
       [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.includes("Schedule")),
     );
     expect(asked).toEqual(["Set up a call with "]);
+  });
+
+  test("Just mail: no agent bar and no Schedule handoff on the Calendar; both are back at assist", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const render = (level: "off" | "assist") =>
+      act(async () => {
+        root?.render(
+          <StaticShell settings={{ "ai.level": level, "layout.agent": "bottom" }}>
+            <Calendar source={source} now={NOW} onAsk={() => {}} />
+          </StaticShell>,
+        );
+      });
+    await render("off");
+    await act(tick);
+    const el = host as HTMLElement;
+    expect(el.querySelector(".agent-dock")).toBeNull();
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.includes("Schedule")),
+    ).toBe(false);
+    // The calendar itself is untouched: the views, Today and the Event form stay.
+    expect(el.querySelectorAll(".cal-day")).toHaveLength(7);
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.trim() === "Event"),
+    ).toBe(true);
+    await render("assist");
+    await act(tick);
+    expect(el.querySelector(".agent-dock")).not.toBeNull();
+    expect(
+      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.includes("Schedule")),
+    ).toBe(true);
+  });
+
+  test("an Event whose end is not after its start is refused in plain words and nothing is created", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.trim() === "Event"),
+    );
+    const form = el.querySelector<HTMLFormElement>("form.cal-form");
+    if (!form) throw new Error("no form");
+    await act(async () => {
+      (form.elements.namedItem("title") as HTMLInputElement).value = "Backwards";
+      (form.elements.namedItem("start") as HTMLInputElement).value = "2026-09-17T16:00";
+      (form.elements.namedItem("end") as HTMLInputElement).value = "2026-09-17T15:00";
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(tick);
+    expect(source.log).toEqual([]);
+    expect(el.querySelector(".cal-error")?.textContent).toBe(
+      "The end has to come after the start.",
+    );
+    // Cancel closes the form and forgets the complaint.
+    await click(
+      [...form.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel"),
+    );
+    expect(el.querySelector("form.cal-form")).toBeNull();
+    expect(el.querySelector(".cal-error")).toBeNull();
+  });
+
+  test("an answer from the Agenda that the seam refuses shows why, in plain words", async () => {
+    const inner = fixtureCalendar({ calendars, events, invites });
+    const source = {
+      ...inner,
+      respond: async () => {
+        throw new Error("the Provider is unreachable");
+      },
+    };
+    await mount(<Calendar source={source} now={NOW} initialView="agenda" />);
+    const el = host as HTMLElement;
+    const podcast = [...el.querySelectorAll(".ag-row")].find((r) =>
+      r.textContent?.includes("Podcast recording"),
+    );
+    await click(
+      [...(podcast?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Accept"),
+    );
+    expect(el.querySelector(".cal-answer-error")?.textContent).toBe(
+      "Could not send your answer: the Provider is unreachable",
+    );
   });
 });
 

@@ -3111,6 +3111,12 @@ button.prov {
   color: var(--danger, var(--warning));
   font-size: var(--fs-xs);
 }
+/* an answer a view could not send: one line under the header, in plain words */
+.cal-answer-error {
+  margin: 0;
+  padding: 8px var(--pad);
+  border-bottom: 1px solid var(--border);
+}
 /* the invite bar in the reader is the catalog's .invite; the composer's event card */
 .agent-event .ev-title {
   font-weight: 500;

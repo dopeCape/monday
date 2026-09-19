@@ -109,6 +109,8 @@ export function Calendar({
   const shell = useShell();
   const open = onOpenLink ?? ((href: string) => void openExternal(href));
   const s: Strings = shell.settings;
+  // Just mail (CONTEXT.md "AI level"): no agent bar and no Schedule handoff; the calendar stays.
+  const aiOff = s["ai.level"] === "off";
   const now = nowProp ?? new Date();
   const calendars = useSyncExternalStore(source.subscribe, source.calendars, source.calendars);
   const events = useSyncExternalStore(source.subscribe, source.events, source.events);
@@ -116,6 +118,8 @@ export function Calendar({
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(now));
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The last failed answer from a view, in plain words; cleared by the next answer. */
+  const [answerError, setAnswerError] = useState<string | null>(null);
   const mondayFirst = s["calendar.week_starts_monday"];
   const dayStart = s["calendar.day_start_hour"];
   const dayEnd = Math.max(dayStart + 1, s["calendar.day_end_hour"]);
@@ -175,6 +179,10 @@ export function Calendar({
     const start = new Date(String(data.get("start") ?? ""));
     const end = new Date(String(data.get("end") ?? ""));
     if (!title || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    if (end.getTime() <= start.getTime()) {
+      setError(s["strings.calendar.form.end_before_start"]);
+      return;
+    }
     const attendees = String(data.get("attendees") ?? "")
       .split(",")
       .map((p) => p.trim())
@@ -204,8 +212,16 @@ export function Calendar({
     }
   };
 
-  const respond = (o: Occurrence, response: "accepted" | "tentative" | "declined") =>
-    void source.respond(o.id, response);
+  const respond = (o: Occurrence, response: "accepted" | "tentative" | "declined") => {
+    setAnswerError(null);
+    source.respond(o.id, response).catch((err: unknown) => {
+      setAnswerError(
+        fill(s["strings.calendar.answer_failed"], {
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    });
+  };
 
   const answerButtons = (o: Occurrence) =>
     o.organizer && !o.attendees.find((a) => a.self)?.organizer && o.response !== "accepted" ? (
@@ -407,10 +423,16 @@ export function Calendar({
               { value: "agenda", label: s["strings.calendar.view.agenda"] },
             ]}
           />
-          <Btn onClick={() => setAdding((v) => !v)} aria-expanded={adding}>
+          <Btn
+            onClick={() => {
+              setError(null);
+              setAdding((v) => !v);
+            }}
+            aria-expanded={adding}
+          >
             <Icon icon={PlusIcon} /> {s["strings.calendar.new_event"]}
           </Btn>
-          {onAsk ? (
+          {onAsk && !aiOff ? (
             <Btn onClick={() => onAsk(s["strings.calendar.schedule_ask"])}>
               <Icon icon={CalendarBlankIcon} /> {s["strings.calendar.schedule"]}
             </Btn>
@@ -447,11 +469,22 @@ export function Calendar({
             <Btn primary type="submit">
               {s["strings.calendar.form.save"]}
             </Btn>
-            <Btn type="button" onClick={() => setAdding(false)}>
+            <Btn
+              type="button"
+              onClick={() => {
+                setError(null);
+                setAdding(false);
+              }}
+            >
               {s["strings.calendar.form.cancel"]}
             </Btn>
             {error ? <span className="cal-error">{error}</span> : null}
           </form>
+        ) : null}
+        {answerError ? (
+          <p className="cal-error cal-answer-error" role="alert">
+            {answerError}
+          </p>
         ) : null}
         <div className="cal-body">
           {body}
@@ -476,7 +509,7 @@ export function Calendar({
                       onChange={(e) => void source.setVisible(c.id, e.currentTarget.checked)}
                     />
                     {c.name}
-                    {!c.writable ? <Tag>read only</Tag> : null}
+                    {!c.writable ? <Tag>{s["strings.calendar.read_only"]}</Tag> : null}
                   </label>
                 ))}
               </div>
@@ -484,7 +517,7 @@ export function Calendar({
           </aside>
         </div>
       </div>
-      {shell.layout.agent === "bottom" ? (
+      {shell.layout.agent === "bottom" && !aiOff ? (
         <AgentDock>
           <AgentBar
             placeholder={s["strings.agent.placeholder"]}

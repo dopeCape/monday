@@ -2534,6 +2534,17 @@ export const settingsSchema = {
     "New Event: failure",
     "Could not add the Event: {message}",
   ),
+  "strings.calendar.form.end_before_start": str(
+    "accounts",
+    "New Event: end before start",
+    "The end has to come after the start.",
+  ),
+  "strings.calendar.answer_failed": str(
+    "accounts",
+    "Answering an Event failed",
+    "Could not send your answer: {message}",
+  ),
+  "strings.calendar.read_only": str("accounts", "Calendar list: read only tag", "read only"),
   "strings.calendar.remove": str("accounts", "Event: remove", "Remove"),
   "strings.calendar.reminder": str(
     "accounts",
