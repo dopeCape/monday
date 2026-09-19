@@ -3,14 +3,10 @@
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 export { tauriDriver } from "./driver.ts";
-export {
-  createFakeServer,
-  createFakeStore,
-  type FakeServer,
-  type FakeStore,
-  fakeContent,
-  fakeTransport,
-} from "./fake.ts";
+// The fake Store and the fixture seed are not exported here: they carry the
+// design fixtures, which only the tests and the browser dev server (through
+// react.tsx's lazy import) may load. Import them from "./fake.ts" and
+// "./seed.ts" directly.
 export * from "./queries.ts";
 export {
   StoreProvider,
@@ -20,7 +16,6 @@ export {
   useStoreStatus,
   useSyncProgress,
 } from "./react.tsx";
-export { fixtureSeed, type SeedData, seedStatements } from "./seed.ts";
 export {
   type AnyIntent,
   type CachedMessageHeader,

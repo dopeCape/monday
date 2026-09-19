@@ -82,10 +82,36 @@ export interface ContentTransport {
   ): Promise<{ blobId: Id }>;
 }
 
-/** How often a polling deployment is asked for changes; a Setting once slice 7 lands. */
-export const POLL_INTERVAL_MS = 30_000;
+export type Realtime = Capabilities["realtime"];
 
-export function apiTransport(api: Api, capabilities: () => Capabilities | null): StoreTransport {
+export interface ApiTransportOptions {
+  /** What the Server offers; null before /capabilities answered, which reads as polling. */
+  capabilities: () => Capabilities | null;
+  /** Seconds between pulls when polling (the server.poll_seconds Setting). */
+  pollSeconds: () => number;
+  /**
+   * How many connections in a row may close without ever opening before the
+   * transport steps down a rung (WebSocket to SSE to polling), so a proxy that
+   * refuses upgrades does not keep the Store reconnecting forever (the
+   * server.wake_fallback_after Setting).
+   */
+  fallbackAfter: () => number;
+  log?: (message: string) => void;
+}
+
+/** The rungs a wake connection can step down, best first. */
+export const REALTIME_LADDER: readonly Realtime[] = ["websocket", "sse", "polling"];
+
+/**
+ * The transport picks the wake mode the Server offers, then the next rung
+ * down after `fallbackAfter` connections that closed without opening. A
+ * connection that opens resets the count; new capabilities reset the rung.
+ */
+export function apiTransport(api: Api, options: ApiTransportOptions): StoreTransport {
+  const log = options.log ?? (() => {});
+  let offered: Realtime | null = null;
+  let rung = 0;
+  let failedWithoutOpen = 0;
   return {
     changes: (workspaceId, since, limit) => api.changes.list(workspaceId, since, limit),
     intent: (intent) => api.threads.intent(intent),
@@ -95,10 +121,36 @@ export function apiTransport(api: Api, capabilities: () => Capabilities | null):
     eventsContent: (workspaceId, ids) => api.calendar.eventsContent(workspaceId, ids),
     invite: (inviteId) => api.calendar.invite(inviteId),
     connect(workspaceId, handlers) {
-      const realtime = capabilities()?.realtime ?? "polling";
-      if (realtime === "websocket") return connectWebSocket(api, workspaceId, handlers);
-      if (realtime === "sse") return connectSse(api, workspaceId, handlers);
-      return connectPolling(handlers);
+      const realtime = options.capabilities()?.realtime ?? "polling";
+      if (realtime !== offered) {
+        offered = realtime;
+        rung = Math.max(0, REALTIME_LADDER.indexOf(realtime));
+        failedWithoutOpen = 0;
+      }
+      const mode = REALTIME_LADDER[rung] ?? "polling";
+      let opened = false;
+      const watched: WakeHandlers = {
+        onOpen() {
+          opened = true;
+          failedWithoutOpen = 0;
+          handlers.onOpen();
+        },
+        onWake: handlers.onWake,
+        onClose() {
+          if (!opened && mode !== "polling") {
+            failedWithoutOpen += 1;
+            if (failedWithoutOpen >= options.fallbackAfter() && rung < REALTIME_LADDER.length - 1) {
+              rung += 1;
+              failedWithoutOpen = 0;
+              log(`wake: ${mode} never opened; falling back to ${REALTIME_LADDER[rung]}`);
+            }
+          }
+          handlers.onClose();
+        },
+      };
+      if (mode === "websocket") return connectWebSocket(api, workspaceId, watched);
+      if (mode === "sse") return connectSse(api, workspaceId, watched);
+      return connectPolling(watched, options.pollSeconds() * 1000);
     },
   };
 }
@@ -193,7 +245,7 @@ function connectSse(api: Api, workspaceId: Id, handlers: WakeHandlers): WakeConn
   };
 }
 
-function connectPolling(handlers: WakeHandlers, intervalMs = POLL_INTERVAL_MS): WakeConnection {
+function connectPolling(handlers: WakeHandlers, intervalMs: number): WakeConnection {
   const timer = setInterval(() => handlers.onWake(-1), intervalMs);
   queueMicrotask(handlers.onOpen);
   return {

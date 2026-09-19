@@ -83,6 +83,12 @@ export interface ShellState {
   sidecar: SidecarInfo | null;
   /** Spawns a Local runtime's CLI on this Device; null where there is no host to spawn from. */
   spawn: ProcessRunner | null;
+  /**
+   * What runs the webview: the Tauri app, or a browser (the dev server over
+   * the fake platform). Null until the platform has answered. Fixture data may
+   * only ever load under "browser".
+   */
+  host: "tauri" | "browser" | null;
   /** The Cloud this Device paired with (ADR 0008), or null on a Sidecar-only install. */
   cloud: CloudTarget | null;
   /** Where requests go right now: the Sidecar or the Cloud, by preference and reachability. */
@@ -247,6 +253,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const [stored, setStored] = useState<PartialSettings>({});
   const [sidecar, setSidecar] = useState<SidecarInfo | null>(null);
   const [spawn, setSpawn] = useState<ProcessRunner | null>(null);
+  const [hostKind, setHostKind] = useState<"tauri" | "browser" | null>(null);
   const [cloud, setCloudState] = useState<CloudTarget | null>(null);
   const [server, setServer] = useState<Picked | null>(null);
   const configRef = useRef(config);
@@ -265,6 +272,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       if (!alive) return;
       // Only a Tauri host can spawn a Local runtime's CLI; the browser dev server cannot.
       if (p.isTauri) setSpawn(() => p.spawn);
+      setHostKind(p.isTauri ? "tauri" : "browser");
       // The browser dev server is the design fixture, whose world has the assistant
       // everywhere: its Workspace's saved Settings say the full AI level.
       if (!p.isTauri) setStored((s) => ({ "ai.level": "automate", ...s }));
@@ -528,6 +536,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       config,
       sidecar,
       spawn,
+      host: hostKind,
       cloud,
       server,
       api,
@@ -548,6 +557,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       config,
       sidecar,
       spawn,
+      hostKind,
       cloud,
       server,
       api,
@@ -581,6 +591,7 @@ export function StaticShell({
           | "api"
           | "sidecar"
           | "spawn"
+          | "host"
           | "cloud"
           | "server"
           | "setCloud"
@@ -640,6 +651,7 @@ export function StaticShell({
       config: { file: null, values: {}, warnings: [], error: null },
       sidecar: null,
       spawn: null,
+      host: "browser",
       cloud: null,
       server: null,
       setCloud: async () => {},

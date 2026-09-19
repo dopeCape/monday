@@ -18,8 +18,15 @@ import {
 } from "./nav.ts";
 
 const rule = { sentence: "", predicate: {}, prompt: "" };
-const group = (id: string, name: string, parentId: string | null = null): Group =>
-  ({ id, workspaceId: "ws", parentId, name, rule, threshold: null, briefPolicy: null });
+const group = (id: string, name: string, parentId: string | null = null): Group => ({
+  id,
+  workspaceId: "ws",
+  parentId,
+  name,
+  rule,
+  threshold: null,
+  briefPolicy: null,
+});
 const thread = (id: string, over: Partial<Thread>): Thread =>
   ({
     id,

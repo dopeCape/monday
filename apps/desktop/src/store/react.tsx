@@ -33,6 +33,9 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
   const [store, setStore] = useState<Store | null>(null);
   const [content, setContent] = useState<ContentTransport | null>(null);
   const caps = useRef<Capabilities | null>(null);
+  // The transport reads its Settings live, so a change applies on the next connection.
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
 
   useEffect(() => {
     let disposed = false;
@@ -45,11 +48,17 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
           import("./driver.ts"),
           import("./transport.ts"),
         ]);
+        const log = (m: string) => console.warn(`[store] ${m}`);
         opened = await createStore({
           workspaceId,
           driver: await tauriDriver(workspaceId),
-          transport: apiTransport(shell.api, () => caps.current),
-          log: (m) => console.warn(`[store] ${m}`),
+          transport: apiTransport(shell.api, {
+            capabilities: () => caps.current,
+            pollSeconds: () => settingsRef.current["server.poll_seconds"],
+            fallbackAfter: () => settingsRef.current["server.wake_fallback_after"],
+            log,
+          }),
+          log,
         });
         if (!disposed) setContent(apiContent(shell.api));
       } else {
