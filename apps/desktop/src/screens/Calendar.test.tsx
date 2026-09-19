@@ -528,4 +528,37 @@ describe("reminders", () => {
     expect(fired[0]).toMatch(/^Aoife Brennan, take-home\|Aoife Brennan, take-home starts at /);
     stop();
   });
+
+  test("an Event removed or declined before its reminder is not announced; the next one is armed instead; stop cancels all", async () => {
+    const source = fixtureCalendar({ calendars, events });
+    const fired: string[] = [];
+    const clock = new Date(2026, 8, 17, 14, 49, 59, 950);
+    const stop = scheduleReminders(
+      source,
+      () => ({
+        "notifications.enabled": true,
+        "notifications.calendar_lead_minutes": 10,
+        "strings.calendar.reminder": "{title} starts at {time}",
+      }),
+      { notify: async (title) => void fired.push(title) },
+      () => clock,
+    );
+    // Aoife's meeting at 15:00 is armed for 14:50; the user removes it first.
+    await source.remove("aoife");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(fired).toEqual([]);
+    // The next candidate is tomorrow's podcast; declining it re-arms past it too.
+    await source.respond("podcast", "declined");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fired).toEqual([]);
+    stop();
+    // After stop nothing fires, whatever the source does.
+    await source.create({
+      title: "Right away",
+      start: new Date(2026, 8, 17, 14, 59).toISOString(),
+      end: new Date(2026, 8, 17, 15, 30).toISOString(),
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fired).toEqual([]);
+  });
 });
