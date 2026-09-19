@@ -546,7 +546,10 @@ export function App({
         inbox={inbox}
         workspaceId={ws.id}
         onNavigate={navigate}
-        onAsk={(text) => (setAgentText(text), setActive("inbox"))}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
       />
     ) : active === "workflows" ? (
       <Workflows
