@@ -6,7 +6,7 @@
 // (strings.calendar.*); the hours shown, the first weekday and whether
 // declined Events stay are Settings too.
 
-import type { Calendar, CalendarEvent, EventInput, Settings } from "@monday/shared";
+import type { CalendarEvent, EventInput, Settings } from "@monday/shared";
 import {
   AgentBar,
   AgentDock,
@@ -419,18 +419,20 @@ export function Calendar({
         {adding ? (
           <form className="cal-form" onSubmit={submit} aria-label={s["strings.calendar.new_event"]}>
             <Input name="title" placeholder={s["strings.calendar.form.title"]} required autoFocus />
-            <label>
+            <label htmlFor="cal-form-start">
               <span>{s["strings.calendar.form.start"]}</span>
               <Input
+                id="cal-form-start"
                 name="start"
                 type="datetime-local"
                 defaultValue={localInput(nextSlot(now))}
                 required
               />
             </label>
-            <label>
+            <label htmlFor="cal-form-end">
               <span>{s["strings.calendar.form.end"]}</span>
               <Input
+                id="cal-form-end"
                 name="end"
                 type="datetime-local"
                 defaultValue={localInput(
@@ -553,5 +555,3 @@ export function TodayPanel({ items, now, strings, onJoin }: TodayPanelProps) {
     </div>
   );
 }
-
-export type { Calendar as CalendarRow };
