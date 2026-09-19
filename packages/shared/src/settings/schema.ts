@@ -1849,6 +1849,21 @@ export const settingsSchema = {
     label: "Talk to",
     help: "Which server this device sends its wake connection and Outbox to when both the Sidecar and the Cloud are reachable. Either one serves the same database. Per device.",
   }),
+  "server.allowed_origins": setting({
+    type: z.array(z.string().min(1)),
+    default: [
+      "tauri://localhost",
+      "http://tauri.localhost",
+      "https://tauri.localhost",
+      "http://localhost:1420",
+    ],
+    scope: "global",
+    section: "server",
+    group: "Connection",
+    advanced: true,
+    label: "Allowed origins",
+    help: "Web origins the Server answers browser requests from. The desktop app's own origins are here by default; add one to serve another client.",
+  }),
   "server.probe_seconds": setting({
     type: z.int().min(5).max(600),
     default: 30,

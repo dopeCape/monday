@@ -6,6 +6,7 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { DeploymentMode } from "@monday/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
+import { cors } from "./auth/cors.ts";
 import type { Auth } from "./auth/index.ts";
 import {
   type AppEnv,
@@ -283,6 +284,16 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
 
   const app = new Hono<AppEnv>();
 
+  // The allowed origins, re-read from Settings at most once a minute.
+  let originsCache: { at: number; value: readonly string[] } | null = null;
+  const allowedOrigins = async () => {
+    const at = Date.now();
+    if (originsCache && at - originsCache.at < 60_000) return originsCache.value;
+    const s = await readGlobalSettings(db, ["server.allowed_origins"] as const);
+    originsCache = { at, value: s["server.allowed_origins"] };
+    return originsCache.value;
+  };
+  app.use("*", cors(allowedOrigins));
   app.use("*", authenticate(auth, isLoopback));
   app.use(
     "*",
