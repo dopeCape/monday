@@ -202,7 +202,7 @@ export function App({
               })
             : apiAgentClient(shell.api)
           : null,
-    [agentClient, shell.server, shell.api, shell.spawn],
+    [agentClient, shell.server, shell.api, shell.spawn, ws.address],
   );
   const pinned = shell.pinned;
   const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
@@ -278,7 +278,7 @@ export function App({
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [workflowsClient, refreshSeconds]);
+  }, [workflowsClient, refreshSeconds, ws.id]);
   // External callers' calls parked on an approval (slice 19): the Workspace's
   // external feed while the client is open, which is also how the Server knows
   // a client is open; each becomes a chip that opens the caller's Session.
@@ -303,7 +303,7 @@ export function App({
       cancelled = true;
       stop();
     };
-  }, [externalClient]);
+  }, [externalClient, ws.id]);
   const chips = useMemo(
     () =>
       suggestionsFor({
@@ -379,7 +379,7 @@ export function App({
         onboarding?.account?.address ?? ws.address,
         shell.settings["onboarding.sender_chips"],
       ),
-    [inbox, onboarding, shell.settings["onboarding.sender_chips"]],
+    [inbox, onboarding, shell.settings["onboarding.sender_chips"], ws.address],
   );
 
   const column = (side: "left" | "right") => (

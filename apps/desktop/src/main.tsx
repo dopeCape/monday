@@ -68,7 +68,7 @@ function Root() {
         }),
         fetchBodies,
       }),
-    [store, fetchBodies],
+    [store, fetchBodies, ws.address],
   );
 
   // The pre-warm Job runs only against a live Sidecar; the browser dev server has none.
