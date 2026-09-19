@@ -174,14 +174,17 @@ function OnboardingBody({
     [shell, s["onboarding.state"], accountId, now],
   );
 
-  // Density from the screen size, once, on the first run only; a pinned key stays the file's.
+  // Density from the screen size, once, on the first run only (the welcome, or the
+  // first Account on an install that never had one); a later Account's offer and
+  // "Set me up" leave the user's choice alone, and a pinned key stays the file's.
+  const firstRun = Object.keys(s["onboarding.state"]).every((k) => k === accountId);
   useEffect(() => {
-    if (rerun || seeded.current || shell.pinned.has("appearance.density")) return;
+    if (rerun || !firstRun || seeded.current || shell.pinned.has("appearance.density")) return;
     seeded.current = true;
     const width = screenWidth ?? (typeof window !== "undefined" ? window.innerWidth : 1440);
     const density = densityFor(width);
     if (density !== s["appearance.density"]) void shell.set("appearance.density", density);
-  }, [rerun, screenWidth, shell, s["appearance.density"]]);
+  }, [rerun, firstRun, screenWidth, shell, s["appearance.density"]]);
 
   const finish = (status: "completed" | "skipped") => {
     record(status);
@@ -231,9 +234,11 @@ function OnboardingBody({
 
   const configured = useRuntimeConfigured();
   const pickLevel = (level: AiLevel) => setChosen(level);
+  /** Moving up from off needs to know whether a runtime exists; Continue waits for detection. */
+  const needsRuntimeAnswer = chosen !== null && chosen !== "off" && current === "off";
   const continueFromLevel = async () => {
     const level = chosen ?? "off";
-    if (level !== "off" && current === "off" && configured === false) {
+    if (level !== "off" && current === "off" && configured !== true) {
       setStep("runtime");
       return;
     }
@@ -283,7 +288,11 @@ function OnboardingBody({
               <div className="actions">
                 <span className="sp" />
                 <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip"]}</Btn>
-                <Btn primary disabled={chosen === null} onClick={() => void continueFromLevel()}>
+                <Btn
+                  primary
+                  disabled={chosen === null || (needsRuntimeAnswer && configured === null)}
+                  onClick={() => void continueFromLevel()}
+                >
                   {s["strings.onboarding.continue"]}
                 </Btn>
               </div>
