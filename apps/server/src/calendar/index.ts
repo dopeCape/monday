@@ -1317,9 +1317,13 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         if (!part) return;
         const chunks: Uint8Array[] = [];
         for await (const chunk of part.content()) chunks.push(chunk);
-        const text = new TextDecoder().decode(
-          chunks.length === 1 ? chunks[0] : Buffer.concat(chunks.map((c) => Buffer.from(c))),
-        );
+        const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const text = new TextDecoder().decode(bytes);
         const parsed = parseICalendar(text);
         const event = parsed.events[0];
         if (!event || !parsed.method) return;
