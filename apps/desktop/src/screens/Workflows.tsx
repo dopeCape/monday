@@ -35,10 +35,11 @@ import {
   Tag,
   WorkflowCard,
 } from "@monday/ui";
-import { account, workspace } from "@monday/ui/fixtures";
 import { ClockCounterClockwiseIcon, FlaskIcon, PlayIcon, PlusIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { cliLabel } from "../agent/runtimes/index.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { useWorkspace } from "../workspace.tsx";
 import { fill } from "./inbox/triage.ts";
 import { fixtureWorkflowsApi, type WorkflowsApi } from "./workflows/workflow-data.ts";
 
@@ -97,7 +98,7 @@ function runDetail(run: RunView, s: Strings): string {
 }
 
 export function Workflows({
-  workspaceId = workspace.id,
+  workspaceId: workspaceIdProp,
   api: apiOverride,
   onAsk,
   onNavigate,
@@ -105,9 +106,12 @@ export function Workflows({
   now: nowProp,
 }: WorkflowsProps) {
   const shell = useShell();
+  const current = useWorkspace();
+  const workspaceId = workspaceIdProp ?? current.id;
   const { settings } = shell;
   // Just mail (CONTEXT.md "AI level"): the Workflows stay listed, nothing here asks the Agent.
   const aiOff = settings["ai.level"] === "off";
+  // The fixture stands in on the browser dev server only, where no Server exists.
   const api = apiOverride ?? (shell.server ? shell.api.workflows : defaultApi);
   const s = useMemo(() => workflowStrings(settings), [settings]);
   const now = nowProp ?? new Date();
@@ -121,7 +125,10 @@ export function Workflows({
   const [dry, setDry] = useState<DryRunPreview | null>(null);
   const [source, setSource] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The last action that failed; cleared by the next action, never by a refresh. */
   const [error, setError] = useState<string | null>(null);
+  /** Why the list could not load; cleared by the next load that succeeds. */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [ask, setAsk] = useState("");
 
   const fail = useCallback(
@@ -134,11 +141,15 @@ export function Workflows({
       const [list, recent] = await Promise.all([api.list(workspaceId), api.runs(workspaceId)]);
       setWorkflows(list);
       setRuns(recent);
-      setError(null);
+      setLoadError(null);
     } catch (e) {
-      fail(e);
+      setLoadError(
+        fill(s.load_failed ?? "Could not load your workflows: {message}", {
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      );
     }
-  }, [api, workspaceId, fail]);
+  }, [api, workspaceId, s.load_failed]);
 
   useEffect(() => {
     void refresh();
@@ -207,10 +218,11 @@ export function Workflows({
   const pausedCount = (w: WorkflowView) =>
     Math.max(w.paused, runs.filter((r) => r.workflowId === w.id && r.status === "paused").length);
 
+  const runtimeName = cliLabel(settings["ai.local.cli"]);
   const placementLabel = (w: WorkflowView) =>
     w.placementInEffect === "server"
       ? (s.runs_on_server ?? "Runs on your server")
-      : (s.runs_on_local ?? "Runs here via Claude Code");
+      : fill(s.runs_on_local ?? "Runs here via {runtime}", { runtime: runtimeName });
 
   const change = (text: string) => {
     const sentence = text.trim();
@@ -250,7 +262,11 @@ export function Workflows({
               <Icon icon={PlusIcon} /> {s.new ?? "New workflow"}
             </Btn>
           </PageHead>
-          {error ? <p className="faint routing-error">{error}</p> : null}
+          {(error ?? loadError) ? (
+            <p className="faint routing-error" role="alert">
+              {error ?? loadError}
+            </p>
+          ) : null}
           <div className="two">
             <div>
               <Tabs
@@ -262,7 +278,10 @@ export function Workflows({
                 onChange={setTab}
                 className="wf-tabs"
               />
-              <div className="wf">
+              <div className="wf" aria-busy={workflows === null && !loadError ? "true" : undefined}>
+                {workflows === null && !loadError ? (
+                  <p className="faint wf-loading">{s.loading}</p>
+                ) : null}
                 {shown.map((w) => (
                   <WorkflowCard
                     key={w.id}
@@ -420,15 +439,17 @@ export function Workflows({
                     <div className="note">
                       <div>
                         {selected.placementInEffect === "server"
-                          ? fill(s.where_server ?? "", { address: account.address })
-                          : (s.where_local ?? "")}
+                          ? fill(s.where_server ?? "", { address: current.address })
+                          : fill(s.where_local ?? "", { runtime: runtimeName })}
                       </div>
                     </div>
                   </SideCard>
                 </>
               ) : (
                 <SideCard title={s.title ?? "Workflows"}>
-                  <p className="faint">{s.none_selected}</p>
+                  <p className="faint">
+                    {workflows === null && !loadError ? s.loading : s.none_selected}
+                  </p>
                 </SideCard>
               )}
             </aside>

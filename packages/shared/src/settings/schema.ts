@@ -2096,10 +2096,16 @@ export const settingsSchema = {
   "strings.workflows.runs_on_local": str(
     "workflows",
     "Placement: local",
-    "Runs here via Claude Code",
+    "Runs here via {runtime}",
   ),
   "strings.workflows.last_run": str("workflows", "Last run line", "Last run {when}"),
   "strings.workflows.never_ran": str("workflows", "No runs yet", "Not run yet"),
+  "strings.workflows.loading": str("workflows", "Workflows loading line", "Loading your workflows"),
+  "strings.workflows.load_failed": str(
+    "workflows",
+    "Workflows could not load",
+    "Could not load your workflows: {message}",
+  ),
   "strings.workflows.source": str("workflows", "Source button", "Source"),
   "strings.workflows.ask_placeholder": str(
     "workflows",
@@ -2116,7 +2122,7 @@ export const settingsSchema = {
   "strings.workflows.where_local": str(
     "workflows",
     "Where it runs: local",
-    "Runs on this machine through a Local runtime. It waits while the app is closed and catches up on launch.",
+    "Runs on this machine through {runtime}. It waits while the app is closed and catches up on launch.",
   ),
   "strings.workflows.dry_run": str("workflows", "Dry run button", "Dry run"),
   "strings.workflows.dry_run_title": str(
