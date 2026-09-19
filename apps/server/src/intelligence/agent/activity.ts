@@ -30,6 +30,14 @@ export interface ActivityStart {
   preview: ToolPreview | null;
   status: ToolCall["status"];
   decision: ApprovalDecision | "auto" | null;
+  /** An external MCP caller (slice 19): the credential name is the row's actor name. */
+  actor?: { kind: "external"; name: string } | undefined;
+}
+
+/** The actor column of a new row: external when a credential called, automation under a Run, else the Agent. */
+function actorOf(entry: ActivityStart): ActivityRecord["actor"] {
+  if (entry.actor) return "external";
+  return entry.runId ? "automation" : "agent";
 }
 
 export interface ActivityPatch {
@@ -99,7 +107,15 @@ function project(r: Row): ActivityRow {
     ...(resultText !== undefined ? { result: resultLine(resultText) } : {}),
     undoable: r.undo !== null && r.undoneAt === null && r.status === "done",
     undoneAt: r.undoneAt?.toISOString() ?? null,
-    actor: r.actor === "user" ? "user" : r.actor === "automation" ? "automation" : "agent",
+    actor:
+      r.actor === "user"
+        ? "user"
+        : r.actor === "automation"
+          ? "automation"
+          : r.actor === "external"
+            ? "external"
+            : "agent",
+    actorName: r.actorName ?? null,
     callId: r.callId,
     input: r.input ?? null,
     preview: r.preview ?? null,
@@ -129,7 +145,8 @@ export function createActivityLog(db: Db, options: { now?: () => Date } = {}): A
         .values({
           id,
           workspaceId: entry.workspaceId,
-          actor: entry.runId ? "automation" : "agent",
+          actor: actorOf(entry),
+          actorName: entry.actor?.name ?? null,
           tool: entry.tool,
           summary: entry.summary,
           at: now(),
@@ -247,7 +264,8 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
         approvedBy: null,
         undoable: false,
         undoneAt: null,
-        actor: entry.runId ? "automation" : "agent",
+        actor: actorOf(entry),
+        actorName: entry.actor?.name ?? null,
         callId: entry.callId,
         input: entry.input,
         preview: entry.preview,
