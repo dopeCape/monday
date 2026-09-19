@@ -137,8 +137,8 @@ export async function bootCloud(
       ? createVercelKicker({ ...kickerOptions, cronSecret: env.CRON_SECRET })
       : createNetlifyKicker({ ...kickerOptions, waitUntil: (p) => waitUntilNow?.(p) });
   await services.startAccounts();
-  // LangGraph checkpoints for paused Agent turns, set up right after the migrations.
-  const checkpointer = await createCheckpointer(databaseUrl);
+  // LangGraph checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after the migrations.
+  const checkpointer = await createCheckpointer(databaseUrl, handle.db, services.mailstore);
 
   const app = createApp({
     db: handle.db,

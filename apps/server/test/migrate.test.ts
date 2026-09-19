@@ -39,6 +39,7 @@ describe("migrations", () => {
       "examples",
       "external_credentials",
       "groups",
+      "integration_secrets",
       "invites",
       "jobs",
       "labels",

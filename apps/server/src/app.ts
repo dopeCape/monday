@@ -68,6 +68,7 @@ import {
   EXTERNAL_PUBLIC_PREFIXES,
   externalRoutes,
 } from "./routes/external.ts";
+import { integrationRoutes } from "./routes/integrations.ts";
 import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
@@ -166,6 +167,8 @@ export interface AppOptions {
   notifier?: Notifier;
   /** The Server's public URL, the OAuth issuer, when configured; the request's origin otherwise. */
   publicUrl?: () => Promise<string | null>;
+  /** Where the boot and unlock sweeps report; defaults to console.warn. */
+  log?: (message: string) => void;
 }
 
 export function createApp(options: AppOptions): Hono<AppEnv> {
@@ -282,6 +285,26 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     });
   intelligence.extensions.external = external;
 
+  // Rows earlier versions wrote in the clear (transcripts, Voice profiles,
+  // integration secrets in the Setting) move under the envelope as soon as
+  // the root key is in memory: now, or after POST /unlock.
+  const log = options.log ?? ((m: string) => console.warn(m));
+  const sealLegacy = async () => {
+    const moved = await intelligence.sealLegacy();
+    const total = moved.transcripts + moved.voices + moved.integrations;
+    if (total > 0) {
+      log(
+        `[hardening] sealed ${moved.transcripts} transcript event(s), ${moved.voices} voice profile(s), ${moved.integrations} integration secret(s)`,
+      );
+    }
+  };
+  keys.onUnlock(sealLegacy);
+  if (keys.isUnlocked()) {
+    sealLegacy().catch((error) =>
+      log(`[hardening] sweep failed: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  }
+
   const app = new Hono<AppEnv>();
 
   // The allowed origins, re-read from Settings at most once a minute.
@@ -344,6 +367,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
+  app.route("/", integrationRoutes(intelligence.integrationSecrets));
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
   app.route("/", workflowRoutes(intelligence.workflows));

@@ -12,7 +12,7 @@
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { AiLevel, HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accounts, workspaces } from "../db/schema.ts";
 import { createDrafts, type Drafts } from "../drafts/index.ts";
@@ -28,6 +28,7 @@ import {
   type WorkflowSettings,
   type Workflows,
 } from "../workflows/index.ts";
+import { createIntegrationSecretStore, type IntegrationSecretStore } from "../workflows/secrets.ts";
 import {
   type ActivityLog,
   type AgentHost,
@@ -151,6 +152,14 @@ export interface Intelligence {
   extensions: ToolExtensions;
   /** What the onboarding tools act through (slice 20). */
   onboarding: OnboardingSeam;
+  /** The sealed integration secrets the Workflow steps post with; the routes set and clear them. */
+  integrationSecrets: IntegrationSecretStore;
+  /**
+   * Seals what earlier versions wrote in the clear (transcripts, Voice
+   * profiles, integration secrets in the Setting). Needs the root key; the
+   * app runs it at boot and after every unlock until nothing is left.
+   */
+  sealLegacy(): Promise<{ transcripts: number; voices: number; integrations: number }>;
   /** The AI level in effect (CONTEXT.md), read from the Setting. */
   level(): Promise<AiLevel>;
   /** The runtime as /capabilities reports it. Works locked. */
@@ -318,11 +327,14 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
 
   const drafts = options.drafts ?? createDrafts({ db, mailstore, now });
   const activity = createActivityLog(db, { now });
+  const sessions = createSessionStore(db, { now, content: mailstore });
+  // The tokens and webhook URLs live as sealed rows; the Setting only says which exist.
+  const integrationSecrets = createIntegrationSecretStore(db, mailstore, { now });
   const integrations =
     options.integrations ??
     createHttpIntegrations({
-      config: async () =>
-        (await readGlobalSettings(db, ["workflows.integrations"]))["workflows.integrations"],
+      config: () => integrationSecrets.loadAll(),
+      configured: () => integrationSecrets.list(),
     });
   const mcp =
     options.mcp ??
@@ -335,7 +347,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const agent = createAgentHost({
     runtime,
     activity,
-    sessions: createSessionStore(db, { now }),
+    sessions,
     hostFor: (workspaceId) => createServerToolHost({ db, mailstore, drafts, workspaceId, now }),
     ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
     extensions,
@@ -419,7 +431,21 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     workflows,
     extensions,
     onboarding,
+    integrationSecrets,
     level,
+    async sealLegacy() {
+      let transcripts = 0;
+      // Bounded: one pass moves at most 500 rows per call, and the loop stops when a call moves none.
+      for (let round = 0; round < 200; round++) {
+        const moved = await sessions.sealLegacy(500);
+        transcripts += moved;
+        if (moved === 0) break;
+      }
+      const voices = await drafts.sealLegacyVoices();
+      const first = await db.query.workspaces.findFirst({ orderBy: asc(workspaces.createdAt) });
+      const integrations = first ? await integrationSecrets.adopt(first.id) : 0;
+      return { transcripts, voices, integrations };
+    },
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

@@ -3,11 +3,20 @@
 // LangGraph checkpoint is the model's memory of the same conversation and
 // lives in the checkpointer's tables under the Session id. Postgres in
 // production, memory in tests.
+//
+// A transcript quotes mail (what the user pasted, what the Agent read back,
+// the previews on the tool cards), so every event is sealed under the
+// Workspace's envelope as the "transcript" kind before it is stored, and
+// reading one back needs the root key: a locked Server answers 423 for a
+// Session's history. Rows written before migration 0014 carry the event in
+// the clear; they read as they are, and sealLegacy() moves them under the
+// envelope once the Server is unlocked.
 
 import type { AgentEvent, Runtime, SessionSummary } from "@monday/shared";
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, isNotNull } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import { sessionEvents, sessions } from "../../db/schema.ts";
+import type { ContentStore } from "../../mailstore/content.ts";
 
 export interface SessionStore {
   create(workspaceId: string, runtime: Runtime): Promise<SessionSummary>;
@@ -20,6 +29,12 @@ export interface SessionStore {
   append(id: string, event: AgentEvent): Promise<void>;
   /** The transcript in order, with each tool card collapsed to its latest state. */
   events(id: string): Promise<AgentEvent[]>;
+  /**
+   * Seals the transcript rows written before migration 0014, up to `limit`
+   * of them, and returns how many it moved. Needs the root key; the entry
+   * runs it at boot and after an unlock until it returns 0.
+   */
+  sealLegacy(limit?: number): Promise<number>;
 }
 
 /** Every tool card once, at its first position, in its latest state. */
@@ -52,8 +67,44 @@ const project = (r: Row): SessionSummary => ({
   lastActivity: r.lastActivity.toISOString(),
 });
 
-export function createSessionStore(db: Db, options: { now?: () => Date } = {}): SessionStore {
+export interface SessionStoreOptions {
+  /** Seals and opens the transcript events; the Mailstore in production. */
+  content: ContentStore;
+  now?: () => Date;
+}
+
+export function createSessionStore(db: Db, options: SessionStoreOptions): SessionStore {
+  const { content } = options;
   const now = options.now ?? (() => new Date());
+  const workspaceOf = async (sessionId: string): Promise<string | null> => {
+    const row = await db.query.sessions.findFirst({
+      where: eq(sessions.id, sessionId),
+      columns: { workspaceId: true },
+    });
+    return row?.workspaceId ?? null;
+  };
+  const seal = async (workspaceId: string, event: AgentEvent) => {
+    const ref = await content.storeContent(workspaceId, "transcript", JSON.stringify(event));
+    const eventEnc = ref.chunks[0];
+    if (!eventEnc) throw new RangeError("transcript envelope missing");
+    return { eventEnc, eventKey: ref.key };
+  };
+  const open = async (
+    workspaceId: string,
+    row: { event: AgentEvent | null; eventEnc: Uint8Array | null; eventKey: Uint8Array | null },
+  ): Promise<AgentEvent | null> => {
+    if (row.eventEnc && row.eventKey) {
+      const text = await content.readText({
+        workspaceId,
+        kind: "transcript",
+        key: row.eventKey,
+        chunks: [row.eventEnc],
+        size: -1,
+      });
+      return JSON.parse(text) as AgentEvent;
+    }
+    return row.event;
+  };
   return {
     async create(workspaceId, runtime) {
       const [row] = await db
@@ -94,15 +145,53 @@ export function createSessionStore(db: Db, options: { now?: () => Date } = {}): 
       await db.update(sessions).set({ runtime, lastActivity: now() }).where(eq(sessions.id, id));
     },
     async append(id, event) {
-      await db.insert(sessionEvents).values({ sessionId: id, event, at: now() });
+      const workspaceId = await workspaceOf(id);
+      if (!workspaceId) return;
+      const sealed = await seal(workspaceId, event);
+      await db.insert(sessionEvents).values({ sessionId: id, event: null, ...sealed, at: now() });
     },
     async events(id) {
+      const workspaceId = await workspaceOf(id);
+      if (!workspaceId) return [];
       const rows = await db
-        .select({ event: sessionEvents.event })
+        .select({
+          event: sessionEvents.event,
+          eventEnc: sessionEvents.eventEnc,
+          eventKey: sessionEvents.eventKey,
+        })
         .from(sessionEvents)
         .where(eq(sessionEvents.sessionId, id))
         .orderBy(asc(sessionEvents.seq));
-      return collapseEvents(rows.map((r) => r.event));
+      const out: AgentEvent[] = [];
+      for (const row of rows) {
+        const event = await open(workspaceId, row);
+        if (event) out.push(event);
+      }
+      return collapseEvents(out);
+    },
+    async sealLegacy(limit = 500) {
+      const rows = await db
+        .select({
+          seq: sessionEvents.seq,
+          event: sessionEvents.event,
+          workspaceId: sessions.workspaceId,
+        })
+        .from(sessionEvents)
+        .innerJoin(sessions, eq(sessions.id, sessionEvents.sessionId))
+        .where(isNotNull(sessionEvents.event))
+        .orderBy(asc(sessionEvents.seq))
+        .limit(Math.max(1, limit));
+      let moved = 0;
+      for (const row of rows) {
+        if (!row.event) continue;
+        const sealed = await seal(row.workspaceId, row.event);
+        await db
+          .update(sessionEvents)
+          .set({ event: null, ...sealed })
+          .where(eq(sessionEvents.seq, row.seq));
+        moved += 1;
+      }
+      return moved;
     },
   };
 }
@@ -151,6 +240,9 @@ export function createMemorySessionStore(options: { now?: () => Date } = {}): Se
     },
     async events(id) {
       return collapseEvents(events.get(id) ?? []);
+    },
+    async sealLegacy() {
+      return 0;
     },
   };
 }

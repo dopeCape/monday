@@ -33,6 +33,10 @@ export const CONTENT_KINDS: readonly ContentKind[] = [
   "embedding",
   "credential",
   "event",
+  "transcript",
+  "checkpoint",
+  "voice",
+  "integration",
 ];
 
 export function isContentKind(value: unknown): value is ContentKind {

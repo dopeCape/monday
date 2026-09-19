@@ -188,7 +188,15 @@ export type ContentKind =
   | "embedding"
   | "credential"
   /** An Event's title, description and location, content like a Message body (slice 18). */
-  | "event";
+  | "event"
+  /** One Session transcript event: what the user and the Agent said, and the tool cards. */
+  | "transcript"
+  /** A LangGraph checkpoint blob: the model's memory of a Session, sealed per Workspace. */
+  | "checkpoint"
+  /** The Voice profile: a description of how the user writes with excerpts from sent mail. */
+  | "voice"
+  /** A Workflow integration's token or webhook URL, one sealed row per integration. */
+  | "integration";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read

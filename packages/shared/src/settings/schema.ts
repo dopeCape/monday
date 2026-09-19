@@ -226,12 +226,16 @@ export const sectionRuleShape = z.object({
 });
 export type SectionRuleValue = z.output<typeof sectionRuleShape>;
 const placement = z.enum(["server", "local"]);
+/**
+ * Which integrations hold a secret. The tokens and webhook URLs themselves
+ * are sealed rows on the Server (PUT /integrations/:name), never a Setting.
+ */
 const integrationsShape = z.object({
-  slack: z.object({ webhookUrl: z.url().optional(), token: z.string().optional() }).optional(),
-  discord: z.object({ webhookUrl: z.url().optional() }).optional(),
-  notion: z.object({ token: z.string().optional() }).optional(),
-  drive: z.object({ token: z.string().optional() }).optional(),
-  webhook: z.object({ token: z.string().optional() }).optional(),
+  slack: z.boolean().optional(),
+  discord: z.boolean().optional(),
+  notion: z.boolean().optional(),
+  drive: z.boolean().optional(),
+  webhook: z.boolean().optional(),
 });
 const keymap = z.enum(["vim", "gmail", "natural"]);
 const direction = z.enum(["next", "previous"]);
@@ -1628,7 +1632,9 @@ export const settingsSchema = {
     section: "workflows",
     group: "Defaults",
     label: "Integrations",
-    help: "Where the Slack, Notion, Drive, Discord and webhook steps post: a webhook URL or a token per integration.",
+    help: "Which of Slack, Notion, Drive, Discord and the webhook are set up. The tokens and webhook URLs are kept sealed on the Server, set and cleared under Settings, Workflows, Integrations; this only says which ones exist.",
+    hidden:
+      "Written by the Server from its sealed rows whenever an integration is set or cleared; the Integrations panel reads it.",
   }),
   "workflows.mcp_servers": setting({
     type: z.array(mcpServerShape),
