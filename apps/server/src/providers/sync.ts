@@ -231,21 +231,38 @@ interface ChangePayload {
   change: Change;
 }
 
+/** What the Provider's mailboxes look like to the intent mapping. */
+export interface ProviderShape {
+  inboxId: string | null;
+  trashId: string | null;
+  /** A Message can carry several mailboxes (Gmail labels, JMAP): add and remove instead of move. */
+  labels: boolean;
+}
+
 /**
  * The Provider action an intent maps to (docs/spec/inbox.md, "Action
  * semantics"), or null when the intent is monday's alone (a move between
  * Groups, Tags). A snooze leaves the Inbox with archive semantics; its wake,
- * an unsnooze, and an undelete bring the Thread back to the Inbox.
+ * an unsnooze, and an undelete bring the Thread back to the Inbox: a label
+ * added where a Message carries several, a move where it sits in one folder.
  */
-export function providerChangeOf(intent: Intent, inboxId: string | null): Change | null {
+export function providerChangeOf(intent: Intent, shape: ProviderShape): Change | null {
+  const { inboxId, trashId } = shape;
   switch (intent.kind) {
     case "archive":
     case "snooze":
       return { kind: "archive" };
     case "unarchive":
     case "unsnooze":
+      if (!inboxId) return null;
+      return shape.labels
+        ? { kind: "label", add: [inboxId], remove: [] }
+        : { kind: "move", mailboxId: inboxId };
     case "undelete":
-      return inboxId ? { kind: "move", mailboxId: inboxId } : null;
+      if (!inboxId) return null;
+      return shape.labels
+        ? { kind: "label", add: [inboxId], remove: trashId ? [trashId] : [] }
+        : { kind: "move", mailboxId: inboxId };
     case "star":
       return { kind: "star", value: true };
     case "unstar":
@@ -267,6 +284,8 @@ interface AccountRow {
   provider: ProviderKind | "fake";
   address: string;
   workspaceId: string;
+  /** Whether a Message can carry several mailboxes (the Account's capabilities). */
+  labels: boolean;
 }
 
 interface Watcher {
@@ -344,12 +363,19 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         provider: accounts.provider,
         address: accounts.address,
         workspaceId: workspaces.id,
+        capabilities: accounts.capabilities,
       })
       .from(accounts)
       .innerJoin(workspaces, eq(workspaces.accountId, accounts.id))
       .where(eq(accounts.id, accountId));
     if (!row) throw new Error(`account ${accountId} not found`);
-    return row as AccountRow;
+    return {
+      id: row.id,
+      provider: row.provider as ProviderKind | "fake",
+      address: row.address,
+      workspaceId: row.workspaceId,
+      labels: row.capabilities.labels,
+    };
   }
 
   function session(acct: AccountRow): Promise<Session> {
@@ -1181,7 +1207,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         );
       if (rows.length === 0) return;
       const map = await mailboxMapFromLabels(workspaceId);
-      const change = providerChangeOf(intent, map.inboxId);
+      const accountId = await accountIdOf(workspaceId);
+      if (!accountId) return;
+      const acct = await account(accountId);
+      const change = providerChangeOf(intent, {
+        inboxId: map.inboxId,
+        trashId: map.mailboxes.find((m) => m.role === "trash")?.id ?? null,
+        labels: acct.labels,
+      });
       if (!change) return;
       // The mirror takes the user's word now; the pass never flips the row back while the Job is on its way.
       for (const row of rows) {
@@ -1196,9 +1229,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
           );
       }
       await refreshThread(intent.threadId, map);
-      const accountId =
-        rows[0]?.workspaceId === workspaceId ? await accountIdOf(workspaceId) : null;
-      if (!accountId || !jobsRef) return;
+      if (!jobsRef) return;
       const payload: ChangePayload = { accountId, threadId: intent.threadId, change };
       await jobsRef.enqueue(CHANGE_STEP, payload, {
         id: `${CHANGE_STEP}:${intent.threadId}:${intent.kind}:${intent.at}`,

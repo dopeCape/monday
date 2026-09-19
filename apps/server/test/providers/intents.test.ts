@@ -134,47 +134,48 @@ describe("intents reach the Provider and the feed", () => {
   });
 
   test("providerChangeOf maps every intent to the Provider's concept, or to nothing", () => {
+    const folders = { inboxId: "INBOX", trashId: "Trash", labels: false };
+    const labels = { inboxId: "INBOX", trashId: "TRASH", labels: true };
+    const stamp = { threadId: "t", at: "", actor: "user" as const };
+    expect(providerChangeOf({ kind: "archive", ...stamp }, folders)).toEqual({ kind: "archive" });
+    expect(providerChangeOf({ kind: "snooze", until: "", ...stamp }, folders)).toEqual({
+      kind: "archive",
+    });
+    // Back to the Inbox: a move between folders, a label where a Message carries several.
+    expect(providerChangeOf({ kind: "unarchive", ...stamp }, folders)).toEqual({
+      kind: "move",
+      mailboxId: "INBOX",
+    });
+    expect(providerChangeOf({ kind: "unarchive", ...stamp }, labels)).toEqual({
+      kind: "label",
+      add: ["INBOX"],
+      remove: [],
+    });
+    expect(providerChangeOf({ kind: "undelete", ...stamp }, folders)).toEqual({
+      kind: "move",
+      mailboxId: "INBOX",
+    });
+    expect(providerChangeOf({ kind: "undelete", ...stamp }, labels)).toEqual({
+      kind: "label",
+      add: ["INBOX"],
+      remove: ["TRASH"],
+    });
     expect(
-      providerChangeOf({ kind: "archive", threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toEqual({ kind: "archive" });
-    expect(
-      providerChangeOf(
-        { kind: "snooze", until: "", threadId: "t", at: "", actor: "user" },
-        "INBOX",
-      ),
-    ).toEqual({ kind: "archive" });
-    expect(
-      providerChangeOf({ kind: "unarchive", threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toEqual({ kind: "move", mailboxId: "INBOX" });
-    expect(
-      providerChangeOf({ kind: "unsnooze", threadId: "t", at: "", actor: "user" }, null),
+      providerChangeOf({ kind: "unsnooze", ...stamp }, { ...folders, inboxId: null }),
     ).toBeNull();
-    expect(
-      providerChangeOf({ kind: "read", threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toEqual({
+    expect(providerChangeOf({ kind: "read", ...stamp }, folders)).toEqual({
       kind: "read",
       value: true,
     });
-    expect(
-      providerChangeOf({ kind: "unstar", threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toEqual({
+    expect(providerChangeOf({ kind: "unstar", ...stamp }, folders)).toEqual({
       kind: "star",
       value: false,
     });
+    expect(providerChangeOf({ kind: "delete", ...stamp }, folders)).toEqual({ kind: "delete" });
     expect(
-      providerChangeOf({ kind: "delete", threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toEqual({
-      kind: "delete",
-    });
-    expect(
-      providerChangeOf(
-        { kind: "move", group: "g", subgroup: null, threadId: "t", at: "", actor: "user" },
-        "INBOX",
-      ),
+      providerChangeOf({ kind: "move", group: "g", subgroup: null, ...stamp }, folders),
     ).toBeNull();
-    expect(
-      providerChangeOf({ kind: "tags", tags: [], threadId: "t", at: "", actor: "user" }, "INBOX"),
-    ).toBeNull();
+    expect(providerChangeOf({ kind: "tags", tags: [], ...stamp }, folders)).toBeNull();
   });
 
   test("an archive from a Device mirrors at once, survives the next sync, and reaches the Provider through a Job", async () => {
