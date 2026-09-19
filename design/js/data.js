@@ -331,8 +331,9 @@ export const agentThreadLayout = [
 
 export const commands = [
   { sec: "Ask the agent", items: [
+    { i: "ph-sparkle", t: "Reply to the 3 threads waiting on me", ai: true },
     { i: "ph-sparkle", t: "Summarize what I missed since yesterday", ai: true },
-    { i: "ph-sparkle", t: "Draft a reply to Kenji accepting the pro-rata cap", ai: true },
+    { i: "ph-sparkle", t: "Archive newsletters older than a week", ai: true },
   ] },
   { sec: "Actions", items: [
     { i: "ph-note-pencil", t: "New message", k: "C" },

@@ -31,7 +31,7 @@ export interface PaletteNav {
   featured?: boolean | undefined;
 }
 
-/** A canned line for the Agent; the composer (slice 14) supplies real ones. */
+/** A suggestion chip's sentence, as the composer offers it (docs/spec/agent-composer.md). */
 export interface PaletteSuggestion {
   key: string;
   label: string;

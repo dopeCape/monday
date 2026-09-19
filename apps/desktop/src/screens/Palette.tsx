@@ -4,14 +4,13 @@
 // component. Every keystroke is answered from memory and the Cache; nothing
 // here waits on the network or a model.
 
-import { SETTING_SECTIONS, type Settings, type Thread } from "@monday/shared";
+import { type Group, SETTING_SECTIONS, type Settings, type Thread } from "@monday/shared";
 import {
   type CommandItem,
   CommandPalette,
   type CommandSection,
   type IconComponent,
 } from "@monday/ui";
-import { commands as fixtureCommands, folders, groups } from "@monday/ui/fixtures";
 import {
   ArchiveIcon,
   ArrowBendUpLeftIcon,
@@ -40,6 +39,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { chordLabel, KEY_ACTIONS, type KeyAction, type Keymap } from "../keyboard/keymaps.ts";
 import type { SearchHit, SearchModule } from "../search/index.ts";
 import {
@@ -51,6 +51,7 @@ import {
   type PaletteCommand,
   type PaletteNav,
   type PaletteStrings,
+  type PaletteSuggestion,
 } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
 
@@ -116,11 +117,8 @@ const FEATURED_ACTIONS: readonly string[] = [
   "workflow.from_thread",
 ];
 
-/** Canned lines for the Agent until the composer (slice 14) supplies real ones. */
-const agentSuggestions = fixtureCommands
-  .flatMap((sec) => sec.items)
-  .filter((it) => it.ai)
-  .map((it) => ({ key: it.key, label: it.label }));
+const NO_SUGGESTIONS: readonly PaletteSuggestion[] = [];
+const NO_GROUPS: readonly Group[] = [];
 
 const fill = (template: string, vars: Record<string, string | number>) =>
   template.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
@@ -156,18 +154,20 @@ export function paletteActions(keymap: Keymap, settings: Settings, mac: boolean)
   );
 }
 
-/** Folders, Groups, saved Views and Settings pages. */
-export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[] {
+/** The Inbox, the Groups, saved Views and Settings pages. */
+export function paletteNavigation(
+  settings: Settings,
+  mac: boolean,
+  groups: readonly Group[],
+): PaletteNav[] {
   const t = (k: string) => (k in settings ? String(settings[k as keyof Settings]) : k);
   const out: PaletteNav[] = [];
-  for (const f of folders) {
-    out.push({
-      target: f.key === "inbox" ? "inbox" : `folder:${f.key}`,
-      label: f.key === "inbox" ? t("strings.palette.nav.inbox") : f.label,
-      icon: f.key === "inbox" ? "inbox" : f.key === "sent" ? "sent" : "move",
-      featured: f.key === "inbox",
-    });
-  }
+  out.push({
+    target: "inbox",
+    label: t("strings.palette.nav.inbox"),
+    icon: "inbox",
+    featured: true,
+  });
   const byId = new Map(groups.map((g) => [g.id, g]));
   let featuredGroup = false;
   for (const g of groups) {
@@ -228,6 +228,10 @@ export interface PaletteProps {
   search?: SearchModule | null | undefined;
   workspaceId: string;
   recentThreads: readonly Thread[];
+  /** The Workspace's Groups, for "Go to". */
+  groups?: readonly Group[] | undefined;
+  /** The Agent's suggestion chips (docs/spec/agent-composer.md), shown before anything is typed. */
+  suggestions?: readonly PaletteSuggestion[] | undefined;
   onCommand: (command: PaletteCommand) => void;
   /** Tab: the `agent.ask` action with the parsed query attached. */
   onAsk: (ask: AgentAsk) => void;
@@ -246,6 +250,8 @@ export function Palette({
   search,
   workspaceId,
   recentThreads,
+  groups = NO_GROUPS,
+  suggestions = NO_SUGGESTIONS,
   onCommand,
   onAsk,
   now,
@@ -262,7 +268,10 @@ export function Palette({
     () => paletteActions(keymap, settings, mac).filter((a) => agent || a.action !== "agent.focus"),
     [keymap, settings, mac, agent],
   );
-  const navigation = useMemo(() => paletteNavigation(settings, mac), [settings, mac]);
+  const navigation = useMemo(
+    () => paletteNavigation(settings, mac, groups),
+    [settings, mac, groups],
+  );
   const strings = useMemo<PaletteStrings>(
     () => ({
       ask: settings["strings.palette.ask"],
@@ -306,13 +315,13 @@ export function Palette({
         actions,
         navigation,
         threads: recentThreads,
-        suggestions: agentSuggestions,
+        suggestions,
         hits,
         strings,
         agent,
         ...(now ? { now } : {}),
       }),
-    [query, actions, navigation, recentThreads, hits, strings, now, agent],
+    [query, actions, navigation, recentThreads, suggestions, hits, strings, now, agent],
   );
 
   // The highlight follows the list: a key that left it lands on the first row.
@@ -341,7 +350,8 @@ export function Palette({
     if (found) onCommand(found.command);
   };
 
-  return (
+  // The scrim covers the whole window, as the mock's does, not just the screen column.
+  return createPortal(
     <CommandPalette
       sections={sections}
       activeKey={activeKey ?? undefined}
@@ -366,6 +376,7 @@ export function Palette({
         ask: t("strings.palette.foot.ask"),
         empty: model.mode === "search" ? t("strings.search.empty") : undefined,
       }}
-    />
+    />,
+    document.body,
   );
 }

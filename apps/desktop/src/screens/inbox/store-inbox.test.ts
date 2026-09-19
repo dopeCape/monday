@@ -126,6 +126,38 @@ describe("storeInbox", () => {
     expect(inbox.threads().map((t) => t.id)).not.toContain("e7");
     inbox.close();
   });
+
+  test("undo of a mixed batch restores only the Threads the action changed", async () => {
+    const { inbox, store } = await open();
+    // e1 is unread, e3 is read: mark both read, undo, and e3 must stay read.
+    expect(inbox.thread("e1")?.unread).toBe(true);
+    expect(inbox.thread("e3")?.unread).toBe(false);
+    const token = await inbox.markRead(["e1", "e3"]);
+    await settled(inbox, () => inbox.thread("e1")?.unread === false);
+    await inbox.undo(token);
+    await settled(inbox, () => inbox.thread("e1")?.unread === true);
+    expect(inbox.thread("e3")?.unread).toBe(false);
+    expect(await store.query("select kind, thread_id from outbox order by seq")).toEqual([
+      { kind: "read", thread_id: "e1" },
+      { kind: "read", thread_id: "e3" },
+      { kind: "unread", thread_id: "e1" },
+    ]);
+    // The same for stars: e2 is starred already.
+    const starred = await inbox.star(["e1", "e2"]);
+    await settled(inbox, () => inbox.thread("e1")?.starred === true);
+    await inbox.undo(starred);
+    await settled(inbox, () => inbox.thread("e1")?.starred === false);
+    expect(inbox.thread("e2")?.starred).toBe(true);
+  });
+
+  test("the seam hands out the Workspace's Groups and Tags from the Cache", async () => {
+    const { inbox } = await open();
+    expect(inbox.groups().map((g) => g.id)).toContain("hiring");
+    expect(inbox.groups().find((g) => g.id === "candidates")?.parentId).toBe("hiring");
+    expect(inbox.tags().find((t) => t.id === "candidate")?.name).toBe("Candidate");
+    expect(inbox.groups()).toBe(inbox.groups());
+    expect(inbox.tags()).toBe(inbox.tags());
+  });
 });
 
 describe("storeInbox Briefs (slice 13)", () => {

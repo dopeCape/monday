@@ -13,23 +13,39 @@
 // local, and never waiting on the Server. A Section the Server assigned
 // (the section Task) is kept as is.
 
-import type { AiLevel, Brief, Message, SectionRuleSetting, Thread } from "@monday/shared";
+import type {
+  AiLevel,
+  Brief,
+  Group,
+  Message,
+  SectionRuleSetting,
+  Tag,
+  Thread,
+} from "@monday/shared";
 import { sectionOf } from "@monday/shared";
 import {
   ALL_THREADS_SQL,
   BRIEF_OF_THREAD_SQL,
+  GROUPS_SQL,
   type LiveQuery,
   MESSAGES_OF_THREAD_SQL,
   rowToBrief,
   rowToCachedThread,
+  rowToGroup,
   rowToMessage,
+  rowToTag,
   type Store,
   type StoreIntent,
+  TAGS_SQL,
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
 import type { Inbox, UndoToken } from "./actions.ts";
 
-/** What an undo puts back: the inverse intents, in the order the action ran. */
+/**
+ * What an undo puts back: the inverse intents, in the order the action ran.
+ * A Thread the action found already in its target state has no inverse, so
+ * undoing "mark read" on a mixed batch leaves the Threads that were read alone.
+ */
 type Reversal = Array<StoreIntent>;
 
 export interface StoreInbox extends Inbox {
@@ -174,14 +190,20 @@ export async function createStoreInbox(
   };
 
   let lastRows: Record<string, unknown>[] = [];
+  /** The Threads in the trash, which the domain type does not carry. */
+  const deletedIds = new Set<string>();
   const project = (rows: Record<string, unknown>[]) => {
     lastRows = rows;
     byId.clear();
+    deletedIds.clear();
     const all = rows.map((r) => {
       const entry = rowToCachedThread(r, store.workspaceId);
       return { thread: sectioned(entry), deleted: entry.deleted };
     });
-    for (const { thread } of all) byId.set(thread.id, thread);
+    for (const { thread, deleted } of all) {
+      byId.set(thread.id, thread);
+      if (deleted) deletedIds.add(thread.id);
+    }
     stream = all
       .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
       .map(({ thread }) => thread);
@@ -200,10 +222,32 @@ export async function createStoreInbox(
     });
   });
 
-  /** Runs `make` for every known id and files the inverse under a new token. */
+  // Groups and Tags as the Cache holds them (the feed keeps both current).
+  let groups: readonly Group[] = [];
+  let tags: readonly Tag[] = [];
+  const groupsLive = store.live<Record<string, unknown>>(GROUPS_SQL);
+  const tagsLive = store.live<Record<string, unknown>>(TAGS_SQL);
+  await Promise.all([
+    new Promise<void>((resolve) => {
+      groupsLive.subscribe((rows) => {
+        groups = rows.map((r) => rowToGroup(r, store.workspaceId));
+        for (const l of [...listeners]) l();
+        resolve();
+      });
+    }),
+    new Promise<void>((resolve) => {
+      tagsLive.subscribe((rows) => {
+        tags = rows.map((r) => rowToTag(r, store.workspaceId));
+        for (const l of [...listeners]) l();
+        resolve();
+      });
+    }),
+  ]);
+
+  /** Runs `make` for every known id and files the inverses under a new token. */
   const act = async (
     ids: readonly string[],
-    make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent },
+    make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent | null },
   ): Promise<UndoToken> => {
     const reversal: Reversal = [];
     for (const id of ids) {
@@ -211,7 +255,7 @@ export async function createStoreInbox(
       if (!thread) continue;
       const { intent, reverse } = make(thread);
       await store.intent(intent);
-      reversal.push(reverse);
+      if (reverse) reversal.push(reverse);
     }
     const token = `u${++tokenSeq}`;
     undos.set(token, reversal);
@@ -227,14 +271,37 @@ export async function createStoreInbox(
     | "unread"
     | "delete"
     | "undelete";
+  /** Whether a Thread already sits where a flag intent would put it. */
+  const already = (kind: Flag, t: Thread, deleted: boolean): boolean => {
+    switch (kind) {
+      case "archive":
+        return t.archived;
+      case "unarchive":
+        return !t.archived;
+      case "star":
+        return t.starred;
+      case "unstar":
+        return !t.starred;
+      case "read":
+        return !t.unread;
+      case "unread":
+        return t.unread;
+      case "delete":
+        return deleted;
+      case "undelete":
+        return !deleted;
+    }
+  };
   const flip = (kind: Flag, reverse: Flag) => (t: Thread) => ({
     intent: { kind, threadId: t.id },
-    reverse: { kind: reverse, threadId: t.id },
+    reverse: already(kind, t, deletedIds.has(t.id)) ? null : { kind: reverse, threadId: t.id },
   });
 
   return {
     threads: () => stream,
     thread: (id) => byId.get(id),
+    groups: () => groups,
+    tags: () => tags,
     messages: (threadId) => watch(threadId).messages,
     watchMessages(threadId, listener) {
       const w = watch(threadId);
@@ -304,6 +371,8 @@ export async function createStoreInbox(
     },
     close() {
       live.close();
+      groupsLive.close();
+      tagsLive.close();
       listeners.clear();
       for (const w of watched.values()) {
         w.live.close();

@@ -4,9 +4,8 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { BriefAction, ExternalPending, Settings } from "@monday/shared";
+import type { BriefAction, ExternalPending, Settings, Tag, Thread } from "@monday/shared";
 import { Btn, ColHead, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
-import { account, groups, NOW, sections, tagsOf, workspace } from "@monday/ui/fixtures";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -33,6 +32,7 @@ import { openExternal, saveDownload } from "../platform/open.ts";
 import type { SearchModule } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
 import { type Composer, fixtureComposer } from "./compose/composer.ts";
@@ -57,6 +57,7 @@ import {
   targets,
   toggleSelected,
 } from "./inbox/triage.ts";
+import { useClock } from "./inbox/useClock.ts";
 import { reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
 import { Palette, type PaletteCommand } from "./Palette.tsx";
 
@@ -74,7 +75,11 @@ export interface InboxProps {
   syncing?: SyncProgress | null | undefined;
   /** Offline flips the agent bar's placeholder; the workspace dot is the App's. */
   online?: boolean | undefined;
-  /** The wall clock for relative times. Defaults to the fixtures' NOW. */
+  /**
+   * The wall clock for relative times, pinned by tests. Absent, the
+   * Workspace's clock (the design fixture's fixed one on the dev server) or
+   * the real one, refreshed every inbox.time_refresh_seconds.
+   */
   now?: Date | undefined;
   /** Opens this Thread in the reader on mount. Defaults to `?sel=` in the URL. */
   initialOpen?: string | null | undefined;
@@ -95,12 +100,17 @@ export interface InboxProps {
   onSearch?: ((query: string) => void) | undefined;
   /** Text the agent bar opens with, such as a palette handoff. */
   initialAgentText?: string | undefined;
-  /** The composer's Session (slice 14); inert without an Agent host. */
+  /** The composer's Session; inert without an Agent host. */
   agent?: AgentSession | undefined;
-  /** External calls parked on an approval (slice 19), for the chips. */
+  /** External calls parked on an approval, for the chips. */
   externalPending?: readonly ExternalPending[] | undefined;
-  /** The calendar seam (slice 18): the reader's invite bar and its overlap line. Absent, no bar. */
+  /** The calendar seam: the reader's invite bar and its overlap line. Absent, no bar. */
   calendar?: CalendarSource | undefined;
+  /**
+   * A Group lens (CONTEXT.md "Group"): only the Threads in this Group or
+   * Sub-group, under the Group's name. Absent, the whole Inbox.
+   */
+  group?: string | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -109,6 +119,12 @@ type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
 
 const defaultInbox = fixtureInbox();
 const defaultComposer = fixtureComposer();
+
+/** "needs-reply" as a heading when no strings.section.* Setting names it. */
+function sectionFallbackName(id: string): string {
+  const words = id.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 /** The Messages of the open Thread, from the reader seam, fetched on open. */
 function useThreadMessages(inbox: InboxData, threadId: string | null) {
@@ -147,23 +163,28 @@ export function Inbox({
   composer = defaultComposer,
   syncing = null,
   online = true,
-  now = NOW,
+  now: nowProp,
   initialOpen,
   initialSelection,
   timing,
   composeRequest = 0,
   initialCompose,
   search = null,
-  workspaceId = workspace.id,
+  workspaceId: workspaceIdProp,
   onNavigate,
   onSearch,
   initialAgentText,
   agent = NULL_SESSION,
   externalPending,
   calendar,
+  group,
 }: InboxProps) {
   const shell = useShell();
+  const ws = useWorkspace();
+  const workspaceId = workspaceIdProp ?? ws.id;
   const { settings } = shell;
+  const clock = useClock(settings["inbox.time_refresh_seconds"], nowProp ?? ws.now);
+  const now = nowProp ?? ws.now ?? clock;
   const stream = shell.layout.list === "stream";
   // Just mail (CONTEXT.md "AI level"): no agent bar, and `/` does nothing.
   const aiOff = settings["ai.level"] === "off";
@@ -173,18 +194,33 @@ export function Inbox({
 
   /* ------------------------------ Data ------------------------------ */
 
-  const threads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const allThreads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const groups = useSyncExternalStore(inbox.subscribe, inbox.groups, inbox.groups);
+  const tags = useSyncExternalStore(inbox.subscribe, inbox.tags, inbox.tags);
+  const lens = group ? groups.find((g) => g.id === group) : undefined;
+  const threads = useMemo(
+    () =>
+      lens ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id) : allThreads,
+    [allThreads, lens],
+  );
+  const tagsOf = useCallback(
+    (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
+    [tags],
+  );
   const collapseMs = timing?.collapse ?? (reducedMotion() ? 0 : settings["inbox.row_collapse_ms"]);
   const toastMs = timing?.toast ?? settings["inbox.undo_toast_ms"];
   const rows = useLeavingRows(threads, collapseMs);
 
+  // The Sections are the rules in Settings (ADR 0004): the order Setting says
+  // which show and in what order, a rule may hide its Section, and the heading
+  // is the strings.section.<id> Setting where one exists.
   const orderedSections = useMemo(() => {
-    const byId = new Map(sections.map((s) => [s.id, s]));
+    const rules = new Map(settings["sections.rules"].map((r) => [r.id, r]));
     return settings["sections.order"].flatMap((id) => {
-      const s = byId.get(id);
-      if (!s || s.hidden) return [];
+      if (rules.get(id)?.hidden) return [];
       const nameKey = `strings.section.${id}`;
-      const name = nameKey in settings ? String(settings[nameKey as keyof Settings]) : s.name;
+      const name =
+        nameKey in settings ? String(settings[nameKey as keyof Settings]) : sectionFallbackName(id);
       return [{ id, name, rows: rows.filter((r) => r.thread.section === id) }];
     });
   }, [rows, settings]);
@@ -249,7 +285,9 @@ export function Inbox({
 
   /* ------------------------------ Compose ------------------------------ */
 
-  const nowFn = useCallback(() => (now === NOW ? new Date() : now), [now]);
+  // Compose runs on the real clock unless a test pins one: a send counts down
+  // from the Server's run time, never from the fixtures' day.
+  const nowFn = useCallback(() => nowProp ?? new Date(), [nowProp]);
   const compose = useCompose({ composer, settings, now: nowFn });
   const cs = compose.strings;
   const openNew = compose.openNew;
@@ -397,7 +435,7 @@ export function Inbox({
         token,
       );
     },
-    [inbox, showToast, countText, t],
+    [inbox, groups, showToast, countText, t],
   );
 
   const undo = useCallback(async () => {
@@ -660,7 +698,7 @@ export function Inbox({
     setFocus(id);
     setReaderOpen(true);
   }
-  const runtime = runtimeLine(agent.runtimeInfo, s, account.address);
+  const runtime = runtimeLine(agent.runtimeInfo, s, ws.address);
   const agentStrings = useMemo(() => composerStrings(s), [s]);
   const chips = useMemo(
     () =>
@@ -672,6 +710,11 @@ export function Inbox({
       }),
     [s, agent.waiting, externalPending, threads],
   );
+  /** The same chips as lines in the palette's "Ask the agent" section. */
+  const paletteSuggestions = useMemo(
+    () => chips.map((c, i) => ({ key: `chip-${i}`, label: c.label })),
+    [chips],
+  );
   /** A chip that names Layout knobs applies them here; the sentence still goes to the Agent. */
   const applySuggestionLayout = (sg: Suggestion) => {
     if (!sg.layout) return;
@@ -679,7 +722,7 @@ export function Inbox({
     if (sg.layout.agent) void shell.set("layout.agent", sg.layout.agent);
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
-  const listTitle = t("strings.inbox.title");
+  const listTitle = lens?.name ?? t("strings.inbox.title");
   const headCount = selection.length
     ? fill(t("strings.inbox.selected"), { n: selection.length })
     : threads.length;
@@ -1000,7 +1043,9 @@ export function Inbox({
           keymap={keymap}
           search={search}
           workspaceId={workspaceId}
-          recentThreads={threads.slice(0, 20)}
+          recentThreads={allThreads.slice(0, 20)}
+          groups={groups}
+          suggestions={paletteSuggestions}
           now={now}
           onCommand={runCommand}
           onAsk={handoff}

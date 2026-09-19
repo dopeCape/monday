@@ -3,7 +3,8 @@
 // DOM out. Mounted under a StaticShell over the fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { PartialSettings } from "@monday/shared";
+import type { PartialSettings, Thread } from "@monday/shared";
+import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -40,6 +41,8 @@ function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
     inbox: {
       threads: inbox.threads,
       thread: inbox.thread,
+      groups: inbox.groups,
+      tags: inbox.tags,
       subscribe: inbox.subscribe,
       messages: inbox.messages,
       watchMessages: inbox.watchMessages,
@@ -123,6 +126,62 @@ describe("Inbox rendering", () => {
       "Pending",
     ]);
     expect(rowIds()).toEqual(["e10", "e11", "e4", "e5"]);
+  });
+
+  test("a user-defined Section renders from its rule; a hidden rule hides its Section", async () => {
+    const custom = fixtureInbox([
+      { ...fixtureThreads[0], id: "p1", section: "projects" } as Thread,
+      { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
+    ]);
+    await mount(
+      { inbox: custom },
+      {
+        "sections.order": ["projects", "waiting"],
+        "sections.rules": [
+          { id: "projects", when: { groups: ["hiring"] } },
+          { id: "waiting", when: { lastFrom: "others" }, hidden: true },
+        ],
+      },
+    );
+    // No strings.section.projects Setting: the id reads as a heading.
+    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual(["Projects"]);
+    expect(rowIds()).toEqual(["p1"]);
+  });
+
+  test("a Group lens shows only that Group's Threads under the Group's name", async () => {
+    await mount({ group: "hiring" });
+    expect(document.querySelector(".col-head h2")?.textContent).toBe("Hiring");
+    expect(rowIds()).toEqual(["e1", "e3"]);
+    expect(document.querySelector(".col-head .count")?.textContent).toBe("2");
+  });
+
+  test("row labels and the move picker come from the seam's Tags and Groups, not the fixtures", async () => {
+    const custom = fixtureInbox([{ ...fixtureThreads[0], tags: ["t-mine"] } as Thread], {
+      tags: [{ id: "t-mine", workspaceId: "ws", name: "Mine" }],
+      groups: [
+        {
+          id: "g-only",
+          workspaceId: "ws",
+          parentId: null,
+          name: "Only group",
+          rule: { sentence: "", predicate: {}, prompt: "" },
+          threshold: null,
+          briefPolicy: null,
+        },
+      ],
+    });
+    await mount({ inbox: custom });
+    expect(document.querySelector(".row .lbl")?.textContent).toBe("Mine");
+    await press("m");
+    expect(
+      [...document.querySelectorAll(".pop-item span:first-child")].map((s) => s.textContent),
+    ).toEqual(["Only group", "No group"]);
+  });
+
+  test("without a pinned clock the rows read the Workspace's clock, the design fixture's here", async () => {
+    await mount({ now: undefined });
+    // e1 was written at 09:41 on the fixtures' day, which the fixture Workspace's clock makes today.
+    expect(document.querySelector(".row .time")?.textContent).toBe("09:41");
   });
 
   test("an empty Inbox shows one line from Settings and nothing else", async () => {

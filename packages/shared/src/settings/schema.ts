@@ -593,6 +593,16 @@ export const settingsSchema = {
     label: "Undo toast",
     help: "Milliseconds an undo toast stays before it fades.",
   }),
+  "inbox.time_refresh_seconds": setting({
+    type: z.int().min(0).max(3600),
+    default: 30,
+    scope: "device",
+    section: "appearance",
+    group: "Inbox",
+    advanced: true,
+    label: "Time refresh",
+    help: "Seconds between refreshes of the relative times in the list, such as 2h or Mon. Zero keeps them as they were when the list rendered. Per device.",
+  }),
 
   /* The Settings page itself (docs/spec/settings.md) */
   "settings.search_limit": setting({
