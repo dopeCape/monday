@@ -16,7 +16,7 @@ import {
   type SettingSection,
   settingsSchema,
 } from "@monday/shared";
-import { Btn, Kbd, Toast } from "@monday/ui";
+import { Btn, EmptyState, Kbd, Toast } from "@monday/ui";
 import {
   AtIcon,
   CloudIcon,
@@ -602,12 +602,12 @@ function SearchResults({
         <span className="hint">{s["strings.settings.search.hint"]}</span>
       </div>
       {hits.length === 0 ? (
-        <div className="settings-empty" data-panel="search-empty">
-          <b className="empty-title">
-            {fill(s["strings.settings.search.empty"], { query: query.trim() })}
-          </b>
-          <span className="empty-sub">{s["strings.settings.search.suggest"]}</span>
-        </div>
+        <EmptyState
+          className="settings-empty"
+          title={fill(s["strings.settings.search.empty"], { query: query.trim() })}
+          body={s["strings.settings.search.suggest"]}
+          attrs={{ "data-panel": "search-empty" }}
+        />
       ) : null}
       <HighlightProvider words={words}>
         {grouped.map((g) => (

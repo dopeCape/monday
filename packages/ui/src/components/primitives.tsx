@@ -330,6 +330,74 @@ export function SectionLabel({ children, className }: SectionLabelProps) {
   return <div className={cx("sec", className)}>{children}</div>;
 }
 
+/* ------------------------------ Note and EmptyState ------------------------------ */
+
+export type NoteKind = "info" | "ok" | "warn" | "error";
+
+export interface NoteProps {
+  kind?: NoteKind | undefined;
+  /** An optional Phosphor icon before the text. */
+  icon?: IconComponent | undefined;
+  className?: string | undefined;
+  /** data-* attributes for tests. */
+  attrs?: Record<string, string | undefined> | undefined;
+  children?: ReactNode | undefined;
+}
+
+/**
+ * One line of secondary text with a state: a plain note, a success, a
+ * warning (a Config file line that did not parse) or an error (a request
+ * that failed). Color only for state, no icon unless given.
+ */
+export function Note({ kind = "info", icon, className, attrs, children }: NoteProps) {
+  return (
+    <div
+      className={cx(
+        "note",
+        kind === "ok" && "ok",
+        kind === "warn" && "warn",
+        kind === "error" && "err",
+        className,
+      )}
+      role={kind === "error" || kind === "warn" ? "alert" : undefined}
+      {...(attrs ?? {})}
+    >
+      {icon ? <Icon icon={icon} /> : null}
+      <span>{children}</span>
+    </div>
+  );
+}
+
+export interface EmptyStateProps {
+  title: ReactNode;
+  /** The line under the title: what to do next, never an apology. */
+  body?: ReactNode | undefined;
+  /** An optional Phosphor icon above the title. */
+  icon?: IconComponent | undefined;
+  /** One action, such as a Compose or Ask button. */
+  action?: ReactNode | undefined;
+  /** The page's own empty (left-aligned, under the header) rather than a centered one. */
+  page?: boolean | undefined;
+  className?: string | undefined;
+  attrs?: Record<string, string | undefined> | undefined;
+}
+
+/** The shared empty state: a short title, one line of guidance, at most one action. */
+export function EmptyState({ title, body, icon, action, page, className, attrs }: EmptyStateProps) {
+  return (
+    <div className={cx("empty", page && "page-empty", className)} {...(attrs ?? {})}>
+      {icon ? (
+        <span className="ico">
+          <Icon icon={icon} />
+        </span>
+      ) : null}
+      <h3>{title}</h3>
+      {body ? <p>{body}</p> : null}
+      {action ? <div className="empty-action">{action}</div> : null}
+    </div>
+  );
+}
+
 /* ------------------------------ Vr ------------------------------ */
 
 /** A hairline divider between toolbar groups. */

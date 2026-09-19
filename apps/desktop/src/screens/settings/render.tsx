@@ -568,7 +568,10 @@ export function Pinned({ k, children }: { k: SettingKey; children: ReactNode }) 
   return (
     <span className="pinned" title={title}>
       <Tag>{shell.settings["strings.settings.pinned"]}</Tag>
-      <span className="pinned-control">{children}</span>
+      {/* inert keeps keyboard focus out too; the Shell would refuse the write anyway (ADR 0001) */}
+      <span className="pinned-control" inert>
+        {children}
+      </span>
     </span>
   );
 }

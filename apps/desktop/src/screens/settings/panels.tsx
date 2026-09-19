@@ -21,7 +21,7 @@ import {
   type MeterMonth,
   type VoiceProfile,
 } from "@monday/shared";
-import { Btn, formatWhen, Input, Seg, Switch, Tag } from "@monday/ui";
+import { Btn, formatWhen, Input, Note, Seg, Switch, Tag } from "@monday/ui";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import type { AccountView, PendingPairings, StorageInfo } from "../../platform/api.ts";
@@ -333,17 +333,21 @@ export function ConfigPanel(_: PanelProps) {
       }
     >
       {shell.config.error ? (
-        <div className="note warn">
+        <Note kind="error" attrs={{ "data-config-error": "" }}>
           {fill(s["strings.settings.config.error"], {
             line: shell.config.error.line ?? "?",
             message: shell.config.error.message,
           })}
-        </div>
+        </Note>
       ) : null}
       {shell.config.warnings.map((w) => (
-        <div className="note warn" key={`${w.line}-${w.key}`}>
+        <Note
+          kind="warn"
+          key={`${w.line}-${w.key}`}
+          attrs={{ "data-config-warning": String(w.line ?? "") }}
+        >
           {fill(s["strings.settings.config.warning"], { line: w.line ?? "?", message: w.message })}
-        </div>
+        </Note>
       ))}
       <div className="code">
         {shell.config.file?.exists ? shell.config.file.text : s["strings.settings.config.none"]}
