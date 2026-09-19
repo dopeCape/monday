@@ -61,6 +61,8 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   list_workflow_runs: "read",
   approve_workflow_step: "leaves_mailbox",
   run_workflow: "reversible",
+  // External MCP (slice 19): a key the Agent makes when asked; revoking it is the undo.
+  create_external_key: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -110,12 +112,17 @@ export type UndoRecord =
       kind: "workflow";
       workflowId: Id;
       previous: { version: number; enabled: boolean } | null;
-    };
+    }
+  /** An external key the Agent created (slice 19): Undo revokes it. */
+  | { kind: "external_key"; credentialId: Id };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {
   workspaceId: Id;
-  actor: "agent" | "user" | "automation";
+  /** "external" is a call through the external MCP server (docs/spec/external-mcp.md). */
+  actor: "agent" | "user" | "automation" | "external";
+  /** The credential's name when the actor is external: the caller the card names. */
+  actorName?: string | null;
   callId: string | null;
   input: Record<string, unknown> | null;
   preview: ToolPreview | null;
@@ -352,4 +359,74 @@ export function withHandover(text: string, transcript: readonly AgentEvent[]): s
   const context = transcriptAsContext(transcript);
   if (!context) return text;
   return `The conversation so far, from another runtime. Tool calls listed here already happened; do not repeat them.\n\n${context}\n\nThe user continues:\n${text}`;
+}
+
+/* ------------------------------ External MCP (slice 19) ------------------------------ */
+
+/** What an external credential may reach: read-only tools, or every tool with its approvals. */
+export type ExternalScope = "read" | "act";
+
+/**
+ * A credential of the external MCP server (docs/spec/external-mcp.md): a Key
+ * made in Settings or by the Agent, or an OAuth token the owner consented
+ * to. Separate from Device tokens (ADR 0006). The secret is never listed.
+ */
+export interface ExternalCredential {
+  id: Id;
+  kind: "key" | "oauth";
+  name: string;
+  scope: ExternalScope;
+  /** The Workspaces it may reach; null means all of them. */
+  workspaceIds: Id[] | null;
+  createdAt: IsoDate;
+  expiresAt: IsoDate;
+  lastUsedAt: IsoDate | null;
+  revokedAt: IsoDate | null;
+  /** The OAuth client this credential belongs to, for the interactive kind. */
+  clientId: string | null;
+  /** The key's visible prefix, so the list and a leaked key can be matched. */
+  prefix: string | null;
+}
+
+/** What the owner decides when a new key is made. */
+export interface ExternalKeyInput {
+  name: string;
+  scope: ExternalScope;
+  workspaceIds: Id[] | null;
+  /** Days until it expires; the Setting external.key_expiry_days when absent. Never "never". */
+  expiresInDays?: number | undefined;
+}
+
+/** A key just made: the row and the secret, shown once. */
+export interface ExternalKeyCreated {
+  credential: ExternalCredential;
+  secret: string;
+}
+
+/** An external call parked on an approval, as the caller polls it and the owner's client lists it. */
+export interface ExternalPending {
+  activityId: Id;
+  workspaceId: Id;
+  credentialId: Id;
+  credentialName: string;
+  tool: string;
+  inputSummary: string;
+  status: "waiting" | "running" | "done" | "failed";
+  /** The result text once the call finished. */
+  text: string | null;
+  /** The Session the owner's card lives in. */
+  sessionId: Id | null;
+  at: IsoDate;
+}
+
+/** An OAuth consent waiting for the owner (docs/spec/external-mcp.md, Interactive). */
+export interface ExternalConsent {
+  id: Id;
+  clientId: string;
+  clientName: string;
+  scope: ExternalScope;
+  workspaceIds: Id[] | null;
+  /** The pairing code shown on the consent page, typed in a monday client to approve. */
+  code: string;
+  expiresAt: IsoDate;
 }

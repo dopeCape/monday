@@ -15,6 +15,7 @@ import type {
   DraftAttachment,
   DraftKind,
   DraftStatus,
+  ExternalScope,
   FieldWrites,
   HostedProvider,
   Person,
@@ -500,8 +501,12 @@ export const changes = pgTable(
   (t) => [index("changes_workspace_seq_idx").on(t.workspaceId, t.seq)],
 );
 
-/** Who made an Activity row: the Agent through a tool, the user, or automation (a replayed intent). */
-export type ActivityActor = Actor | "agent";
+/**
+ * Who made an Activity row: the Agent through a tool, the user, automation (a
+ * replayed intent), or an external MCP caller (slice 19), whose credential
+ * name sits in actor_name.
+ */
+export type ActivityActor = Actor | "agent" | "external";
 
 /**
  * The Activity log (ADR 0002): one row per Tool call, with the tier, the
@@ -534,6 +539,8 @@ export const activity = pgTable(
     undoneAt: timestamp("undone_at", { withTimezone: true, mode: "date" }),
     /** The Workflow Run a Step ran under (slice 16); the ledger key beside call_id for Runs. */
     runId: text("run_id"),
+    /** The external credential's name when the actor is external (slice 19). */
+    actorName: text("actor_name"),
   },
   (t) => [
     index("activity_workspace_at_idx").on(t.workspaceId, t.at),
@@ -925,3 +932,78 @@ export const workflowRunSteps = pgTable(
   },
   (t) => [primaryKey({ columns: [t.runId, t.index] })],
 );
+
+/* ------------------------------ External MCP (docs/spec/external-mcp.md, slice 19) ------------------------------ */
+
+/**
+ * A credential of the external MCP server: a Key from Settings or the Agent,
+ * or the token an OAuth client received after consent. Never a Device token
+ * (ADR 0006). Only the SHA-256 of the secret is kept; a key's short prefix
+ * is stored so the list and a leaked key can be matched.
+ */
+export const externalCredentials = pgTable(
+  "external_credentials",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").$type<"key" | "oauth">().notNull(),
+    name: text("name").notNull(),
+    scope: text("scope").$type<ExternalScope>().notNull(),
+    /** Null means every Workspace. */
+    workspaceIds: jsonb("workspace_ids").$type<string[] | null>(),
+    secretHash: text("secret_hash").notNull().unique(),
+    prefix: text("prefix"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true, mode: "date" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "date" }),
+    /** The registered OAuth client, for the interactive kind. */
+    clientId: text("client_id"),
+  },
+  (t) => [index("external_credentials_client_idx").on(t.clientId)],
+);
+
+/** An OAuth client that registered dynamically (RFC 7591). Public clients: PKCE, no secret. */
+export const oauthClients = pgTable("oauth_clients", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  redirectUris: jsonb("redirect_uris").$type<string[]>().notNull(),
+  /** The registration document as received, for the client to read back. */
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+/**
+ * An authorization in flight: created when the consent page opens, approved
+ * from a monday client or by pairing code, exchanged once at /oauth/token
+ * with the PKCE verifier. The code itself is only ever stored hashed.
+ */
+export const oauthCodes = pgTable("oauth_codes", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id")
+    .notNull()
+    .references(() => oauthClients.id, { onDelete: "cascade" }),
+  /** The short code the consent page shows for approval from a client. */
+  pairingCode: text("pairing_code").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  scope: text("scope").$type<ExternalScope>().notNull(),
+  workspaceIds: jsonb("workspace_ids").$type<string[] | null>(),
+  state: text("state"),
+  codeChallenge: text("code_challenge").notNull(),
+  resource: text("resource"),
+  /** SHA-256 of the authorization code, set once the owner approved. */
+  codeHash: text("code_hash").unique(),
+  approvedAt: timestamp("approved_at", { withTimezone: true, mode: "date" }),
+  usedAt: timestamp("used_at", { withTimezone: true, mode: "date" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+/** A refresh token: rotates on use, and dies with its credential. */
+export const oauthRefreshTokens = pgTable("oauth_refresh_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  credentialId: text("credential_id")
+    .notNull()
+    .references(() => externalCredentials.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  usedAt: timestamp("used_at", { withTimezone: true, mode: "date" }),
+});
