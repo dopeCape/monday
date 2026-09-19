@@ -450,8 +450,8 @@ describe("settings and workflows", () => {
         <Switch on />
       </SettingsField>,
     );
-    expect(html).toContain('class="field"');
-    expect(html).toContain("<b>Ask before sending</b>");
+    expect(html).toContain('class="scard"');
+    expect(html).toContain('<b class="scard-title">Ask before sending</b>');
     expect(html).toContain("switch on");
   });
 
