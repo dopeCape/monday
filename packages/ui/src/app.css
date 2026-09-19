@@ -4552,12 +4552,7 @@ button.prov {
     --t-slow: 0ms;
   }
 }
-:root[data-transitions="off"] *,
-:root[data-transitions="off"] *::before,
-:root[data-transitions="off"] *::after {
-  animation-duration: 0ms !important;
-  transition-duration: 0ms !important;
-}
+/* Off zeroes the tokens (tokens.css); motion.test.ts proves nothing reads a literal duration. */
 /* the CalDAV link form under Settings, Accounts, Meetings (slice 18) */
 .caldav-account {
   margin-top: 10px;
