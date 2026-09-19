@@ -280,6 +280,8 @@ describe("the brief Job's decisions over Postgres", () => {
     jobs = createJobs(db.handle.db, { now: () => clock });
     chat = createFakeChat((call) => (call.system.includes("one word") ? "always" : BRIEF));
     intelligence = createIntelligence({
+      // These slices ran before the AI level existed; they assume the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore: store,
       chat: chat.chat,

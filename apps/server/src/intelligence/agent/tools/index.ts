@@ -436,5 +436,16 @@ export async function replayUndo(
         ? "Undone: the key was revoked."
         : "Nothing to undo: the key was already revoked.";
     }
+    case "groups": {
+      const onboarding = extensions?.onboarding;
+      const { applied } = await host.applyIntents(undo.intents, { actor: "user" });
+      if (!onboarding) {
+        return `Undone: ${applied} of ${plural(undo.intents.length, "thread")} put back; the Groups stay because this host cannot delete them.`;
+      }
+      for (const id of undo.groupIds) await onboarding.deleteGroup(id);
+      return `Undone: ${plural(undo.groupIds.length, "Group")} removed and ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
+    }
   }
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;

@@ -98,6 +98,8 @@ export interface PaletteInput {
   limit?: number | undefined;
   /** Hits shown inline while browsing (search mode shows every hit). */
   inlineHits?: number | undefined;
+  /** False at AI level off: no Ask monday section and no suggestion lines (CONTEXT.md "AI level"). */
+  agent?: boolean | undefined;
   now?: Date | undefined;
 }
 
@@ -166,8 +168,9 @@ export function buildPalette(input: PaletteInput): PaletteModel {
     return { mode: "search", query, sections, flat };
   }
 
+  const agent = input.agent ?? true;
   if (text === "") {
-    const ask = input.suggestions.slice(0, featured).map<PaletteItem>((g) => ({
+    const ask = (agent ? input.suggestions : []).slice(0, featured).map<PaletteItem>((g) => ({
       key: `ask:${g.key}`,
       label: g.label,
       ai: true,
@@ -281,7 +284,14 @@ export function buildPalette(input: PaletteInput): PaletteModel {
       ? Number.NEGATIVE_INFINITY
       : strength(hits.length ? hits : [searchItem]),
   });
-  sections.push({ key: "ask", label: s.ask, items: [askItem], strength: Number.NEGATIVE_INFINITY });
+  if (agent) {
+    sections.push({
+      key: "ask",
+      label: s.ask,
+      items: [askItem],
+      strength: Number.NEGATIVE_INFINITY,
+    });
+  }
   sections.sort((a, b) => b.strength - a.strength);
   return { mode: "browse", query, sections, flat: sections.flatMap((sec) => sec.items) };
 }

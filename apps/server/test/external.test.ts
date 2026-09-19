@@ -247,6 +247,8 @@ describe("the external MCP server", () => {
         "list_workflows",
         "dry_run_workflow",
         "list_workflow_runs",
+        "onboarding_context",
+        "propose_workflows",
       ].sort(),
     );
     expect(listed.every((t) => t._meta?.tier === "read")).toBe(true);

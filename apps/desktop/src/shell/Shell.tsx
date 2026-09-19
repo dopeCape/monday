@@ -127,6 +127,9 @@ export function Shell({ children }: { children: ReactNode }) {
     void platform().then(async (p) => {
       // Only a Tauri host can spawn a Local runtime's CLI; the browser dev server cannot.
       if (p.isTauri) setSpawn(() => p.spawn);
+      // The browser dev server is the design fixture, whose world has the assistant
+      // everywhere: its Workspace's saved Settings say the full AI level (slice 20).
+      if (!p.isTauri) setStored((s) => ({ "ai.level": "automate", ...s }));
       const first = await p.readConfig();
       setConfig((last) => parseFile(first, last));
       dispose.push(p.onConfigChanged((f) => setConfig((last) => parseFile(f, last))));

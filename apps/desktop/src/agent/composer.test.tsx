@@ -105,7 +105,7 @@ async function mount(client: FakeAgentClient, runtime?: Runtime) {
   const r = root;
   await act(async () =>
     r.render(
-      <StaticShell>
+      <StaticShell settings={{ "ai.level": "automate" }}>
         <Harness client={client} runtime={runtime} />
       </StaticShell>,
     ),
@@ -396,7 +396,7 @@ describe("the composer in bottom-bar mode", () => {
     // The Settings now ask for a Hosted provider: the same Session moves, with the line.
     await act(async () => {
       root?.render(
-        <StaticShell>
+        <StaticShell settings={{ "ai.level": "automate" }}>
           <Harness
             client={client}
             runtime={{ kind: "hosted", provider: "anthropic", model: "claude-sonnet-5" }}

@@ -9,6 +9,7 @@
 
 import { z } from "zod";
 import type {
+  AiLevel,
   BriefPolicy,
   BriefPolicyMode,
   Density,
@@ -138,6 +139,17 @@ const briefPromptDefault = [
 ].join(" ");
 
 const runtimeMode = z.enum(["local", "hosted"]);
+const aiLevel = z.enum(["off", "assist", "automate"]) satisfies z.ZodType<AiLevel>;
+export const AI_LEVELS = aiLevel.options;
+/** Where one Account stands with onboarding: offered once, then completed or skipped. */
+const onboardingState = z.record(
+  z.string().min(1),
+  z.object({
+    status: z.enum(["offered", "completed", "skipped"]),
+    at: z.string(),
+  }),
+);
+export type OnboardingState = z.output<typeof onboardingState>;
 const localCli = z.enum(["claude-code", "codex", "opencode"]);
 const hostedProvider = z.enum([
   "anthropic",
@@ -1141,6 +1153,16 @@ export const settingsSchema = {
   }),
 
   /* AI and agent */
+  "ai.level": setting({
+    type: aiLevel,
+    default: "off",
+    scope: "global",
+    section: "ai",
+    group: "Level",
+    control: "ai-level",
+    label: "AI level",
+    help: "How much AI monday does. Just mail: no agent bar, Briefs, routing, Workflows or model calls. Mail with an assistant: the agent bar and Briefs on open, nothing runs unasked. Mail that sorts and acts for me: routing into Groups, background Briefs and Workflows too. Moving down disables, never deletes.",
+  }),
   "ai.mode": setting({
     type: runtimeMode,
     default: "local",
@@ -1345,6 +1367,24 @@ export const settingsSchema = {
     label: "Composer system prompt",
     help: "The instructions every composer Session starts with. The tool list and the Workspace address are appended.",
   }),
+  "agent.onboarding_prompt": setting({
+    type: z.string().max(20_000),
+    default: [
+      "This Session is onboarding (docs/spec/onboarding.md). Its only job is to gather context and seed good defaults; skipping loses nothing. The user's AI level is {level}.",
+      "Ask at most {questions} questions, one per turn, each answerable in one sentence or a chip, in this order: who the user is and what they do; what mail matters most; which tools they use (Slack, Notion, Drive, Discord); whether monday may learn their voice from sent mail (off unless they say yes); whether monday may read the last {days} days of mail to propose Groups (off unless they say yes). The user may answer Skip to any question; move on without comment. Never re-ask a skipped question.",
+      "Start by calling onboarding_context once, silently, to learn the top senders, the Thread count and what is already set up. Do not describe it; ask the first question.",
+      "After the questions, at level automate: call propose_groups with three to five Groups drawn from the answers and the top senders, each with a plain-language sentence and a Predicate (senders or domains); the tool shows the list with the count of Threads that would move and asks for approval; nothing moves until the user approves. Then call propose_workflows with the tools the user named; it lists at most {workflows} catalog Workflows with their Dry run; then adopt_workflow for the one the user picks, one at a time, which asks before enabling. At level assist, skip Groups and Workflows entirely.",
+      "If the user said they get a lot of mail, or the Thread count is at least {focus}, offer a Focus view with propose_views.",
+      "End with the keymap: call set_keymap with the user's answer to Vim, Gmail or Natural (Vim when they do not care), then one line saying onboarding is done and that Set me up in the composer runs it again.",
+      "Never ask for a provider key or a runtime here. Keep every message to one or two short sentences.",
+    ].join("\n"),
+    scope: "global",
+    section: "ai",
+    group: "Sessions",
+    advanced: true,
+    label: "Onboarding prompt",
+    help: "Appended to the system prompt for the onboarding conversation. {level}, {questions}, {days}, {workflows} and {focus} are filled from the Settings.",
+  }),
   "agent.suggestions.evergreen": setting({
     type: z.array(z.string().min(1)).max(8),
     default: ["Summarize what I missed since yesterday", "Archive newsletters older than a week"],
@@ -1542,6 +1582,68 @@ export const settingsSchema = {
     control: "mcp-servers",
     label: "MCP servers",
     help: "External MCP servers by command or URL, with their auth and which of their tools become Workflow steps and Agent tools.",
+  }),
+
+  /* Onboarding (docs/spec/onboarding.md) */
+  "onboarding.state": setting({
+    type: onboardingState,
+    default: {},
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    label: "Onboarding",
+    help: "Per Account: whether onboarding was offered, completed or skipped. Each new Account gets its own offer; nothing re-offers unasked.",
+    hidden: "Kept by the onboarding screen; Set me up in the composer runs it again.",
+  }),
+  "onboarding.questions_max": setting({
+    type: z.int().min(1).max(10),
+    default: 5,
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    advanced: true,
+    label: "Onboarding questions",
+    help: "The most questions the onboarding conversation asks, each answerable in one sentence or a chip.",
+  }),
+  "onboarding.sender_chips": setting({
+    type: z.int().min(0).max(12),
+    default: 6,
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    advanced: true,
+    label: "Sender chips",
+    help: "How many of the top senders already synced become chips for the what-matters question.",
+  }),
+  "onboarding.read_days": setting({
+    type: z.int().min(1).max(365),
+    default: 30,
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    advanced: true,
+    label: "Mail the Agent may read",
+    help: "With the explicit yes, the days of mail headers (and the top senders' bodies) the Agent reads to propose Groups. Without it, only the sender list.",
+  }),
+  "onboarding.workflow_proposals_max": setting({
+    type: z.int().min(0).max(5),
+    default: 2,
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    advanced: true,
+    label: "Workflow proposals",
+    help: "The most catalog Workflows onboarding proposes, matched to the tools chosen.",
+  }),
+  "onboarding.focus_view_threads": setting({
+    type: z.int().min(0),
+    default: 200,
+    scope: "global",
+    section: "accounts",
+    group: "Accounts",
+    advanced: true,
+    label: "Lots of mail",
+    help: "A Workspace with at least this many Threads counts as lots of mail, and onboarding offers a Focus view.",
   }),
 
   /* Keyboard */
@@ -2805,6 +2907,114 @@ export const settingsSchema = {
   "strings.action.agent.focus": str("shortcuts", "Action: talk to the agent", "Ask monday"),
   "strings.action.palette.open": str("shortcuts", "Action: palette", "Command palette"),
   "strings.action.view": str("shortcuts", "Action: switch to a View", "Switch to view {n}"),
+  "strings.ai.level.off": str("ai", "AI level card: off", "Just mail"),
+  "strings.ai.level.off_sub": str(
+    "ai",
+    "AI level card: off, body",
+    "No AI at all. A fast mail client with Groups you make by hand, search, keymaps and the calendar. No provider key asked for.",
+  ),
+  "strings.ai.level.assist": str("ai", "AI level card: assist", "Mail with an assistant"),
+  "strings.ai.level.assist_sub": str(
+    "ai",
+    "AI level card: assist, body",
+    "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking.",
+  ),
+  "strings.ai.level.automate": str(
+    "ai",
+    "AI level card: automate",
+    "Mail that sorts and acts for me",
+  ),
+  "strings.ai.level.automate_sub": str(
+    "ai",
+    "AI level card: automate, body",
+    "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.",
+  ),
+  "strings.ai.level.change_note": str(
+    "ai",
+    "AI level note",
+    "Yours to change at any time. Moving down disables, never deletes; moving up brings everything back.",
+  ),
+  "strings.ai.level.runtime_title": str("ai", "Runtime step title", "One thing first"),
+  "strings.ai.level.runtime_intro": str(
+    "ai",
+    "Runtime step intro",
+    "The assistant needs somewhere to run: a command-line agent already on this machine, or a provider key. Pick one and you are set.",
+  ),
+  "strings.ai.level.runtime_continue": str("ai", "Runtime step continue", "Continue"),
+  "strings.ai.level.runtime_back": str("ai", "Runtime step back", "Back"),
+  "strings.ai.level.runtime_missing": str(
+    "ai",
+    "Runtime step: nothing configured yet",
+    "No command-line agent found and no key added yet.",
+  ),
+  "strings.ai.off": str(
+    "ai",
+    "Model call refused at level off",
+    "AI is off. Pick Mail with an assistant or Mail that sorts and acts for me under Settings, AI and agent.",
+  ),
+  "strings.onboarding.title": str("accounts", "Onboarding title", "What do you want from monday?"),
+  "strings.onboarding.intro": str(
+    "accounts",
+    "Onboarding intro",
+    "Your mail is syncing. Pick how much monday should do; the choice is yours and you can change it any time.",
+  ),
+  "strings.onboarding.set_me_up": str("accounts", "Onboarding rerun", "Set me up"),
+  "strings.onboarding.continue": str("accounts", "Onboarding continue", "Continue"),
+  "strings.onboarding.skip": str("accounts", "Onboarding skip", "Skip"),
+  "strings.onboarding.skip_rest": str("accounts", "Onboarding skip the rest", "Skip the rest"),
+  "strings.onboarding.done": str("accounts", "Onboarding done", "Done"),
+  "strings.onboarding.keymap_title": str(
+    "accounts",
+    "Keymap question",
+    "How do you like your keys?",
+  ),
+  "strings.onboarding.keymap_intro": str(
+    "accounts",
+    "Keymap question body",
+    "Every binding can be changed later under Settings, Shortcuts.",
+  ),
+  "strings.onboarding.keymap.vim": str("accounts", "Keymap card: Vim", "Vim"),
+  "strings.onboarding.keymap.vim_sub": str(
+    "accounts",
+    "Keymap card: Vim, body",
+    "J and K move, E archives, / talks to the agent.",
+  ),
+  "strings.onboarding.keymap.gmail": str("accounts", "Keymap card: Gmail", "Gmail"),
+  "strings.onboarding.keymap.gmail_sub": str(
+    "accounts",
+    "Keymap card: Gmail, body",
+    "The keys you already know from Gmail.",
+  ),
+  "strings.onboarding.keymap.natural": str("accounts", "Keymap card: Natural", "Natural"),
+  "strings.onboarding.keymap.natural_sub": str(
+    "accounts",
+    "Keymap card: Natural, body",
+    "Arrows, Enter and Delete. Nothing to learn.",
+  ),
+  "strings.onboarding.chat_title": str("accounts", "Onboarding chat title", "A few questions"),
+  "strings.onboarding.chat_intro": str(
+    "accounts",
+    "Onboarding chat body",
+    "Five at most, each answerable in a sentence or a chip. Skip any of them; closing skips the rest.",
+  ),
+  "strings.onboarding.kickoff": str(
+    "accounts",
+    "The first turn of the onboarding conversation",
+    "Set me up.",
+  ),
+  "strings.onboarding.chip.yes": str("accounts", "Onboarding chip: yes", "Yes"),
+  "strings.onboarding.chip.no": str("accounts", "Onboarding chip: no", "No"),
+  "strings.onboarding.chip.lots": str(
+    "accounts",
+    "Onboarding chip: lots of mail",
+    "I get a lot of mail",
+  ),
+  "strings.onboarding.tools": str(
+    "accounts",
+    "Onboarding tool chips, comma separated",
+    "Slack, Notion, Drive, Discord",
+  ),
+  "strings.palette.nav.onboarding": str("accounts", "Palette: Set me up", "Set me up"),
   "strings.ai.no_shared_key": str(
     "ai",
     "Hosted call without a shared key",
@@ -3158,6 +3368,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
   appearance: ["Theme", "Palette", "Layout", "Views", "Type", "Config file", "Inbox", "Search"],
   routing: ["Groups", "Sections", "Briefs", "Thresholds", "Re-evaluation", "Reader"],
   ai: [
+    "Level",
     "Runtime",
     "Anthropic",
     "Gemini",
@@ -3218,4 +3429,68 @@ export function groupsInSection(section: SettingSection): SettingGroup[] {
     (entry.advanced ? group.advanced : group.keys).push(key);
   }
   return [...groups.values()];
+}
+
+/* ------------------------------ The AI level ------------------------------ */
+
+const LEVEL_RANK: Readonly<Record<AiLevel, number>> = { off: 0, assist: 1, automate: 2 };
+
+/** Whether `level` is at or above `wanted`. */
+export function levelAtLeast(level: AiLevel, wanted: AiLevel): boolean {
+  return LEVEL_RANK[level] >= LEVEL_RANK[wanted];
+}
+
+/** Routing keys that only mean something once the Server may route unasked. */
+const AUTOMATE_KEYS = new Set<string>([
+  "routing.on_arrival",
+  "routing.reevaluate",
+  "routing.lookback_days",
+  "routing.learn_from_corrections",
+  "routing.predicate_first",
+  "routing.classify.snippet_chars",
+  "routing.examples_in_prompt",
+  "routing.rerun.recent",
+  "routing.threshold.route",
+  "routing.threshold.ask",
+  "routing.threshold.tie_margin",
+  "routing.decisions.cap",
+  "routing.brief_policy.default",
+]);
+
+/**
+ * The lowest AI level at which a Setting is shown (docs/spec/settings.md: the
+ * rest of AI and agent is hidden under `off`, the automation parts under
+ * `assist`). Everything the Agent or a model touches needs `assist`; what
+ * runs unasked on the Server needs `automate`; the rest shows at `off`.
+ */
+export function settingLevel(key: SettingKey): AiLevel {
+  if (key === "ai.level") return "off";
+  if (key.startsWith("workflows.") || key.startsWith("briefs.") || AUTOMATE_KEYS.has(key)) {
+    return "automate";
+  }
+  if (
+    (settingsSchema[key] as SettingEntry).section === "ai" ||
+    key.startsWith("ai.") ||
+    key.startsWith("agent.") ||
+    key.startsWith("external.")
+  ) {
+    return "assist";
+  }
+  return "off";
+}
+
+/**
+ * The groups of a section with only the keys the AI level shows. A group
+ * whose keys all hide is dropped; a group that never had keys (a panel the
+ * screen fills) stays, and the screen decides its own level.
+ */
+export function groupsInSectionAt(section: SettingSection, level: AiLevel): SettingGroup[] {
+  const out: SettingGroup[] = [];
+  for (const g of groupsInSection(section)) {
+    const panel = g.keys.length === 0 && g.advanced.length === 0;
+    const keys = g.keys.filter((k) => levelAtLeast(level, settingLevel(k)));
+    const advanced = g.advanced.filter((k) => levelAtLeast(level, settingLevel(k)));
+    if (panel || keys.length > 0 || advanced.length > 0) out.push({ name: g.name, keys, advanced });
+  }
+  return out;
 }

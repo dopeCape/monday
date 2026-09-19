@@ -128,6 +128,13 @@ describe("the tool catalog", () => {
       run_workflow: "reversible",
       // Slice 19: an external key the Agent makes; revoking it is the undo.
       create_external_key: "reversible",
+      // Slice 20: onboarding.
+      onboarding_context: "read",
+      propose_groups: "reversible",
+      propose_workflows: "read",
+      adopt_workflow: "reversible",
+      propose_views: "reversible",
+      set_keymap: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

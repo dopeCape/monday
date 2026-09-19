@@ -10,11 +10,13 @@
 // is what the coverage test walks. There is no hand-built settings screen.
 
 import {
+  type AiLevel,
   type ControlShape,
   describeSetting,
-  groupsInSection,
+  groupsInSectionAt,
   indexLines,
   isSettingKey,
+  levelAtLeast,
   lineOf,
   type SettingEntry,
   type SettingGroup,
@@ -129,10 +131,34 @@ export function registerPanel(section: SettingSection, group: string, panel: Pan
 
 /* ------------------------------ The page ------------------------------ */
 
+/**
+ * The lowest AI level a panel shows at (docs/spec/settings.md: the rest of AI
+ * and agent hides under `off`). Panels not listed show at every level: the
+ * Accounts list, the Groups tree (hand-made Groups stay), the Server ones.
+ */
+const PANEL_LEVELS: Partial<Record<SettingSection, Record<string, AiLevel>>> = {
+  ai: { Meter: "assist", "Activity log": "assist", "External MCP": "assist" },
+  workflows: { "MCP servers": "automate" },
+};
+
+export function panelLevel(section: SettingSection, group: string): AiLevel {
+  return PANEL_LEVELS[section]?.[group] ?? "off";
+}
+
 export function SettingsPage({ section }: { section: SettingSection }) {
   const shell = useShell();
   const s = shell.settings;
-  const groups = useMemo(() => groupsInSection(section), [section]);
+  const level = s["ai.level"];
+  const groups = useMemo(
+    () =>
+      groupsInSectionAt(section, level).filter(
+        (g) =>
+          g.keys.length > 0 ||
+          g.advanced.length > 0 ||
+          levelAtLeast(level, panelLevel(section, g.name)),
+      ),
+    [section, level],
+  );
   return (
     <>
       <h1>{s[`strings.settings.section.${section}`]}</h1>
@@ -713,6 +739,8 @@ export function AskInput({
   const screen = useSettingsScreen();
   const s = useShell().settings;
   const [text, setText] = useState("");
+  // Just mail: there is no Agent to ask (CONTEXT.md "AI level").
+  if (s["ai.level"] === "off") return null;
   const send = () => {
     if (!text.trim()) return;
     screen.onAsk(fill(prompt, { text: text.trim() }));

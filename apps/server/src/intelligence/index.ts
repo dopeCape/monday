@@ -10,7 +10,7 @@
 // extension slot after both exist.
 
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
-import type { HostedState } from "@monday/shared";
+import type { AiLevel, HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
@@ -18,7 +18,7 @@ import { accounts, workspaces } from "../db/schema.ts";
 import { createDrafts, type Drafts } from "../drafts/index.ts";
 import type { Jobs } from "../jobs/index.ts";
 import type { Mailstore } from "../mailstore/index.ts";
-import { readGlobalSettings } from "../settings/read.ts";
+import { readGlobalSetting, readGlobalSettings } from "../settings/read.ts";
 import {
   createHttpIntegrations,
   createSdkMcpClients,
@@ -40,6 +40,7 @@ import {
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
+import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import {
@@ -76,6 +77,8 @@ export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
 export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
+export type { OnboardingSeam, TopSender } from "./onboarding.ts";
+export { createOnboarding } from "./onboarding.ts";
 export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
 export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
 export type {
@@ -106,7 +109,7 @@ export type {
   RunOptions,
   RunResult,
 } from "./runtime/index.ts";
-export { createHostedRuntime, NoProviderKeyError } from "./runtime/index.ts";
+export { AiOffError, createHostedRuntime, NoProviderKeyError } from "./runtime/index.ts";
 
 export interface IntelligenceOptions {
   db: Db;
@@ -129,6 +132,8 @@ export interface IntelligenceOptions {
   mcp?: McpClients;
   now?: () => Date;
   log?: (message: string) => void;
+  /** The AI level; defaults to the Setting ai.level. Tests may pin it. */
+  level?: () => Promise<AiLevel>;
 }
 
 export interface Intelligence {
@@ -143,6 +148,10 @@ export interface Intelligence {
   workflows: Workflows;
   /** The extension tools' seams; a module made after this one (external MCP, slice 19) fills its slot here. */
   extensions: ToolExtensions;
+  /** What the onboarding tools act through (slice 20). */
+  onboarding: OnboardingSeam;
+  /** The AI level in effect (CONTEXT.md), read from the Setting. */
+  level(): Promise<AiLevel>;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
@@ -150,6 +159,11 @@ export interface Intelligence {
 
 const AGENT_SETTING_KEYS = [
   "agent.system_prompt",
+  "agent.onboarding_prompt",
+  "onboarding.questions_max",
+  "onboarding.read_days",
+  "onboarding.workflow_proposals_max",
+  "onboarding.focus_view_threads",
   "agent.preview_above",
   "agent.always_ask",
   "agent.max_steps",
@@ -213,6 +227,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const log = options.log ?? (() => {});
   const keys = createProviderKeyStore(db, mailstore);
   const meter = createMeter(db, { now });
+  const level = options.level ?? (() => readGlobalSetting(db, "ai.level"));
   const hostedSettings = () => readGlobalSettings(db, HOSTED_SETTING_KEYS);
   const resolveKey: KeysResolver = options.keys ?? ((provider) => keys.load(provider));
   const runtime = createHostedRuntime({
@@ -222,6 +237,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     settings: hostedSettings,
     meter,
     now: () => now().getTime(),
+    level,
   });
   const policySettings = async (): Promise<BriefPolicySettings> => {
     const s = await readGlobalSettings(db, POLICY_SETTING_KEYS);
@@ -247,6 +263,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     policy,
     now,
     log,
+    level,
     settings: async (): Promise<BriefSettings> => {
       const s = await readGlobalSettings(db, BRIEF_SETTING_KEYS);
       return {
@@ -272,6 +289,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     mailstore,
     runtime,
     now,
+    level,
     ...(options.log ? { log: options.log } : {}),
     settings: async (): Promise<RoutingSettings> => {
       const s = await readGlobalSettings(db, ROUTING_SETTING_KEYS);
@@ -321,8 +339,16 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     now,
     settings: async () => {
       const s = await readGlobalSettings(db, AGENT_SETTING_KEYS);
+      const current = await level();
       return {
         systemPrompt: s["agent.system_prompt"],
+        level: current,
+        onboardingPrompt: s["agent.onboarding_prompt"]
+          .replaceAll("{level}", current)
+          .replaceAll("{questions}", String(s["onboarding.questions_max"]))
+          .replaceAll("{days}", String(s["onboarding.read_days"]))
+          .replaceAll("{workflows}", String(s["onboarding.workflow_proposals_max"]))
+          .replaceAll("{focus}", String(s["onboarding.focus_view_threads"])),
         previewAbove: s["agent.preview_above"],
         alwaysAsk: s["agent.always_ask"],
         maxSteps: s["agent.max_steps"],
@@ -349,6 +375,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     mcp,
     now,
     log,
+    level,
     settings: async (): Promise<WorkflowSettings> => {
       const s = await readGlobalSettings(db, WORKFLOW_SETTING_KEYS);
       return {
@@ -371,6 +398,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
   extensions.workflows = workflows;
+  const onboarding = createOnboarding({ db, routing, workflows, level });
+  extensions.onboarding = onboarding;
 
   return {
     runtime,
@@ -383,6 +412,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     activity,
     workflows,
     extensions,
+    onboarding,
+    level,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

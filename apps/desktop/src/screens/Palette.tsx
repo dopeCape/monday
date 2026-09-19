@@ -214,6 +214,8 @@ export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[
   out.push({ target: "routing", label: t("strings.palette.nav.routing"), icon: "group" });
   out.push({ target: "workflows", label: t("strings.palette.nav.workflows"), icon: "workflow" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
+  // Set me up: onboarding again, from the three choices (docs/spec/onboarding.md, "Later and again").
+  out.push({ target: "onboarding", label: t("strings.palette.nav.onboarding"), icon: "settings" });
   return out;
 }
 
@@ -256,7 +258,11 @@ export function Palette({
   const [active, setActive] = useState<string | null>(null);
   const seq = useRef(0);
 
-  const actions = useMemo(() => paletteActions(keymap, settings, mac), [keymap, settings, mac]);
+  const agent = settings["ai.level"] !== "off";
+  const actions = useMemo(
+    () => paletteActions(keymap, settings, mac).filter((a) => agent || a.action !== "agent.focus"),
+    [keymap, settings, mac, agent],
+  );
   const navigation = useMemo(() => paletteNavigation(settings, mac), [settings, mac]);
   const strings = useMemo<PaletteStrings>(
     () => ({
@@ -304,9 +310,10 @@ export function Palette({
         suggestions: agentSuggestions,
         hits,
         strings,
+        agent,
         ...(now ? { now } : {}),
       }),
-    [query, actions, navigation, recentThreads, hits, strings, now],
+    [query, actions, navigation, recentThreads, hits, strings, now, agent],
   );
 
   // The highlight follows the list: a key that left it lands on the first row.

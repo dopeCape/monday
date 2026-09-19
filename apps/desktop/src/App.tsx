@@ -1,5 +1,9 @@
 // Composes the shell from the layout knobs (ADR 0009): nav full, rail or hidden;
-// agent bottom, left or right; then the active screen.
+// agent bottom, left or right; then the active screen. The AI level
+// (CONTEXT.md) gates the agent here: at `off` no agent column or bar is
+// rendered, the layout falls back as if the agent knob were hidden (the
+// Setting keeps its value), and no Session is opened. Onboarding is offered
+// once per Account, after it is added, and again from "Set me up".
 
 import type { ExternalPending } from "@monday/shared";
 import { NavSidebar, Rail } from "@monday/ui";
@@ -25,15 +29,24 @@ import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
+import type { AccountView } from "./platform/api.ts";
+import { type DeviceProviderKeys, deviceProviderKeys } from "./platform/providerKeys.ts";
+import { platform } from "./platform/tauri.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
+import { Onboarding } from "./screens/Onboarding.tsx";
+import {
+  ONBOARDING_FIXTURE_SENDERS,
+  onboardingFixtureClient,
+} from "./screens/onboarding-fixture.ts";
 import { Routing } from "./screens/Routing.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Search } from "./screens/Search.tsx";
 import { Settings } from "./screens/Settings.tsx";
+import type { RuntimeDetection } from "./screens/settings/render.tsx";
 import { Workflows } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
@@ -62,6 +75,48 @@ export interface AppProps {
   now?: Date | undefined;
   /** The Workflows page's Server side; the Shell's client or the fixture by default, a fake in tests. */
   workflowsApi?: WorkflowsApi | undefined;
+  /**
+   * The Accounts of this Server, for the onboarding offer: each Account whose
+   * onboarding was never offered gets it once. Defaults to the Server's list
+   * once a Server is picked; tests pass a list, null offers nothing.
+   */
+  accounts?: { list(): Promise<{ accounts: AccountView[] }> } | null | undefined;
+  /** This Device's provider keys, for the runtime step; the platform keychain by default. */
+  keys?: DeviceProviderKeys | null | undefined;
+}
+
+/** Detection as the Settings screens and onboarding read it, from what the Device found. */
+function detectionOf(statuses: ReturnType<typeof useLocalRuntimes>): RuntimeDetection | null {
+  if (!statuses) return null;
+  return {
+    detect: async () =>
+      (Object.values(statuses) as Array<(typeof statuses)[keyof typeof statuses]>).map((r) => ({
+        cli: r.cli,
+        version: r.version,
+        path: r.command,
+        status: !r.installed ? "missing" : r.loggedIn === false ? "available" : "connected",
+      })),
+  };
+}
+
+/** The senders with the most Threads, most active first, never the owner. */
+function topSenders(
+  threads: readonly { participants: { name: string; email: string }[] }[],
+  me: string,
+  limit: number,
+): string[] {
+  const counts = new Map<string, { name: string; n: number }>();
+  for (const t of threads) {
+    const p = t.participants[0];
+    if (!p || p.email.toLowerCase() === me.toLowerCase()) continue;
+    const entry = counts.get(p.email) ?? { name: p.name || p.email, n: 0 };
+    entry.n += 1;
+    counts.set(p.email, entry);
+  }
+  return [...counts.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, limit)
+    .map((e) => e.name);
 }
 
 const defaultComposer = fixtureComposer();
@@ -78,9 +133,13 @@ export function App({
   agentClient,
   now: nowProp,
   workflowsApi,
+  accounts: accountsProp,
+  keys: keysProp,
 }: AppProps) {
   const shell = useShell();
   const now = nowProp ?? new Date();
+  // Just mail (CONTEXT.md "AI level"): no agent column, no bar, no Session.
+  const aiOff = shell.settings["ai.level"] === "off";
   const storeGroups = useSyncExternalStore(
     routing?.subscribe ?? noSubscribe,
     routing?.groups ?? noGroups,
@@ -138,8 +197,9 @@ export function App({
   );
   const pinned = shell.pinned;
   const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
-  const agent = useAgentSession({
-    client,
+  const detection = useMemo(() => detectionOf(runtimes), [runtimes]);
+  const agentSession = useAgentSession({
+    client: aiOff ? null : client,
     workspaceId: workspace.id,
     context: () => ({ pinned: [...pinned] }),
     newAfterHours: shell.settings["ai.session.new_after_hours"],
@@ -147,6 +207,33 @@ export function App({
     developerModeDefault: shell.settings["ai.developer_mode_default"],
     onSettingsChanged: () => void shell.refresh(),
   });
+  /** The Account being onboarded, and whether this is "Set me up" again. */
+  const [onboarding, setOnboarding] = useState<{
+    account: AccountView | null;
+    rerun: boolean;
+  } | null>(null);
+  const [found, setFound] = useState<AccountView[] | null>(null);
+  const foundRef = useRef(found);
+  foundRef.current = found;
+  const openOnboarding = useCallback((target: AccountView | null, rerun: boolean) => {
+    setOnboarding({ account: target ?? foundRef.current?.[0] ?? null, rerun });
+    setActive("onboarding");
+  }, []);
+  // "Set me up" typed into the composer runs onboarding again (docs/spec/onboarding.md).
+  const setMeUp = shell.settings["strings.onboarding.set_me_up"].trim().toLowerCase();
+  const agent = useMemo(
+    () => ({
+      ...agentSession,
+      send: (text: string) => {
+        if (text.trim().toLowerCase().replace(/[.!]$/, "") === setMeUp) {
+          openOnboarding(null, true);
+          return Promise.resolve();
+        }
+        return agentSession.send(text);
+      },
+    }),
+    [agentSession, setMeUp, openOnboarding],
+  );
   const runtime = runtimeLine(agent.runtimeInfo, shell.settings, account.address, runtimes);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
   // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
@@ -217,6 +304,62 @@ export function App({
       }),
     [shell.settings, agent.waiting, pausedRuns, externalPending, inbox],
   );
+  /* ------------------------------ Onboarding ------------------------------ */
+
+  const accountsSource =
+    accountsProp !== undefined ? accountsProp : shell.server ? shell.api.accounts : null;
+  useEffect(() => {
+    if (!accountsSource) return;
+    let live = true;
+    void Promise.all([accountsSource.list(), shell.refresh()])
+      .then(([r]) => {
+        if (live) setFound(r.accounts);
+      })
+      .catch(() => {
+        if (live) setFound([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [accountsSource, shell.refresh]);
+  // Each new Account gets its own offer, once: the offer is recorded before the screen shows.
+  const shellRef = useRef(shell);
+  shellRef.current = shell;
+  const offered = useRef(new Set<string>());
+  useEffect(() => {
+    if (!found) return;
+    const state = shellRef.current.settings["onboarding.state"];
+    const fresh = found.find((a) => !state[a.id] && !offered.current.has(a.id));
+    if (!fresh) return;
+    offered.current.add(fresh.id);
+    void shellRef.current.set("onboarding.state", {
+      ...state,
+      [fresh.id]: { status: "offered", at: new Date().toISOString() },
+    });
+    setOnboarding({ account: fresh, rerun: false });
+    setActive("onboarding");
+  }, [found]);
+  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
+  useEffect(() => {
+    if (keysProp !== undefined) return;
+    let live = true;
+    void platform().then((p) => {
+      if (live) setKeys(deviceProviderKeys(p));
+    });
+    return () => {
+      live = false;
+    };
+  }, [keysProp]);
+  const senders = useMemo(
+    () =>
+      topSenders(
+        inbox?.threads() ?? [],
+        onboarding?.account?.address ?? account.address,
+        shell.settings["onboarding.sender_chips"],
+      ),
+    [inbox, onboarding, shell.settings["onboarding.sender_chips"]],
+  );
+
   const column = (side: "left" | "right") => (
     <AgentComposer
       key={`agent-${side}`}
@@ -267,6 +410,7 @@ export function App({
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
       else if (target === "activity") setActive("settings");
+      else if (target === "onboarding") openOnboarding(null, true);
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
         setActive("inbox");
@@ -274,13 +418,44 @@ export function App({
       else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
       else setActive("inbox");
     },
-    [shell],
+    [shell, openOnboarding],
   );
 
   const openSearch = useCallback((query: string) => {
     setSearchQuery(query);
     setActive("search");
   }, []);
+
+  if (active === "onboarding") {
+    // The dev server's fixture state: the conversation from the mock, with no Server behind it.
+    const fixtureChat =
+      !shell.server &&
+      agentClient === undefined &&
+      new URLSearchParams(location.search).get("step") === "chat";
+    return (
+      <div
+        className="app"
+        data-online={online ? "true" : "false"}
+        style={{ gridTemplateColumns: "minmax(0, 1fr)" }}
+      >
+        <Onboarding
+          key={`onboarding-${onboarding?.account?.id ?? "none"}-${onboarding?.rerun ? "again" : "first"}`}
+          accountId={onboarding?.account?.id ?? account.id}
+          workspaceId={onboarding?.account?.workspaceId ?? workspace.id}
+          address={onboarding?.account?.address ?? account.address}
+          agentClient={fixtureChat ? onboardingFixtureClient(() => now) : client}
+          initialStep={fixtureChat ? "chat" : undefined}
+          runtimes={detection}
+          keys={keys}
+          senders={fixtureChat ? ONBOARDING_FIXTURE_SENDERS : senders}
+          threadCount={inbox?.threads().length ?? 0}
+          rerun={onboarding?.rerun ?? false}
+          now={now}
+          onDone={() => setActive("inbox")}
+        />
+      </div>
+    );
+  }
 
   const cols: string[] = [];
   const parts: React.ReactNode[] = [];
@@ -316,7 +491,7 @@ export function App({
       />,
     );
   }
-  if (shell.layout.agent === "left") {
+  if (shell.layout.agent === "left" && !aiOff) {
     cols.push("var(--agent-w)");
     parts.push(column("left"));
   }
@@ -327,6 +502,8 @@ export function App({
         key={`screen-${settingsSection ?? ""}`}
         initialSection={settingsSection}
         workspaceId={workspace.id}
+        runtimes={detection ?? undefined}
+        keys={keysProp ?? undefined}
         onAsk={(text) => {
           setAgentText(text);
           setActive("inbox");
@@ -406,7 +583,7 @@ export function App({
       />
     ),
   );
-  if (shell.layout.agent === "right") {
+  if (shell.layout.agent === "right" && !aiOff) {
     cols.push("var(--agent-w)");
     parts.push(column("right"));
   }

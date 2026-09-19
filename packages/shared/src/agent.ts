@@ -63,6 +63,13 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   run_workflow: "reversible",
   // External MCP (slice 19): a key the Agent makes when asked; revoking it is the undo.
   create_external_key: "reversible",
+  // Onboarding (slice 20, docs/spec/onboarding.md).
+  onboarding_context: "read",
+  propose_groups: "reversible",
+  propose_workflows: "read",
+  adopt_workflow: "reversible",
+  propose_views: "reversible",
+  set_keymap: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -114,7 +121,9 @@ export type UndoRecord =
       previous: { version: number; enabled: boolean } | null;
     }
   /** An external key the Agent created (slice 19): Undo revokes it. */
-  | { kind: "external_key"; credentialId: Id };
+  | { kind: "external_key"; credentialId: Id }
+  /** Onboarding's approved Group proposal: the Groups it created and the moves to put back. */
+  | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {
@@ -256,6 +265,8 @@ export interface TurnContext {
   threadId?: Id | null | undefined;
   /** The Session's Developer mode switch (CONTEXT.md); only a Local runtime reads it. */
   developerMode?: boolean | undefined;
+  /** This Session is the onboarding conversation (docs/spec/onboarding.md): the onboarding prompt is appended. */
+  onboarding?: boolean | undefined;
 }
 
 /* ------------------------------ AgentSession seam ------------------------------ */

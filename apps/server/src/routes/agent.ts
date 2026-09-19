@@ -87,6 +87,7 @@ const context = z
     pinned: z.array(z.string().min(1)).max(500).optional(),
     threadId: z.string().min(1).nullable().optional(),
     developerMode: z.boolean().optional(),
+    onboarding: z.boolean().optional(),
   })
   .optional();
 const turnBody = z.object({ text: z.string().min(1).max(20_000), context });

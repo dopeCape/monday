@@ -288,6 +288,14 @@ export type BriefAction = { label: string } & (
 
 /* ------------------------------ The agent ------------------------------ */
 
+/**
+ * The AI level (CONTEXT.md): how much AI monday does, chosen on onboarding's
+ * first screen and changeable at any time. `off` is just mail, `assist` the
+ * agent bar and Briefs on open, `automate` routing, background Briefs and
+ * Workflows too. Lowering it disables, never deletes.
+ */
+export type AiLevel = "off" | "assist" | "automate";
+
 /** The command-line agents a Local runtime can be (CONTEXT.md, Local runtime). */
 export type LocalCli = "claude-code" | "codex" | "opencode";
 

@@ -39,7 +39,7 @@ async function searchOverFixtures(): Promise<SearchModule> {
   });
 }
 
-async function mount(props: Partial<InboxProps> = {}) {
+async function mount(props: Partial<InboxProps> = {}, level: "off" | "automate" = "automate") {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -48,7 +48,7 @@ async function mount(props: Partial<InboxProps> = {}) {
   const searched: string[] = [];
   await act(async () =>
     r.render(
-      <StaticShell>
+      <StaticShell settings={{ "ai.level": level }}>
         <Inbox
           inbox={fixtureInbox()}
           now={NOW}
@@ -111,6 +111,16 @@ describe("palette in the Inbox", () => {
     await type("ext sel");
     expect(items()).toContain("Extend selection down");
     expect(document.querySelector(".cmdk-item .kbd")?.textContent).toBe("Shift+J");
+  });
+
+  test("at AI level off the palette has no Ask section and no agent action, and Set me up is a Go to target (slice 20)", async () => {
+    await mount({}, "off");
+    await press("k", { metaKey: true });
+    expect(sections()).toEqual(["Actions", "Go to"]);
+    expect(items()).not.toContain("Ask monday");
+    await type("set me");
+    expect(items()).toContain("Set me up");
+    expect(document.querySelector(".agent-bar")).toBeNull();
   });
 
   test("arrow keys move the highlight and Enter runs the action once the palette has closed", async () => {

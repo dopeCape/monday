@@ -237,6 +237,8 @@ export interface ComposerProps {
   onOpenThread?: ((threadId: string) => void) | undefined;
   /** A chip with layout knobs is applied by the screen; every chip is also sent as a turn. */
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
+  /** One conversation only: no new, history or Developer mode (the onboarding conversation). */
+  plain?: boolean | undefined;
 }
 
 export function Composer({
@@ -253,6 +255,7 @@ export function Composer({
   onTextChange,
   onOpenThread,
   onSuggest,
+  plain = false,
 }: ComposerProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const turns = useMemo(
@@ -328,7 +331,7 @@ export function Composer({
   const local = agent.runtimeInfo?.runtime.kind === "local";
   const thread = (
     <>
-      {local ? (
+      {local && !plain ? (
         <div className="agent-developer">
           <Chip
             on={agent.developerMode}
@@ -395,6 +398,7 @@ export function Composer({
       onNew={onNew}
       onHistory={toggleHistory}
       labels={labels}
+      bare={plain}
     >
       {history ?? thread}
       {chips?.length ? (

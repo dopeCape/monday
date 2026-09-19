@@ -69,7 +69,7 @@ async function mount(props: Partial<InboxProps> = {}, settings: PartialSettings 
   const data = props.inbox ?? fixtureInbox();
   await act(async () =>
     r.render(
-      <StaticShell settings={settings}>
+      <StaticShell settings={{ "ai.level": "automate", ...settings }}>
         <Inbox
           now={new Date(2026, 8, 16, 10, 0)}
           initialOpen={null}

@@ -18,6 +18,7 @@ import {
   isSettingKey,
   isStringKey,
   type MeterMonth,
+  type PartialSettings,
   SETTING_SECTIONS,
   type SettingEntry,
   type SettingKey,
@@ -314,6 +315,8 @@ function Capture() {
 async function mount(
   props: Partial<SettingsProps> = {},
   shell: Partial<Pick<ShellState, "api" | "pinned" | "config" | "sidecar" | "server">> = {},
+  // These pages were specified under the full AI level; the level tests set their own (slice 20).
+  settings: PartialSettings = { "ai.level": "automate" },
 ) {
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -322,7 +325,7 @@ async function mount(
   const asked: string[] = [];
   await act(async () =>
     r.render(
-      <StaticShell shell={shell}>
+      <StaticShell shell={shell} settings={settings}>
         <Capture />
         <Settings
           workspaceId="ws-1"
@@ -600,6 +603,111 @@ describe("Settings › AI and agent", () => {
     await clickText("Undo", q('[data-activity="act-1"]') ?? document);
     expect(scripted.calls).toContainEqual({ name: "agent.undo", args: ["act-1", "s1"] });
     expect(q('[data-activity="act-1"]')?.textContent).toContain("Undone");
+  });
+});
+
+/* ------------------------------ The AI level (slice 20) ------------------------------ */
+
+describe("Settings › AI and agent: the AI level", () => {
+  const cardsOf = () => qa('[data-setting="ai.level"] .choice-card b').map((b) => b.textContent);
+
+  test("at off only the three cards show; the rest of the section and the Ask monday inputs hide, the automation parts hide at assist", async () => {
+    await mount({ initialSection: "ai" }, { api: scriptedApi().api }, { "ai.level": "off" });
+    expect(cardsOf()).toEqual([
+      "Just mail",
+      "Mail with an assistant",
+      "Mail that sorts and acts for me",
+    ]);
+    expect(q('[data-setting="ai.level"] .choice-card.on b')?.textContent).toBe("Just mail");
+    expect(qa("[data-setting]").map((el) => el.getAttribute("data-setting"))).toEqual(["ai.level"]);
+    expect(qa("[data-panel]")).toHaveLength(0);
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    // Routing at off: the Groups tree stays, the on-arrival and Brief policy knobs hide, no Ask monday.
+    await mount({ initialSection: "routing" }, { api: scriptedApi().api }, { "ai.level": "off" });
+    expect(q('[data-setting="routing.on_arrival"]')).toBeNull();
+    expect(q('[data-setting="briefs.policy"]')).toBeNull();
+    expect(q('[data-setting="sections.rules"]')).not.toBeNull();
+    expect(qa(".set-ask")).toHaveLength(0);
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    // Assist: the Runtime and Permissions show; Workflows keeps only what the level allows.
+    await mount({ initialSection: "ai" }, { api: scriptedApi().api }, { "ai.level": "assist" });
+    expect(q('[data-setting="ai.mode"]')).not.toBeNull();
+    expect(q('[data-setting="agent.always_ask"]')).not.toBeNull();
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(
+      { initialSection: "workflows" },
+      { api: scriptedApi().api },
+      { "ai.level": "assist" },
+    );
+    expect(q('[data-setting="workflows.placement"]')).toBeNull();
+    expect(qa("[data-setting]")).toHaveLength(0);
+  });
+
+  test("raising from off with no runtime configured shows the runtime step first; Continue saves the level", async () => {
+    const scripted = scriptedApi();
+    const captured = await mount(
+      { initialSection: "ai", runtimes: { detect: async () => [] } },
+      { api: scripted.api },
+      { "ai.level": "off" },
+    );
+    void captured;
+    await click(q('[data-setting="ai.level"] .choice-card[data-value="automate"]'));
+    // Not saved yet: the runtime step sits under the cards.
+    expect(scripted.calls.some((c) => c.name === "settings.set")).toBe(false);
+    const step = q('[data-panel="runtime-step"]');
+    expect(step).not.toBeNull();
+    expect(step?.textContent).toContain("One thing first");
+    expect(step?.querySelector('[data-setting="ai.mode"]')).not.toBeNull();
+    expect(step?.querySelector('[data-setting="ai.local.cli"]')).not.toBeNull();
+    const cont = [...(step?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent?.trim() === "Continue",
+    );
+    expect(cont?.disabled).toBe(true);
+    // Back returns to the cards with off still in effect.
+    await clickText("Back", step ?? document);
+    expect(q('[data-panel="runtime-step"]')).toBeNull();
+    expect(q('[data-setting="ai.level"] .choice-card.on b')?.textContent).toBe("Just mail");
+  });
+
+  test("with a CLI detected the cards save the level at once, and lowering keeps every other Setting", async () => {
+    const scripted = scriptedApi();
+    await mount(
+      {
+        initialSection: "ai",
+        runtimes: {
+          detect: async () => [
+            { cli: "claude-code", version: "2.1.4", path: "/usr/bin/claude", status: "connected" },
+          ],
+        },
+      },
+      { api: scripted.api },
+      { "ai.level": "off" },
+    );
+    await click(q('[data-setting="ai.level"] .choice-card[data-value="automate"]'));
+    expect(q('[data-panel="runtime-step"]')).toBeNull();
+    expect(scripted.calls.find((c) => c.name === "settings.set")?.args.slice(0, 2)).toEqual([
+      "ai.level",
+      "automate",
+    ]);
+    expect(q('[data-setting="ai.level"] .choice-card.on b')?.textContent).toBe(
+      "Mail that sorts and acts for me",
+    );
+    // The rest of the section came back.
+    expect(q('[data-setting="ai.mode"]')).not.toBeNull();
+    await click(q('[data-setting="ai.level"] .choice-card[data-value="off"]'));
+    expect(
+      scripted.calls
+        .filter((c) => c.name === "settings.set")
+        .at(-1)
+        ?.args.slice(0, 2),
+    ).toEqual(["ai.level", "off"]);
+    expect(scripted.calls.filter((c) => c.name === "settings.set")).toHaveLength(2);
   });
 });
 

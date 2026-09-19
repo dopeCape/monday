@@ -107,3 +107,57 @@ export function CustomSwatch({ onSelect, className }: CustomSwatchProps) {
     </button>
   );
 }
+
+/* ------------------------------ ChoiceCards ------------------------------ */
+
+export interface ChoiceCard<V extends string> {
+  value: V;
+  title: string;
+  body: string;
+  /** A short third line in the foreground color, such as what the choice adds. */
+  adds?: string | undefined;
+  icon?: ReactNode | undefined;
+}
+
+export interface ChoiceCardsProps<V extends string> {
+  cards: readonly ChoiceCard<V>[];
+  value: V | null;
+  onChange?: ((value: V) => void) | undefined;
+  disabled?: boolean | undefined;
+  className?: string | undefined;
+}
+
+/**
+ * One choice among a few, as cards: the AI level on onboarding's first screen
+ * and at the top of Settings, AI and agent, and the keymap question. The same
+ * card primitives as the Sync server upgrade cards; calm, spacious, no glyphs
+ * beyond an optional Phosphor icon.
+ */
+export function ChoiceCards<V extends string>({
+  cards,
+  value,
+  onChange,
+  disabled,
+  className,
+}: ChoiceCardsProps<V>) {
+  return (
+    <div className={cx("choice-cards", className)} data-count={cards.length}>
+      {cards.map((c) => (
+        <button
+          type="button"
+          key={c.value}
+          className={cx("choice-card", value === c.value && "on")}
+          aria-pressed={value === c.value}
+          data-value={c.value}
+          disabled={disabled}
+          onClick={() => onChange?.(c.value)}
+        >
+          {c.icon ? <i className="ic">{c.icon}</i> : null}
+          <b>{c.title}</b>
+          <span>{c.body}</span>
+          {c.adds ? <span className="adds">{c.adds}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}

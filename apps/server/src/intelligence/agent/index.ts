@@ -18,6 +18,7 @@ import type {
   ActivityRecord,
   AgentEvent,
   AgentSession,
+  AiLevel,
   ApprovalDecision,
   Runtime,
   SessionStartContext,
@@ -78,6 +79,10 @@ export { createToolServer, INTEGRATION_TOOL, TOOL_CATALOG } from "./tools/index.
 
 export interface AgentSettings {
   systemPrompt: string;
+  /** The AI level (CONTEXT.md); the tools read it to refuse what the level forbids. */
+  level?: AiLevel | undefined;
+  /** The onboarding instructions, filled in, for a Session whose context says onboarding. */
+  onboardingPrompt?: string | undefined;
   previewAbove: number;
   alwaysAsk: string[];
   maxSteps: number;
@@ -334,7 +339,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       tools: tools(session.workspaceId),
       settings: async () => {
         const s = await options.settings();
-        return { systemPrompt: s.systemPrompt, maxSteps: s.maxSteps };
+        return {
+          systemPrompt: s.systemPrompt,
+          maxSteps: s.maxSteps,
+          onboardingPrompt: s.onboardingPrompt,
+        };
       },
       bind: (threadId, ctx) => {
         if (running.has(threadId)) throw new TurnBusyError(session.id);

@@ -159,6 +159,8 @@
       { t: "Settings › Appearance", d: "Theme, palette swatches, layout, density, and the live config file.", o: { hash: "#/settings/appearance" } },
       { t: "Settings › AI and agent", d: "Local CLI (Claude Code, Codex, OpenCode) versus API key, and what runs where.", o: { hash: "#/settings/ai" } },
       { t: "Settings › Sync server", d: "The self-hosted TypeScript service: health, webhooks, offline workflows, compose file.", o: { hash: "#/settings/server" } },
+      { t: "Onboarding, first screen", d: "What do you want: just mail, mail with an assistant, or mail that sorts and acts for you. AI is never pushed.", o: { hash: "#/onboarding" } },
+      { t: "Onboarding, the conversation", d: "Five questions at most in the composer, chips from the top senders, and the Groups proposal with move counts waiting for approval.", o: { hash: "#/onboarding/chat" } },
     ];
     $("#screens").innerHTML = screens.map(s => `<div class="item">${frame(s.o)}<h3>${s.t}</h3><p>${s.d}</p></div>`).join("");
 

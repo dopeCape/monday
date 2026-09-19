@@ -127,6 +127,14 @@ describe("palette: browse mode", () => {
     expect(m.flat.length).toBe(9);
   });
 
+  test("at AI level off there is no Ask section, browsing or typing (slice 20)", () => {
+    const off = buildPalette({ ...input(""), agent: false });
+    expect(off.sections.map((s) => s.key)).toEqual(["actions", "go"]);
+    const typed = buildPalette({ ...input("ext"), agent: false });
+    expect(typed.sections.some((s) => s.key === "ask")).toBe(false);
+    expect(typed.flat.some((i) => i.ai)).toBe(false);
+  });
+
   test("typing fuzzy matches every action, navigation target and recent Thread", () => {
     const m = buildPalette(input("ext"));
     const actions = m.sections.find((s) => s.key === "actions");

@@ -45,7 +45,11 @@ describe.skipIf(!API_KEY)("Hosted runtime against Anthropic (ANTHROPIC_API_KEY s
     await keys.unlock(randomKey());
     store = createMailstore(db.handle.db, keys);
     jobs = createJobs(db.handle.db);
-    intelligence = createIntelligence({ db: db.handle.db, mailstore: store });
+    intelligence = createIntelligence({
+      db: db.handle.db,
+      mailstore: store,
+      level: async () => "automate",
+    });
     intelligence.registerSteps(jobs);
     workspaceId = (await store.createWorkspace(account)).id;
     // The key goes through the share path, so the Job reads it from the envelope.

@@ -160,6 +160,8 @@ export function Inbox({
   const shell = useShell();
   const { settings } = shell;
   const stream = shell.layout.list === "stream";
+  // Just mail (CONTEXT.md "AI level"): no agent bar, and `/` does nothing.
+  const aiOff = settings["ai.level"] === "off";
   const mac = isMac();
   const keymap = useActiveKeymap();
   const key = (action: KeyAction) => chordLabel(keymap[action], mac);
@@ -578,7 +580,7 @@ export function Inbox({
       if (compose.pending) void compose.undo(openThreadId);
       else void undo();
     },
-    "agent.focus": () => !overlay && focusAgent(),
+    "agent.focus": () => !overlay && !aiOff && focusAgent(),
     "palette.open": () => {
       setPaletteQuery("");
       setPaletteOpen((o) => !o);
@@ -872,7 +874,7 @@ export function Inbox({
         />
       ) : null}
 
-      {shell.layout.agent === "bottom" ? (
+      {shell.layout.agent === "bottom" && !aiOff ? (
         <AgentComposer
           agent={agent}
           mode="bottom"

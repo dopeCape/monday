@@ -73,6 +73,7 @@ export function intelligenceRoutes(
     );
     if (result.status === "queued") return c.json({ jobId: result.jobId }, 202);
     if (result.status === "fresh") return c.json({ fresh: true }, 200);
+    if (result.status === "ai_off") return c.json({ error: "ai_off" }, 409);
     const choice = await intelligence.runtime.resolve("brief");
     return c.json({ error: "no_shared_key", provider: choice.provider }, 409);
   });

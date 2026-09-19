@@ -120,7 +120,7 @@ async function mount(api: RoutingApi, routing = fixtureRouting()) {
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell>
+      <StaticShell settings={{ "ai.level": "automate" }}>
         <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} />
       </StaticShell>,
     );

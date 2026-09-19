@@ -8,6 +8,7 @@
 // entry's `control` gives, so the renderer walks the schema and nothing else.
 
 import {
+  type AiLevel,
   type Effort,
   HOSTED_PROVIDERS,
   type HostedProvider,
@@ -28,7 +29,19 @@ import {
   tierOf,
   type ViewSetting,
 } from "@monday/shared";
-import { Btn, CustomSwatch, Input, Kbd, palettes, Seg, Swatch, Switch, Tag } from "@monday/ui";
+import {
+  Btn,
+  type ChoiceCard,
+  ChoiceCards,
+  CustomSwatch,
+  Input,
+  Kbd,
+  palettes,
+  Seg,
+  Swatch,
+  Switch,
+  Tag,
+} from "@monday/ui";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -57,6 +70,7 @@ import {
   optionLabel,
   RecordEditor,
   Row,
+  SettingControl,
   useDraft,
   useSetting,
   useSettingsScreen,
@@ -578,6 +592,140 @@ function PerAccountText({
 }
 
 /* ------------------------------ AI and agent ------------------------------ */
+
+/**
+ * Whether a runtime is configured on this Device: a detected CLI, a Device
+ * key, or a key shared with the Server. Null while the seams are still
+ * answering. Moving up from `off` asks for one only when this is false
+ * (docs/spec/onboarding.md, "First screen").
+ */
+export function useRuntimeConfigured(): boolean | null {
+  const shell = useShell();
+  const screen = useSettingsScreen();
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    const run = async () => {
+      const detected = await (screen.runtimes?.detect() ?? Promise.resolve([])).catch(() => []);
+      if (detected.some((d) => d.status !== "missing")) return true;
+      if (screen.keys) {
+        for (const p of HOSTED_PROVIDERS) if (await screen.keys.get(p)) return true;
+      }
+      try {
+        return (await shell.api.keys.shared()).shared.length > 0;
+      } catch {
+        return false;
+      }
+    };
+    void run().then((ok) => {
+      if (live) setConfigured(ok);
+    });
+    return () => {
+      live = false;
+    };
+  }, [screen.runtimes, screen.keys, shell.api]);
+  return configured;
+}
+
+/** The three AI level cards' copy, from the strings Settings. */
+export function levelCards(s: Settings): ChoiceCard<AiLevel>[] {
+  return [
+    { value: "off", title: s["strings.ai.level.off"], body: s["strings.ai.level.off_sub"] },
+    {
+      value: "assist",
+      title: s["strings.ai.level.assist"],
+      body: s["strings.ai.level.assist_sub"],
+    },
+    {
+      value: "automate",
+      title: s["strings.ai.level.automate"],
+      body: s["strings.ai.level.automate_sub"],
+    },
+  ];
+}
+
+/**
+ * The runtime step: a Local CLI from the detected list or a Hosted provider
+ * with its key, through the same controls the Runtime group renders. Shown
+ * under the level cards when moving up from `off` with nothing configured.
+ */
+export function RuntimeStep({
+  configured,
+  onContinue,
+  onBack,
+}: {
+  configured: boolean | null;
+  onContinue: () => void;
+  onBack?: (() => void) | undefined;
+}) {
+  const s = useShell().settings;
+  const mode = s["ai.mode"];
+  const provider = s["ai.hosted.provider"];
+  return (
+    <div className="level-runtime" data-panel="runtime-step">
+      <h4>{s["strings.ai.level.runtime_title"]}</h4>
+      <p>{s["strings.ai.level.runtime_intro"]}</p>
+      <SettingControl k="ai.mode" />
+      {mode === "local" ? (
+        <SettingControl k="ai.local.cli" />
+      ) : (
+        <>
+          <SettingControl k="ai.hosted.provider" />
+          <SettingControl k={`ai.share_key.${provider}`} />
+        </>
+      )}
+      {configured === false ? <p className="err">{s["strings.ai.level.runtime_missing"]}</p> : null}
+      <div className="actions">
+        <Btn primary disabled={!configured} onClick={onContinue}>
+          {s["strings.ai.level.runtime_continue"]}
+        </Btn>
+        {onBack ? <Btn onClick={onBack}>{s["strings.ai.level.runtime_back"]}</Btn> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The AI level (CONTEXT.md): the three cards from onboarding's first screen,
+ * at the top of AI and agent. Moving up from `off` with no runtime configured
+ * shows the runtime step first; the level is saved after it.
+ */
+function AiLevelControl({ k }: ControlProps) {
+  const { value, change, error, shell } = useSetting(k);
+  const s = shell.settings;
+  const current = value as AiLevel;
+  const configured = useRuntimeConfigured();
+  const [pending, setPending] = useState<AiLevel | null>(null);
+  const pick = (level: AiLevel) => {
+    if (level === current) {
+      setPending(null);
+      return;
+    }
+    if (current === "off" && configured === false) {
+      setPending(level);
+      return;
+    }
+    setPending(null);
+    void change(level);
+  };
+  return (
+    <Row k={k} bare error={error}>
+      <ChoiceCards cards={levelCards(s)} value={pending ?? current} onChange={pick} />
+      <p className="choice-note">{s["strings.ai.level.change_note"]}</p>
+      {pending ? (
+        <RuntimeStep
+          configured={configured}
+          onContinue={() => {
+            void change(pending);
+            setPending(null);
+          }}
+          onBack={() => setPending(null)}
+        />
+      ) : null}
+    </Row>
+  );
+}
+controlKinds["ai-level"] = AiLevelControl;
 
 /** Local CLI or API key: the two cards from the mock. */
 function RuntimeModeControl({ k }: ControlProps) {
