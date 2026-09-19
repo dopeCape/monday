@@ -1,6 +1,5 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
-import { draftGhost, draftNote } from "@monday/ui/fixtures";
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
@@ -60,7 +59,7 @@ function Root() {
       createSearch({
         sources: () => [{ store, account: ws.address }],
         settings: () => ({
-          weights: [8, 3, 2, 1],
+          weights: settingsRef.current["search.weights"],
           recencyDays: settingsRef.current["search.recency_boost_days"],
           limit: settingsRef.current["search.results_limit"],
           recentMax: settingsRef.current["search.recent_max"],
@@ -99,6 +98,7 @@ function Root() {
     };
   }, [store, fetchBodies, shell.sidecar]);
 
+  const browser = shell.host === "browser";
   useEffect(() => {
     if (!content) return;
     let closed = false;
@@ -129,12 +129,15 @@ function Root() {
         },
         log: (m) => console.warn(`[reader] ${m}`),
       }),
-      platform().then((p) =>
-        createStoreComposer(store, content, {
-          address: ws.address,
-          // The browser dev server shows the design fixture's suggestion; the Agent's arrive in slice 14.
-          suggestions: p.isTauri ? undefined : { d1: { ghost: draftGhost, note: draftNote } },
-        }),
+      // The browser dev server shows the design fixture's suggestion on its
+      // Draft; the fixtures load only there, never in the app.
+      (!browser
+        ? Promise.resolve(undefined)
+        : import("@monday/ui/fixtures").then((fx) => ({
+            d1: { ghost: fx.draftGhost, note: fx.draftNote },
+          }))
+      ).then((suggestions) =>
+        createStoreComposer(store, content, { address: ws.address, suggestions }),
       ),
     ]).then(([routing, calendar, inbox, composer]) => {
       if (closed) {
@@ -154,7 +157,7 @@ function Root() {
       opened?.routing.close();
       opened?.calendar.close();
     };
-  }, [store, content, shell.api, ws.address]);
+  }, [store, content, shell.api, ws.address, browser]);
 
   // Changed Section rules re-section the stream at once, without a new Cache read.
   const sectionRules = shell.settings["sections.rules"];
@@ -182,18 +185,18 @@ function Root() {
   );
 }
 
-/** How often the first-run screen asks whether an Account has arrived. */
-const FIRST_RUN_POLL_MS = 3000;
-
 /**
  * Picks the Workspace: the first connected Account's in the app, the design
- * fixture's on the browser dev server (no Server there). With a Server and no
- * Account yet, the Accounts screen is the whole app until one is connected.
+ * fixture's on the browser dev server (no Server there). In the app nothing
+ * renders until the Sidecar (or the Cloud) answers, so the fixture Workspace
+ * never opens a Cache there. With a Server and no Account yet, the Accounts
+ * screen is the whole app until one is connected.
  */
 function WorkspaceGate() {
   const shell = useShell();
   const [accounts, setAccounts] = useState<AccountView[] | null>(null);
   const server = shell.server;
+  const pollMs = shell.settings["server.first_run_poll_seconds"] * 1000;
   useEffect(() => {
     if (!server) return;
     let stopped = false;
@@ -204,10 +207,10 @@ function WorkspaceGate() {
         .then((r) => {
           if (stopped) return;
           setAccounts(r.accounts);
-          if (r.accounts.length === 0) timer = setTimeout(tick, FIRST_RUN_POLL_MS);
+          if (r.accounts.length === 0) timer = setTimeout(tick, pollMs);
         })
         .catch(() => {
-          if (!stopped) timer = setTimeout(tick, FIRST_RUN_POLL_MS);
+          if (!stopped) timer = setTimeout(tick, pollMs);
         });
     };
     tick();
@@ -215,15 +218,38 @@ function WorkspaceGate() {
       stopped = true;
       if (timer) clearTimeout(timer);
     };
-  }, [server, shell.api]);
+  }, [server, shell.api, pollMs]);
 
   const current = useMemo<CurrentWorkspace | null>(() => {
-    if (!server) return FIXTURE_WORKSPACE;
+    if (shell.host === "browser" && !server) return FIXTURE_WORKSPACE;
     const first = accounts?.[0];
     return first ? { id: first.workspaceId, accountId: first.id, address: first.address } : null;
-  }, [server, accounts]);
+  }, [shell.host, server, accounts]);
 
-  if (server && accounts === null) return null;
+  // In the app a Sidecar that reported a failure, or a Server that has not
+  // answered within one reachability check, shows the Server section (which
+  // says what happened and offers the Cloud) rather than a blank window.
+  const waitMs = shell.settings["server.probe_seconds"] * 1000;
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    if (shell.host !== "tauri" || server) {
+      setWaited(false);
+      return;
+    }
+    const timer = setTimeout(() => setWaited(true), waitMs);
+    return () => clearTimeout(timer);
+  }, [shell.host, server, waitMs]);
+
+  // The host is unknown, the Sidecar is still starting, or the Accounts have not answered.
+  if (shell.host === null || (server && accounts === null)) return null;
+  if (shell.host === "tauri" && !server) {
+    if (!waited && !shell.sidecarError) return null;
+    return (
+      <div className="app" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+        <Settings initialSection="server" />
+      </div>
+    );
+  }
   if (!current) {
     // First run: the level cards, the keymap, then the first Account. Once the
     // welcome has run (or was skipped), the Accounts screen waits for one.

@@ -472,3 +472,27 @@ export function paletteFromBase16(
     },
   };
 }
+
+/* ------------------------------ Files ------------------------------ */
+
+/**
+ * Read a palette file of either shape. A `.yaml` or `.yml` path, or text that
+ * names base16 slots, is one base16 scheme (its other half mirrors it); anything
+ * else is token TOML. The name falls back to the file's stem.
+ */
+export function parsePaletteFile(text: string, path = ""): PaletteResult {
+  const stem =
+    path
+      .split(/[\\/]/)
+      .pop()
+      ?.replace(/\.[^.]+$/, "") || "custom";
+  const yaml = /\.ya?ml$/i.test(path);
+  const base16 = yaml || (!/\.toml$/i.test(path) && /^\s*-?\s*base0[0-9A-Fa-f]\s*:/m.test(text));
+  if (base16) {
+    const result = parseBase16(text);
+    if (!result.ok) return result;
+    const half = result.scheme.half;
+    return paletteFromBase16({ [half]: text }, result.scheme.name || stem);
+  }
+  return parsePaletteToml(text, stem);
+}

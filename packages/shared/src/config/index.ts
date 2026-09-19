@@ -17,6 +17,7 @@ export {
   paletteFromBase16,
   parseBase16,
   parseHex,
+  parsePaletteFile,
   parsePaletteToml,
   REQUIRED_TOKENS,
   type RequiredToken,

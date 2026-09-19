@@ -13,6 +13,7 @@ export * from "./components/rail.tsx";
 export * from "./components/reader.tsx";
 export * from "./components/routing.tsx";
 export * from "./components/settings.tsx";
+export * from "./components/toast.tsx";
 export * from "./components/workflows.tsx";
 export * from "./format.ts";
 export * from "./motion.ts";

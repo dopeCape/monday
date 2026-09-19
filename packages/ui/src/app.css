@@ -258,6 +258,12 @@ i.ph-bold > svg {
   font-size: var(--fs-md);
   width: 100%;
   text-align: left;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease),
+    height var(--t-med) var(--ease),
+    padding var(--t-med) var(--ease);
 }
 .nav-item i {
   color: var(--fg-faint);
@@ -325,6 +331,10 @@ i.ph-bold > svg {
   color: var(--fg-faint);
   display: grid;
   place-items: center;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
 }
 .rail button:hover {
   background: var(--hover);
@@ -437,11 +447,7 @@ i.ph-bold > svg {
   border: 1px solid var(--border);
   background: transparent;
   white-space: nowrap;
-  transition:
-    background var(--t-fast),
-    color var(--t-fast),
-    border-color var(--t-fast),
-    transform var(--t-fast) var(--ease);
+  animation: tag-in var(--t-fast) var(--ease);
 }
 .chip:hover {
   background: var(--hover);
@@ -468,6 +474,13 @@ i.ph-bold > svg {
   color: var(--fg-muted);
   background: var(--sunken);
   white-space: nowrap;
+  animation: tag-in var(--t-fast) var(--ease);
+}
+/* tags and chips arriving: a short fade, never a bounce */
+@keyframes tag-in {
+  from {
+    opacity: 0;
+  }
 }
 .tag.ai {
   color: var(--fg);
@@ -490,9 +503,22 @@ i.ph-bold > svg {
   font-size: var(--fs-md);
   outline: 0;
   width: 100%;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
 }
 .input:focus {
   border-color: var(--fg-faint);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled {
+  opacity: 0.55;
+  background: var(--sunken);
+  cursor: not-allowed;
+}
+.input[aria-invalid="true"] {
+  border-color: var(--danger);
 }
 .switch {
   width: 32px;
@@ -578,6 +604,69 @@ i.ph-bold > svg {
   color: var(--fg-faint);
 }
 
+/* =========================== STATES AND MOTION ===========================
+   The shared primitives' hover, pressed, focus-visible and disabled states,
+   and the transitions between them. Every duration is a motion token, so the
+   appearance.transitions Setting and reduce-motion stop all of it at once.
+   Focus rings use --accent-ring, the token every palette already carries. */
+.btn,
+.chip,
+.switch,
+.seg button,
+.tabs button {
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+.btn:focus-visible,
+.chip:focus-visible,
+.switch:focus-visible,
+.seg button:focus-visible,
+.tabs button:focus-visible,
+.nav-item:focus-visible,
+.rail button:focus-visible,
+.ws:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+.btn:disabled,
+.chip:disabled,
+.switch:disabled,
+.seg button:disabled,
+.tabs button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn:active:not(:disabled),
+.chip:active:not(:disabled),
+.seg button:active:not(:disabled),
+.tabs button:active:not(:disabled),
+.nav-item:active,
+.rail button:active {
+  transform: translateY(1px);
+}
+.btn.primary:active:not(:disabled) {
+  opacity: 0.8;
+}
+.chip:active:not(:disabled) {
+  background: var(--active);
+}
+.switch:hover:not(:disabled) {
+  background: var(--fg-faint);
+}
+.switch.on:hover:not(:disabled) {
+  background: var(--fg);
+  opacity: 0.88;
+}
+.seg button:hover:not(.on) {
+  color: var(--fg);
+  background: var(--hover);
+}
 /* =========================== LIST =========================== */
 .sec {
   padding: 22px var(--pad) 8px;
@@ -596,7 +685,9 @@ i.ph-bold > svg {
   padding: var(--list-row-py) var(--pad);
   position: relative;
   cursor: default;
-  transition: background var(--t-fast);
+  transition:
+    background-color var(--t-fast) var(--ease),
+    padding var(--t-med) var(--ease);
   border-radius: 0;
 }
 .row:hover {
@@ -1206,7 +1297,7 @@ button.msg {
   color: var(--success);
 }
 .tool.run .st i {
-  animation: spin calc(var(--t-slow) * 3) linear infinite;
+  animation: spin var(--t-spin) linear infinite;
 }
 .tool.wait {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
@@ -1732,6 +1823,15 @@ button.msg {
 }
 .empty .ico {
   display: none;
+}
+.empty .empty-action {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.empty.page-empty .empty-action {
+  justify-content: flex-start;
 }
 .examples {
   display: grid;
@@ -2280,16 +2380,12 @@ button.msg {
 }
 .settings-empty {
   padding: 24px 0;
-  display: grid;
-  gap: 6px;
+  margin: 0;
+  text-align: left;
 }
-.settings-empty .empty-title {
+.settings-empty > h3 {
   font-weight: 500;
   font-size: var(--fs-md);
-}
-.settings-empty .empty-sub {
-  color: var(--fg-muted);
-  font-size: var(--fs-sm);
 }
 .sresult-section {
   margin: 0 0 36px;
@@ -2979,7 +3075,11 @@ details.advanced[open] > summary::before {
   margin-bottom: 8px;
 }
 .note.warn {
-  color: var(--warning, #b8860b);
+  color: var(--warning);
+  margin-bottom: 8px;
+}
+.note.err {
+  color: var(--danger);
   margin-bottom: 8px;
 }
 .voice-edit {
@@ -4495,8 +4595,8 @@ button.prov {
   color: var(--fg);
   cursor: pointer;
   transition:
-    border-color var(--t-fast),
-    background var(--t-fast);
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
 }
 .choice-card:hover {
   border-color: var(--fg-faint);
@@ -4650,9 +4750,54 @@ button.prov {
     --t-fast: 0ms;
     --t-med: 0ms;
     --t-slow: 0ms;
+    --t-spin: 0ms;
   }
 }
-/* Off zeroes the tokens (tokens.css); motion.test.ts proves nothing reads a literal duration. */
+:root[data-transitions="off"] *,
+:root[data-transitions="off"] *::before,
+:root[data-transitions="off"] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: the off switch must beat every component rule */
+  animation-duration: 0ms !important;
+  /* biome-ignore lint/complexity/noImportantStyles: same */
+  transition-duration: 0ms !important;
+}
+/* the toast: rises in, sinks out; the component adds .leaving one beat before it unmounts */
+.toast.leaving {
+  animation: toast-out var(--t-fast) var(--ease-in) forwards;
+}
+@keyframes toast-out {
+  to {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+/* sheets slide, dialogs and popovers rise (sheet-in, rise and fade), the scrim
+   fades, the swatch and the choice cards ease their border; a density or font
+   size change eases the row, nav and bar heights on their own rules */
+/* screens: the App swaps the main column between inbox, calendar, routing,
+   workflows and settings (and onboarding); each new one fades and settles in */
+.app > .main,
+.app > .page {
+  animation: screen-in var(--t-med) var(--ease);
+}
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+/* Light to dark and back: the Shell sets data-theme-fade for one slow beat
+   after the mode flips, and every surface eases its colors over it. */
+:root[data-theme-fade] body,
+:root[data-theme-fade] body *,
+:root[data-theme-fade] body *::before,
+:root[data-theme-fade] body *::after {
+  transition:
+    background-color var(--t-slow) var(--ease),
+    color var(--t-slow) var(--ease),
+    border-color var(--t-slow) var(--ease),
+    fill var(--t-slow) var(--ease);
+}
 /* the CalDAV link form under Settings, Accounts, Meetings (slice 18) */
 .caldav-account {
   margin-top: 10px;

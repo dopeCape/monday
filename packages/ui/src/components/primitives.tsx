@@ -1,8 +1,84 @@
 // The small pieces: avatar, the monogram mark, buttons, chips, tags, keys,
-// inputs, switches, segmented controls, tabs, column heads and section labels.
-import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode } from "react";
+// inputs, switches, segmented controls, tabs, column heads and section labels,
+// plus the two hooks a sheet or dialog needs: a focus trap and an Escape.
+import {
+  type ButtonHTMLAttributes,
+  type CSSProperties,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+} from "react";
 import { avatarColor, cx, initials } from "../format.ts";
 import { Icon, type IconComponent } from "./icon.tsx";
+
+/* ------------------------------ Focus trap and Escape ------------------------------ */
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** The elements inside `root` that take focus, in document order. */
+export function focusableIn(root: ParentNode): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => !el.hasAttribute("aria-hidden") && el.getAttribute("aria-hidden") !== "true",
+  );
+}
+
+/**
+ * Keeps Tab inside a sheet or dialog while it is open: Tab from the last
+ * control wraps to the first and Shift+Tab from the first wraps to the last;
+ * focus moves into the first control on open and back to where it was on
+ * close. Inert while `active` is false, so a component can keep the hook and
+ * toggle it.
+ */
+export function useFocusTrap(ref: RefObject<HTMLElement | null>, active = true): void {
+  useEffect(() => {
+    const root = ref.current;
+    if (!active || !root || typeof document === "undefined") return;
+    const before = document.activeElement as HTMLElement | null;
+    if (!root.contains(before)) {
+      const first = focusableIn(root)[0] ?? root;
+      first.focus?.();
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const items = focusableIn(root);
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0] as HTMLElement;
+      const last = items[items.length - 1] as HTMLElement;
+      const current = document.activeElement;
+      if (e.shiftKey && (current === first || !root.contains(current))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (current === last || !root.contains(current))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    root.addEventListener("keydown", onKey);
+    return () => {
+      root.removeEventListener("keydown", onKey);
+      if (before && document.contains(before)) before.focus?.();
+    };
+  }, [ref, active]);
+}
+
+/** Calls `onEscape` on Escape anywhere in the document while `active`; the innermost overlay stops the event. */
+export function useEscape(onEscape: (() => void) | undefined, active = true): void {
+  useEffect(() => {
+    if (!active || !onEscape || typeof document === "undefined") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      onEscape();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onEscape, active]);
+}
 
 /* ------------------------------ Avatar ------------------------------ */
 
@@ -252,6 +328,74 @@ export interface SectionLabelProps {
 /** A Section heading in the stream. */
 export function SectionLabel({ children, className }: SectionLabelProps) {
   return <div className={cx("sec", className)}>{children}</div>;
+}
+
+/* ------------------------------ Note and EmptyState ------------------------------ */
+
+export type NoteKind = "info" | "ok" | "warn" | "error";
+
+export interface NoteProps {
+  kind?: NoteKind | undefined;
+  /** An optional Phosphor icon before the text. */
+  icon?: IconComponent | undefined;
+  className?: string | undefined;
+  /** data-* attributes for tests. */
+  attrs?: Record<string, string | undefined> | undefined;
+  children?: ReactNode | undefined;
+}
+
+/**
+ * One line of secondary text with a state: a plain note, a success, a
+ * warning (a Config file line that did not parse) or an error (a request
+ * that failed). Color only for state, no icon unless given.
+ */
+export function Note({ kind = "info", icon, className, attrs, children }: NoteProps) {
+  return (
+    <div
+      className={cx(
+        "note",
+        kind === "ok" && "ok",
+        kind === "warn" && "warn",
+        kind === "error" && "err",
+        className,
+      )}
+      role={kind === "error" || kind === "warn" ? "alert" : undefined}
+      {...(attrs ?? {})}
+    >
+      {icon ? <Icon icon={icon} /> : null}
+      <span>{children}</span>
+    </div>
+  );
+}
+
+export interface EmptyStateProps {
+  title: ReactNode;
+  /** The line under the title: what to do next, never an apology. */
+  body?: ReactNode | undefined;
+  /** An optional Phosphor icon above the title. */
+  icon?: IconComponent | undefined;
+  /** One action, such as a Compose or Ask button. */
+  action?: ReactNode | undefined;
+  /** The page's own empty (left-aligned, under the header) rather than a centered one. */
+  page?: boolean | undefined;
+  className?: string | undefined;
+  attrs?: Record<string, string | undefined> | undefined;
+}
+
+/** The shared empty state: a short title, one line of guidance, at most one action. */
+export function EmptyState({ title, body, icon, action, page, className, attrs }: EmptyStateProps) {
+  return (
+    <div className={cx("empty", page && "page-empty", className)} {...(attrs ?? {})}>
+      {icon ? (
+        <span className="ico">
+          <Icon icon={icon} />
+        </span>
+      ) : null}
+      <h3>{title}</h3>
+      {body ? <p>{body}</p> : null}
+      {action ? <div className="empty-action">{action}</div> : null}
+    </div>
+  );
 }
 
 /* ------------------------------ Vr ------------------------------ */

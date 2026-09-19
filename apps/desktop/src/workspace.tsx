@@ -4,7 +4,6 @@
 // reads it here, never from the fixtures directly.
 
 import type { Id } from "@monday/shared";
-import { account, NOW, workspace } from "@monday/ui/fixtures";
 import { createContext, type ReactNode, useContext } from "react";
 
 export interface CurrentWorkspace {
@@ -20,12 +19,16 @@ export interface CurrentWorkspace {
   now?: Date | undefined;
 }
 
-/** The design fixture's Workspace, for the dev server and the tests. */
+/**
+ * The design fixture's Workspace, for the dev server and the tests. Spelled
+ * out here so this module never loads `@monday/ui/fixtures`; a test pins the
+ * three values to the fixture's.
+ */
 export const FIXTURE_WORKSPACE: CurrentWorkspace = {
-  id: workspace.id,
-  accountId: account.id,
-  address: account.address,
-  now: NOW,
+  id: "ws-genai",
+  accountId: "acct-genai",
+  address: "tejas@genai-labs.io",
+  now: new Date("2026-09-16T10:00:00"),
 };
 
 const WorkspaceContext = createContext<CurrentWorkspace>(FIXTURE_WORKSPACE);

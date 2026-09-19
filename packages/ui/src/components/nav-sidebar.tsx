@@ -26,8 +26,28 @@ export interface NavWorkspace {
   status?: string | undefined;
 }
 
+/** The fixed words on the sidebar; the app reads them from Settings, the mock keeps these. */
+export interface NavLabels {
+  search: string;
+  compose: string;
+  mail: string;
+  groups: string;
+  automation: string;
+  settings: string;
+}
+
+export const DEFAULT_NAV_LABELS: NavLabels = {
+  search: "Search",
+  compose: "New message",
+  mail: "Mail",
+  groups: "Groups",
+  automation: "Automation",
+  settings: "Settings",
+};
+
 export interface NavSidebarProps {
   workspace: NavWorkspace;
+  labels?: NavLabels | undefined;
   /** The Mail section: Inbox, Starred, Snoozed, Drafts, Sent, Archive. */
   folders: readonly NavItem[];
   calendar?: NavItem | undefined;
@@ -71,6 +91,7 @@ function Item({ item, on, sub, onSelect }: ItemProps) {
 
 export function NavSidebar({
   workspace,
+  labels = DEFAULT_NAV_LABELS,
   folders,
   calendar,
   groups,
@@ -100,16 +121,16 @@ export function NavSidebar({
       </button>
       <button type="button" className="nav-item" onClick={onSearch}>
         <Icon icon={MagnifyingGlassIcon} />
-        <span>Search</span>
+        <span>{labels.search}</span>
         <Kbd>⌘K</Kbd>
       </button>
       <button type="button" className="nav-item" onClick={onCompose}>
         <Icon icon={PencilSimpleLineIcon} />
-        <span>New message</span>
+        <span>{labels.compose}</span>
         <Kbd>C</Kbd>
       </button>
 
-      <div className="nav-sec">Mail</div>
+      <div className="nav-sec">{labels.mail}</div>
       {folders.map((f) => (
         <Item key={f.key} item={withCount(f)} on={active === f.key} onSelect={onSelect} />
       ))}
@@ -117,7 +138,7 @@ export function NavSidebar({
         <Item item={withCount(calendar)} on={active === calendar.key} onSelect={onSelect} />
       ) : null}
 
-      {top.length ? <div className="nav-sec">Groups</div> : null}
+      {top.length ? <div className="nav-sec">{labels.groups}</div> : null}
       {top.map((g) => (
         <Fragment key={g.id}>
           <Item
@@ -137,14 +158,14 @@ export function NavSidebar({
         </Fragment>
       ))}
 
-      {automation.length ? <div className="nav-sec">Automation</div> : null}
+      {automation.length ? <div className="nav-sec">{labels.automation}</div> : null}
       {automation.map((a) => (
         <Item key={a.key} item={a} on={active === a.key} onSelect={onSelect} />
       ))}
 
       <div className="nav-foot">
         <Item
-          item={{ key: "settings", label: "Settings", icon: GearSixIcon }}
+          item={{ key: "settings", label: labels.settings, icon: GearSixIcon }}
           on={active === "settings"}
           onSelect={onSelect}
         />

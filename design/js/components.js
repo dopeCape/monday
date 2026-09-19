@@ -27,7 +27,7 @@ export function navSidebar(route) {
   const auto = nav.automation.map(it => item({ ...it, n: 0, href: `#/${it.key}` }, route.screen === it.key)).join("");
   return `
   <aside class="nav">
-    <button class="ws" title="Synced 12 seconds ago">
+    <button class="ws" title="Connected">
       <span class="avatar sq" style="--c:var(--fg)">${workspace.initials}<span class="live"></span></span>
       <span class="ws-name">${workspace.name}</span>
       ${ic("ph-caret-up-down")}

@@ -14,9 +14,10 @@ import {
   SETTING_SECTIONS,
   type SettingKey,
   type SettingSection,
+  type Settings as SettingValues,
   settingsSchema,
 } from "@monday/shared";
-import { Btn, Kbd } from "@monday/ui";
+import { Btn, EmptyState, Kbd, Toast } from "@monday/ui";
 import {
   AtIcon,
   CloudIcon,
@@ -45,7 +46,7 @@ import { isTypingTarget } from "../keyboard/useKeymap.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "../platform/providerKeys.ts";
 import { platform } from "../platform/tauri.ts";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
-import { Toast } from "./inbox/Toast.tsx";
+
 import "./settings/controls.tsx";
 import "./settings/panels.tsx";
 import {
@@ -91,7 +92,7 @@ export interface SettingsProps {
   initialSearch?: boolean | undefined;
   /** Routes an "Ask monday" text to the composer, prefilled. Inert when absent. */
   onAsk?: ((text: string) => void) | undefined;
-  /** The Local runtime detection seam (slice 15). */
+  /** The Local runtime detection seam: what this Device found of the three CLIs. */
   runtimes?: RuntimeDetection | undefined;
   /** This Device's provider keys; defaults to the platform keychain. */
   keys?: DeviceProviderKeys | undefined;
@@ -115,6 +116,32 @@ function sectionOf(name: string | undefined): SettingSection {
   return (SETTING_SECTIONS as readonly string[]).includes(name ?? "")
     ? (name as SettingSection)
     : "appearance";
+}
+
+/**
+ * Writes several keys as one change: in order, and when one is refused in the
+ * middle (an invalid value the Shell rejects) the keys already written go back
+ * to `previous`, so a preset or a View never half-applies. The first refusal
+ * is the result.
+ */
+export async function writeAll(
+  set: <K extends SettingKey>(key: K, value: SettingValues[K]) => Promise<SetResult>,
+  changes: ReadonlyArray<[SettingKey, unknown]>,
+  previous: ReadonlyArray<[SettingKey, unknown]>,
+): Promise<SetResult> {
+  const applied: SettingKey[] = [];
+  for (const [k, v] of changes) {
+    const result = await set(k, v as never);
+    if (!result.ok) {
+      for (const key of applied) {
+        const before = previous.find(([p]) => p === key);
+        if (before) await set(key, before[1] as never);
+      }
+      return result;
+    }
+    applied.push(k);
+  }
+  return { ok: true };
 }
 
 /** Where the page should scroll after a navigation: a group anchor or a card's key. */
@@ -180,11 +207,7 @@ export function Settings({
       const previous = changes.map(
         ([k]) => [k, structuredClone(shell.settings[k])] as [SettingKey, unknown],
       );
-      let result: SetResult = { ok: true };
-      for (const [k, v] of changes) {
-        result = await shell.set(k, v as never);
-        if (!result.ok) break;
-      }
+      const result = await writeAll(shell.set, changes, previous);
       if (result.ok) {
         setToast({
           id: ++toastSeq.current,
@@ -435,6 +458,7 @@ export function PageIndex({
   onJump: (group: string) => void;
 }) {
   const s = useShell().settings;
+  const holdMs = s["settings.index_hold_ms"];
   const [active, setActive] = useState<string | null>(groups[0] ?? null);
   const holdUntil = useRef(0);
   const key = groups.join("\n");
@@ -447,6 +471,12 @@ export function PageIndex({
       .filter((el): el is HTMLElement => el !== null);
     const read = () => {
       if (Date.now() < holdUntil.current) return;
+      // Scrolled to the end: the last group is the one being read, even when the
+      // page is too short for its anchor to ever reach the reading line.
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 1 && root.scrollTop > 0) {
+        setActive(anchors.at(-1)?.dataset.group ?? null);
+        return;
+      }
       const top = root.getBoundingClientRect().top;
       const line = top + root.clientHeight * 0.33;
       let current: string | null = null;
@@ -458,7 +488,12 @@ export function PageIndex({
     };
     const io = new IntersectionObserver(read, { root, threshold: [0, 0.25, 0.5, 0.75, 1] });
     for (const el of anchors) io.observe(el);
-    return () => io.disconnect();
+    // The observer fires as anchors cross the edges; the end of the page needs the scroll itself.
+    root.addEventListener("scroll", read, { passive: true });
+    return () => {
+      io.disconnect();
+      root.removeEventListener("scroll", read);
+    };
   }, [key, scroller]);
   if (groups.length < 2) return <aside className="settings-index" aria-hidden="true" />;
   return (
@@ -472,7 +507,7 @@ export function PageIndex({
           data-index-group={g}
           onClick={(e) => {
             e.preventDefault();
-            holdUntil.current = Date.now() + 1200;
+            holdUntil.current = Date.now() + holdMs;
             setActive(g);
             onJump(g);
           }}
@@ -590,12 +625,12 @@ function SearchResults({
         <span className="hint">{s["strings.settings.search.hint"]}</span>
       </div>
       {hits.length === 0 ? (
-        <div className="settings-empty" data-panel="search-empty">
-          <b className="empty-title">
-            {fill(s["strings.settings.search.empty"], { query: query.trim() })}
-          </b>
-          <span className="empty-sub">{s["strings.settings.search.suggest"]}</span>
-        </div>
+        <EmptyState
+          className="settings-empty"
+          title={fill(s["strings.settings.search.empty"], { query: query.trim() })}
+          body={s["strings.settings.search.suggest"]}
+          attrs={{ "data-panel": "search-empty" }}
+        />
       ) : null}
       <HighlightProvider words={words}>
         {grouped.map((g) => (
