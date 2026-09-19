@@ -61,6 +61,13 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   list_workflow_runs: "read",
   approve_workflow_step: "leaves_mailbox",
   run_workflow: "reversible",
+  // Onboarding (slice 20, docs/spec/onboarding.md).
+  onboarding_context: "read",
+  propose_groups: "reversible",
+  propose_workflows: "read",
+  adopt_workflow: "reversible",
+  propose_views: "reversible",
+  set_keymap: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -110,7 +117,9 @@ export type UndoRecord =
       kind: "workflow";
       workflowId: Id;
       previous: { version: number; enabled: boolean } | null;
-    };
+    }
+  /** Onboarding's approved Group proposal: the Groups it created and the moves to put back. */
+  | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

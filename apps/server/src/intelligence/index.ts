@@ -40,6 +40,7 @@ import {
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
+import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import {
@@ -76,6 +77,8 @@ export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
 export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
+export type { OnboardingSeam, TopSender } from "./onboarding.ts";
+export { createOnboarding } from "./onboarding.ts";
 export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
 export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
 export type {
@@ -143,6 +146,8 @@ export interface Intelligence {
   agent: AgentHost;
   activity: ActivityLog;
   workflows: Workflows;
+  /** What the onboarding tools act through (slice 20). */
+  onboarding: OnboardingSeam;
   /** The AI level in effect (CONTEXT.md), read from the Setting. */
   level(): Promise<AiLevel>;
   /** The runtime as /capabilities reports it. Works locked. */
@@ -391,6 +396,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
   extensions.workflows = workflows;
+  const onboarding = createOnboarding({ db, routing, workflows, level });
+  extensions.onboarding = onboarding;
 
   return {
     runtime,
@@ -402,6 +409,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     agent,
     activity,
     workflows,
+    onboarding,
     level,
     async hostedState() {
       const settings = await hostedSettings();

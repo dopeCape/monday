@@ -126,6 +126,13 @@ describe("the tool catalog", () => {
       list_workflow_runs: "read",
       approve_workflow_step: "leaves_mailbox",
       run_workflow: "reversible",
+      // Slice 20: onboarding.
+      onboarding_context: "read",
+      propose_groups: "reversible",
+      propose_workflows: "read",
+      adopt_workflow: "reversible",
+      propose_views: "reversible",
+      set_keymap: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

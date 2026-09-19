@@ -15,6 +15,7 @@ import { describeWorkflow, type INTEGRATIONS, parseWorkflowInput } from "@monday
 import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
+import type { OnboardingSeam } from "../../onboarding.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
 
 /* ------------------------------ Seams ------------------------------ */
@@ -60,6 +61,8 @@ export interface ToolExtensions {
   integrations?: IntegrationsSeam | undefined;
   mcp?: McpSeam | undefined;
   workflows?: WorkflowsSeam | undefined;
+  /** What the onboarding tools act through (slice 20). */
+  onboarding?: OnboardingSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });
