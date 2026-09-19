@@ -202,6 +202,8 @@ export interface SyncEngine {
   registerSteps(jobs: Jobs): void;
   /** Enqueues the three Jobs an Account needs; idempotent. */
   startAccount(jobs: Jobs, accountId: string): Promise<void>;
+  /** Forgets an Account: stops its watcher and drops its Session (the Account is being removed). */
+  forget(accountId: string): Promise<void>;
   /** Drops cached Sessions and watchers. */
   close(): Promise<void>;
 }
@@ -1307,6 +1309,12 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         needs: ["needs-process"],
       });
       await jobs.enqueue(RECONCILE_STEP, payload, { id: `${RECONCILE_STEP}:${accountId}` });
+    },
+
+    async forget(accountId) {
+      await engine.unwatch(accountId);
+      await dropSession(accountId);
+      touched.delete(accountId);
     },
 
     async close() {

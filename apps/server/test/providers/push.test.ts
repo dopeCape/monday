@@ -155,6 +155,10 @@ describe("push registrations, webhooks and the OAuth routes", () => {
         await engine.startAccount(jobs, accountId);
         await push.startAccount(jobs, accountId, provider);
       },
+      onRemoving: async (accountId) => {
+        await engine.forget(accountId);
+        await jobs.cancelByPayload("accountId", accountId);
+      },
     });
     const authService = createAuth({ db: db.handle.db, sidecarToken: SIDECAR_TOKEN });
     app = createApp({
@@ -554,13 +558,22 @@ describe("push registrations, webhooks and the OAuth routes", () => {
     expect(refreshedAuths).toBeGreaterThanOrEqual(1);
   });
 
-  test("removing an Account clears its credentials", async () => {
+  test("removing an Account clears its credentials and cancels its Jobs", async () => {
+    const before = (await db.handle.db.select().from(jobsTable)).filter(
+      (j) => (j.payload as { accountId?: string }).accountId === graphAccountId,
+    );
+    expect(before.length).toBeGreaterThan(0);
     const res = await app.request(`/accounts/${graphAccountId}`, {
       method: "DELETE",
       headers: auth,
     });
     expect(res.status).toBe(204);
     await expect(credentials.load(graphAccountId)).rejects.toMatchObject({ code: "auth" });
+    // Nothing is left to fail against the missing row.
+    const after = (await db.handle.db.select().from(jobsTable)).filter(
+      (j) => (j.payload as { accountId?: string }).accountId === graphAccountId,
+    );
+    expect(after.filter((j) => j.status === "queued")).toHaveLength(0);
     expect(
       (await app.request(`/accounts/${graphAccountId}`, { method: "DELETE", headers: auth }))
         .status,

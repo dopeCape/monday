@@ -124,6 +124,12 @@ export async function createServices(options: ServicesOptions): Promise<Services
       await push.startAccount(jobs, accountId, provider);
       await calendar.startAccount(jobs, accountId);
     },
+    onRemoving: async (accountId) => {
+      // Its Jobs would only fail against a missing row; its watcher would hold a dead connection.
+      await sync.forget(accountId);
+      const cancelled = await jobs.cancelByPayload("accountId", accountId);
+      debug(`account ${accountId} removed: ${cancelled} job(s) cancelled`);
+    },
   });
 
   return {

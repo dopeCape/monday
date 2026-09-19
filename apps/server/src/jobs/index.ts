@@ -70,6 +70,12 @@ export interface Jobs {
   requeue(id: string, owner: string, sleepMs?: number): Promise<void>;
   /** Pushes a running job's lease to now plus `budgetMs`; false when the job is not this owner's any more. */
   extend(id: string, owner: string, budgetMs: number): Promise<boolean>;
+  /**
+   * Removes every job, queued or asleep, whose payload names `value` under
+   * `field` (an Account that was removed). Running ones finish and are not
+   * requeued by their owner, whose complete and requeue find no row.
+   */
+  cancelByPayload(field: string, value: string): Promise<number>;
   sweepExpiredLeases(): Promise<number>;
   /**
    * Removes a job that has not started. True when a queued row was removed;
@@ -207,6 +213,14 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
         await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
         onEnqueue(id);
       }
+    },
+
+    async cancelByPayload(field, value) {
+      const removed = await db
+        .delete(jobs)
+        .where(and(sql`${jobs.payload} ->> ${field} = ${value}`, eq(jobs.status, "queued")))
+        .returning({ id: jobs.id });
+      return removed.length;
     },
 
     async extend(id, owner, budgetMs) {
