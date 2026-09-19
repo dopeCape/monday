@@ -79,6 +79,8 @@ export interface RunContext {
    * approval); returning null falls back to the interrupt.
    */
   approve?: ((row: ActivityRow) => Promise<"standing" | null>) | undefined;
+  /** Called before every model call and every tool call: a Job's lease renewal. */
+  heartbeat?: (() => Promise<void>) | undefined;
 }
 
 export interface AgentGraphOptions {
@@ -122,6 +124,7 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
       const allowed: ToolSpec[] = ctx.allow
         ? ctx.tools.specs().filter((t) => ctx.allow?.includes(t.name))
         : ctx.tools.specs();
+      await ctx.heartbeat?.();
       const result = await runtime.converse(
         ctx.task ?? "composer",
         {
@@ -163,6 +166,7 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
           });
           continue;
         }
+        await ctx.heartbeat?.();
         const outcome = await ctx.tools.call(
           {
             name: call.name,

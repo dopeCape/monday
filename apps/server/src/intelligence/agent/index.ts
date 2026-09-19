@@ -130,6 +130,8 @@ export interface StepRunInput {
   /** A Standing approval answers "standing"; null pauses the Run at the interrupt. */
   approve(row: ActivityRow): Promise<"standing" | null>;
   onTool?: ((row: ActivityRow) => void) | undefined;
+  /** Renews the Job's lease; called before every model and tool call so a long Step is not swept. */
+  heartbeat?: (() => Promise<void>) | undefined;
   /** Resumes the paused thread with the decision instead of starting a new one. */
   resume?: ApprovalDecision | undefined;
 }
@@ -416,6 +418,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           if (now().getTime() > input.deadline) throw new BudgetExceededError("minutes");
         },
         approve: input.approve,
+        heartbeat: input.heartbeat,
       });
       try {
         const result = input.resume

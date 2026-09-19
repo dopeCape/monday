@@ -341,7 +341,16 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
     // Through the Jobs table, never inline: routing first, then the trigger.
     expect((await jobs.get(`${ROUTE_STEP}:${thread.id}`))?.status).toBe("queued");
     expect((await jobs.get(`${WORKFLOW_TRIGGER_STEP}:${thread.id}`))?.status).toBe("queued");
+    // The agentic Step renews its Job's lease around every model and tool call.
+    let renewals = 0;
+    const extend = jobs.extend;
+    jobs.extend = async (...args) => {
+      renewals += 1;
+      return extend(...args);
+    };
     const first = await drain();
+    jobs.extend = extend;
+    expect(renewals).toBe(3);
     expect(first).toEqual([
       ROUTE_STEP,
       WORKFLOW_TRIGGER_STEP,
