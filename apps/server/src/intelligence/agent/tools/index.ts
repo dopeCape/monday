@@ -14,9 +14,12 @@ import { z } from "zod";
 import type { ToolSpec } from "../../runtime/index.ts";
 import type { ActivityLog, ActivityRow } from "../activity.ts";
 import { findTool, TOOL_CATALOG, type ToolContext, type ToolSettings } from "./catalog.ts";
+import type { ToolExtensions } from "./extensions.ts";
 
 export type { ToolDefinition, ToolPlan, ToolSettings } from "./catalog.ts";
 export { TOOL_CATALOG } from "./catalog.ts";
+export type { IntegrationsSeam, McpSeam, ToolExtensions, WorkflowsSeam } from "./extensions.ts";
+export { INTEGRATION_TOOL } from "./extensions.ts";
 
 export interface ToolCallRequest {
   name: string;
@@ -24,13 +27,18 @@ export interface ToolCallRequest {
   /** The model's id for the call; the ledger key within the Session. */
   callId: string;
   sessionId: string | null;
+  /** The Workflow Run a Step calls under; the ledger key beside callId when there is no Session. */
+  runId?: string | null | undefined;
   /** Setting keys the calling Device pins. */
   pinned?: readonly string[] | undefined;
 }
 
 export interface ToolCallContext {
-  /** Shows the preview and waits for the user. In the LangGraph loop this is an interrupt. */
-  ask(row: ActivityRow, preview: ToolPreview): Promise<ApprovalDecision>;
+  /**
+   * Shows the preview and waits for the user. In the LangGraph loop this is
+   * an interrupt; a Workflow Step with a Standing approval answers "standing".
+   */
+  ask(row: ActivityRow, preview: ToolPreview): Promise<ApprovalDecision | "standing">;
   /** Every change to the call's Activity row, so a transport can stream the card. */
   onUpdate?: ((row: ActivityRow) => void) | undefined;
 }
@@ -42,6 +50,12 @@ export interface ToolOutcome {
   isError: boolean;
 }
 
+/** What a tool would do, without doing it: a Dry run reads these. */
+export type ToolPreviewOutcome =
+  | { kind: "result"; text: string }
+  | { kind: "refused"; text: string }
+  | { kind: "action"; preview: ToolPreview; count: number; asks: boolean };
+
 export interface ToolServer {
   /** The tools as the model sees them. */
   specs(): ToolSpec[];
@@ -50,6 +64,8 @@ export interface ToolServer {
   /** The Tier a tool runs at now, promotions included. */
   tierOf(name: string): Promise<Tier | null>;
   call(request: ToolCallRequest, ctx: ToolCallContext): Promise<ToolOutcome>;
+  /** Plans a call and reports the preview without applying it or writing the Activity log. */
+  preview(request: Pick<ToolCallRequest, "name" | "args" | "pinned">): Promise<ToolPreviewOutcome>;
   /** Replays an Activity row's undo record and marks it undone. */
   undo(activityId: string, sessionId?: string | null): Promise<ToolOutcome>;
 }
@@ -59,6 +75,12 @@ export interface ToolServerOptions {
   activity: ActivityLog;
   settings: () => Promise<ToolSettings>;
   now?: () => Date;
+  /**
+   * The seams the extension tools act through. Read at call time, so a
+   * module created after the tool server (the Workflows module, which needs
+   * the Agent host) can fill its slot later.
+   */
+  extensions?: ToolExtensions | undefined;
 }
 
 /** JSON Schema for a tool input, in the object shape MCP requires. */
@@ -119,6 +141,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       const outcome = await server.undo(id, sessionId);
       return { text: outcome.text };
     },
+    extensions: options.extensions,
   });
 
   const finish = async (
@@ -155,11 +178,35 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       return asks(name, await options.settings()) ? "always-ask" : tierOf(tool.tier);
     },
 
+    async preview(request) {
+      const settings = await options.settings();
+      const tool = findTool(request.name);
+      if (!tool) return { kind: "refused", text: `Unknown tool "${request.name}".` };
+      const parsed = tool.input.safeParse(request.args ?? {});
+      if (!parsed.success) {
+        const issues = parsed.error.issues
+          .map((i) => `${i.path.map(String).join(".") || "input"}: ${i.message}`)
+          .join("; ");
+        return { kind: "refused", text: `Invalid input: ${issues}` };
+      }
+      const plan = await tool.run(parsed.data, context(request.pinned ?? [], settings, null));
+      if (plan.kind === "result") return { kind: "result", text: plan.text };
+      if (plan.kind === "refused") return { kind: "refused", text: plan.text };
+      return {
+        kind: "action",
+        preview: plan.preview,
+        count: plan.count,
+        asks: asks(tool.name, settings) || plan.count > settings.previewAbove,
+      };
+    },
+
     async call(request, ctx) {
       const settings = await options.settings();
       const existing = request.sessionId
         ? await activity.findCall(request.sessionId, request.callId)
-        : null;
+        : request.runId
+          ? await activity.findRunCall(request.runId, request.callId)
+          : null;
       if (existing && existing.status !== "waiting" && existing.status !== "running") {
         return {
           activity: existing,
@@ -185,6 +232,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
         const row = await activity.start({
           workspaceId: host.workspaceId,
           sessionId: request.sessionId,
+          runId: request.runId ?? null,
           callId: request.callId,
           tool: request.name,
           tier: fields.tier,
@@ -245,7 +293,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       if (plan.kind === "refused") return fail(row, plan.text);
 
       const needsApproval = tier === "always-ask" || plan.count > settings.previewAbove;
-      let decision: ApprovalDecision | "auto" = "auto";
+      let decision: ApprovalDecision | "auto" | "standing" = "auto";
       if (needsApproval) {
         const waiting = await finish(row, { status: "waiting", preview: plan.preview }, ctx);
         decision = await ctx.ask(waiting, plan.preview);
@@ -311,7 +359,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
         });
         return { activity: row, text: row.resultText ?? "", isError: true };
       }
-      const text = await replayUndo(host, target.undo);
+      const text = await replayUndo(host, target.undo, options.extensions);
       await activity.update(target.id, { undoneAt: now().toISOString() });
       const row = await activity.update((await record()).id, {
         status: "done",
@@ -325,7 +373,11 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
 }
 
 /** Applies an undo record through the host; the wording is what the card and the model read. */
-export async function replayUndo(host: ToolHost, undo: UndoRecord): Promise<string> {
+export async function replayUndo(
+  host: ToolHost,
+  undo: UndoRecord,
+  extensions?: ToolExtensions | undefined,
+): Promise<string> {
   switch (undo.kind) {
     case "intents": {
       const { applied } = await host.applyIntents(undo.intents, { actor: "user" });
@@ -343,6 +395,23 @@ export async function replayUndo(host: ToolHost, undo: UndoRecord): Promise<stri
       return result.applied
         ? "Undone: the send was cancelled and the Draft reopened."
         : "Too late to undo: the message has already been sent.";
+    }
+    case "workflow": {
+      const workflows = extensions?.workflows;
+      if (!workflows) return "Cannot undo: workflows are not available from this host.";
+      if (!undo.previous) {
+        await workflows.remove(undo.workflowId);
+        return "Undone: the workflow was deleted.";
+      }
+      const current = await workflows.get(undo.workflowId);
+      if (!current) return "Cannot undo: the workflow no longer exists.";
+      if (current.version !== undo.previous.version) {
+        await workflows.revert(undo.workflowId, undo.previous.version);
+      }
+      if (current.enabled !== undo.previous.enabled) {
+        await workflows.enable(undo.workflowId, undo.previous.enabled);
+      }
+      return `Undone: the workflow is back at version ${undo.previous.version}, ${undo.previous.enabled ? "enabled" : "disabled"}.`;
     }
   }
 }

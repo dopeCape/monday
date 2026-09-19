@@ -19,17 +19,31 @@ import type {
 } from "@monday/shared";
 import type { HostedRuntime } from "../runtime/index.ts";
 import { type ActivityLog, type ActivityRow, publicActivity } from "./activity.ts";
-import { type AgentGraph, createAgentGraph, type RunContext } from "./graph.ts";
+import {
+  type AgentGraph,
+  BudgetExceededError,
+  createAgentGraph,
+  type InterruptPayload,
+  type RunContext,
+} from "./graph.ts";
 import type { SessionStore } from "./sessions.ts";
-import { createToolServer, type ToolServer } from "./tools/index.ts";
+import { createToolServer, type ToolExtensions, type ToolServer } from "./tools/index.ts";
 
 export type { ActivityLog, ActivityRow } from "./activity.ts";
 export { createActivityLog, createMemoryActivityLog, publicActivity } from "./activity.ts";
+export type { InterruptPayload } from "./graph.ts";
+export { BudgetExceededError } from "./graph.ts";
 export { createServerToolHost } from "./host.ts";
 export type { SessionStore } from "./sessions.ts";
 export { collapseEvents, createMemorySessionStore, createSessionStore } from "./sessions.ts";
-export type { ToolServer } from "./tools/index.ts";
-export { createToolServer, TOOL_CATALOG } from "./tools/index.ts";
+export type {
+  IntegrationsSeam,
+  McpSeam,
+  ToolExtensions,
+  ToolServer,
+  WorkflowsSeam,
+} from "./tools/index.ts";
+export { createToolServer, INTEGRATION_TOOL, TOOL_CATALOG } from "./tools/index.ts";
 
 export interface AgentSettings {
   systemPrompt: string;
@@ -51,11 +65,43 @@ export interface AgentHostOptions {
   /** LangGraph's checkpointer; PostgresSaver in production, memory by default. */
   checkpointer?: BaseCheckpointSaver;
   now?: () => Date;
+  /** The seams of the extension tools; filled after creation by the modules that need this host. */
+  extensions?: ToolExtensions | undefined;
 }
 
 export interface TurnResult {
   /** The Activity row that waits for approval, when the turn paused. */
   waiting: string | null;
+}
+
+/** One agentic Step of a Workflow (ADR 0003): a LangGraph thread of its own under the Run. */
+export interface StepRunInput {
+  workspaceId: string;
+  runId: string;
+  /** The checkpoint thread id: unique per Step within the Run, stable across a resume. */
+  key: string;
+  system: string;
+  prompt: string;
+  /** Tool names the Step may call; null means every tool. */
+  allow: readonly string[] | null;
+  /** The Budget: tool calls, tokens, and the moment the Step must be done by. */
+  maxToolCalls: number;
+  maxTokens: number;
+  deadline: number;
+  /** A Standing approval answers "standing"; null pauses the Run at the interrupt. */
+  approve(row: ActivityRow): Promise<"standing" | null>;
+  onTool?: ((row: ActivityRow) => void) | undefined;
+  /** Resumes the paused thread with the decision instead of starting a new one. */
+  resume?: ApprovalDecision | undefined;
+}
+
+export interface StepRunResult {
+  /** The model's final text; empty while interrupted. */
+  text: string;
+  interrupted: InterruptPayload | null;
+  modelCalls: number;
+  toolCalls: number;
+  tokens: number;
 }
 
 export class SessionNotFoundError extends Error {
@@ -101,6 +147,11 @@ export interface AgentHost {
   undo(activityId: string, sessionId?: string | null): Promise<ActivityRecord>;
   /** The tool server for a Workspace, for the loopback MCP transports. */
   tools(workspaceId: string): ToolServer;
+  /**
+   * Runs one agentic Step through the same graph as a turn, with a tool
+   * allowlist and the Budget enforced: over any cap throws BudgetExceededError.
+   */
+  runStep(input: StepRunInput): Promise<StepRunResult>;
 }
 
 /** The card the composer renders for an Activity row. */
@@ -139,6 +190,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         host: options.hostFor(workspaceId),
         activity,
         now,
+        extensions: options.extensions,
         settings: async () => {
           const s = await options.settings();
           return {
@@ -237,6 +289,59 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
 
   return {
     tools,
+
+    async runStep(input) {
+      if (running.has(input.key)) throw new TurnBusyError(input.key);
+      let tokens = 0;
+      let text = "";
+      running.set(input.key, {
+        workspaceId: input.workspaceId,
+        sessionId: input.key,
+        runId: input.runId,
+        system: input.system,
+        pinned: [],
+        // One model call per tool round plus the closing answer.
+        maxSteps: input.maxToolCalls + 1,
+        maxToolCalls: input.maxToolCalls,
+        tools: tools(input.workspaceId),
+        task: "agentic-step",
+        allow: input.allow ?? undefined,
+        onText: () => {},
+        onAssistant: (answer) => {
+          text = answer;
+        },
+        onTool: (row) => input.onTool?.(row),
+        onUsage: (usage) => {
+          tokens += usage.inputTokens + usage.outputTokens;
+          if (tokens > input.maxTokens) throw new BudgetExceededError("tokens");
+          if (now().getTime() > input.deadline) throw new BudgetExceededError("minutes");
+        },
+        approve: input.approve,
+      });
+      try {
+        const result = input.resume
+          ? await graph.resume(input.key, input.resume)
+          : await graph.turn(input.key, input.prompt);
+        const last = result.state.messages.at(-1);
+        if (
+          !result.interrupted &&
+          last?.role === "assistant" &&
+          last.toolCalls.length > 0 &&
+          result.state.steps >= input.maxToolCalls + 1
+        ) {
+          throw new BudgetExceededError("calls");
+        }
+        return {
+          text: result.interrupted ? "" : text || (last?.role === "assistant" ? last.content : ""),
+          interrupted: result.interrupted,
+          modelCalls: result.state.steps,
+          toolCalls: result.state.toolCalls,
+          tokens,
+        };
+      } finally {
+        running.delete(input.key);
+      }
+    },
 
     async createSession(workspaceId) {
       const choice = await runtime.resolve("composer");

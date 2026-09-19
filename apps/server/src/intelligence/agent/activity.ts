@@ -20,6 +20,8 @@ import { activity } from "../../db/schema.ts";
 export interface ActivityStart {
   workspaceId: string;
   sessionId: string | null;
+  /** The Workflow Run a Step runs under; with callId, the ledger key for Runs. */
+  runId?: string | null;
   callId: string | null;
   tool: string;
   tier: Tier;
@@ -32,7 +34,7 @@ export interface ActivityStart {
 
 export interface ActivityPatch {
   status?: ToolCall["status"];
-  decision?: ApprovalDecision | "auto" | null;
+  decision?: ApprovalDecision | "auto" | "standing" | null;
   preview?: ToolPreview | null;
   summary?: string;
   result?: unknown;
@@ -55,9 +57,11 @@ export interface ActivityLog {
   get(id: string): Promise<ActivityRow | null>;
   /** The row for a model's call id in a Session, if the call was already started. */
   findCall(sessionId: string, callId: string): Promise<ActivityRow | null>;
+  /** The same ledger for a Workflow Run's Steps. */
+  findRunCall(runId: string, callId: string): Promise<ActivityRow | null>;
   list(
     workspaceId: string,
-    options?: { limit?: number; sessionId?: string },
+    options?: { limit?: number; sessionId?: string; runId?: string },
   ): Promise<ActivityRow[]>;
   /** The newest done row with an undo record that has not been undone, in the Session or the Workspace. */
   latestUndoable(workspaceId: string, sessionId?: string | null): Promise<ActivityRow | null>;
@@ -86,12 +90,12 @@ function project(r: Row): ActivityRow {
     id: r.id,
     workspaceId: r.workspaceId,
     sessionId: r.sessionId,
-    runId: null,
+    runId: r.runId ?? null,
     tool: r.tool,
     tier: r.tier ?? "read-only",
     inputSummary: r.summary,
     status: r.status,
-    approvedBy: r.decision === "approved" ? "user" : null,
+    approvedBy: r.decision === "approved" ? "user" : r.decision === "standing" ? "standing" : null,
     ...(resultText !== undefined ? { result: resultLine(resultText) } : {}),
     undoable: r.undo !== null && r.undoneAt === null && r.status === "done",
     undoneAt: r.undoneAt?.toISOString() ?? null,
@@ -125,11 +129,12 @@ export function createActivityLog(db: Db, options: { now?: () => Date } = {}): A
         .values({
           id,
           workspaceId: entry.workspaceId,
-          actor: "agent",
+          actor: entry.runId ? "automation" : "agent",
           tool: entry.tool,
           summary: entry.summary,
           at: now(),
           sessionId: entry.sessionId,
+          runId: entry.runId ?? null,
           callId: entry.callId,
           tier: entry.tier,
           input: entry.input,
@@ -175,6 +180,13 @@ export function createActivityLog(db: Db, options: { now?: () => Date } = {}): A
       return row ? project(row) : null;
     },
 
+    async findRunCall(runId, callId) {
+      const row = await db.query.activity.findFirst({
+        where: and(eq(activity.runId, runId), eq(activity.callId, callId)),
+      });
+      return row ? project(row) : null;
+    },
+
     async list(workspaceId, opts = {}) {
       const rows = await db
         .select()
@@ -183,6 +195,7 @@ export function createActivityLog(db: Db, options: { now?: () => Date } = {}): A
           and(
             eq(activity.workspaceId, workspaceId),
             ...(opts.sessionId ? [eq(activity.sessionId, opts.sessionId)] : []),
+            ...(opts.runId ? [eq(activity.runId, opts.runId)] : []),
           ),
         )
         .orderBy(desc(activity.at), desc(activity.id))
@@ -226,7 +239,7 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
         id: crypto.randomUUID(),
         workspaceId: entry.workspaceId,
         sessionId: entry.sessionId,
-        runId: null,
+        runId: entry.runId ?? null,
         tool: entry.tool,
         tier: entry.tier,
         inputSummary: entry.summary,
@@ -234,7 +247,7 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
         approvedBy: null,
         undoable: false,
         undoneAt: null,
-        actor: "agent",
+        actor: entry.runId ? "automation" : "agent",
         callId: entry.callId,
         input: entry.input,
         preview: entry.preview,
@@ -253,7 +266,12 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
       if (patch.status !== undefined) row.status = patch.status;
       if (patch.decision !== undefined) {
         row.decision = patch.decision;
-        row.approvedBy = patch.decision === "approved" ? "user" : null;
+        row.approvedBy =
+          patch.decision === "approved"
+            ? "user"
+            : patch.decision === "standing"
+              ? "standing"
+              : null;
       }
       if (patch.preview !== undefined) row.preview = patch.preview;
       if (patch.summary !== undefined) row.inputSummary = patch.summary;
@@ -274,11 +292,16 @@ export function createMemoryActivityLog(options: { now?: () => Date } = {}): Act
     async findCall(sessionId, callId) {
       return rows.find((r) => r.sessionId === sessionId && r.callId === callId) ?? null;
     },
+    async findRunCall(runId, callId) {
+      return rows.find((r) => r.runId === runId && r.callId === callId) ?? null;
+    },
     async list(workspaceId, opts = {}) {
       return rows
         .filter(
           (r) =>
-            r.workspaceId === workspaceId && (!opts.sessionId || r.sessionId === opts.sessionId),
+            r.workspaceId === workspaceId &&
+            (!opts.sessionId || r.sessionId === opts.sessionId) &&
+            (!opts.runId || r.runId === opts.runId),
         )
         .slice()
         .reverse()

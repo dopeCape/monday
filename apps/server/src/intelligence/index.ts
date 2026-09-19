@@ -4,7 +4,10 @@
 // (Groups, the classify and route Tasks, Needs a decision); slice 13 adds the
 // brief policy and the background Job around it; slice 14 adds the Agent host
 // (the tool server, Sessions, the Activity log and the LangGraph loop) over
-// the same runtime.
+// the same runtime. Slice 16 adds the Workflows module beside it: it needs
+// the Agent host (the tool server, the graph) and the Agent host's tools
+// need it back, so the module is made here and handed to the tool server's
+// extension slot after both exist.
 
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { HostedState } from "@monday/shared";
@@ -17,11 +20,22 @@ import type { Jobs } from "../jobs/index.ts";
 import type { Mailstore } from "../mailstore/index.ts";
 import { readGlobalSettings } from "../settings/read.ts";
 import {
+  createHttpIntegrations,
+  createSdkMcpClients,
+  createWorkflows,
+  type Integrations,
+  type McpClients,
+  type WorkflowSettings,
+  type Workflows,
+} from "../workflows/index.ts";
+import {
+  type ActivityLog,
   type AgentHost,
   createActivityLog,
   createAgentHost,
   createServerToolHost,
   createSessionStore,
+  type ToolExtensions,
 } from "./agent/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
@@ -37,8 +51,18 @@ import {
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
 
-export type { AgentHost, AgentSettings, TurnResult } from "./agent/index.ts";
-export { SessionNotFoundError, TurnBusyError } from "./agent/index.ts";
+export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
+export {
+  createFakeIntegrations,
+  createFakeMcpClients,
+  RunNotWaitingError,
+  WORKFLOW_SCHEDULE_STEP,
+  WORKFLOW_STEP_STEP,
+  WORKFLOW_TRIGGER_STEP,
+  WorkflowNotFoundError,
+} from "../workflows/index.ts";
+export type { ActivityLog, AgentHost, AgentSettings, TurnResult } from "./agent/index.ts";
+export { BudgetExceededError, SessionNotFoundError, TurnBusyError } from "./agent/index.ts";
 export type { BriefRequest, BriefSettings, Briefs, ThreadVersion } from "./brief.ts";
 export {
   BRIEF_STEP,
@@ -99,6 +123,10 @@ export interface IntelligenceOptions {
   drafts?: Drafts;
   /** LangGraph's checkpointer; the entry passes PostgresSaver, the default keeps checkpoints in memory. */
   checkpointer?: BaseCheckpointSaver;
+  /** The integrations the Workflow steps post through; HTTP by default, the fake in tests. */
+  integrations?: Integrations;
+  /** The MCP servers as steps; the SDK client by default, the fake in tests. */
+  mcp?: McpClients;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -111,6 +139,8 @@ export interface Intelligence {
   policy: BriefPolicyRule;
   routing: Routing;
   agent: AgentHost;
+  activity: ActivityLog;
+  workflows: Workflows;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
   registerSteps(jobs: Jobs): void;
@@ -141,6 +171,21 @@ const POLICY_SETTING_KEYS = [
   "briefs.fyi_min_messages",
   "briefs.fyi_min_words",
   "briefs.automated_senders",
+] as const;
+
+const WORKFLOW_SETTING_KEYS = [
+  "workflows.placement",
+  "workflows.ask_before_enable",
+  "workflows.notify_on_failure",
+  "workflows.run_retention_days",
+  "workflows.budget.tool_calls",
+  "workflows.budget.tokens",
+  "workflows.budget.minutes",
+  "workflows.agentic.system_prompt",
+  "workflows.step_retries",
+  "workflows.trigger.routing_wait_seconds",
+  "workflows.dry_run.recent",
+  "strings.workflows.failed_notice",
 ] as const;
 
 const ROUTING_SETTING_KEYS = [
@@ -248,12 +293,28 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   });
 
   const drafts = options.drafts ?? createDrafts({ db, mailstore, now });
+  const activity = createActivityLog(db, { now });
+  const integrations =
+    options.integrations ??
+    createHttpIntegrations({
+      config: async () =>
+        (await readGlobalSettings(db, ["workflows.integrations"]))["workflows.integrations"],
+    });
+  const mcp =
+    options.mcp ??
+    createSdkMcpClients({
+      servers: async () =>
+        (await readGlobalSettings(db, ["workflows.mcp_servers"]))["workflows.mcp_servers"],
+    });
+  // Filled once the Workflows module exists; the tool server reads it per call.
+  const extensions: ToolExtensions = { integrations, mcp };
   const agent = createAgentHost({
     runtime,
-    activity: createActivityLog(db, { now }),
+    activity,
     sessions: createSessionStore(db, { now }),
     hostFor: (workspaceId) => createServerToolHost({ db, mailstore, drafts, workspaceId, now }),
     ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
+    extensions,
     now,
     settings: async () => {
       const s = await readGlobalSettings(db, AGENT_SETTING_KEYS);
@@ -275,6 +336,38 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
 
+  const workflows = createWorkflows({
+    db,
+    mailstore,
+    runtime,
+    agent,
+    activity,
+    integrations,
+    mcp,
+    now,
+    log,
+    settings: async (): Promise<WorkflowSettings> => {
+      const s = await readGlobalSettings(db, WORKFLOW_SETTING_KEYS);
+      return {
+        placement: s["workflows.placement"],
+        askBeforeEnable: s["workflows.ask_before_enable"],
+        notifyOnFailure: s["workflows.notify_on_failure"],
+        retentionDays: s["workflows.run_retention_days"],
+        budget: {
+          calls: s["workflows.budget.tool_calls"],
+          tokens: s["workflows.budget.tokens"],
+          minutes: s["workflows.budget.minutes"],
+        },
+        agenticSystemPrompt: s["workflows.agentic.system_prompt"],
+        stepRetries: s["workflows.step_retries"],
+        routingWaitSeconds: s["workflows.trigger.routing_wait_seconds"],
+        dryRunRecent: s["workflows.dry_run.recent"],
+        failedNotice: s["strings.workflows.failed_notice"],
+      };
+    },
+  });
+  extensions.workflows = workflows;
+
   return {
     runtime,
     keys,
@@ -283,6 +376,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     policy,
     routing,
     agent,
+    activity,
+    workflows,
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(
@@ -297,6 +392,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     registerSteps(jobs) {
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
+      workflows.registerSteps(jobs);
     },
   };
 }

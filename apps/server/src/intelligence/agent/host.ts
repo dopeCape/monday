@@ -265,6 +265,16 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
       return { value, pinned: false };
     },
 
+    async readAttachment(attachmentId) {
+      try {
+        const a = await mailstore.readAttachment(attachmentId);
+        return { name: a.name, mediaType: a.mediaType, bytes: a.bytes };
+      } catch (error) {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      }
+    },
+
     async writeSetting(key, value) {
       if (!isSettingKey(key)) throw new Error(`unknown setting ${key}`);
       // A Device-scoped Setting changed by the Agent lands in the global row,

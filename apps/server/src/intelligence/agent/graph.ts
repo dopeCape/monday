@@ -19,8 +19,8 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph";
-import type { ApprovalDecision, ToolPreview } from "@monday/shared";
-import type { AgentMessage, HostedRuntime } from "../runtime/index.ts";
+import type { ApprovalDecision, Task, ToolPreview, Usage } from "@monday/shared";
+import type { AgentMessage, HostedRuntime, ToolSpec } from "../runtime/index.ts";
 import type { ActivityRow } from "./activity.ts";
 import type { ToolServer } from "./tools/index.ts";
 
@@ -31,7 +31,17 @@ export const AgentState = Annotation.Root({
   }),
   /** Model calls made in the current turn; reset to 0 by each new user turn. */
   steps: Annotation<number>({ reducer: (_, b) => b, default: () => 0 }),
+  /** Tool calls made over the whole thread, for an agentic Step's Budget. */
+  toolCalls: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }),
 });
+
+/** An agentic Step spent more than its Budget allows (CONTEXT.md "Budget": the Run fails). */
+export class BudgetExceededError extends Error {
+  constructor(readonly cap: "calls" | "tokens" | "minutes") {
+    super(`budget exceeded: ${cap}`);
+    this.name = "BudgetExceededError";
+  }
+}
 
 export type AgentStateType = typeof AgentState.State;
 
@@ -54,6 +64,21 @@ export interface RunContext {
   onText(delta: string): void;
   onAssistant(text: string): void;
   onTool(row: ActivityRow): void;
+  /** The Task the model calls meter under; the composer by default, agentic-step for a Workflow. */
+  task?: Task | undefined;
+  /** Tool names the model may see and call; absent means the whole catalog. */
+  allow?: readonly string[] | undefined;
+  /** The Workflow Run the calls are ledgered under, when this is an agentic Step. */
+  runId?: string | null | undefined;
+  /** Told after every model call; may throw to stop the loop (a Budget). */
+  onUsage?: ((usage: Usage) => void) | undefined;
+  /** The most tool calls the thread may make; the next one over fails the loop. */
+  maxToolCalls?: number | undefined;
+  /**
+   * Answers a tool's approval without an interrupt when it can (a Standing
+   * approval); returning null falls back to the interrupt.
+   */
+  approve?: ((row: ActivityRow) => Promise<"standing" | null>) | undefined;
 }
 
 export interface AgentGraphOptions {
@@ -94,16 +119,20 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
   const graph = new StateGraph(AgentState)
     .addNode("model", async (state, config) => {
       const ctx = options.contextFor(sessionOf(config));
+      const allowed: ToolSpec[] = ctx.allow
+        ? ctx.tools.specs().filter((t) => ctx.allow?.includes(t.name))
+        : ctx.tools.specs();
       const result = await runtime.converse(
-        "composer",
+        ctx.task ?? "composer",
         {
           system: ctx.system,
           messages: state.messages,
-          tools: ctx.tools.specs(),
+          tools: allowed,
           onText: ctx.onText,
         },
         { workspaceId: ctx.workspaceId },
       );
+      ctx.onUsage?.(result.usage);
       if (result.text) ctx.onAssistant(result.text);
       const message: AgentMessage = {
         role: "assistant",
@@ -118,16 +147,35 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
       if (!assistant) return { messages: [] };
       const results: AgentMessage[] = [];
       for (const call of assistant.toolCalls) {
+        if (
+          ctx.maxToolCalls !== undefined &&
+          state.toolCalls + results.length >= ctx.maxToolCalls
+        ) {
+          throw new BudgetExceededError("calls");
+        }
+        if (ctx.allow && !ctx.allow.includes(call.name)) {
+          results.push({
+            role: "tool",
+            toolCallId: call.id,
+            name: call.name,
+            content: `The tool "${call.name}" is not allowed in this step.`,
+            isError: true,
+          });
+          continue;
+        }
         const outcome = await ctx.tools.call(
           {
             name: call.name,
             args: call.args,
             callId: call.id,
-            sessionId: ctx.sessionId,
+            sessionId: ctx.runId ? null : ctx.sessionId,
+            runId: ctx.runId ?? null,
             pinned: ctx.pinned,
           },
           {
             ask: async (row, preview) => {
+              const standing = ctx.approve ? await ctx.approve(row) : null;
+              if (standing) return standing;
               const payload: InterruptPayload = {
                 activityId: row.id,
                 callId: call.id,
@@ -147,7 +195,7 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
           ...(outcome.isError ? { isError: true } : {}),
         });
       }
-      return { messages: results };
+      return { messages: results, toolCalls: results.length };
     })
     .addEdge(START, "model")
     .addConditionalEdges("model", (state) =>
