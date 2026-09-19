@@ -210,6 +210,8 @@ describe("Briefs end to end: the policy, the Job, the feed and the Cache", () =>
       return answers.reply;
     });
     intelligence = createIntelligence({
+      // Slice 13 ran before the AI level existed; it assumes the full level (slice 20).
+      level: async () => "automate",
       db: db.handle.db,
       mailstore,
       chat: chat.chat,

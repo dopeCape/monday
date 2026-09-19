@@ -13,7 +13,7 @@
 // local, and never waiting on the Server. A Section the Server assigned
 // (the section Task) is kept as is.
 
-import type { Brief, Message, SectionRuleSetting, Thread } from "@monday/shared";
+import type { AiLevel, Brief, Message, SectionRuleSetting, Thread } from "@monday/shared";
 import { sectionOf } from "@monday/shared";
 import {
   ALL_THREADS_SQL,
@@ -55,6 +55,8 @@ export interface StoreInboxOptions {
   remoteImages?: (() => boolean) | undefined;
   /** The Section rules; absent leaves every Thread's Section as the Cache has it. */
   sections?: SectionSource | undefined;
+  /** The AI level, read at open time: at `off` no Brief is asked for (CONTEXT.md "AI level"). */
+  level?: (() => AiLevel) | undefined;
   log?: ((message: string) => void) | undefined;
 }
 
@@ -122,6 +124,7 @@ export async function createStoreInbox(
 
   /** Asks the Server for a Brief; the answer arrives through the feed. Never throws. */
   const askBrief = async (threadId: string, trigger: "open" | "user") => {
+    if (options.level?.() === "off") return;
     const content = options.content;
     if (!content) return;
     try {

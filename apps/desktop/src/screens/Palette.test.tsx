@@ -48,7 +48,7 @@ async function mount(props: Partial<InboxProps> = {}) {
   const searched: string[] = [];
   await act(async () =>
     r.render(
-      <StaticShell>
+      <StaticShell settings={{ "ai.level": "automate" }}>
         <Inbox
           inbox={fixtureInbox()}
           now={NOW}

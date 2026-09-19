@@ -100,6 +100,7 @@ function Root() {
       createStoreInbox(store, {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],
+        level: () => settingsRef.current["ai.level"],
         // The Section rules run here, on the client, over the Cache (CONTEXT.md "Section rule").
         sections: {
           rules: () => settingsRef.current["sections.rules"],
