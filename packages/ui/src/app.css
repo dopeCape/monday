@@ -2014,10 +2014,6 @@ button.msg {
   background: transparent;
   padding: 10px 0 0;
 }
-.scard.sheet > .scard-main {
-  display: block;
-  padding: 22px 24px 20px;
-}
 .with-mark {
   display: inline-flex;
   align-items: center;
@@ -2146,9 +2142,9 @@ button.msg {
   padding: 0 4px;
 }
 .sresult .show-in .crumb {
+  display: inline-block;
   color: var(--fg-faint);
   font-weight: 400;
-  text-decoration: none;
 }
 
 .swatches {
@@ -4073,6 +4069,18 @@ button.prov {
 .wizard-foot > div {
   display: flex;
   gap: 8px;
+}
+/* the wizard inside a settings card (Connect an account) */
+.scard.sheet {
+  padding: 20px 24px 18px;
+}
+.scard.sheet .wizard {
+  max-width: none;
+}
+.scard.sheet .wizard-title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .wizard-figure {
   border: 1px solid var(--border);

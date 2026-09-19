@@ -2778,6 +2778,11 @@ export const settingsSchema = {
     "Could not check: {message}",
   ),
   "strings.settings.about.release_notes": str("about", "About: release notes", "Release notes"),
+  "strings.settings.about.no_release": str(
+    "about",
+    "About: no release yet",
+    "No release published yet; this is a development build.",
+  ),
   /* The Settings page: search, the page index, card footers, danger actions */
   "strings.settings.search.placeholder": str(
     "appearance",

@@ -97,7 +97,9 @@ export interface SettingsProps {
   keys?: DeviceProviderKeys | undefined;
   serverProps?: ServerProps | undefined;
   /** The newest release for "Check for updates"; tests script it. */
-  latestRelease?: ((source: string) => Promise<{ version: string; url: string }>) | undefined;
+  latestRelease?:
+    | ((source: string) => Promise<{ version: string; url: string } | null>)
+    | undefined;
   workspaceId?: string | undefined;
   version?: string | undefined;
   now?: (() => Date) | undefined;
@@ -417,8 +419,11 @@ export function Settings({
 
 /**
  * The right-hand index of the current section's groups. The active group
- * follows the scroll position through an IntersectionObserver over the group
- * anchors inside the page's scroller; a click scrolls smoothly to the group.
+ * follows the scroll position: an IntersectionObserver over the group
+ * anchors inside the page's scroller fires as they cross the viewport, and
+ * the group whose top is closest above the reading line (a third of the way
+ * down) is the one being read. A click scrolls smoothly to the group and
+ * holds it active while the scroll settles.
  */
 export function PageIndex({
   groups,
@@ -431,30 +436,30 @@ export function PageIndex({
 }) {
   const s = useShell().settings;
   const [active, setActive] = useState<string | null>(groups[0] ?? null);
+  const holdUntil = useRef(0);
+  const key = groups.join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the group list is compared by its names
   useEffect(() => {
     const root = scroller.current;
     if (!root || typeof IntersectionObserver === "undefined") return;
-    const visible = new Set<string>();
-    const order = [...groups];
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          const name = (e.target as HTMLElement).dataset.group;
-          if (!name) continue;
-          if (e.isIntersecting) visible.add(name);
-          else visible.delete(name);
-        }
-        const first = order.find((g) => visible.has(g));
-        if (first) setActive(first);
-      },
-      { root, rootMargin: "-8% 0px -65% 0px", threshold: 0 },
-    );
-    for (const name of groups) {
-      const el = root.querySelector(`#${groupId(name)}`);
-      if (el) io.observe(el);
-    }
+    const anchors = groups
+      .map((name) => root.querySelector<HTMLElement>(`#${groupId(name)}`))
+      .filter((el): el is HTMLElement => el !== null);
+    const read = () => {
+      if (Date.now() < holdUntil.current) return;
+      const top = root.getBoundingClientRect().top;
+      const line = top + root.clientHeight * 0.33;
+      let current: string | null = null;
+      for (const el of anchors) {
+        if (el.getBoundingClientRect().top <= line) current = el.dataset.group ?? null;
+        else break;
+      }
+      setActive(current ?? anchors[0]?.dataset.group ?? null);
+    };
+    const io = new IntersectionObserver(read, { root, threshold: [0, 0.25, 0.5, 0.75, 1] });
+    for (const el of anchors) io.observe(el);
     return () => io.disconnect();
-  }, [groups, scroller]);
+  }, [key, scroller]);
   if (groups.length < 2) return <aside className="settings-index" aria-hidden="true" />;
   return (
     <aside className="settings-index" aria-label={s["strings.settings.index.title"]}>
@@ -467,6 +472,7 @@ export function PageIndex({
           data-index-group={g}
           onClick={(e) => {
             e.preventDefault();
+            holdUntil.current = Date.now() + 1200;
             setActive(g);
             onJump(g);
           }}

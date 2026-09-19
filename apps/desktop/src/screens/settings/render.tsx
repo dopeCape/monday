@@ -78,7 +78,9 @@ export interface SettingsScreen {
   /** Opens a section and scrolls to a card or group; the search results' "Show in section". Absent outside the Settings page. */
   navigate?: ((section: SettingSection, target?: string) => void) | undefined;
   /** The newest release for "Check for updates"; GitHub's releases API by default. Tests script it. */
-  latestRelease?: ((source: string) => Promise<{ version: string; url: string }>) | undefined;
+  latestRelease?:
+    | ((source: string) => Promise<{ version: string; url: string } | null>)
+    | undefined;
 }
 
 const ScreenContext = createContext<SettingsScreen | null>(null);

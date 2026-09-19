@@ -320,7 +320,7 @@ function JmapForm({
   return (
     <div className="wizard">
       <div className="wizard-head">
-        <h1>{s["strings.accounts.pick.fastmail"]}</h1>
+        <h1 className="wizard-title">{s["strings.accounts.pick.fastmail"]}</h1>
       </div>
       <div className="wizard-step">
         <p className="wizard-sentence">{s["strings.accounts.jmap.help"]}</p>
@@ -426,7 +426,7 @@ function ImapForm({
   return (
     <div className="wizard">
       <div className="wizard-head">
-        <h1>{s["strings.accounts.pick.imap"]}</h1>
+        <h1 className="wizard-title">{s["strings.accounts.pick.imap"]}</h1>
       </div>
       <div className="wizard-step">
         <div className="wizard-fields">
@@ -685,7 +685,7 @@ export function Wizard(props: WizardProps) {
   return (
     <div className="wizard" data-step={state.step}>
       <div className="wizard-head">
-        <h1>{title}</h1>
+        <h1 className="wizard-title">{title}</h1>
         {!finished ? (
           <span className="wizard-progress">
             {fill(s["strings.accounts.wizard.step_of"], { n, total })}

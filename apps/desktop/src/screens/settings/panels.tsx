@@ -987,6 +987,7 @@ type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "latest" }
+  | { kind: "none" }
   | { kind: "available"; version: string; url: string }
   | { kind: "failed"; message: string };
 
@@ -1022,9 +1023,11 @@ export function AboutPanel(_: PanelProps) {
     try {
       const latest = await (screen.latestRelease ?? fetchLatestRelease)(source);
       setUpdate(
-        isNewerVersion(latest.version, screen.version)
-          ? { kind: "available", version: latest.version, url: latest.url }
-          : { kind: "latest" },
+        latest === null
+          ? { kind: "none" }
+          : isNewerVersion(latest.version, screen.version)
+            ? { kind: "available", version: latest.version, url: latest.url }
+            : { kind: "latest" },
       );
     } catch (e) {
       setUpdate({ kind: "failed", message: messageOf(e) });
@@ -1049,13 +1052,15 @@ export function AboutPanel(_: PanelProps) {
                   ? s["strings.settings.about.checking"]
                   : update.kind === "latest"
                     ? s["strings.settings.about.latest"]
-                    : update.kind === "available"
-                      ? fill(s["strings.settings.about.update_available"], {
-                          version: update.version,
-                        })
-                      : fill(s["strings.settings.about.update_failed"], {
-                          message: update.message,
-                        })}
+                    : update.kind === "none"
+                      ? s["strings.settings.about.no_release"]
+                      : update.kind === "available"
+                        ? fill(s["strings.settings.about.update_available"], {
+                            version: update.version,
+                          })
+                        : fill(s["strings.settings.about.update_failed"], {
+                            message: update.message,
+                          })}
               </span>
               <span className="sp" />
               {update.kind === "available" ? (
@@ -1094,18 +1099,19 @@ registerPanel("about", "About", AboutPanel, {
   searchTerms: ["about", "version", "update", "license", "source", "github", "telemetry", "mit"],
 });
 
-/** The newest release of the source repository, from GitHub's releases API. */
+/** The newest release of the source repository from GitHub's releases API; null when none is published. */
 export async function fetchLatestRelease(
   source: string,
-): Promise<{ version: string; url: string }> {
+): Promise<{ version: string; url: string } | null> {
   const m = /github\.com\/([^/]+)\/([^/]+)/.exec(source);
   if (!m) throw new Error("no release source");
   const r = await fetch(`https://api.github.com/repos/${m[1]}/${m[2]}/releases/latest`, {
     headers: { accept: "application/vnd.github+json" },
   });
+  if (r.status === 404) return null;
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const body = (await r.json()) as { tag_name?: string; html_url?: string };
-  if (!body.tag_name) throw new Error("no release yet");
+  if (!body.tag_name) return null;
   return { version: body.tag_name, url: body.html_url ?? `${source}/releases` };
 }
 
