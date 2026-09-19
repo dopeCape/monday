@@ -19,6 +19,7 @@ import { desiredRuntime, runtimeLine } from "../agent/runtimeLine.ts";
 import { useAgentSession } from "../agent/useAgentSession.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
+import { AddAccount } from "./settings/AddAccount.tsx";
 import { levelCards, RuntimeStep, useRuntimeConfigured } from "./settings/controls.tsx";
 import {
   type RuntimeDetection,
@@ -48,12 +49,21 @@ export interface OnboardingProps {
   screenWidth?: number | undefined;
   /** Opens on the conversation at once (the dev server's fixture state); the level is not touched. */
   initialStep?: "chat" | undefined;
+  /**
+   * `welcome` is the first run before any Account exists: level, runtime, keymap,
+   * then connecting the first Account. `account` (default) is the offer each new
+   * Account gets; after a welcome it opens on the conversation.
+   */
+  mode?: "welcome" | "account" | undefined;
   now?: Date | undefined;
   /** Leaves the screen: after Done, Skip the rest, or when nothing is left to ask. */
   onDone: () => void;
 }
 
-type Step = "level" | "runtime" | "chat" | "keymap";
+type Step = "level" | "runtime" | "chat" | "keymap" | "connect";
+
+/** The onboarding.state key of the welcome run, which belongs to no Account. */
+export const WELCOME_KEY = "welcome";
 
 /** Density from the screen size (docs/spec/onboarding.md, "What it seeds"). */
 export function densityFor(width: number): Density {
@@ -136,6 +146,7 @@ function OnboardingBody({
   rerun = false,
   screenWidth,
   initialStep,
+  mode = "account",
   now: nowProp,
   onDone,
 }: OnboardingProps) {
@@ -144,7 +155,9 @@ function OnboardingBody({
   const now = nowProp ?? new Date();
   const current = s["ai.level"];
   const [step, setStep] = useState<Step>(initialStep ?? "level");
-  const [chosen, setChosen] = useState<AiLevel | null>(rerun ? current : null);
+  const [chosen, setChosen] = useState<AiLevel | null>(
+    rerun || initialStep === "chat" ? current : null,
+  );
   const [finished, setFinished] = useState(false);
   const seeded = useRef(false);
 
@@ -228,8 +241,13 @@ function OnboardingBody({
   };
   const applyLevel = async (level: AiLevel) => {
     if (level !== current) await shell.set("ai.level", level);
-    if (level === "off") setStep("keymap");
+    if (level === "off" || mode === "welcome") setStep("keymap");
     else setStep("chat");
+  };
+  /** After the keymap: the welcome connects the first Account; an Account's offer is done. */
+  const afterKeymap = () => {
+    if (mode === "welcome") setStep("connect");
+    else finish("completed");
   };
 
   const keymaps: ChoiceCard<KeymapChoice>[] = [
@@ -337,9 +355,23 @@ function OnboardingBody({
               />
               <div className="actions">
                 <span className="sp" />
-                <Btn primary onClick={() => finish("completed")}>
-                  {s["strings.onboarding.done"]}
+                <Btn primary onClick={afterKeymap}>
+                  {mode === "welcome"
+                    ? s["strings.onboarding.continue"]
+                    : s["strings.onboarding.done"]}
                 </Btn>
+              </div>
+            </>
+          ) : null}
+
+          {step === "connect" ? (
+            <>
+              <h1>{s["strings.onboarding.connect_title"]}</h1>
+              <p>{s["strings.onboarding.connect_intro"]}</p>
+              <AddAccount onAdded={() => finish("completed")} />
+              <div className="actions">
+                <span className="sp" />
+                <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.connect_later"]}</Btn>
               </div>
             </>
           ) : null}

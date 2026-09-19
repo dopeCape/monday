@@ -9,6 +9,7 @@ import { platform } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
+import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import { createSearch, type FetchBodies } from "./search/index.ts";
@@ -224,9 +225,23 @@ function WorkspaceGate() {
 
   if (server && accounts === null) return null;
   if (!current) {
+    // First run: the level cards, the keymap, then the first Account. Once the
+    // welcome has run (or was skipped), the Accounts screen waits for one.
+    const welcomed = shell.settings["onboarding.state"][WELCOME_KEY] !== undefined;
     return (
       <div className="app" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
-        <Settings initialSection="accounts" />
+        {welcomed ? (
+          <Settings initialSection="accounts" />
+        ) : (
+          <Onboarding
+            mode="welcome"
+            accountId={WELCOME_KEY}
+            workspaceId=""
+            address=""
+            agentClient={null}
+            onDone={() => void shell.refresh()}
+          />
+        )}
       </div>
     );
   }

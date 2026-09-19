@@ -38,7 +38,7 @@ import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
-import { Onboarding } from "./screens/Onboarding.tsx";
+import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import {
   ONBOARDING_FIXTURE_SENDERS,
   onboardingFixtureClient,
@@ -219,6 +219,8 @@ export function App({
   const [onboarding, setOnboarding] = useState<{
     account: AccountView | null;
     rerun: boolean;
+    /** The welcome already asked the level and keymap; open on the conversation. */
+    afterWelcome?: boolean;
   } | null>(null);
   const [found, setFound] = useState<AccountView[] | null>(null);
   const foundRef = useRef(found);
@@ -340,11 +342,22 @@ export function App({
     const fresh = found.find((a) => !state[a.id] && !offered.current.has(a.id));
     if (!fresh) return;
     offered.current.add(fresh.id);
+    // The welcome already asked the level and the keymap: with AI off there is
+    // nothing left to ask, and otherwise the offer opens on the conversation.
+    const welcomed = state[WELCOME_KEY] !== undefined;
+    const aiOff = shellRef.current.settings["ai.level"] === "off";
+    if (welcomed && aiOff) {
+      void shellRef.current.set("onboarding.state", {
+        ...state,
+        [fresh.id]: { status: "completed", at: new Date().toISOString() },
+      });
+      return;
+    }
     void shellRef.current.set("onboarding.state", {
       ...state,
       [fresh.id]: { status: "offered", at: new Date().toISOString() },
     });
-    setOnboarding({ account: fresh, rerun: false });
+    setOnboarding({ account: fresh, rerun: false, afterWelcome: welcomed });
     setActive("onboarding");
   }, [found]);
   const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
@@ -453,7 +466,7 @@ export function App({
           workspaceId={onboarding?.account?.workspaceId ?? ws.id}
           address={onboarding?.account?.address ?? ws.address}
           agentClient={fixtureChat ? onboardingFixtureClient(() => now) : client}
-          initialStep={fixtureChat ? "chat" : undefined}
+          initialStep={fixtureChat || onboarding?.afterWelcome ? "chat" : undefined}
           runtimes={detection}
           keys={keys}
           senders={fixtureChat ? ONBOARDING_FIXTURE_SENDERS : senders}

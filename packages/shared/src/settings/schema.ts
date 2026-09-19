@@ -3158,7 +3158,18 @@ export const settingsSchema = {
   "strings.onboarding.intro": str(
     "accounts",
     "Onboarding intro",
-    "Your mail is syncing. Pick how much monday should do; the choice is yours and you can change it any time.",
+    "Pick how much monday should do. The choice is yours and you can change it any time.",
+  ),
+  "strings.onboarding.connect_title": str(
+    "accounts",
+    "Onboarding connect title",
+    "Connect an account",
+  ),
+  "strings.onboarding.connect_later": str("accounts", "Onboarding connect later", "Connect later"),
+  "strings.onboarding.connect_intro": str(
+    "accounts",
+    "Onboarding connect intro",
+    "Fastmail or any JMAP server, IMAP, Gmail or Microsoft. Mail starts syncing as soon as one is connected.",
   ),
   "strings.onboarding.set_me_up": str("accounts", "Onboarding rerun", "Set me up"),
   "strings.onboarding.continue": str("accounts", "Onboarding continue", "Continue"),

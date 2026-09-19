@@ -1,14 +1,16 @@
 # Onboarding
 
-Optional. Runs after the first Account syncs. Its only job is to gather context and seed good defaults so the app is useful from the first minute. Skipping it loses nothing that cannot be asked of the Agent later.
+Optional. The first screen and the keymap question run on first launch, before any Account exists, and end by connecting the first Account; the conversation runs after that Account syncs. Its only job is to gather context and seed good defaults so the app is useful from the first minute. Skipping it loses nothing that cannot be asked of the Agent later.
 
 ## First screen: what do you want
 
 Before any conversation, one plain screen with three choices. It is the only step that is not a chat, because it decides whether there is a chat at all. AI is never pushed; the choice is the user's and it can change at any time.
 
-- **Just mail.** No AI at all: no agent bar, no Briefs, no routing, no Workflows, no model calls, no provider key asked for. monday is a fast mail client with Groups the user makes by hand, search, keymaps and the calendar. The rest of onboarding is skipped; the keymap question still asks.
+- **Just mail.** No AI at all: no agent bar, no Briefs, no routing, no Workflows, no model calls, no provider key asked for. monday is a fast mail client with Groups the user makes by hand, search, keymaps and the calendar. The conversation is skipped; the keymap question still asks, then the first Account is connected.
 - **Mail with an assistant.** The agent bar and what it reaches (draft, find, summarize, change settings, undo), Briefs on open, and the Task map. No routing, no automation, nothing runs without the user asking. Onboarding continues with the conversation below, minus the Groups and Workflows proposals.
 - **Mail that sorts and acts for me.** Everything: routing into Groups, background Briefs under the policy, Workflows with their approvals. The full conversation below.
+
+After the cards and the keymap comes "Connect an account" (Fastmail or JMAP, IMAP, Gmail, Microsoft) with "Connect later" as the way out; the welcome is recorded once so it never re-asks. Each Account added afterwards gets its own offer, opening on the conversation (or on nothing at all under Just mail).
 
 The choice is the Setting `ai.level` (`off`, `assist`, `automate`). It shows at the top of Settings › AI and agent as the same three cards, and the Agent can change it when asked. Moving down never deletes anything: Groups, Workflows and Briefs stay stored and disabled, and come back on moving up. Moving up from `off` asks for a runtime (a local CLI or a key) only then, not before.
 

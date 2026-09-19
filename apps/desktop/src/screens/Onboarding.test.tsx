@@ -181,6 +181,44 @@ describe("onboarding: the first screen and the AI level", () => {
   });
 });
 
+describe("onboarding: the welcome before any Account", () => {
+  test("the level cards come first, then the keymap, then connecting the first Account; the welcome is recorded", async () => {
+    const { done } = await mount({
+      mode: "welcome",
+      accountId: "welcome",
+      workspaceId: "",
+      address: "",
+    });
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("level");
+    await click(card("off"));
+    await clickText("Continue");
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("keymap");
+    // The welcome continues to the Account instead of finishing.
+    await clickText("Continue");
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("connect");
+    expect(text()).toContain("Connect an account");
+    expect(text()).toContain("Gmail");
+    expect(done).toEqual([]);
+    // Connecting later skips the rest and records the welcome, so it never re-asks.
+    await clickText("Connect later");
+    expect(done).toEqual(["done"]);
+    expect(captured?.settings["onboarding.state"]).toEqual({
+      welcome: { status: "skipped", at: NOW.toISOString() },
+    });
+  });
+
+  test("with an assistant chosen the welcome still goes to the keymap and the Account, never the conversation", async () => {
+    await mount(
+      { mode: "welcome", accountId: "welcome", workspaceId: "", address: "", runtimes: detected },
+      { "ai.mode": "local", "ai.local.cli": "claude-code" },
+    );
+    await click(card("assist"));
+    await clickText("Continue");
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("keymap");
+    expect(captured?.settings["ai.level"]).toBe("assist");
+  });
+});
+
 describe("onboarding: the conversation", () => {
   test("automate with a CLI detected: the conversation runs with the onboarding context, chips per question, Skip, the Groups card with move counts, Approve, and Done after the keymap", async () => {
     const client = fakeAgentClient({
@@ -371,6 +409,18 @@ describe("onboarding in the App", () => {
     );
     expect(q('[data-screen="onboarding"]')).toBeNull();
     expect(q(".inbox")).not.toBeNull();
+  });
+
+  test("after the welcome, a fresh Account with AI off is completed without a screen; with an assistant it opens on the conversation", async () => {
+    const welcomed = { welcome: { status: "completed" as const, at: NOW.toISOString() } };
+    await mountApp({ "onboarding.state": welcomed, "ai.level": "off" }, [fresh]);
+    expect(q('[data-screen="onboarding"]')).toBeNull();
+    expect(captured?.settings["onboarding.state"]?.["acct-new"]?.status).toBe("completed");
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    await mountApp({ "onboarding.state": welcomed, "ai.level": "assist" }, [fresh]);
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
   });
 
   test("at off the App renders no agent bar and no agent column; at assist the bar is back", async () => {
