@@ -106,6 +106,8 @@ export function Workflows({
 }: WorkflowsProps) {
   const shell = useShell();
   const { settings } = shell;
+  // Just mail (CONTEXT.md "AI level"): the Workflows stay listed, nothing here asks the Agent.
+  const aiOff = settings["ai.level"] === "off";
   const api = apiOverride ?? (shell.server ? shell.api.workflows : defaultApi);
   const s = useMemo(() => workflowStrings(settings), [settings]);
   const now = nowProp ?? new Date();
@@ -319,12 +321,14 @@ export function Workflows({
                       </Btn>
                     }
                   >
-                    <AskBox
-                      placeholder={s.ask_placeholder ?? "Ask monday to change this workflow"}
-                      value={ask}
-                      onChange={setAsk}
-                      onSubmit={change}
-                    />
+                    {aiOff ? null : (
+                      <AskBox
+                        placeholder={s.ask_placeholder ?? "Ask monday to change this workflow"}
+                        value={ask}
+                        onChange={setAsk}
+                        onSubmit={change}
+                      />
+                    )}
                     <div className="wf-meta">
                       <span className="faint">
                         {fill(s.version ?? "Version {n}", { n: selected.version })}
@@ -431,7 +435,7 @@ export function Workflows({
           </div>
         </div>
       </div>
-      {shell.layout.agent === "bottom" ? (
+      {shell.layout.agent === "bottom" && !aiOff ? (
         <AgentDock>
           <AgentBar
             placeholder={settings["strings.agent.placeholder"]}

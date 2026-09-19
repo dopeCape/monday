@@ -135,6 +135,8 @@ export function Routing({
   const { settings } = shell;
   const api = apiOverride ?? shell.api.routing;
   const s = useMemo(() => routingStrings(settings), [settings]);
+  // Just mail (CONTEXT.md "AI level"): the Groups stay, hand-made; nothing here asks the Agent.
+  const aiOff = settings["ai.level"] === "off";
   const groups = useSyncExternalStore(routing.subscribe, routing.groups, routing.groups);
   const decisions = useSyncExternalStore(routing.subscribe, routing.decisions, routing.decisions);
   const threads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
@@ -470,13 +472,15 @@ export function Routing({
                   busy={busy}
                 />
               ) : null}
-              <SideCard title={s["ask.title"] ?? "Ask for a group"}>
-                <AskBox
-                  placeholder={s["ask.placeholder"] ?? ""}
-                  help={s["ask.help"]}
-                  onSubmit={() => onNavigate?.("agent")}
-                />
-              </SideCard>
+              {aiOff ? null : (
+                <SideCard title={s["ask.title"] ?? "Ask for a group"}>
+                  <AskBox
+                    placeholder={s["ask.placeholder"] ?? ""}
+                    help={s["ask.help"]}
+                    onSubmit={() => onNavigate?.("agent")}
+                  />
+                </SideCard>
+              )}
               <SideCard title={s.decisions ?? "Needs a decision"} count={pending.length}>
                 {pending.length === 0 ? (
                   <p className="faint" style={{ fontSize: "var(--fs-xs)", margin: 0 }}>
@@ -517,7 +521,7 @@ export function Routing({
           </div>
         </div>
       </div>
-      {shell.layout.agent === "bottom" ? (
+      {shell.layout.agent === "bottom" && !aiOff ? (
         <AgentDock>
           <AgentBar
             placeholder={settings["strings.agent.placeholder"]}
