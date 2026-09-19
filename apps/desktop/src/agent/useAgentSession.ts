@@ -92,6 +92,9 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const [session, setSession] = useState<SessionSummary | null>(null);
   const [events, setEvents] = useState<TranscriptEvent[]>([]);
   const [busy, setBusy] = useState(false);
+  // The turn in flight, read synchronously: two clicks on one card in the same
+  // tick must not both reach the Server (the second would apply the call twice).
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionSummary[]>([]);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
@@ -197,7 +200,8 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         setError(NO_CLIENT);
         return;
       }
-      if (busy) return;
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
       try {
@@ -208,10 +212,11 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
-    [client, busy, ensureSession, ensureRuntime, refreshHistory],
+    [client, ensureSession, ensureRuntime, refreshHistory],
   );
 
   const newSession = useCallback(async () => {
@@ -262,9 +267,12 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     [client, run, onEvent, turnContext],
   );
 
+  /** Undos in flight, so a second click on the same card is a no-op. */
+  const undoing = useRef(new Set<string>());
   const undo = useCallback(
     async (activityId: string): Promise<ActivityRecord | null> => {
-      if (!client) return null;
+      if (!client || undoing.current.has(activityId)) return null;
+      undoing.current.add(activityId);
       try {
         const result = await client.undo(activityId, sessionRef.current?.id ?? null);
         setEvents((current) =>
@@ -279,6 +287,8 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         return null;
+      } finally {
+        undoing.current.delete(activityId);
       }
     },
     [client],

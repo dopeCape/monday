@@ -266,6 +266,39 @@ describe("the composer in bottom-bar mode", () => {
     expect(bar()).not.toBeNull();
   });
 
+  test("a second click on Apply or Undo in the same tick is a no-op: one approval, one undo", async () => {
+    const client = fakeAgentClient({
+      turns: [archiveTurn],
+      onApprove: (call: ToolCall) => [
+        toolEvent({ ...call, status: "done", approvedBy: "user", undoable: true }),
+      ],
+    });
+    await mount(client);
+    await typeInBar("archive every newsletter older than a week");
+    await submitBar();
+    const archive = cardByTool("archive");
+    if (!archive) throw new Error("no archive card");
+    const apply = button(archive, "Apply");
+    if (!apply) throw new Error("no Apply");
+    await act(async () => {
+      apply.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      apply.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(client.approvals).toHaveLength(1);
+    const applied = cardByTool("archived");
+    if (!applied) throw new Error("no applied card");
+    const undo = button(applied, "Undo");
+    if (!undo) throw new Error("no Undo");
+    await act(async () => {
+      undo.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      undo.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(client.undos).toEqual(["c2"]);
+    expect(cardByTool("archived")?.querySelector(".st")?.textContent?.trim()).toBe("Undone");
+  });
+
   test("a send asks even for one message; Cancel changes nothing and the card says so", async () => {
     const client = fakeAgentClient({
       turns: [
