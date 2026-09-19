@@ -977,10 +977,33 @@ button.msg {
   box-shadow: var(--shadow-lg);
   animation: rise var(--t-med) var(--ease);
 }
+.agent-panel.leaving {
+  animation: sink var(--t-med) var(--ease-in) forwards;
+  pointer-events: none;
+}
 @keyframes rise {
   from {
     transform: translateY(8px);
     opacity: 0;
+  }
+}
+@keyframes sink {
+  to {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+/* one calm entrance for anything that joins a list or a thread */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
   }
 }
 .agent-panel .col-head {
@@ -1023,6 +1046,12 @@ button.msg {
   padding: 4px var(--pad) 14px;
   flex-wrap: wrap;
 }
+.agent-suggest .chip {
+  animation: fade-in var(--t-med) var(--ease);
+}
+.chip:active {
+  transform: translateY(1px);
+}
 .agent-col {
   display: flex;
   flex-direction: column;
@@ -1041,6 +1070,7 @@ button.msg {
   background: var(--panel);
 }
 .u {
+  animation: fade-in var(--t-med) var(--ease);
   align-self: flex-end;
   max-width: 86%;
   padding: 9px 13px;
@@ -1058,6 +1088,10 @@ button.msg {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.a p,
+.a .line {
+  animation: fade-in var(--t-med) var(--ease);
 }
 .a p {
   margin: 0;
@@ -1086,6 +1120,17 @@ button.msg {
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   font-size: var(--fs-sm);
+  animation: fade-in var(--t-med) var(--ease);
+  transition:
+    border-color var(--t-med) var(--ease),
+    background var(--t-med) var(--ease);
+}
+.tool .st {
+  transition: color var(--t-med) var(--ease);
+}
+.tool .preview,
+.tool .acts {
+  animation: fade-in var(--t-fast) var(--ease);
 }
 .tool .t {
   font-weight: 500;
@@ -1106,7 +1151,7 @@ button.msg {
   color: var(--success);
 }
 .tool.run .st i {
-  animation: spin 1s linear infinite;
+  animation: spin calc(var(--t-slow) * 3) linear infinite;
 }
 .tool.wait {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
@@ -1190,6 +1235,13 @@ button.msg {
 .agent-history .r:hover {
   background: var(--hover);
 }
+.agent-history .r {
+  animation: fade-in var(--t-med) var(--ease);
+  transition: background var(--t-fast);
+}
+.agent-history .r:active {
+  background: var(--active);
+}
 .agent-history .r .t {
   color: var(--fg-faint);
   font-size: var(--fs-xs);
@@ -1208,6 +1260,10 @@ button.msg {
 }
 .agent-developer .warn {
   color: var(--warning);
+  animation: fade-in var(--t-fast) var(--ease);
+}
+.agent-error {
+  animation: fade-in var(--t-fast) var(--ease);
 }
 .results {
   display: flex;
@@ -1231,6 +1287,12 @@ button.msg {
 }
 .results .r:hover {
   background: var(--hover);
+}
+.results .r {
+  transition: background var(--t-fast);
+}
+.results .r:active {
+  background: var(--active);
 }
 .results .r b {
   font-weight: 500;
@@ -1435,6 +1497,15 @@ button.msg {
 .runlog button.r.on {
   color: var(--fg);
 }
+.runlog .r {
+  animation: fade-in var(--t-med) var(--ease);
+}
+.runlog button.r {
+  transition: color var(--t-fast);
+}
+.runlog button.r:active {
+  color: var(--fg-muted);
+}
 .runlog .r[data-status="failed"] > i,
 .runlog .r[data-status="waiting"] > i,
 .runlog .r[data-status="paused"] > i {
@@ -1474,6 +1545,20 @@ button.msg {
   margin-top: 8px;
   padding-left: 12px;
   border-left: 2px solid var(--border);
+  animation: fade-in var(--t-med) var(--ease);
+}
+.wf-card {
+  transition: background var(--t-fast);
+}
+.wf-loading {
+  margin: 12px 0 0;
+  font-size: var(--fs-sm);
+}
+/* the side's cards join calmly: the dry run, the approval, the source */
+.dry-run,
+.run-approval.tool,
+.source {
+  animation: fade-in var(--t-med) var(--ease);
 }
 .run-approval.tool {
   margin: 8px 0 0;
@@ -1714,6 +1799,19 @@ button.msg {
 }
 .sample:last-child {
   border: 0;
+}
+.sample.leaving {
+  animation: fade-out var(--t-med) var(--ease-in) forwards;
+  pointer-events: none;
+}
+.rule-edit,
+.side-card.preview,
+.rule-examples .sample {
+  animation: fade-in var(--t-med) var(--ease);
+}
+.routing-note,
+.routing-error {
+  animation: fade-in var(--t-fast) var(--ease);
 }
 .sample .avatar {
   display: none;
@@ -2861,6 +2959,18 @@ button.prov {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
 }
+.cal-view {
+  min-width: 0;
+  min-height: 0;
+  display: contents;
+}
+.cal-view > * {
+  animation: fade-in var(--t-med) var(--ease);
+}
+.cal-form,
+.cal-answer-error {
+  animation: fade-in var(--t-fast) var(--ease);
+}
 .cal-side {
   border-left: 1px solid var(--border);
   padding: 12px var(--pad) 120px;
@@ -2934,6 +3044,14 @@ button.prov {
 .ev span {
   color: var(--fg-faint);
 }
+.ev {
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast);
+}
+.ev:hover {
+  border-color: var(--fg-muted);
+}
 .ev.agent {
   border-left-color: var(--fg);
   background: var(--active);
@@ -3001,6 +3119,18 @@ button.prov {
   border-left: 2px solid var(--fg);
   padding-left: 8px;
   margin-left: -10px;
+}
+.today-panel .tp-row {
+  animation: fade-in var(--t-med) var(--ease);
+  transition:
+    padding var(--t-med) var(--ease),
+    margin var(--t-med) var(--ease);
+}
+.cal-mc {
+  transition: background var(--t-fast);
+}
+.cal-mc:active {
+  background: var(--active);
 }
 .invite {
   border: 1px solid var(--border);
@@ -4277,6 +4407,13 @@ button.prov {
   cursor: default;
   opacity: 0.6;
 }
+.choice-card:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.choice-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .choice-card > .ic {
   font-style: normal;
   color: var(--fg-muted);
@@ -4339,6 +4476,10 @@ button.prov {
   min-width: 0;
   display: grid;
   gap: 20px;
+  animation: fade-in var(--t-slow) var(--ease);
+}
+.onboarding-chips .chip {
+  animation: fade-in var(--t-med) var(--ease);
 }
 .onboarding h1 {
   font-size: var(--fs-2xl);
@@ -4385,6 +4526,20 @@ button.prov {
   flex-wrap: wrap;
   gap: 6px;
   padding: 0 12px 4px;
+}
+
+/* Keyboard focus on the agent, routing, workflows, calendar and onboarding surfaces. */
+.agent-panel button:focus-visible,
+.agent-col button:focus-visible,
+.agent-dock button:focus-visible,
+.page button:focus-visible,
+.cal-wrap button:focus-visible,
+.onboarding button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cal-mc:focus-visible {
+  outline-offset: -2px;
 }
 
 /* The Setting (appearance.transitions) and the system preference both stop motion. */

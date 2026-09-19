@@ -278,7 +278,7 @@ function OnboardingBody({
   return (
     <div className="main page" data-screen="onboarding" data-step={step}>
       <div className="onboarding">
-        <div className="onboarding-in">
+        <div className="onboarding-in" key={step}>
           {step === "level" ? (
             <>
               <h1>{s["strings.onboarding.title"]}</h1>

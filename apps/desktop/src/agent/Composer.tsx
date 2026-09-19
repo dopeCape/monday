@@ -17,9 +17,10 @@ import {
   Chip,
   formatListTime,
   formatSpan,
+  motionMs,
   type Suggestion,
 } from "@monday/ui";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { runtimeLabel } from "./runtimeLine.ts";
 import type { TranscriptEvent } from "./transcript.ts";
 import { type AgentStrings, cardActions, statusLabel, toolTitle } from "./transcript.ts";
@@ -345,6 +346,22 @@ export function Composer({
   onOpenRuntime,
 }: ComposerProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Bottom bar: a collapsing panel stays mounted for one sink (--t-med), then goes.
+  const [shown, setShown] = useState(open);
+  const leaving = shown && !open;
+  useEffect(() => {
+    if (open) {
+      setShown(true);
+      return;
+    }
+    const ms = motionMs("--t-med");
+    if (ms <= 0) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(false), ms);
+    return () => clearTimeout(timer);
+  }, [open]);
   const turns = useMemo(
     () => turnsOf(agent.events, { strings, now, working: agent.busy }),
     [agent.events, agent.busy, strings, now],
@@ -455,7 +472,7 @@ export function Composer({
   if (mode === "bottom") {
     return (
       <AgentDock>
-        {open ? (
+        {open || shown ? (
           <AgentPanel
             runtime={runtime}
             onRuntime={onOpenRuntime}
@@ -465,6 +482,7 @@ export function Composer({
             onHistory={toggleHistory}
             onClose={() => onOpenChange?.(false)}
             labels={labels}
+            className={leaving ? "leaving" : undefined}
           >
             {history ?? thread}
           </AgentPanel>

@@ -487,7 +487,9 @@ export function Calendar({
           </p>
         ) : null}
         <div className="cal-body">
-          {body}
+          <div className="cal-view" key={view}>
+            {body}
+          </div>
           <aside className="cal-side">
             {s["calendar.today_panel"] ? (
               <SideCard title={s["strings.calendar.today_panel"]}>

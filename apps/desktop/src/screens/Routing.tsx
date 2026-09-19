@@ -24,6 +24,7 @@ import {
   GroupCard,
   Icon,
   type IconComponent,
+  motionMs,
   PageHead,
   PreviewCard,
   SampleRow,
@@ -177,6 +178,8 @@ export function Routing({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settled, setSettled] = useState<Set<string>>(() => new Set());
+  /** Rows answered a moment ago, still on screen while they fade out. */
+  const [leaving, setLeaving] = useState<Set<string>>(() => new Set());
   /** Delete asks once: the button names the Group until the second click. */
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** Whether a shared key exists for routing on the Server; null until known or where it cannot be. */
@@ -221,6 +224,7 @@ export function Routing({
 
   const recent = threads.filter((t) => t.group !== null).slice(0, 8);
   const pending = decisions.filter((d) => !settled.has(d.threadId));
+  const stillShown = pending.filter((d) => !leaving.has(d.threadId));
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
@@ -315,15 +319,28 @@ export function Routing({
     }
   };
 
+  const without = (prev: Set<string>, threadId: string) =>
+    new Set([...prev].filter((id) => id !== threadId));
   const decide = async (threadId: string, groupId: string | null) => {
     setError(null);
-    setSettled((prev) => new Set([...prev, threadId]));
+    // The row fades for one --t-med, then leaves; with transitions off it leaves at once.
+    const ms = motionMs("--t-med");
+    if (ms > 0) {
+      setLeaving((prev) => new Set([...prev, threadId]));
+      setTimeout(() => {
+        setLeaving((prev) => without(prev, threadId));
+        setSettled((prev) => new Set([...prev, threadId]));
+      }, ms);
+    } else {
+      setSettled((prev) => new Set([...prev, threadId]));
+    }
     try {
       await api.decide(threadId, groupId);
       refreshViews();
     } catch (e) {
       // The row comes back: the Server did not take the choice.
-      setSettled((prev) => new Set([...prev].filter((id) => id !== threadId)));
+      setLeaving((prev) => without(prev, threadId));
+      setSettled((prev) => without(prev, threadId));
       fail(e);
     }
   };
@@ -473,7 +490,7 @@ export function Routing({
                   name: c.name,
                   description: c.rule.sentence.length > 0 ? c.rule.sentence : undefined,
                   count: views?.get(c.id)?.unread ?? unreadIn(c.id),
-                  icon: groupIcon(c),
+                  icon: groupIcon?.(c),
                 }));
                 return (
                   <div key={g.id}>
@@ -535,7 +552,7 @@ export function Routing({
                   />
                 </SideCard>
               )}
-              <SideCard title={s.decisions ?? "Needs a decision"} count={pending.length}>
+              <SideCard title={s.decisions ?? "Needs a decision"} count={stillShown.length}>
                 {pending.length === 0 ? (
                   <p className="faint" style={{ fontSize: "var(--fs-xs)", margin: 0 }}>
                     {s["decisions.empty"]}
@@ -547,6 +564,7 @@ export function Routing({
                   return (
                     <DecisionRow
                       key={d.threadId}
+                      className={leaving.has(d.threadId) ? "leaving" : undefined}
                       threadId={d.threadId}
                       name={nameOf(from)}
                       subject={t?.subject || d.subject}

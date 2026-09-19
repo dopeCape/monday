@@ -15,5 +15,6 @@ export * from "./components/routing.tsx";
 export * from "./components/settings.tsx";
 export * from "./components/workflows.tsx";
 export * from "./format.ts";
+export * from "./motion.ts";
 export * from "./palettes.ts";
 export * from "./theme.tsx";
