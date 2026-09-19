@@ -60,6 +60,12 @@ export interface Platform {
   /** Replaces the root key from a recovery file; a new Device joining an existing Server. */
   importRecoveryKey(text: string): Promise<void>;
   /**
+   * A desktop notification (a calendar reminder, a Workflow failure) through
+   * the host: the notification plugin in the app, the web Notification API in
+   * a browser. The caller has already checked the notifications.* Settings.
+   */
+  notify(title: string, body: string): Promise<void>;
+  /**
    * Spawns one of the Local runtime CLIs (CONTEXT.md, Local runtime) through
    * the shell plugin. `command` is a scope name from the capability
    * (`claude`, `codex`, `opencode` and their detection variants), never a
@@ -145,6 +151,7 @@ async function tauriPlatform(): Promise<Platform> {
     power: () => invoke<PowerInfo>("power_info"),
     recoveryFile: () => invoke<string>("recovery_file"),
     importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
+    notify: (title, body) => invoke("notify", { title, body }),
     spawn,
   };
 }
@@ -158,6 +165,8 @@ export interface FakePlatformOptions {
   rootKey?: string | null;
   /** The processes the fake spawns; none by default, so every CLI reads as not installed. */
   spawn?: ProcessRunner;
+  /** Receives what the fake would have shown as a desktop notification. */
+  notified?: (title: string, body: string) => void;
   /** Palette files by path, as `appearance.palette` would name them. */
   files?: Record<string, string>;
 }
@@ -234,6 +243,13 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       if (!key) throw new Error("not a recovery key");
       rootKey = key;
     },
+    notify: async (title, body) => {
+      if (options.notified) {
+        options.notified(title, body);
+        return;
+      }
+      await webNotify(title, body);
+    },
     spawn:
       options.spawn ??
       (async (command) => {
@@ -241,6 +257,23 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       }),
   };
 }
+
+/** The web Notification API for a browser, asking once; silent where there is none. */
+async function webNotify(title: string, body: string): Promise<void> {
+  if (typeof Notification === "undefined") return;
+  let permission = Notification.permission;
+  if (permission === "default") permission = await Notification.requestPermission();
+  if (permission !== "granted") return;
+  new Notification(title, { body });
+}
+
+/** Desktop notifications through whichever platform is running; the shape reminders take. */
+export const platformNotifier = {
+  async notify(title: string, body: string): Promise<void> {
+    const p = await platform();
+    await p.notify(title, body);
+  },
+};
 
 /** A fixed 32-byte key so the browser dev server's recovery file is stable. */
 const FAKE_ROOT_KEY = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) % 256);

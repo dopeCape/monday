@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod notify;
 mod rootkey;
 mod power;
 mod runtimes;
@@ -14,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(sidecar::SidecarState::default())
         .manage(db::DbState::default())
         .invoke_handler(tauri::generate_handler![
@@ -33,6 +35,7 @@ pub fn run() {
             power::power_info,
             power::network_info,
             runtimes::env_path,
+            notify::notify,
         ])
         .setup(|app| {
             config::watch(app.handle().clone());

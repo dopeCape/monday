@@ -7,6 +7,7 @@
 
 import type { Settings } from "@monday/shared";
 import { useEffect } from "react";
+import { platformNotifier } from "../platform/tauri.ts";
 import type { CalendarSource } from "../screens/calendar/calendar-data.ts";
 import { occurrencesIn } from "../screens/calendar/calendar-data.ts";
 
@@ -60,7 +61,7 @@ export function scheduleReminders(
     Settings,
     "notifications.enabled" | "notifications.calendar_lead_minutes" | "strings.calendar.reminder"
   >,
-  notifier: Notifier = webNotifier,
+  notifier: Notifier = platformNotifier,
   now: () => Date = () => new Date(),
 ): () => void {
   const fired = new Set<string>();
