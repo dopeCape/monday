@@ -28,6 +28,7 @@ import type {
   InviteIntent,
   IsoDate,
   MeetingLinkKind,
+  MeetingLinkSetting,
   Person,
   RsvpResponse,
 } from "@monday/shared";
@@ -71,8 +72,8 @@ export const LOCAL_CALENDAR_ID = "local";
 
 export interface CalendarSettings {
   pollMinutes: number;
-  meetingLink: MeetingLinkKind;
-  meetingLinks: Record<string, MeetingLinkKind>;
+  meetingLink: MeetingLinkSetting;
+  meetingLinks: Record<string, MeetingLinkSetting>;
   customLink: string;
   defaultDurationMinutes: number;
   windowPastDays: number;
@@ -796,8 +797,9 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
     customLink: string | null | undefined,
   ): Promise<{ meetingLink: MeetingLinkKind; customLink: string | null }> {
     const settings = await readSettings();
-    const kind: MeetingLinkKind =
-      wanted ?? settings.meetingLinks[acct.address] ?? settings.meetingLink ?? "none";
+    const chosen: MeetingLinkSetting =
+      wanted ?? settings.meetingLinks[acct.address] ?? settings.meetingLink ?? "provider";
+    const kind: MeetingLinkKind = chosen === "provider" ? info.defaultMeetingLink : chosen;
     if (kind === "none") return { meetingLink: "none", customLink: null };
     if (kind === "jitsi") {
       return {

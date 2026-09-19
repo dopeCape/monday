@@ -18,7 +18,13 @@ import type { ToolExtensions } from "./extensions.ts";
 
 export type { ToolDefinition, ToolPlan, ToolSettings } from "./catalog.ts";
 export { TOOL_CATALOG } from "./catalog.ts";
-export type { IntegrationsSeam, McpSeam, ToolExtensions, WorkflowsSeam } from "./extensions.ts";
+export type {
+  CalendarSeam,
+  IntegrationsSeam,
+  McpSeam,
+  ToolExtensions,
+  WorkflowsSeam,
+} from "./extensions.ts";
 export { INTEGRATION_TOOL } from "./extensions.ts";
 
 export interface ToolCallRequest {
@@ -412,6 +418,14 @@ export async function replayUndo(
         await workflows.enable(undo.workflowId, undo.previous.enabled);
       }
       return `Undone: the workflow is back at version ${undo.previous.version}, ${undo.previous.enabled ? "enabled" : "disabled"}.`;
+    }
+    case "event": {
+      const calendar = extensions?.calendar;
+      if (!calendar) return "Cannot undo: the calendar is not available from this host.";
+      const current = await calendar.readEvent(undo.eventId);
+      if (!current) return "Nothing to undo: the Event is already gone.";
+      await calendar.deleteEvent(undo.eventId);
+      return `Undone: "${current.title}" was cancelled${current.attendees.some((a) => !a.self) ? " and the attendees told" : ""}.`;
     }
   }
 }

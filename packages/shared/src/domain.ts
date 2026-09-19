@@ -531,6 +531,9 @@ export type EventStatus = "confirmed" | "tentative" | "cancelled";
 /** The kind of meeting link the scheduling tool asks the Provider to make. */
 export type MeetingLinkKind = "none" | "google-meet" | "teams" | "jitsi" | "custom";
 
+/** The Setting's value: a kind, or "provider" for whatever the Account's Provider mints (Meet, Teams), none elsewhere. */
+export type MeetingLinkSetting = MeetingLinkKind | "provider";
+
 export interface CalendarEvent {
   id: Id;
   workspaceId: Id;

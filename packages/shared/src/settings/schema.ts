@@ -155,7 +155,7 @@ export const PROVIDER_LABELS: Readonly<Record<HostedProvider, string>> = {
   kimi: "Kimi",
   openrouter: "OpenRouter",
 };
-const meetingLink = z.enum(["none", "google-meet", "teams", "jitsi", "custom"]);
+const meetingLink = z.enum(["provider", "none", "google-meet", "teams", "jitsi", "custom"]);
 export type MeetingLink = z.output<typeof meetingLink>;
 /** One MCP server a Workflow Step or the Agent may call: the workflow module owns the shape. */
 export const mcpServerShape = mcpServerSchema;
@@ -1586,12 +1586,12 @@ export const settingsSchema = {
   }),
   "calendar.meeting_link": setting({
     type: meetingLink,
-    default: "none",
+    default: "provider",
     scope: "global",
     section: "accounts",
     group: "Meetings",
     label: "Meeting link",
-    help: "The kind of link the scheduling tool adds to a new Event: none, Google Meet, Teams, Jitsi, or a custom URL from the Account's Provider.",
+    help: "The kind of link the scheduling tool adds to a new Event: the Provider's own (Google Meet on Google, Teams on Microsoft 365, none elsewhere), none, Google Meet, Teams, Jitsi, or the custom URL below.",
   }),
   "calendar.meeting_links": setting({
     type: z.record(z.string(), meetingLink),

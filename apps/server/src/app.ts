@@ -156,6 +156,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       if (options.jobs) created.registerSteps(options.jobs);
       return created;
     })();
+  // The calendar tools act through the module (slice 18).
+  if (options.calendar) intelligence.attachCalendar(options.calendar);
   // Bodies landing carry the text/calendar parts the calendar module turns into Invites (slice 18).
   if (options.calendar && options.sync) {
     options.sync.setBodyObserver((account, messageId, threadId, raw) =>
