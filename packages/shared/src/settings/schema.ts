@@ -1253,6 +1253,14 @@ export const settingsSchema = {
     label: "Wait for routing",
     help: "Seconds an arrival trigger with a Group filter waits for routing to place the Thread before checking again.",
   }),
+  "workflows.silence.check_cron": setting({
+    type: z.string().min(9),
+    default: "0 9 * * *",
+    scope: "global",
+    section: "workflows",
+    label: "Silence check",
+    help: "When Workflows with a silence trigger look for Threads with no reply, as a five-field cron in UTC.",
+  }),
   "workflows.dry_run.recent": setting({
     type: z.int().min(1).max(200),
     default: 10,
@@ -2062,6 +2070,7 @@ export const settingsSchema = {
   "strings.palette.nav.settings": str("appearance", "Palette: Settings", "Settings"),
   "strings.palette.nav.search": str("appearance", "Palette: Search", "Search"),
   "strings.palette.nav.routing": str("appearance", "Palette: Routing", "Routing"),
+  "strings.palette.nav.workflows": str("appearance", "Palette: Workflows", "Workflows"),
   "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
   "strings.palette.nav.settings_page": str(
     "appearance",

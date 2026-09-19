@@ -212,6 +212,7 @@ export function paletteNavigation(settings: Settings, mac: boolean): PaletteNav[
     });
   }
   out.push({ target: "routing", label: t("strings.palette.nav.routing"), icon: "group" });
+  out.push({ target: "workflows", label: t("strings.palette.nav.workflows"), icon: "workflow" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
   return out;
 }

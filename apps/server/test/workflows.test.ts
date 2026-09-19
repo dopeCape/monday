@@ -750,6 +750,94 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
     expect(runs.runs[0]?.steps[0]?.detail).toBe("Archived Application: Design Engineer");
   });
 
+  test("a silence trigger checks daily and starts one Run per Thread with no reply from the user", async () => {
+    const res = await send("/workflows", {
+      workspace: workspaceId,
+      name: "Follow-up nudge",
+      trigger: { kind: "silence", days: 1 },
+      steps: [
+        {
+          id: "draft",
+          kind: "draft_reply",
+          name: "Draft",
+          instructions: "A short, warm follow-up.",
+        },
+        { id: "remind", kind: "notify", name: "Remind", text: "Follow up: {{thread.subject}}" },
+      ],
+    });
+    expect(res.status).toBe(201);
+    const view = (await res.json()) as WorkflowView;
+    await send(`/workflows/${view.id}/enable`, { enabled: true });
+    const armed = await jobs.get(`${WORKFLOW_SCHEDULE_STEP}:${view.id}:1`);
+    expect(armed?.status).toBe("queued");
+    expect(armed?.runAt.getUTCHours()).toBe(9);
+    // Which fixture Threads are silent: older than a day, last word not the user's.
+    const page = await store.listThreads(workspaceId, { limit: 500, includeArchived: true });
+    const silent: string[] = [];
+    for (const t of page.threads) {
+      if (t.archived || Date.parse(t.lastActivity) >= NOW.getTime() - 86_400_000) continue;
+      const last = (await store.listMessages(t.id)).at(-1);
+      if (last && last.from.email.toLowerCase() === fixture.address.toLowerCase()) continue;
+      silent.push(t.id);
+    }
+    expect(silent.length).toBeGreaterThan(0);
+    expect(silent.length).toBeLessThan(page.threads.length);
+    const claimSchedule = async (from: Jobs, owner: string) => {
+      let job = await from.claim(owner, ["needs-process"], 30_000);
+      while (job && job.class !== WORKFLOW_SCHEDULE_STEP) {
+        await from.requeue(job.id, owner, 60 * 86_400_000);
+        job = await from.claim(owner, ["needs-process"], 30_000);
+      }
+      return job;
+    };
+    const nine = createJobs(db.handle.db, { now: () => armed?.runAt as Date });
+    intelligence.registerSteps(nine);
+    const job = await claimSchedule(nine, "server-d");
+    expect(job?.class).toBe(WORKFLOW_SCHEDULE_STEP);
+    expect(await nine.run(job as NonNullable<typeof job>, 30_000)).toMatchObject({
+      sleepMs: expect.any(Number),
+    });
+    const runs = (await (
+      await request(`/workflows/runs?workspace=${workspaceId}&workflow=${view.id}`)
+    ).json()) as { runs: RunView[] };
+    expect(runs.runs.map((r) => r.threadId).sort()).toEqual(silent.sort());
+    expect(runs.runs.every((r) => r.trigger.kind === "silence")).toBe(true);
+    // The Steps run: a Draft in the user's voice through the draft-in-voice Task, then the reminder.
+    for (let i = 0; i < 200; i++) {
+      const step = await nine.claim("server-d", ["needs-process"], 30_000);
+      if (!step) break;
+      if (step.class !== WORKFLOW_STEP_STEP) {
+        await nine.requeue(step.id, "server-d", 60 * 86_400_000);
+        continue;
+      }
+      await nine.run(step, 30_000);
+    }
+    const done = (await (
+      await request(`/workflows/runs?workspace=${workspaceId}&workflow=${view.id}`)
+    ).json()) as { runs: RunView[] };
+    const one = done.runs[0] as RunView;
+    expect(one.status).toBe("done");
+    expect(one.steps.map((s) => [s.name, s.status])).toEqual([
+      ["Draft", "done"],
+      ["Remind", "done"],
+    ]);
+    expect(one.steps[0]?.detail).toContain("Draft");
+    expect(one.steps[1]?.detail).toBe(`Follow up: ${one.subject}`);
+    // Checking again the next day starts nothing twice for the same Thread.
+    const again = createJobs(db.handle.db, {
+      now: () => new Date((armed?.runAt.getTime() as number) + 86_400_000),
+    });
+    intelligence.registerSteps(again);
+    const next = await claimSchedule(again, "server-e");
+    expect(next?.class).toBe(WORKFLOW_SCHEDULE_STEP);
+    await again.run(next as NonNullable<typeof next>, 30_000);
+    const after = (await (
+      await request(`/workflows/runs?workspace=${workspaceId}&workflow=${view.id}`)
+    ).json()) as { runs: RunView[] };
+    expect(after.runs).toHaveLength(silent.length);
+    intelligence.registerSteps(jobs);
+  });
+
   test("the Workflow list carries the Run summary the page shows, and the Agent tools list it", async () => {
     const list = (await (await request(`/workflows?workspace=${workspaceId}`)).json()) as {
       workflows: WorkflowView[];

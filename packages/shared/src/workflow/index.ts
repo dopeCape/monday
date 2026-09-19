@@ -64,6 +64,15 @@ export const triggerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("manual") }).describe("Only when asked"),
   z
     .object({
+      kind: z.literal("silence"),
+      /** Days without a reply from the user before the Run starts. */
+      days: z.int().min(1).max(365),
+      /** Only Threads in this Group (or Sub-group). */
+      group: z.string().min(1).optional(),
+    })
+    .describe("Silence after N days"),
+  z
+    .object({
       kind: z.literal("thread_event"),
       event: z.enum(THREAD_EVENTS),
       /** For `tagged`: the Tag name; for `moved`: the Group id. */
@@ -72,6 +81,42 @@ export const triggerSchema = z.discriminatedUnion("kind", [
     .describe("Something happens to a Thread"),
 ]);
 export type Trigger = z.output<typeof triggerSchema>;
+
+/** "Fridays 16:00" and "1st of month 06:00" for the crons the Agent writes; the raw cron otherwise. */
+export function describeCron(cron: string): string {
+  const [m, h, d, mo, w] = cron.trim().split(/\s+/);
+  if (!m || !h || d === undefined || mo === undefined || w === undefined) return cron;
+  if (!/^\d+$/.test(m) || !/^\d+$/.test(h)) return cron;
+  const time = `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
+  const days = [
+    "Sundays",
+    "Mondays",
+    "Tuesdays",
+    "Wednesdays",
+    "Thursdays",
+    "Fridays",
+    "Saturdays",
+  ];
+  const names: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  if (d === "*" && mo === "*" && w !== "*") {
+    const n = names[w.toLowerCase()] ?? (/^\d$/.test(w) ? Number(w) % 7 : null);
+    if (n !== null && days[n]) return `${days[n]} ${time}`;
+  }
+  if (w === "*" && mo === "*" && /^\d+$/.test(d)) {
+    const n = Number(d);
+    const suffix =
+      n % 10 === 1 && n !== 11
+        ? "st"
+        : n % 10 === 2 && n !== 12
+          ? "nd"
+          : n % 10 === 3 && n !== 13
+            ? "rd"
+            : "th";
+    return `${n}${suffix} of month ${time}`;
+  }
+  if (d === "*" && mo === "*" && w === "*") return `Daily ${time}`;
+  return cron;
+}
 
 /* ------------------------------ Steps ------------------------------ */
 
@@ -171,7 +216,13 @@ export const stepSchema = z.discriminatedUnion("kind", [
     database: z.string().min(1),
     properties: z.record(z.string().min(1), template).default({}),
   }),
-  z.object({ ...base, kind: z.literal("drive"), folder: z.string().min(1), name: template }),
+  z.object({
+    ...base,
+    kind: z.literal("drive"),
+    folder: z.string().min(1),
+    /** What the file is saved as; absent keeps the attachment's name. */
+    fileName: template.optional(),
+  }),
   z.object({ ...base, kind: z.literal("discord"), channel: z.string().min(1), text: template }),
   z.object({
     ...base,
@@ -354,6 +405,7 @@ export type RunTrigger =
   | { kind: "arrival"; threadId: Id }
   | { kind: "thread_event"; threadId: Id; event: ThreadEvent }
   | { kind: "schedule"; at: IsoDate }
+  | { kind: "silence"; threadId: Id }
   | { kind: "manual"; threadId: Id | null };
 
 export interface RunStepView {
@@ -469,9 +521,21 @@ export function describeTrigger(
       };
     }
     case "schedule":
-      return { kind: "trig", icon: "calendar", label: "On a schedule", detail: trigger.cron };
+      return {
+        kind: "trig",
+        icon: "calendar",
+        label: describeCron(trigger.cron),
+        detail: undefined,
+      };
     case "manual":
       return { kind: "trig", icon: "hand", label: "When asked", detail: undefined };
+    case "silence":
+      return {
+        kind: "trig",
+        icon: "timer",
+        label: "No reply",
+        detail: `${trigger.days} day${trigger.days === 1 ? "" : "s"}${trigger.group ? ` in ${groupName ? groupName(trigger.group) : trigger.group}` : ""}`,
+      };
     case "thread_event":
       return {
         kind: "trig",
@@ -517,7 +581,7 @@ export function describeStep(step: Step, groupName?: (id: string) => string): Fl
     case "slack":
       return act("slack", step.channel);
     case "notion":
-      return act("notion", step.database);
+      return act("notion", `add row to ${step.database}`);
     case "drive":
       return act("drive", step.folder);
     case "discord":

@@ -93,13 +93,14 @@ describe("transcript", () => {
     const chips = suggestionsFor({
       settings: strings,
       waiting: [call({ status: "waiting", tool: "send_draft" })],
+      pausedRuns: [{ workflowName: "Candidate intake", stepName: "Slack" }],
       needsReply: [thread, thread, thread],
     });
     expect(chips.map((c) => c.label)).toEqual([
       "Decide on the pending send draft",
+      "Decide on the Slack step waiting in Candidate intake",
       "Reply to the 3 threads waiting on me",
       "Summarize what I missed since yesterday",
-      "Archive newsletters older than a week",
     ]);
     const capped = suggestionsFor({
       settings: {

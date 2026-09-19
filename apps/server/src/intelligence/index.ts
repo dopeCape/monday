@@ -185,6 +185,7 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.step_retries",
   "workflows.trigger.routing_wait_seconds",
   "workflows.dry_run.recent",
+  "workflows.silence.check_cron",
   "strings.workflows.failed_notice",
 ] as const;
 
@@ -362,6 +363,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         stepRetries: s["workflows.step_retries"],
         routingWaitSeconds: s["workflows.trigger.routing_wait_seconds"],
         dryRunRecent: s["workflows.dry_run.recent"],
+        silenceCheckCron: s["workflows.silence.check_cron"],
         failedNotice: s["strings.workflows.failed_notice"],
       };
     },

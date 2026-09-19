@@ -45,11 +45,13 @@ import type { ChangeBus } from "../changes/bus.ts";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db } from "../db/client.ts";
 import {
+  accounts,
   threads,
   workflowRunSteps,
   workflowRuns,
   workflows as workflowsTable,
   workflowVersions,
+  workspaces,
 } from "../db/schema.ts";
 import type {
   ActivityLog,
@@ -104,6 +106,8 @@ export interface WorkflowSettings {
   stepRetries: number;
   routingWaitSeconds: number;
   dryRunRecent: number;
+  /** When the silence triggers look for Threads gone quiet (a cron). */
+  silenceCheckCron: string;
   failedNotice: string;
 }
 
@@ -655,7 +659,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         return callTool(
           env,
           INTEGRATION_TOOL.drive,
-          { attachment_id: attachment.id, folder: step.folder, name: render(env, step.name) },
+          {
+            attachment_id: attachment.id,
+            folder: step.folder,
+            ...(step.fileName ? { name: render(env, step.fileName) } : {}),
+          },
           `Save to ${step.folder}`,
         );
       }
@@ -1029,22 +1037,90 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     return "done";
   };
 
+  /** Threads silent for N days: nothing from anyone since, and the last word was not the user's. */
+  const silentThreads = async (
+    w: WorkflowRow,
+    trigger: { days: number; group?: string | undefined },
+    limit: number,
+  ): Promise<ThreadRow[]> => {
+    const cutoff = new Date(now().getTime() - trigger.days * 86_400_000);
+    const rows = await db
+      .select()
+      .from(threads)
+      .where(
+        and(
+          eq(threads.workspaceId, w.workspaceId),
+          eq(threads.deleted, false),
+          eq(threads.archived, false),
+          lt(threads.lastActivity, cutoff),
+          ...(trigger.group
+            ? [
+                sql`(${threads.groupId} = ${trigger.group} or ${threads.subgroupId} = ${trigger.group})`,
+              ]
+            : []),
+        ),
+      )
+      .orderBy(desc(threads.lastActivity))
+      .limit(limit);
+    const address = await ownerAddress(w.workspaceId);
+    const out: ThreadRow[] = [];
+    for (const t of rows) {
+      const headers = await mailstore.listMessages(t.id);
+      const last = headers[headers.length - 1];
+      if (last && address && last.from.email.toLowerCase() === address) continue;
+      out.push(t);
+    }
+    return out;
+  };
+
+  const ownerAddress = async (workspaceId: Id): Promise<string | null> => {
+    const rows = await db
+      .select({ address: accounts.address })
+      .from(workspaces)
+      .innerJoin(accounts, eq(accounts.id, workspaces.accountId))
+      .where(eq(workspaces.id, workspaceId));
+    return rows[0]?.address.toLowerCase() ?? null;
+  };
+
+  /** A schedule fires one Run at each cron minute; a silence trigger checks daily for Threads gone quiet. */
   const runScheduleJob = async (job: Job<ScheduleJobPayload>): Promise<StepResult> => {
     const { workflowId, version } = job.payload;
     const w = await row(workflowId);
     if (!w?.enabled || w.currentVersion !== version) return "done";
     const doc = await document(workflowId, version);
-    if (doc?.trigger.kind !== "schedule") return "done";
+    if (!doc) return "done";
     const at = now();
-    await createRun(w, doc, { kind: "schedule", at: at.toISOString() }, null);
-    const next = nextCronRun(parseCron(doc.trigger.cron), at);
+    if (doc.trigger.kind === "schedule") {
+      await createRun(w, doc, { kind: "schedule", at: at.toISOString() }, null);
+    } else if (doc.trigger.kind === "silence") {
+      for (const t of await silentThreads(w, doc.trigger, 500)) {
+        await createRun(
+          w,
+          doc,
+          { kind: "silence", threadId: t.id },
+          t,
+          `run:${w.id}:silence:${t.id}`,
+        );
+      }
+    } else return "done";
+    const next = nextCronRun(
+      parseCron(cronOf(doc, (await options.settings()).silenceCheckCron)),
+      at,
+    );
     if (!next) return "done";
     return { sleepMs: next.getTime() - at.getTime() };
   };
 
+  const cronOf = (doc: WorkflowInput, silenceCron: string): string =>
+    doc.trigger.kind === "schedule" ? doc.trigger.cron : silenceCron;
+
   const armSchedule = async (w: WorkflowRow, doc: WorkflowInput): Promise<void> => {
-    if (!jobs || !w.enabled || doc.trigger.kind !== "schedule") return;
-    const next = nextCronRun(parseCron(doc.trigger.cron), now());
+    if (!jobs || !w.enabled) return;
+    if (doc.trigger.kind !== "schedule" && doc.trigger.kind !== "silence") return;
+    const next = nextCronRun(
+      parseCron(cronOf(doc, (await options.settings()).silenceCheckCron)),
+      now(),
+    );
     if (!next) return;
     const payload: ScheduleJobPayload = { workflowId: w.id, version: w.currentVersion };
     await jobs.enqueue(WORKFLOW_SCHEDULE_STEP, payload, {
@@ -1063,6 +1139,10 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
   ): Promise<{ considered: number; threads: ThreadRow[] }> => {
     if (doc.trigger.kind === "schedule" || doc.trigger.kind === "manual") {
       return { considered: 0, threads: [] };
+    }
+    if (doc.trigger.kind === "silence") {
+      const silent = await silentThreads(w, doc.trigger, 500);
+      return { considered: silent.length, threads: silent.slice(0, recent) };
     }
     const rows = await db
       .select()
