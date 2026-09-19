@@ -143,28 +143,27 @@ const events: CalendarEvent[] = [
   }),
 ];
 
-const invites: Invite[] = [
-  {
-    id: "inv-1",
-    workspaceId: "ws",
-    messageId: "m-podcast",
-    threadId: "t-podcast",
-    eventId: "podcast",
-    method: "REQUEST",
-    uid: "podcast@lindqvist",
-    sequence: 0,
-    title: "Podcast recording",
-    start: at(18, 13),
-    end: at(18, 14),
-    allDay: false,
-    organizer: { name: "Sofia Lindqvist", email: "sofia@lindqvist.test" },
-    attendees: [],
-    response: "needs-action",
-    byMail: true,
-    senderMismatch: false,
-    receivedAt: NOW.toISOString(),
-  },
-];
+const podcastInvite: Invite = {
+  id: "inv-1",
+  workspaceId: "ws",
+  messageId: "m-podcast",
+  threadId: "t-podcast",
+  eventId: "podcast",
+  method: "REQUEST",
+  uid: "podcast@lindqvist",
+  sequence: 0,
+  title: "Podcast recording",
+  start: at(18, 13),
+  end: at(18, 14),
+  allDay: false,
+  organizer: { name: "Sofia Lindqvist", email: "sofia@lindqvist.test" },
+  attendees: [],
+  response: "needs-action",
+  byMail: true,
+  senderMismatch: false,
+  receivedAt: NOW.toISOString(),
+};
+const invites: Invite[] = [podcastInvite];
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 const S = defaultSettings();
@@ -320,14 +319,14 @@ describe("the invite bar", () => {
 
   test("a forged sender gets the warning and no buttons; a CANCEL shows cancelled", async () => {
     const forged: Invite = {
-      ...invites[0]!,
+      ...podcastInvite,
       id: "inv-2",
       threadId: "t-forged",
       senderMismatch: true,
       eventId: null,
     };
     const cancel: Invite = {
-      ...invites[0]!,
+      ...podcastInvite,
       id: "inv-3",
       threadId: "t-cancel",
       method: "CANCEL",
@@ -336,7 +335,7 @@ describe("the invite bar", () => {
     await mount(
       <>
         <InviteBar invites={[forged]} overlaps={[]} strings={S} onRsvp={() => {}} />
-        <InviteBar invites={[invites[0]!, cancel]} overlaps={[]} strings={S} onRsvp={() => {}} />
+        <InviteBar invites={[podcastInvite, cancel]} overlaps={[]} strings={S} onRsvp={() => {}} />
       </>,
     );
     const bars = [...(host as HTMLElement).querySelectorAll(".invite")];

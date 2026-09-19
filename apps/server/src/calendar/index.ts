@@ -821,7 +821,6 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
   /* ------------------------------ Sync ------------------------------ */
 
   async function syncCalendarEvents(
-    acct: AccountRow,
     s: CalendarSession,
     calendar: CalendarRow,
     report: CalendarSyncReport,
@@ -1359,7 +1358,7 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       report.calendars = list.length;
       for (const calendar of list) {
         try {
-          await syncCalendarEvents(acct, s, calendar, report);
+          await syncCalendarEvents(s, calendar, report);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           log(`calendar sync ${acct.id}/${calendar.providerId}: ${message}`);

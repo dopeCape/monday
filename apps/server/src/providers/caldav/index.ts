@@ -10,7 +10,7 @@
 // itself. XML is read with a small tag scanner; nothing here needs a
 // namespace-aware parser.
 
-import type { CalendarInfo, IsoDate, RsvpResponse } from "@monday/shared";
+import type { CalendarInfo, RsvpResponse } from "@monday/shared";
 import {
   escapeText,
   type ParsedEvent,
