@@ -3,7 +3,7 @@
 // paused at a Step), then Threads in Needs your reply, then the evergreen
 // prompts Setting. Plain sentences, no icons.
 
-import type { Settings, Thread, ToolCall } from "@monday/shared";
+import type { ExternalPending, Settings, Thread, ToolCall } from "@monday/shared";
 import type { Suggestion } from "@monday/ui";
 
 /** A Workflow Run paused at a Step that asks (slice 16). */
@@ -20,6 +20,8 @@ export interface SuggestionInput {
   pausedRuns?: readonly PausedRunChip[] | undefined;
   /** Threads in Needs your reply. */
   needsReply: readonly Thread[];
+  /** External calls parked on an approval (slice 19); the chip opens the caller's Session, where the card waits. */
+  external?: readonly ExternalPending[] | undefined;
 }
 
 export function suggestionsFor(input: SuggestionInput): Suggestion[] {
@@ -27,6 +29,13 @@ export function suggestionsFor(input: SuggestionInput): Suggestion[] {
   const out: Suggestion[] = [];
   for (const call of input.waiting) {
     out.push({ label: `Decide on the pending ${call.tool.replaceAll("_", " ")}` });
+  }
+  for (const p of input.external ?? []) {
+    if (p.status !== "waiting") continue;
+    out.push({
+      label: `Decide on the ${p.tool.replaceAll("_", " ")} that ${p.credentialName} asks for`,
+      session: p.sessionId ?? undefined,
+    });
   }
   for (const run of input.pausedRuns ?? []) {
     out.push({ label: `Decide on the ${run.stepName} step waiting in ${run.workflowName}` });

@@ -28,6 +28,7 @@ import { type AppEnv, createApp } from "../src/app.ts";
 import { claimableNeeds } from "../src/capabilities.ts";
 import { createDb, type DbHandle, dbOptionsFor } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
+import { createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createNetlifyKicker } from "../src/kicker/netlify.ts";
 import type { ServerlessKicker } from "../src/kicker/serverless.ts";
@@ -36,7 +37,7 @@ import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
 import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
 import { createCheckpointer } from "./checkpointer.ts";
 import { migrationsFolder } from "./resources.ts";
-import { createServices, type Services } from "./services.ts";
+import { createServices, publicUrlReader, type Services } from "./services.ts";
 
 export type CloudMode = Extract<DeploymentMode, "vercel" | "netlify">;
 
@@ -155,6 +156,9 @@ export async function bootCloud(
     oauth: { flow: createOAuthFlow(), loopback: null },
     push: services.push,
     mounts: [kicker.routes()],
+    // No desktop on a Cloud Server: an external approval waits in the pending items and is logged.
+    notifier: createMemoryNotifier((line) => log(line)),
+    publicUrl: publicUrlReader(handle.db, env),
   });
 
   const boot: CloudBoot = {

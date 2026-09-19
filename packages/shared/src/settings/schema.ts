@@ -1356,13 +1356,13 @@ export const settingsSchema = {
     help: "The prompts offered as chips when a Session is empty, after any pending approvals and Needs your reply items.",
   }),
 
-  /* External MCP */
+  /* External access (docs/spec/external-mcp.md) */
   "external.approval_timeout_minutes": setting({
     type: z.int().min(1),
     default: 5,
     scope: "global",
     section: "ai",
-    group: "External MCP",
+    group: "External access",
     advanced: true,
     label: "External approval timeout",
     help: "Minutes an external always-ask call waits for the owner before it returns pending.",
@@ -1372,7 +1372,7 @@ export const settingsSchema = {
     default: 60,
     scope: "global",
     section: "ai",
-    group: "External MCP",
+    group: "External access",
     advanced: true,
     label: "External rate limit",
     help: "Calls per minute per external credential.",
@@ -1382,7 +1382,7 @@ export const settingsSchema = {
     default: 90,
     scope: "global",
     section: "ai",
-    group: "External MCP",
+    group: "External access",
     advanced: true,
     label: "Key expiry",
     help: "Default lifetime of a new external key in days. Keys always expire.",
@@ -1392,7 +1392,7 @@ export const settingsSchema = {
     default: 50,
     scope: "global",
     section: "ai",
-    group: "External MCP",
+    group: "External access",
     advanced: true,
     label: "External search cap",
     help: "The most results one external search call returns.",
@@ -1402,7 +1402,7 @@ export const settingsSchema = {
     default: 10,
     scope: "global",
     section: "ai",
-    group: "External MCP",
+    group: "External access",
     advanced: true,
     label: "Consent page timeout",
     help: "Minutes an OAuth consent page waits for you before the client has to start over.",
@@ -2991,7 +2991,7 @@ export const settingsSchema = {
   "strings.server.devices.approved": str("server", "Devices: approved", "Approved"),
 
   /* External access (docs/spec/external-mcp.md, slice 19) */
-  "strings.settings.intro.ai.external-mcp": str(
+  "strings.settings.intro.ai.external-access": str(
     "ai",
     "External access intro",
     "Other agents can use monday's tools over MCP with a key or by signing in. Read keys only read; act keys can do more, and anything that leaves the mailbox still asks you.",
@@ -3169,7 +3169,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Permissions",
     "Activity log",
     "Sessions",
-    "External MCP",
+    "External access",
   ],
   workflows: ["Defaults", "Budget", "MCP servers"],
   server: ["Server", "Storage", "Connection", "Cloud", "Devices", "Jobs"],

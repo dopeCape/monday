@@ -59,6 +59,12 @@ export function waitingCalls(events: readonly TranscriptEvent[]): ToolCall[] {
 
 /** Titles for the cards, from the tool name, as the mock words them. */
 export function toolTitle(call: ToolCall): string {
+  const base = toolVerb(call);
+  // An external caller's card carries its name (docs/spec/external-mcp.md).
+  return call.actorName ? `${base}, asked by ${call.actorName}` : base;
+}
+
+function toolVerb(call: ToolCall): string {
   const done = call.status === "done" || call.status === "failed";
   switch (call.tool) {
     case "search_threads":

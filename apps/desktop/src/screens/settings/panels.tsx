@@ -9,12 +9,16 @@
 import {
   type ActivityRecord,
   type Device,
+  type ExternalConsent,
+  type ExternalCredential,
+  type ExternalKeyCreated,
+  type ExternalScope,
   formatMicros,
   type GroupView,
   type MeterMonth,
   type VoiceProfile,
 } from "@monday/shared";
-import { Btn, formatWhen, Input, Tag } from "@monday/ui";
+import { Btn, formatWhen, Input, Seg, Tag } from "@monday/ui";
 import { useCallback, useEffect, useState } from "react";
 import type { AccountView, PendingPairings, StorageInfo } from "../../platform/api.ts";
 import { platform } from "../../platform/tauri.ts";
@@ -810,3 +814,324 @@ export function AboutPanel(_: PanelProps) {
   );
 }
 registerPanel("about", "About", AboutPanel);
+
+/* ------------------------------ External access (docs/spec/external-mcp.md, slice 19) ------------------------------ */
+
+/** The Workspaces line of a credential: all, or how many. */
+function workspacesLine(
+  c: Pick<ExternalCredential, "workspaceIds">,
+  s: ReturnType<typeof useShell>["settings"],
+): string {
+  if (c.workspaceIds === null) return s["strings.external.workspaces.all"];
+  return fill(s["strings.external.workspaces.some"], { n: c.workspaceIds.length });
+}
+
+/**
+ * Keys and connected OAuth clients with kind, scope, Workspaces, expiry and
+ * last use, each revocable; the New key form, whose key is shown once with
+ * Copy; the OAuth consents waiting for approval, by list or by code.
+ */
+export function ExternalAccessPanel(_: PanelProps) {
+  const shell = useShell();
+  const screen = useSettingsScreen();
+  const s = shell.settings;
+  const [credentials, setCredentials] = useState<ExternalCredential[] | null>(null);
+  const [consents, setConsents] = useState<ExternalConsent[]>([]);
+  const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<ExternalScope>("read");
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const [days, setDays] = useState(String(s["external.key_expiry_days"]));
+  const [made, setMade] = useState<ExternalKeyCreated | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [code, setCode] = useState("");
+  const [approvedCode, setApprovedCode] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    shell.api.external
+      .credentials()
+      .then(setCredentials)
+      .catch(() => setCredentials(null));
+    shell.api.external
+      .consents()
+      .then(setConsents)
+      .catch(() => setConsents([]));
+    shell.api.accounts
+      .list()
+      .then((r) => setAccounts(r.accounts))
+      .catch(() => setAccounts([]));
+  }, [shell.api]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const fail = (e: unknown) =>
+    setError(
+      fill(s["strings.server.error.generic"], { message: String((e as Error)?.message ?? e) }),
+    );
+
+  const create = () => {
+    setError(null);
+    const expiresInDays = Number(days);
+    shell.api.external
+      .createKey({
+        name: name.trim(),
+        scope,
+        workspaceIds: chosen,
+        ...(Number.isInteger(expiresInDays) && expiresInDays > 0 ? { expiresInDays } : {}),
+      })
+      .then((k) => {
+        setMade(k);
+        setCopied(false);
+        setCreating(false);
+        setName("");
+        refresh();
+      })
+      .catch(fail);
+  };
+  const copy = () => {
+    if (!made) return;
+    void navigator.clipboard?.writeText(made.secret).catch(() => {});
+    setCopied(true);
+  };
+  const revoke = (c: ExternalCredential) => {
+    if (!confirm(fill(s["strings.external.revoke_confirm"], { name: c.name }))) return;
+    shell.api.external
+      .revoke(c.id)
+      .then(refresh)
+      .catch(() => {});
+  };
+  const approve = (ref: { id: string } | { code: string }) => {
+    setError(null);
+    shell.api.external
+      .approveConsent(ref, chosen)
+      .then(() => {
+        if ("code" in ref) {
+          setApprovedCode(true);
+          setCode("");
+        }
+        refresh();
+      })
+      .catch((e: unknown) => {
+        if ((e as { status?: number })?.status === 404)
+          setError(s["strings.external.consents.unknown"]);
+        else fail(e);
+      });
+  };
+  const status = (c: ExternalCredential): { kind: "ok" | "warn"; label: string } => {
+    if (c.revokedAt) return { kind: "warn", label: s["strings.external.revoked"] };
+    if (Date.parse(c.expiresAt) <= screen.now().getTime()) {
+      return { kind: "warn", label: s["strings.external.expired"] };
+    }
+    return {
+      kind: "ok",
+      label: fill(s["strings.external.expires"], { when: formatWhen(c.expiresAt, screen.now()) }),
+    };
+  };
+  const scopeLabel = (scope: ExternalScope) =>
+    scope === "read" ? s["strings.external.scope.read"] : s["strings.external.scope.act"];
+  const toggleWorkspace = (id: string) =>
+    setChosen((current) => {
+      const all = accounts.map((a) => a.workspaceId);
+      const set = new Set(current ?? all);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      return set.size === all.length ? null : [...set];
+    });
+
+  return (
+    <div data-panel="external">
+      {made ? (
+        <div className="sect pair" data-panel="external-key">
+          <p>
+            <b>{made.credential.name}</b> · {scopeLabel(made.credential.scope)}
+          </p>
+          <div className="wizard-fields">
+            <div className="wizard-field">
+              <div className="wizard-action">
+                <Input readOnly value={made.secret} data-secret style={{ flex: 1 }} />
+                <Btn primary onClick={copy}>
+                  {copied ? s["strings.external.copied"] : s["strings.external.copy"]}
+                </Btn>
+                <Btn onClick={() => setMade(null)}>{s["strings.external.done"]}</Btn>
+              </div>
+              <span className="help">{s["strings.external.shown_once"]}</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className="accounts-list">
+        {credentials && credentials.length === 0 ? (
+          <div className="note">{s["strings.external.empty"]}</div>
+        ) : null}
+        {(credentials ?? []).map((c) => {
+          const st = status(c);
+          return (
+            <div className="account-row" key={c.id} data-credential={c.id}>
+              <div className="lg">{c.kind === "key" ? "K" : "O"}</div>
+              <div>
+                <b>
+                  {c.name}
+                  {c.prefix ? ` (${c.prefix}...)` : ""}
+                </b>
+                <span>
+                  {[
+                    c.kind === "key"
+                      ? s["strings.external.kind.key"]
+                      : s["strings.external.kind.oauth"],
+                    scopeLabel(c.scope),
+                    workspacesLine(c, s),
+                    c.lastUsedAt
+                      ? fill(s["strings.external.last_used"], {
+                          when: formatWhen(c.lastUsedAt, screen.now()),
+                        })
+                      : s["strings.external.never_used"],
+                  ].join(" · ")}
+                </span>
+              </div>
+              <Tag kind={st.kind}>{st.label}</Tag>
+              {c.revokedAt ? (
+                <span />
+              ) : (
+                <Btn sm onClick={() => revoke(c)}>
+                  {s["strings.external.revoke"]}
+                </Btn>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {creating ? (
+        <div className="sect pair wizard-fields" data-panel="external-new">
+          <div className="wizard-field">
+            <label className="wizard-label" htmlFor="external-name">
+              {s["strings.external.form.name"]}
+            </label>
+            <Input
+              id="external-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={s["strings.external.form.name_placeholder"]}
+            />
+          </div>
+          <div className="wizard-field">
+            <span className="wizard-label">{s["strings.external.form.scope"]}</span>
+            <Seg
+              options={[
+                { value: "read", label: s["strings.external.scope.read"] },
+                { value: "act", label: s["strings.external.scope.act"] },
+              ]}
+              value={scope}
+              onChange={setScope}
+            />
+          </div>
+          {accounts.length > 1 ? (
+            <div className="wizard-field">
+              <span className="wizard-label">{s["strings.external.form.workspaces"]}</span>
+              {accounts.map((a) => (
+                <label key={a.workspaceId} className="check">
+                  <input
+                    type="checkbox"
+                    checked={chosen === null || chosen.includes(a.workspaceId)}
+                    onChange={() => toggleWorkspace(a.workspaceId)}
+                  />{" "}
+                  {a.address}
+                </label>
+              ))}
+            </div>
+          ) : null}
+          <div className="wizard-field">
+            <label className="wizard-label" htmlFor="external-days">
+              {s["strings.external.form.expiry"]}
+            </label>
+            <Input
+              id="external-days"
+              inputMode="numeric"
+              value={days}
+              onChange={(e) => setDays(e.target.value)}
+              style={{ width: 120 }}
+            />
+          </div>
+          <div className="wizard-action">
+            <Btn primary disabled={!name.trim()} onClick={create}>
+              {s["strings.external.form.create"]}
+            </Btn>
+            <Btn onClick={() => setCreating(false)}>{s["strings.external.form.cancel"]}</Btn>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 12 }}>
+          <Btn outline onClick={() => setCreating(true)}>
+            {s["strings.external.new_key"]}
+          </Btn>
+        </div>
+      )}
+      <div className="sect pair" data-panel="external-consents">
+        <h3>{s["strings.external.consents.title"]}</h3>
+        <p>{s["strings.external.consents.help"]}</p>
+        {consents.length > 0 ? (
+          <div className="accounts-list">
+            {consents.map((c) => (
+              <div className="account-row" key={c.id} data-consent={c.id}>
+                <div className="lg">{c.clientName.slice(0, 1).toUpperCase()}</div>
+                <div>
+                  <b>
+                    {fill(s["strings.external.consents.line"], {
+                      client: c.clientName,
+                      scope: scopeLabel(c.scope),
+                      code: c.code,
+                    })}
+                  </b>
+                  <span>{workspacesLine(c, s)}</span>
+                </div>
+                <Btn
+                  sm
+                  onClick={() => {
+                    shell.api.external
+                      .denyConsent(c.id)
+                      .then(refresh)
+                      .catch(() => {});
+                  }}
+                >
+                  {s["strings.external.consents.deny"]}
+                </Btn>
+                <Btn sm primary onClick={() => approve({ id: c.id })}>
+                  {s["strings.external.consents.approve"]}
+                </Btn>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="wizard-fields">
+          <div className="wizard-field">
+            <div className="wizard-action">
+              <Input
+                id="external-code"
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  setApprovedCode(false);
+                }}
+                inputMode="numeric"
+                placeholder="000000"
+                style={{ width: 120 }}
+              />
+              <Btn
+                disabled={!/^\d{6}$/.test(code.trim())}
+                onClick={() => approve({ code: code.trim() })}
+              >
+                {approvedCode
+                  ? s["strings.external.consents.approved"]
+                  : s["strings.external.consents.approve"]}
+              </Btn>
+            </div>
+          </div>
+          {error ? <div className="wizard-check bad">{error}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+registerPanel("ai", "External access", ExternalAccessPanel);

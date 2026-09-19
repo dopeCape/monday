@@ -18,6 +18,11 @@ import type {
   DraftContent,
   DraftIntent,
   DryRunPreview,
+  ExternalConsent,
+  ExternalCredential,
+  ExternalKeyCreated,
+  ExternalKeyInput,
+  ExternalPending,
   GroupInput,
   GroupView,
   HeaderSearchPage,
@@ -387,6 +392,57 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
     },
     /** What the Server holds: message count and database size, for the Storage line. */
     storage: () => request<StorageInfo>("/storage"),
+    /** External access (slice 19, docs/spec/external-mcp.md): keys, OAuth consents, parked approvals. */
+    external: {
+      credentials: () =>
+        request<{ credentials: ExternalCredential[] }>("/external/credentials").then(
+          (r) => r.credentials,
+        ),
+      /** Makes a key; the secret in the answer is shown once and never listed again. */
+      createKey: (input: ExternalKeyInput) =>
+        request<ExternalKeyCreated>("/external/credentials", json("POST", input)),
+      revoke: (id: Id) =>
+        raw(`/external/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }).then(
+          () => undefined,
+        ),
+      /** External calls of the Workspace parked on an approval. */
+      pending: (workspaceId: Id) =>
+        request<{ pending: ExternalPending[] }>(
+          `/external/pending?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.pending),
+      decide: (activityId: Id, decision: ApprovalDecision) =>
+        request<ExternalPending>(
+          `/external/pending/${encodeURIComponent(activityId)}`,
+          json("POST", { decision }),
+        ),
+      /**
+       * The Workspace's external feed: the cards of external calls as they move.
+       * Subscribed while a client is open, which is how the Server knows one is. Returns the unsubscribe.
+       */
+      live: (workspaceId: Id, onPending: (pending: ExternalPending) => void): (() => void) => {
+        const controller = new AbortController();
+        void raw(`/external/live?${new URLSearchParams({ workspace: workspaceId })}`, {
+          signal: controller.signal,
+        })
+          .then((res) => readEvents(res, (event) => onPending(event as unknown as ExternalPending)))
+          .catch(() => {
+            // Aborted by the unsubscribe, or the Server went away.
+          });
+        return () => controller.abort();
+      },
+      consents: () =>
+        request<{ consents: ExternalConsent[] }>("/external/consents").then((r) => r.consents),
+      /** Approves an OAuth consent by its id from the list, or by the code the sign-in page shows. */
+      approveConsent: (ref: { id: Id } | { code: string }, workspaceIds: Id[] | null = null) =>
+        request<ExternalConsent>(
+          "/external/consents/approve",
+          json("POST", { ...ref, workspaceIds }),
+        ),
+      denyConsent: (id: Id) =>
+        raw(`/external/consents/${encodeURIComponent(id)}/deny`, { method: "POST" }).then(
+          () => undefined,
+        ),
+    },
     upgrade: {
       status: () => request<UpgradeStatus>("/upgrade"),
       export: () => request<ExportResult>("/upgrade/export", { method: "POST" }),
