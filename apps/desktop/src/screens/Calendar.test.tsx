@@ -405,6 +405,44 @@ describe("the invite bar", () => {
     expect(el.querySelector(".invite .tag")?.textContent).toBe("Accepted");
   });
 
+  test("the invite's own Event, not yet linked but holding the same uid, is not an overlap", async () => {
+    // The Provider added the meeting to the calendar before the Server linked the Invite to it.
+    const unlinked: Invite = {
+      ...podcastInvite,
+      id: "inv-4",
+      threadId: "t-unlinked",
+      eventId: null,
+    };
+    const source = fixtureCalendar({
+      calendars,
+      events: events.map((e) => (e.id === "podcast" ? { ...e, uid: "podcast@lindqvist" } : e)),
+      invites: [unlinked],
+    });
+    await mount(<ThreadInviteBar calendar={source} threadId="t-unlinked" settings={S} />);
+    const bar = (host as HTMLElement).querySelector(".invite");
+    expect(bar?.textContent).toContain("Podcast recording");
+    expect(bar?.querySelector(".inv-c")).toBeNull();
+  });
+
+  test("the invite's own Event, not yet linked but holding the same uid, is not an overlap", async () => {
+    // The Provider added the meeting to the calendar before the Server linked the Invite to it.
+    const unlinked: Invite = {
+      ...podcastInvite,
+      id: "inv-4",
+      threadId: "t-unlinked",
+      eventId: null,
+    };
+    const source = fixtureCalendar({
+      calendars,
+      events: events.map((e) => (e.id === "podcast" ? { ...e, uid: "podcast@lindqvist" } : e)),
+      invites: [unlinked],
+    });
+    await mount(<ThreadInviteBar calendar={source} threadId="t-unlinked" settings={S} />);
+    const bar = (host as HTMLElement).querySelector(".invite");
+    expect(bar?.textContent).toContain("Podcast recording");
+    expect(bar?.querySelector(".inv-c")).toBeNull();
+  });
+
   test("a forged sender gets the warning and no buttons; a CANCEL shows cancelled", async () => {
     const forged: Invite = {
       ...podcastInvite,
