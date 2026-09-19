@@ -53,7 +53,7 @@ const conversation = [
         tool: {
           t: "propose groups",
           st: "wait",
-          stt: "Waiting",
+          stt: "Needs approval",
           d: "Hiring, Finance, Investors",
           preview:
             "Hiring: Candidates, recruiters and interview threads. (6 threads would move)<br>Finance: Invoices, receipts and payment notices. (2 threads would move)<br>Investors: Mail from Meridian and the other funds. (3 threads would move)<br>Over the newest 50 threads. Nothing moves until you approve; one Undo puts it all back.",

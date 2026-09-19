@@ -329,6 +329,8 @@ export interface AgentColumnProps {
   /** The AgentThread, then the AgentBar. */
   children?: ReactNode | undefined;
   className?: string | undefined;
+  /** One conversation only, no new or history buttons (the onboarding conversation). */
+  bare?: boolean | undefined;
 }
 
 /** The Agent as a permanent column (agent: left or right). */
@@ -340,16 +342,21 @@ export function AgentColumn({
   labels,
   children,
   className,
+  bare,
 }: AgentColumnProps) {
   return (
     <section className={cx("agent-col", side, className)}>
       <ColHead title="monday" count={runtime}>
-        <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>
-          <Icon icon={PlusIcon} />
-        </Btn>
-        <Btn icon title={labels?.history ?? "History"} onClick={onHistory}>
-          <Icon icon={ClockCounterClockwiseIcon} />
-        </Btn>
+        {bare ? null : (
+          <>
+            <Btn icon title={labels?.new ?? "New conversation"} onClick={onNew}>
+              <Icon icon={PlusIcon} />
+            </Btn>
+            <Btn icon title={labels?.history ?? "History"} onClick={onHistory}>
+              <Icon icon={ClockCounterClockwiseIcon} />
+            </Btn>
+          </>
+        )}
       </ColHead>
       {children}
     </section>

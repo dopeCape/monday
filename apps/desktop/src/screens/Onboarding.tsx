@@ -310,6 +310,7 @@ function OnboardingBody({
                   placeholder={s["strings.agent.placeholder_open"]}
                   text={text}
                   onTextChange={setText}
+                  plain
                 />
               </div>
               <div className="actions">

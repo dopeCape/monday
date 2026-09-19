@@ -406,7 +406,11 @@ export function App({
       agentClient === undefined &&
       new URLSearchParams(location.search).get("step") === "chat";
     return (
-      <div className="app" data-online={online ? "true" : "false"}>
+      <div
+        className="app"
+        data-online={online ? "true" : "false"}
+        style={{ gridTemplateColumns: "minmax(0, 1fr)" }}
+      >
         <Onboarding
           key={`onboarding-${onboarding?.account?.id ?? "none"}-${onboarding?.rerun ? "again" : "first"}`}
           accountId={onboarding?.account?.id ?? account.id}
