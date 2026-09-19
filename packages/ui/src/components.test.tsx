@@ -620,7 +620,7 @@ describe("routing", () => {
     expect(ask).toContain("The agent proposes a rule.");
   });
 
-  test("DecisionRow offers the candidates, and an X only when there is one", () => {
+  test("DecisionRow offers the candidates, and an X to leave the Thread out either way", () => {
     const two = render(
       <DecisionRow
         threadId="d1"
@@ -637,7 +637,7 @@ describe("routing", () => {
     );
     expect(two).toContain('<button type="button" class="btn sm">Hiring</button>');
     expect(two).toContain('<button type="button" class="btn sm">Community</button>');
-    expect(two).not.toContain('aria-label="Leave"');
+    expect(two).toContain('aria-label="Leave"');
     const one = render(
       <DecisionRow
         threadId="d2"

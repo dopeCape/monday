@@ -1524,6 +1524,15 @@ button.msg {
   margin: -16px 0 20px;
   font-size: var(--fs-sm);
 }
+.routing-error[role="alert"] {
+  color: var(--danger);
+}
+/* a calm note under the head: routing needs a shared key, the groups are loading */
+.routing-note {
+  margin: -16px 0 20px;
+  font-size: var(--fs-sm);
+  max-width: 60ch;
+}
 .side-card h3 .preview-acts {
   margin-left: auto;
   display: flex;

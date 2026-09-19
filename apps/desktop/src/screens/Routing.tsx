@@ -6,7 +6,15 @@
 // Store (the feed keeps them current); Examples, Confidence and the actions
 // go through the API. Every string is a Setting (strings.routing.*).
 
-import type { GroupInput, GroupView, Predicate, ProposedMove, Settings } from "@monday/shared";
+import type {
+  Group,
+  GroupInput,
+  GroupView,
+  HostedProvider,
+  Predicate,
+  ProposedMove,
+  Settings,
+} from "@monday/shared";
 import {
   AgentBar,
   AgentDock,
@@ -15,6 +23,7 @@ import {
   DecisionRow,
   GroupCard,
   Icon,
+  type IconComponent,
   PageHead,
   PreviewCard,
   SampleRow,
@@ -22,11 +31,12 @@ import {
   SideCard,
   type SubgroupItem,
 } from "@monday/ui";
-import { groupConfidence, groupIcon, workspace } from "@monday/ui/fixtures";
+import { groupIcon as fixtureGroupIcon } from "@monday/ui/fixtures";
 import { ArrowsClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { Api } from "../platform/api.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { useWorkspace } from "../workspace.tsx";
 import { fixtureInbox, type InboxSource } from "./inbox/actions.ts";
 import { fill } from "./inbox/triage.ts";
 import { fixtureRouting, type RoutingSource } from "./routing/routing-data.ts";
@@ -36,17 +46,25 @@ export interface RoutingProps {
   routing?: RoutingSource | undefined;
   /** The stream, for unread counts and "Recently routed". */
   inbox?: InboxSource | undefined;
+  /** The Workspace shown; the current one by default. */
   workspaceId?: string | undefined;
   /** Opens a Group in the inbox. */
   onNavigate?: ((target: string) => void) | undefined;
   /** The Server side of the page; the Shell's client by default, a fake in tests. */
   api?: RoutingApi | undefined;
+  /** Which Hosted providers hold a shared key; the Shell's client by default, null where no Server is. */
+  keys?: Pick<Api["keys"], "shared"> | null | undefined;
+  /** An icon per Group, when the nav has one; the mock's on the dev server, none in the app. */
+  groupIcon?: ((g: Group) => IconComponent | undefined) | undefined;
 }
 
 export type RoutingApi = Api["routing"];
 
-const defaultRouting = fixtureRouting();
-const defaultInbox = fixtureInbox();
+/** The design fixtures stand in on the browser dev server only, where no Server exists. */
+const devRouting = fixtureRouting();
+const devInbox = fixtureInbox();
+const emptyRouting = fixtureRouting([], []);
+const emptyInbox = fixtureInbox([]);
 
 type Strings = Record<string, string>;
 
@@ -125,14 +143,22 @@ function inputOf(d: Draft): GroupInput {
 }
 
 export function Routing({
-  routing = defaultRouting,
-  inbox = defaultInbox,
-  workspaceId = workspace.id,
+  routing: routingProp,
+  inbox: inboxProp,
+  workspaceId: workspaceIdProp,
   onNavigate,
   api: apiOverride,
+  keys: keysProp,
+  groupIcon: groupIconProp,
 }: RoutingProps) {
   const shell = useShell();
   const { settings } = shell;
+  const current = useWorkspace();
+  const workspaceId = workspaceIdProp ?? current.id;
+  const routing = routingProp ?? (shell.server ? emptyRouting : devRouting);
+  const inbox = inboxProp ?? (shell.server ? emptyInbox : devInbox);
+  const groupIcon = groupIconProp ?? (shell.server ? undefined : fixtureGroupIcon);
+  const keys = keysProp === undefined ? (shell.server ? shell.api.keys : null) : keysProp;
   const api = apiOverride ?? shell.api.routing;
   const s = useMemo(() => routingStrings(settings), [settings]);
   // Just mail (CONTEXT.md "AI level"): the Groups stay, hand-made; nothing here asks the Agent.
@@ -151,6 +177,10 @@ export function Routing({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [settled, setSettled] = useState<Set<string>>(() => new Set());
+  /** Delete asks once: the button names the Group until the second click. */
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Whether a shared key exists for routing on the Server; null until known or where it cannot be. */
+  const [sharedKeys, setSharedKeys] = useState<HostedProvider[] | null>(null);
 
   const refreshViews = useCallback(() => {
     api
@@ -161,6 +191,22 @@ export function Routing({
   useEffect(() => {
     refreshViews();
   }, [refreshViews]);
+  useEffect(() => {
+    if (!keys) return;
+    let live = true;
+    keys
+      .shared()
+      .then((r) => {
+        if (live) setSharedKeys(r.shared);
+      })
+      .catch(() => {
+        if (live) setSharedKeys(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [keys]);
+  const hostedNeeded = settings["ai.level"] === "automate" && sharedKeys?.length === 0;
 
   const byId = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
   const top = groups.filter((g) => g.parentId === null);
@@ -171,8 +217,7 @@ export function Routing({
 
   const unreadIn = (id: string) =>
     threads.filter((t) => t.unread && (t.group === id || t.subgroup === id)).length;
-  const confidenceOf = (id: string): number | null =>
-    views?.get(id)?.confidence ?? (views === null ? (groupConfidence[id] ?? null) : null);
+  const confidenceOf = (id: string): number | null => views?.get(id)?.confidence ?? null;
 
   const recent = threads.filter((t) => t.group !== null).slice(0, 8);
   const pending = decisions.filter((d) => !settled.has(d.threadId));
@@ -183,7 +228,13 @@ export function Routing({
     const g = byId.get(id);
     if (!g) return;
     setEditing(id);
+    setConfirmDelete(false);
     setDraft(draftOf(views?.get(id) ?? g));
+  };
+  const stopEdit = () => {
+    setEditing(null);
+    setDraft(null);
+    setConfirmDelete(false);
   };
 
   const save = async () => {
@@ -192,8 +243,7 @@ export function Routing({
     setError(null);
     try {
       await api.updateGroup(editing, inputOf(draft));
-      setEditing(null);
-      setDraft(null);
+      stopEdit();
       refreshViews();
     } catch (e) {
       fail(e);
@@ -204,12 +254,16 @@ export function Routing({
 
   const remove = async () => {
     if (!editing) return;
+    // Deleting is not reversible: the first click only names what would go (ADR 0002).
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await api.deleteGroup(editing);
-      setEditing(null);
-      setDraft(null);
+      stopEdit();
       refreshViews();
     } catch (e) {
       fail(e);
@@ -285,7 +339,7 @@ export function Routing({
     editing && draft ? (
       <div className="rule-edit">
         <label>
-          <span>Name</span>
+          <span>{s["edit.name"]}</span>
           <input
             className="input"
             value={draft.name}
@@ -293,7 +347,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Rule</span>
+          <span>{s["edit.sentence"]}</span>
           <textarea
             className="input"
             rows={3}
@@ -302,7 +356,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Always from these domains</span>
+          <span>{s["edit.domains"]}</span>
           <input
             className="input"
             value={draft.domains}
@@ -310,7 +364,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Always from these senders</span>
+          <span>{s["edit.senders"]}</span>
           <input
             className="input"
             value={draft.senders}
@@ -318,7 +372,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Always with these subjects</span>
+          <span>{s["edit.subjects"]}</span>
           <input
             className="input"
             value={draft.subjects}
@@ -326,7 +380,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Always from these lists</span>
+          <span>{s["edit.lists"]}</span>
           <input
             className="input"
             value={draft.lists}
@@ -334,7 +388,7 @@ export function Routing({
           />
         </label>
         <label>
-          <span>Route threshold, empty for the Setting</span>
+          <span>{s["edit.threshold"]}</span>
           <input
             className="input"
             value={draft.threshold}
@@ -342,13 +396,13 @@ export function Routing({
           />
         </label>
         <div className="rule-edit-row">
-          <span>Brief policy</span>
+          <span>{s["edit.brief_policy"]}</span>
           <Seg
             options={[
-              { value: "default", label: "Setting" },
-              { value: "always", label: "Always" },
-              { value: "on_open", label: "On open" },
-              { value: "never", label: "Never" },
+              { value: "default", label: s["edit.brief.default"] ?? "Setting" },
+              { value: "always", label: s["edit.brief.always"] ?? "Always" },
+              { value: "on_open", label: s["edit.brief.on_open"] ?? "On open" },
+              { value: "never", label: s["edit.brief.never"] ?? "Never" },
             ]}
             value={draft.briefPolicy}
             onChange={(value) => setDraft({ ...draft, briefPolicy: value })}
@@ -364,27 +418,22 @@ export function Routing({
                 key={`${e.threadId}:${e.positive}`}
                 name={nameOf(e.from)}
                 subject={e.subject}
-                tag={e.positive ? "Belongs" : "Does not belong"}
+                tag={e.positive ? s["edit.belongs"] : s["edit.not_belongs"]}
               />
             ))}
           </div>
         ) : null}
         <div className="acts">
           <Btn sm primary onClick={save} disabled={busy}>
-            Save
+            {s["edit.save"]}
           </Btn>
-          <Btn
-            sm
-            onClick={() => {
-              setEditing(null);
-              setDraft(null);
-            }}
-            disabled={busy}
-          >
-            Cancel
+          <Btn sm onClick={stopEdit} disabled={busy}>
+            {s["edit.cancel"]}
           </Btn>
-          <Btn sm onClick={remove} disabled={busy}>
-            Delete group
+          <Btn sm onClick={remove} disabled={busy} className={confirmDelete ? "danger" : undefined}>
+            {confirmDelete
+              ? fill(s["edit.delete_confirm"] ?? "Delete {name} for good", { name: draft.name })
+              : s["edit.delete"]}
           </Btn>
         </div>
       </div>
@@ -402,7 +451,12 @@ export function Routing({
               <Icon icon={PlusIcon} /> {s.new_group ?? "New group"}
             </Btn>
           </PageHead>
-          {error ? <p className="faint routing-error">{error}</p> : null}
+          {error ? (
+            <p className="faint routing-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {hostedNeeded ? <p className="faint routing-note">{s.hosted_needed}</p> : null}
           <div className="two">
             <div className="tree">
               {top.length === 0 ? (
