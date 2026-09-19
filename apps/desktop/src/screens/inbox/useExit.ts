@@ -6,19 +6,10 @@
 // the token reads zero, because transitions are off, the system asks for
 // less motion, or a test has no stylesheet, the thing leaves at once.
 
+import { type MotionToken, motionMs } from "@monday/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type MotionToken = "--t-fast" | "--t-med" | "--t-slow";
-
-/** The milliseconds a motion token resolves to on the root right now; 0 when unset. */
-export function motionMs(token: MotionToken): number {
-  if (typeof document === "undefined" || typeof getComputedStyle !== "function") return 0;
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
-  if (raw === "") return 0;
-  const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n)) return 0;
-  return raw.endsWith("ms") ? n : raw.endsWith("s") ? n * 1000 : n;
-}
+export type { MotionToken } from "@monday/ui";
 
 export interface Exit {
   /** Render the element at all. */

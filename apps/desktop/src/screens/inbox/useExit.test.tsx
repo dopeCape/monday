@@ -6,10 +6,11 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { motionMs } from "@monday/ui";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { motionMs, useExit, useExitValue } from "./useExit.ts";
+import { useExit, useExitValue } from "./useExit.ts";
 
 const tokensCss = readFileSync(
   new URL("../../../../../packages/ui/src/tokens.css", import.meta.url).pathname,
