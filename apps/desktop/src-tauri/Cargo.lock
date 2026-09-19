@@ -2132,6 +2132,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "keyring",
+ "libc",
  "notify",
  "notify-debouncer-mini",
  "rand",

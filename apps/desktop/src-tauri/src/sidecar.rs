@@ -4,6 +4,7 @@
 //! port once on stdout; the parent pid is passed so the server can watch us.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use rand::RngCore;
 use serde::Serialize;
@@ -104,12 +105,48 @@ pub async fn start(app: &AppHandle) -> Result<SidecarInfo, String> {
     Ok(info)
 }
 
+/// How long the sidecar gets to shut down on its own (stop Postgres, close the
+/// database, finish a lease) before it is killed outright.
+const GRACEFUL_STOP: Duration = Duration::from_secs(8);
+
+/// Asks the sidecar to stop and waits for it. A plain kill is SIGKILL, which
+/// skips the sidecar's shutdown and leaves the embedded Postgres running with
+/// the data directory locked; SIGTERM lets it stop Postgres first.
 pub fn stop(app: &AppHandle) {
     let state = app.state::<SidecarState>();
     if let Some(child) = state.child.lock().unwrap().take() {
-        let _ = child.kill();
+        let pid = child.pid();
+        if !terminate_and_wait(pid, GRACEFUL_STOP) {
+            eprintln!("[monday] sidecar {pid} did not stop in time; killing it");
+            let _ = child.kill();
+        }
     }
     state.info.lock().unwrap().running = false;
+}
+
+#[cfg(unix)]
+fn terminate_and_wait(pid: u32, timeout: Duration) -> bool {
+    // SAFETY: plain libc calls on a pid we spawned; kill(pid, 0) only probes.
+    unsafe {
+        if libc::kill(pid as i32, libc::SIGTERM) != 0 {
+            return true; // already gone
+        }
+    }
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        if unsafe { libc::kill(pid as i32, 0) } != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(unix))]
+fn terminate_and_wait(_pid: u32, _timeout: Duration) -> bool {
+    // No SIGTERM on Windows; the sidecar's parent watchdog stops Postgres on
+    // the next tick after the kill below, since the parent pid is gone.
+    false
 }
 
 #[tauri::command]

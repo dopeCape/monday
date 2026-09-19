@@ -27,3 +27,6 @@ rand = "0.9"
 base64 = "0.22"
 thiserror = "2"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
