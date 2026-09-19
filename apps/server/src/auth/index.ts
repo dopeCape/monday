@@ -7,12 +7,16 @@
 // Runtime-neutral: Web Crypto only.
 
 import type { Device } from "@monday/shared";
+import { settingsSchema } from "@monday/shared";
 import { and, desc, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { devices, pairingCodes } from "../db/schema.ts";
 
 export const SIDECAR_DEVICE_ID = "local";
-export const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
+/** The shipped default of server.device_code_minutes, as milliseconds. */
+export const PAIRING_CODE_TTL_MS = settingsSchema["server.device_code_minutes"].default * 60_000;
+/** How often a Device's last_seen is written. */
+export const LAST_SEEN_RESOLUTION_MS = 60_000;
 
 export type Principal =
   | { kind: "sidecar"; deviceId: typeof SIDECAR_DEVICE_ID }
@@ -57,7 +61,8 @@ export interface AuthOptions {
   sidecarToken?: string | null;
   /** One-time code that pairs the very first Device. */
   setupCode?: string | null;
-  codeTtlMs?: number;
+  /** How long a pairing code lives; the Setting server.device_code_minutes when read from the table. */
+  codeTtlMs?: number | (() => Promise<number> | number);
   now?: () => Date;
 }
 
@@ -119,7 +124,8 @@ export function createAuth(options: AuthOptions): Auth {
   const { db } = options;
   const sidecarToken = options.sidecarToken || null;
   const setupCode = options.setupCode || null;
-  const codeTtlMs = options.codeTtlMs ?? PAIRING_CODE_TTL_MS;
+  const codeTtl = options.codeTtlMs ?? PAIRING_CODE_TTL_MS;
+  const codeTtlMs = async () => (typeof codeTtl === "function" ? await codeTtl() : codeTtl);
   const now = options.now ?? (() => new Date());
 
   const mintDevice = async (name: string) => {
@@ -144,7 +150,10 @@ export function createAuth(options: AuthOptions): Auth {
       const hash = await sha256Hex(bearer);
       const row = await db.query.devices.findFirst({ where: eq(devices.tokenHash, hash) });
       if (!row) return null;
-      await db.update(devices).set({ lastSeen: now() }).where(eq(devices.id, row.id));
+      // Last seen is a minute's resolution: one write per Device per minute, not one per request.
+      if (now().getTime() - row.lastSeen.getTime() >= LAST_SEEN_RESOLUTION_MS) {
+        await db.update(devices).set({ lastSeen: now() }).where(eq(devices.id, row.id));
+      }
       return { kind: "device", deviceId: row.id };
     },
 
@@ -159,7 +168,7 @@ export function createAuth(options: AuthOptions): Auth {
     async pairStart(name) {
       const secret = randomToken();
       const secretHash = await sha256Hex(secret);
-      const expiresAt = new Date(now().getTime() + codeTtlMs);
+      const expiresAt = new Date(now().getTime() + (await codeTtlMs()));
       for (let attempt = 0; attempt < 20; attempt++) {
         const code = randomCode();
         const inserted = await db

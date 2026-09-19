@@ -72,6 +72,8 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   adopt_workflow: "reversible",
   propose_views: "reversible",
   set_keymap: "reversible",
+  // The Voice profile (CONTEXT.md): built from sent mail on request; Undo restores the old one.
+  build_voice_profile: "reversible",
   // The calendar tools (slice 18): an invite goes out, so scheduling and answering ask first.
   list_events: "read",
   schedule_event: "leaves_mailbox",
@@ -154,7 +156,13 @@ export type UndoRecord =
   /** Onboarding's approved Group proposal: the Groups it created and the moves to put back. */
   | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] }
   /** An Event the scheduling tool made: Undo cancels it (the Provider mails the cancellation). */
-  | { kind: "event"; eventId: Id };
+  | { kind: "event"; eventId: Id }
+  /** The Voice profile before a rebuild: Undo puts it back. */
+  | {
+      kind: "voice";
+      workspaceId: Id;
+      previous: { description: string; excerpts: string[]; enabled: boolean };
+    };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

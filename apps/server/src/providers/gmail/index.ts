@@ -39,15 +39,18 @@ import {
 import { createGoogleCalendar } from "./calendar.ts";
 import { GmailApiError, GmailClient } from "./client.ts";
 import {
+  deleteSubscription,
   ensurePullSubscription,
   ensurePushSubscription,
   type PullLoop,
+  type PushOidc,
   pullLoop,
 } from "./pubsub.ts";
 import { GMAIL_COST, gmailQuotaBucket, type TokenBucket } from "./quota.ts";
 
 export { createGoogleCalendar, eventOfGoogle } from "./calendar.ts";
 export { GmailApiError, GmailClient } from "./client.ts";
+export * from "./oidc.ts";
 export * from "./pubsub.ts";
 export * from "./quota.ts";
 
@@ -635,10 +638,15 @@ export class GmailSession implements Session {
     await this.client.request("stop", { cost: "stop", method: "POST", body: {} });
   }
 
-  /** Creates or updates the push subscription that delivers to the Cloud webhook. */
-  async subscribePush(pushEndpoint: string): Promise<string> {
+  /** Creates or updates the push subscription that delivers to the Cloud webhook, signed with the OIDC token. */
+  async subscribePush(pushEndpoint: string, oidc: PushOidc): Promise<string> {
     if (!this.pubsubTopic) throw new ProviderError("no Pub/Sub topic configured", "unsupported");
-    return ensurePushSubscription(this.client, this.pubsubTopic, pushEndpoint);
+    return ensurePushSubscription(this.client, this.pubsubTopic, pushEndpoint, oidc);
+  }
+
+  /** Drops the push subscription, so nothing delivers to a webhook that will refuse it. */
+  async unsubscribePush(subscription: string): Promise<void> {
+    await deleteSubscription(this.client, subscription);
   }
 
   watch(mailboxIds: string[]): Watch {

@@ -290,7 +290,14 @@ export interface InviteChange {
 
 /** Thread headers as the feed carries them: no subject, no snippet (those are content). */
 export interface ThreadChange extends Thread {
+  /** In the Provider's trash. */
   deleted: boolean;
+  /**
+   * The row is gone from the Server (its last Message left the Provider, or
+   * it folded into another Thread): drop it from the Cache. Such a row also
+   * carries `deleted: true`, so a client that does not know this field hides it.
+   */
+  removed?: boolean;
 }
 
 /** Message headers; the body stays behind /messages/:id/body. */
@@ -302,6 +309,8 @@ export interface MessageChange {
   cc: Person[];
   date: IsoDate;
   hasAttachments: boolean;
+  /** The Message left the Server: drop it from the Cache. */
+  removed?: boolean;
 }
 
 export interface LabelChange {

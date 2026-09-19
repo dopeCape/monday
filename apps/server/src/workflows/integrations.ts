@@ -2,8 +2,8 @@
 // Slack, Notion, Google Drive, Discord and a plain webhook, behind one seam.
 // A post is what leaves the mailbox, so every call sits behind an always-ask
 // tool; this module only knows how to deliver one. The HTTP implementation
-// reads where to post from the workflows.integrations Setting; tests use the
-// fake, which records every post.
+// reads where to post from the sealed integration secrets (secrets.ts), never
+// from a Setting; tests use the fake, which records every post.
 
 import type { Integration } from "@monday/shared";
 
@@ -38,7 +38,7 @@ export interface Integrations {
   configured(integration: Integration): Promise<boolean>;
 }
 
-/** Where each integration posts (the workflows.integrations Setting). */
+/** Where each integration posts: the sealed secrets, opened. */
 export interface IntegrationsConfig {
   slack?: { webhookUrl?: string | undefined; token?: string | undefined } | undefined;
   discord?: { webhookUrl?: string | undefined } | undefined;
@@ -55,11 +55,17 @@ export class IntegrationNotConfiguredError extends Error {
 }
 
 export interface HttpIntegrationsOptions {
+  /** The secrets in the clear, read at post time. Throws LockedError on a locked Server. */
   config: () => Promise<IntegrationsConfig>;
+  /**
+   * Which integrations hold a secret, without opening any, so the preview's
+   * wording works on a locked Server. Defaults to opening `config`.
+   */
+  configured?: () => Promise<readonly Integration[]>;
   fetch?: typeof fetch;
 }
 
-/** Posts over HTTP with the endpoints and tokens the Setting holds. */
+/** Posts over HTTP with the endpoints and tokens the sealed rows hold. */
 export function createHttpIntegrations(options: HttpIntegrationsOptions): Integrations {
   const doFetch = options.fetch ?? fetch;
 
@@ -88,6 +94,8 @@ export function createHttpIntegrations(options: HttpIntegrationsOptions): Integr
 
   return {
     async configured(integration) {
+      if (integration === "webhook") return true;
+      if (options.configured) return (await options.configured()).includes(integration);
       const c = await options.config();
       switch (integration) {
         case "slack":
@@ -98,8 +106,6 @@ export function createHttpIntegrations(options: HttpIntegrationsOptions): Integr
           return Boolean(c.notion?.token);
         case "drive":
           return Boolean(c.drive?.token);
-        case "webhook":
-          return true;
       }
     },
 

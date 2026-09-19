@@ -43,6 +43,8 @@ export interface AccountServiceOptions {
   credentials: CredentialStore;
   /** Starts the Account's Jobs (sync, watch, reconcile, push registrations). */
   onAdded?: (accountId: string, provider: ProviderKind) => Promise<void>;
+  /** Called before the rows go: stop the watcher, drop the Session, cancel the Account's Jobs. */
+  onRemoving?: (accountId: string, provider: ProviderKind) => Promise<void>;
 }
 
 export function createAccountService(options: AccountServiceOptions): AccountService {
@@ -122,6 +124,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
     async remove(accountId) {
       const existing = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
       if (!existing) return false;
+      await options.onRemoving?.(accountId, existing.provider);
       await credentials.clear(accountId);
       await db.delete(accounts).where(eq(accounts.id, accountId));
       return true;

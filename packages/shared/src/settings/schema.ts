@@ -226,12 +226,16 @@ export const sectionRuleShape = z.object({
 });
 export type SectionRuleValue = z.output<typeof sectionRuleShape>;
 const placement = z.enum(["server", "local"]);
+/**
+ * Which integrations hold a secret. The tokens and webhook URLs themselves
+ * are sealed rows on the Server (PUT /integrations/:name), never a Setting.
+ */
 const integrationsShape = z.object({
-  slack: z.object({ webhookUrl: z.url().optional(), token: z.string().optional() }).optional(),
-  discord: z.object({ webhookUrl: z.url().optional() }).optional(),
-  notion: z.object({ token: z.string().optional() }).optional(),
-  drive: z.object({ token: z.string().optional() }).optional(),
-  webhook: z.object({ token: z.string().optional() }).optional(),
+  slack: z.boolean().optional(),
+  discord: z.boolean().optional(),
+  notion: z.boolean().optional(),
+  drive: z.boolean().optional(),
+  webhook: z.boolean().optional(),
 });
 const keymap = z.enum(["vim", "gmail", "natural"]);
 const direction = z.enum(["next", "previous"]);
@@ -1041,6 +1045,16 @@ export const settingsSchema = {
     label: "Gmail watch renewal",
     help: "Hours between renewals of the Gmail push watch. Gmail stops notifying after seven days without one.",
   }),
+  "sync.gmail_push_service_account": setting({
+    type: z.string().max(320),
+    default: "",
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    advanced: true,
+    label: "Gmail push signing account",
+    help: "The service account email Pub/Sub signs push deliveries as (the Google project's Pub/Sub push subscription needs a service account with roles/iam.serviceAccountTokenCreator granted to the Pub/Sub service agent). The Cloud verifies every Gmail push against it; empty means no push subscription is registered and Gmail is polled on the reconcile interval.",
+  }),
   "sync.graph_subscription_renew_hours": setting({
     type: z.int().min(1).max(144),
     default: 72,
@@ -1494,6 +1508,7 @@ export const settingsSchema = {
       "Ask at most {questions} questions, one per turn, each answerable in one sentence or a chip, in this order: who the user is and what they do; what mail matters most; which tools they use (Slack, Notion, Drive, Discord); whether monday may learn their voice from sent mail (off unless they say yes); whether monday may read the last {days} days of mail to propose Groups (off unless they say yes). The user may answer Skip to any question; move on without comment. Never re-ask a skipped question.",
       "Start by calling onboarding_context once, silently, to learn the top senders, the Thread count and what is already set up. Do not describe it; ask the first question.",
       "After the questions, at level automate: call propose_groups with three to five Groups drawn from the answers and the top senders, each with a plain-language sentence and a Predicate (senders or domains); the tool shows the list with the count of Threads that would move and asks for approval; nothing moves until the user approves. Then call propose_workflows with the tools the user named; it lists at most {workflows} catalog Workflows with their Dry run; then adopt_workflow for the one the user picks, one at a time, which asks before enabling. At level assist, skip Groups and Workflows entirely.",
+      "If the user said monday may learn their voice from sent mail, call build_voice_profile once; it asks nothing more and can be undone.",
       "If the user said they get a lot of mail, or the Thread count is at least {focus}, offer a Focus view with propose_views.",
       "End with the keymap: call set_keymap with the user's answer to Vim, Gmail or Natural (Vim when they do not care), then one line saying onboarding is done and that Set me up in the composer runs it again.",
       "Never ask for a provider key or a runtime here. Keep every message to one or two short sentences.",
@@ -1702,7 +1717,9 @@ export const settingsSchema = {
     section: "workflows",
     group: "Defaults",
     label: "Integrations",
-    help: "Where the Slack, Notion, Drive, Discord and webhook steps post: a webhook URL or a token per integration.",
+    help: "Which of Slack, Notion, Drive, Discord and the webhook are set up. The tokens and webhook URLs are kept sealed on the Server, set and cleared under Settings, Workflows, Integrations; this only says which ones exist.",
+    hidden:
+      "Written by the Server from its sealed rows whenever an integration is set or cleared; the Integrations panel reads it.",
   }),
   "workflows.mcp_servers": setting({
     type: z.array(mcpServerShape),
@@ -1713,6 +1730,50 @@ export const settingsSchema = {
     control: "mcp-servers",
     label: "MCP servers",
     help: "External MCP servers by command or URL, with their auth and which of their tools become Workflow steps and Agent tools.",
+  }),
+
+  /* The Voice profile (CONTEXT.md), built from sent mail by build_voice_profile */
+  "voice.sample_messages": setting({
+    type: z.int().min(1).max(200),
+    default: 40,
+    scope: "global",
+    section: "accounts",
+    group: "Voice profile",
+    advanced: true,
+    label: "Messages read",
+    help: "How many of the newest messages you sent the voice profile is built from.",
+  }),
+  "voice.excerpt_chars": setting({
+    type: z.int().min(80).max(4000),
+    default: 600,
+    scope: "global",
+    section: "accounts",
+    group: "Voice profile",
+    advanced: true,
+    label: "Characters per message",
+    help: "How much of each sent message, above the quoted history, the model reads.",
+  }),
+  "voice.excerpts_max": setting({
+    type: z.int().min(0).max(20),
+    default: 5,
+    scope: "global",
+    section: "accounts",
+    group: "Voice profile",
+    advanced: true,
+    label: "Excerpts kept",
+    help: "The most verbatim excerpts the profile keeps as examples of your writing.",
+  }),
+  "voice.prompt": setting({
+    type: z.string().min(1).max(4000),
+    default:
+      "You describe how one person writes email, from messages they sent. Describe their voice in three to six sentences: greeting and sign-off habits, sentence length, formality, warmth, humour, how they ask for things, how they say no, what they never do. Then pick excerpts that show it, quoted verbatim. Say nothing about the recipients or the subjects; the description is about the writer.",
+    scope: "global",
+    section: "accounts",
+    group: "Voice profile",
+    control: "sentence",
+    advanced: true,
+    label: "Model prompt",
+    help: "What the model is told when it builds the profile from your sent mail.",
   }),
 
   /* Onboarding (docs/spec/onboarding.md) */
@@ -2003,6 +2064,16 @@ export const settingsSchema = {
     advanced: true,
     label: "Allowed origins",
     help: "Web origins the Server answers browser requests from. The desktop app's own origins are here by default; add one to serve another client.",
+  }),
+  "server.device_code_minutes": setting({
+    type: z.int().min(1).max(60),
+    default: 10,
+    scope: "global",
+    section: "server",
+    group: "Devices",
+    advanced: true,
+    label: "Device code lifetime",
+    help: "Minutes the short code a new Device shows stays valid before it has to show a fresh one.",
   }),
   "server.probe_seconds": setting({
     type: z.int().min(5).max(600),

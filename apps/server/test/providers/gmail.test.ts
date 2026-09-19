@@ -466,19 +466,30 @@ describe("Gmail adapter", () => {
     const renewed = await (session as GmailSession).renewWatch();
     expect(renewed.expiration).toBeGreaterThan(Date.now());
     expect(server.watches.at(-1)?.labelIds).toEqual(["INBOX", "Label_1"]);
+    const oidc = {
+      serviceAccountEmail: "push@p.iam.gserviceaccount.com",
+      audience: "https://monday.example/webhooks/gmail/a",
+    };
     const pushName = await (session as GmailSession).subscribePush(
       "https://monday.example/webhooks/gmail/a?secret=s",
+      oidc,
     );
     expect(server.subscriptions.get(pushName)).toMatchObject({
-      pushConfig: { pushEndpoint: "https://monday.example/webhooks/gmail/a?secret=s" },
+      pushConfig: {
+        pushEndpoint: "https://monday.example/webhooks/gmail/a?secret=s",
+        oidcToken: oidc,
+      },
     });
     // Re-subscribing updates the endpoint instead of failing on 409.
     await (session as GmailSession).subscribePush(
       "https://monday.example/webhooks/gmail/a?secret=t",
+      oidc,
     );
     expect(server.subscriptions.get(pushName)).toMatchObject({
       pushConfig: { pushEndpoint: "https://monday.example/webhooks/gmail/a?secret=t" },
     });
+    await (session as GmailSession).unsubscribePush(pushName);
+    expect(server.subscriptions.has(pushName)).toBe(false);
     await session.close();
   });
 

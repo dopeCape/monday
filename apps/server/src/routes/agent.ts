@@ -99,7 +99,13 @@ const activityQuery = z.object({
   session: z.string().min(1).optional(),
 });
 
-export function agentRoutes(agent: AgentHost): Hono<AppEnv> {
+export interface AgentRoutesOptions {
+  /** How often an idle live stream sends a keepalive comment. */
+  keepaliveMs?: number;
+}
+
+export function agentRoutes(agent: AgentHost, routeOptions: AgentRoutesOptions = {}): Hono<AppEnv> {
+  const options = { keepaliveMs: routeOptions.keepaliveMs ?? 25_000 };
   const app = new Hono<AppEnv>();
 
   app.get("/sessions", async (c) => {
@@ -142,10 +148,20 @@ export function agentRoutes(agent: AgentHost): Hono<AppEnv> {
           stream.writeSSE({ event: event.kind, data: JSON.stringify(event) }).catch(() => {}),
         );
       });
+      // A comment every so often, so an idle stream is not cut by the server or a proxy.
+      const keepalive = setInterval(() => {
+        chain = chain.then(() =>
+          stream.write(": keepalive\n\n").then(
+            () => {},
+            () => {},
+          ),
+        );
+      }, options.keepaliveMs);
       await new Promise<void>((resolve) => {
         stream.onAbort(() => resolve());
         c.req.raw.signal.addEventListener("abort", () => resolve(), { once: true });
       });
+      clearInterval(keepalive);
       unsubscribe();
       await chain;
     });

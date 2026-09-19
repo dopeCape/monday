@@ -8,6 +8,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "./auth/cors.ts";
 import type { Auth } from "./auth/index.ts";
+import { PairingError } from "./auth/index.ts";
 import {
   type AppEnv,
   authenticate,
@@ -21,7 +22,7 @@ import { type CalendarModule, CalendarUnavailableError } from "./calendar/index.
 import { capabilitiesFor } from "./capabilities.ts";
 import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
-import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
+import { createKeys, type Keys, LockedError, UnknownWorkspaceKeyError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
 import { accounts, type BodyState, syncMessages, threads, workspaces } from "./db/schema.ts";
 import {
@@ -39,6 +40,7 @@ import {
   type Notifier,
 } from "./external/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
+import { LocalSessionError } from "./intelligence/agent/index.ts";
 import {
   AiOffError,
   BriefNotReadyError,
@@ -57,6 +59,7 @@ import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
+import { ProviderError } from "./providers/types.ts";
 import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { agentRoutes } from "./routes/agent.ts";
 import { calendarRoutes } from "./routes/calendar.ts";
@@ -68,6 +71,7 @@ import {
   EXTERNAL_PUBLIC_PREFIXES,
   externalRoutes,
 } from "./routes/external.ts";
+import { integrationRoutes } from "./routes/integrations.ts";
 import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
@@ -79,6 +83,9 @@ import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
 import { readGlobalSettings } from "./settings/read.ts";
+import { createSnoozeWaker } from "./snooze.ts";
+import { IntegrationNotConfiguredError } from "./workflows/integrations.ts";
+import { McpServerUnknownError } from "./workflows/mcp.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -89,6 +96,17 @@ const EXTERNAL_SETTING_KEYS = [
   "external.key_expiry_days",
   "external.consent_timeout_minutes",
 ] as const;
+
+/** What a Provider's failure means to the caller of the route that hit it. */
+const PROVIDER_ERROR_STATUS: Record<ProviderError["code"], 400 | 401 | 404 | 413 | 429 | 502> = {
+  auth: 401,
+  network: 502,
+  unsupported: 400,
+  "not-found": 404,
+  protocol: 502,
+  "too-large": 413,
+  "rate-limit": 429,
+};
 
 const CONSENT_STRING_KEYS = [
   "strings.external.consent.title",
@@ -166,6 +184,20 @@ export interface AppOptions {
   notifier?: Notifier;
   /** The Server's public URL, the OAuth issuer, when configured; the request's origin otherwise. */
   publicUrl?: () => Promise<string | null>;
+  /** Where the boot and unlock sweeps report; defaults to console.warn. */
+  log?: (message: string) => void;
+}
+
+/** Whether an error, or the cause under it, says the database connection is gone. */
+function connectionGone(error: unknown): boolean {
+  for (let e = error, depth = 0; e && depth < 5; depth++) {
+    const code = (e as { code?: unknown }).code;
+    const message = (e as { message?: unknown }).message;
+    if (code === "CONNECTION_ENDED" || code === "CONNECTION_CLOSED") return true;
+    if (typeof message === "string" && /CONNECTION_(ENDED|CLOSED)/.test(message)) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export function createApp(options: AppOptions): Hono<AppEnv> {
@@ -225,6 +257,23 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       await intelligence.workflows.onArrival(arrival.workspaceId, arrival.threadId);
     });
   }
+  // A winning intent (a Device, the Agent, a Workflow) reaches the Provider
+  // through the sync engine's mirror and its provider.change Job, and a snooze
+  // arms the Job that brings the Thread back (docs/spec/inbox.md).
+  const snooze = createSnoozeWaker({
+    db,
+    mailstore,
+    ...(options.now ? { now: options.now } : {}),
+    log: (m) => console.warn(`[snooze] ${m}`),
+  });
+  if (options.jobs) {
+    snooze.registerSteps(options.jobs);
+    snooze.armAll().catch((error) => console.warn(`[snooze] arming failed: ${error}`));
+  }
+  mailstore.setIntentObserver(async (intent, workspaceId) => {
+    await snooze.observe(intent, workspaceId);
+    if (options.sync) await options.sync.recordIntent(intent, workspaceId);
+  });
   const placement = async (threadId: string) => {
     const row = await db.query.threads.findFirst({
       where: eq(threads.id, threadId),
@@ -281,6 +330,29 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       },
     });
   intelligence.extensions.external = external;
+
+  // Rows earlier versions wrote in the clear (transcripts, Voice profiles,
+  // integration secrets in the Setting) move under the envelope as soon as
+  // the root key is in memory: now, or after POST /unlock.
+  const log = options.log ?? ((m: string) => console.warn(m));
+  const sealLegacy = async () => {
+    const moved = await intelligence.sealLegacy();
+    const total = moved.transcripts + moved.voices + moved.integrations;
+    if (total > 0) {
+      log(
+        `[hardening] sealed ${moved.transcripts} transcript event(s), ${moved.voices} voice profile(s), ${moved.integrations} integration secret(s)`,
+      );
+    }
+  };
+  const sweep = () =>
+    sealLegacy().catch((error) => {
+      // A database that went away under the sweep (shutdown, a dropped test database) is not news.
+      if (!connectionGone(error)) {
+        log(`[hardening] sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  keys.onUnlock(sweep);
+  if (keys.isUnlocked()) void sweep();
 
   const app = new Hono<AppEnv>();
 
@@ -347,6 +419,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
+  app.route("/", integrationRoutes(intelligence.integrationSecrets));
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
   app.route("/", workflowRoutes(intelligence.workflows));
@@ -388,6 +461,25 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     // A locked server answers 423 for anything that needs the root key.
     if (error instanceof LockedError) return c.json({ error: "locked" }, 423);
     if (error instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+    if (error instanceof UnknownWorkspaceKeyError) {
+      return c.json({ error: "not_found", workspace: error.workspaceId }, 404);
+    }
+    if (error instanceof PairingError) return c.json({ error: error.code }, 400);
+    if (error instanceof LocalSessionError) return c.json({ error: "local_session" }, 409);
+    if (error instanceof IntegrationNotConfiguredError) {
+      return c.json({ error: "integration_not_configured", integration: error.integration }, 409);
+    }
+    if (error instanceof McpServerUnknownError) {
+      return c.json({ error: "unknown_mcp_server", server: error.server }, 400);
+    }
+    if (error instanceof ProviderError) {
+      const status = PROVIDER_ERROR_STATUS[error.code];
+      return c.json({ error: `provider_${error.code}`, message: error.message }, status);
+    }
+    // The Mailstore and the Drafts refuse a malformed cursor, chunk or range with a RangeError.
+    if (error instanceof RangeError) {
+      return c.json({ error: "invalid_request", detail: error.message }, 400);
+    }
     if (error instanceof NoRecipientsError) return c.json({ error: "no_recipients" }, 400);
     if (error instanceof DraftNotOpenError) {
       return c.json({ error: "draft_not_open", status: error.draftStatus }, 409);

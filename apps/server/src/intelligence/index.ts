@@ -12,7 +12,7 @@
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { AiLevel, HostedState } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accounts, workspaces } from "../db/schema.ts";
 import { createDrafts, type Drafts } from "../drafts/index.ts";
@@ -28,6 +28,7 @@ import {
   type WorkflowSettings,
   type Workflows,
 } from "../workflows/index.ts";
+import { createIntegrationSecretStore, type IntegrationSecretStore } from "../workflows/secrets.ts";
 import {
   type ActivityLog,
   type AgentHost,
@@ -52,6 +53,7 @@ import {
   type KeysResolver,
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
+import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
 export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
 export {
@@ -151,6 +153,16 @@ export interface Intelligence {
   extensions: ToolExtensions;
   /** What the onboarding tools act through (slice 20). */
   onboarding: OnboardingSeam;
+  /** The sealed integration secrets the Workflow steps post with; the routes set and clear them. */
+  integrationSecrets: IntegrationSecretStore;
+  /** The Voice profile builder the build_voice_profile tool acts through. */
+  voice: VoiceSeam;
+  /**
+   * Seals what earlier versions wrote in the clear (transcripts, Voice
+   * profiles, integration secrets in the Setting). Needs the root key; the
+   * app runs it at boot and after every unlock until nothing is left.
+   */
+  sealLegacy(): Promise<{ transcripts: number; voices: number; integrations: number }>;
   /** The AI level in effect (CONTEXT.md), read from the Setting. */
   level(): Promise<AiLevel>;
   /** The runtime as /capabilities reports it. Works locked. */
@@ -206,6 +218,13 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.dry_run.recent",
   "workflows.silence.check_cron",
   "strings.workflows.failed_notice",
+] as const;
+
+const VOICE_SETTING_KEYS = [
+  "voice.sample_messages",
+  "voice.excerpt_chars",
+  "voice.excerpts_max",
+  "voice.prompt",
 ] as const;
 
 const ROUTING_SETTING_KEYS = [
@@ -318,11 +337,14 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
 
   const drafts = options.drafts ?? createDrafts({ db, mailstore, now });
   const activity = createActivityLog(db, { now });
+  const sessions = createSessionStore(db, { now, content: mailstore });
+  // The tokens and webhook URLs live as sealed rows; the Setting only says which exist.
+  const integrationSecrets = createIntegrationSecretStore(db, mailstore, { now });
   const integrations =
     options.integrations ??
     createHttpIntegrations({
-      config: async () =>
-        (await readGlobalSettings(db, ["workflows.integrations"]))["workflows.integrations"],
+      config: () => integrationSecrets.loadAll(),
+      configured: () => integrationSecrets.list(),
     });
   const mcp =
     options.mcp ??
@@ -330,12 +352,28 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       servers: async () =>
         (await readGlobalSettings(db, ["workflows.mcp_servers"]))["workflows.mcp_servers"],
     });
+  const voice = createVoiceBuilder({
+    db,
+    mailstore,
+    drafts,
+    runtime,
+    now,
+    settings: async (): Promise<VoiceSettings> => {
+      const s = await readGlobalSettings(db, VOICE_SETTING_KEYS);
+      return {
+        sampleMessages: s["voice.sample_messages"],
+        excerptChars: s["voice.excerpt_chars"],
+        excerptsMax: s["voice.excerpts_max"],
+        prompt: s["voice.prompt"],
+      };
+    },
+  });
   // Filled once the Workflows module exists; the tool server reads it per call.
-  const extensions: ToolExtensions = { integrations, mcp };
+  const extensions: ToolExtensions = { integrations, mcp, voice };
   const agent = createAgentHost({
     runtime,
     activity,
-    sessions: createSessionStore(db, { now }),
+    sessions,
     hostFor: (workspaceId) => createServerToolHost({ db, mailstore, drafts, workspaceId, now }),
     ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
     extensions,
@@ -419,7 +457,22 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     workflows,
     extensions,
     onboarding,
+    integrationSecrets,
+    voice,
     level,
+    async sealLegacy() {
+      let transcripts = 0;
+      // Bounded: one pass moves at most 500 rows per call, and the loop stops when a call moves none.
+      for (let round = 0; round < 200; round++) {
+        const moved = await sessions.sealLegacy(500);
+        transcripts += moved;
+        if (moved === 0) break;
+      }
+      const voices = await drafts.sealLegacyVoices();
+      const first = await db.query.workspaces.findFirst({ orderBy: asc(workspaces.createdAt) });
+      const integrations = first ? await integrationSecrets.adopt(first.id) : 0;
+      return { transcripts, voices, integrations };
+    },
     async hostedState() {
       const settings = await hostedSettings();
       const roles = Object.fromEntries(

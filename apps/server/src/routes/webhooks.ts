@@ -1,9 +1,10 @@
 // Provider push webhooks, reachable without a Device token (the caller is
 // Google or Microsoft) and verified by what only the registration knew: the
-// per-Account secret in the Gmail push endpoint URL, the clientState of the
-// Graph subscription. Each handler does nothing but verify, wake the sync
-// engine and answer inside the provider's window (research 22, section 5.1).
-//   POST /webhooks/gmail/:accountId?secret=   Pub/Sub push envelope
+// Pub/Sub OIDC token and then the per-Account secret in the Gmail push
+// endpoint URL, the clientState of the Graph subscription. Each handler does
+// nothing but verify, wake the sync engine and answer inside the provider's
+// window (research 22, section 5.1).
+//   POST /webhooks/gmail/:accountId?secret=   Pub/Sub push envelope, Authorization: Bearer <Google OIDC token>
 //   POST /webhooks/graph                      validation handshake or change notifications
 //   POST /webhooks/graph/lifecycle            validation handshake or lifecycle notifications
 
@@ -21,12 +22,14 @@ export function webhookRoutes(push: PushManager): Hono<AppEnv> {
     } catch {
       body = null;
     }
+    const bearer = /^Bearer\s+(.+)$/i.exec(c.req.header("authorization") ?? "")?.[1]?.trim();
     const ok = await push.gmailWebhook(
       c.req.param("accountId"),
       c.req.query("secret") ?? null,
       body,
+      bearer || null,
     );
-    // Pub/Sub retries anything but a 2xx; a bad secret is answered with 403 so it stops.
+    // Pub/Sub retries anything but a 2xx; a bad token or secret is answered with 403 so it stops.
     return ok ? c.body(null, 204) : c.json({ error: "forbidden" }, 403);
   });
 

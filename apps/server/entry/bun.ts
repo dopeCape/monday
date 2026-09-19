@@ -119,9 +119,6 @@ async function main() {
     }
     throw error;
   }
-  // LangGraph's checkpoints for paused Agent turns, set up right after our migrations.
-  const checkpointer = await createCheckpointer(databaseUrl);
-
   const services = await createServices({
     db: handle.db,
     mode,
@@ -132,6 +129,8 @@ async function main() {
   });
   const { auth, keys, jobs, mailstore, sync, push, accounts, calendar } = services;
   await services.startAccounts();
+  // LangGraph's checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after our migrations.
+  const checkpointer = await createCheckpointer(databaseUrl, handle.db, mailstore);
 
   const timing = await readHeartbeatTiming(handle.db);
   const kicker = createProcessKicker({
@@ -204,6 +203,7 @@ async function main() {
         ? createLineNotifier((line) => console.log(line))
         : createMemoryNotifier((line) => log(line)),
     publicUrl: publicUrlReader(handle.db, process.env),
+    log,
   });
 
   const hostname = process.env.HOST || (mode === "sidecar" ? "127.0.0.1" : "0.0.0.0");
@@ -232,6 +232,7 @@ async function main() {
       server.stop(true);
       await kicker.stop();
       await sync.close();
+      await calendar.close();
       await changeListener?.stop();
       await checkpointer.end().catch(() => {});
       await handle.close();

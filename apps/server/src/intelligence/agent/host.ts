@@ -5,6 +5,10 @@
 // go through the Drafts module (a send is a scheduled Job with its undo
 // window, ADR 0010). Settings are the global rows; pinning is the calling
 // Device's business and arrives with the turn.
+//
+// One Workspace per host (ADR 0002: no cross-workspace reads in one call):
+// an id from another Workspace, whatever the model or an external caller
+// passes, reads as not found and is never written.
 
 import type {
   IntentArgs,
@@ -15,10 +19,16 @@ import type {
   ToolHost,
 } from "@monday/shared";
 import { defaultSettings, isSettingKey, type Settings } from "@monday/shared";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { LockedError } from "../../crypto/keys.ts";
 import type { Db } from "../../db/client.ts";
-import { settings as settingsTable, threads } from "../../db/schema.ts";
+import {
+  attachments,
+  drafts as draftsTable,
+  groups,
+  settings as settingsTable,
+  threads,
+} from "../../db/schema.ts";
 import type { Drafts } from "../../drafts/index.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { NotFoundError } from "../../mailstore/index.ts";
@@ -38,6 +48,31 @@ const personLine = (p: { name: string; email: string }) =>
 export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
   const { db, mailstore, drafts, workspaceId } = options;
   const now = options.now ?? (() => new Date());
+
+  /** The ids among `threadIds` that belong to this Workspace. */
+  const ownedThreads = async (threadIds: readonly string[]): Promise<Set<string>> => {
+    if (threadIds.length === 0) return new Set();
+    const rows = await db
+      .select({ id: threads.id })
+      .from(threads)
+      .where(and(eq(threads.workspaceId, workspaceId), inArray(threads.id, [...threadIds])));
+    return new Set(rows.map((r) => r.id));
+  };
+  const ownsThread = async (threadId: string) => (await ownedThreads([threadId])).has(threadId);
+  const ownsAttachment = async (attachmentId: string) => {
+    const row = await db.query.attachments.findFirst({
+      where: and(eq(attachments.id, attachmentId), eq(attachments.workspaceId, workspaceId)),
+      columns: { id: true },
+    });
+    return row !== undefined;
+  };
+  const ownsDraft = async (draftId: string) => {
+    const row = await db.query.drafts.findFirst({
+      where: and(eq(draftsTable.id, draftId), eq(draftsTable.workspaceId, workspaceId)),
+      columns: { id: true },
+    });
+    return row !== undefined;
+  };
 
   /** The real subject when the Server is unlocked; the index prefix otherwise. */
   const subjectOf = async (threadId: string, fallback: string): Promise<string> => {
@@ -101,27 +136,16 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
           .slice(0, filter.limit);
         return Promise.all(kept.map(summarize));
       }
-      const out: ThreadSummary[] = [];
-      let cursor: string | null = null;
-      // Pages of the list until the limit is met; the filters not in the index are applied here.
-      while (out.length < filter.limit) {
-        const page = await mailstore.listThreads(workspaceId, {
-          limit: 500,
-          cursor,
-          includeArchived: filter.includeArchived ?? false,
-          ...(filter.section !== undefined ? { section: filter.section } : {}),
-          ...(filter.group !== undefined ? { group: filter.group } : {}),
-        });
-        for (const t of page.threads) {
-          if (filter.unread !== undefined && t.unread !== filter.unread) continue;
-          if (filter.olderThan !== undefined && t.lastActivity >= filter.olderThan) continue;
-          out.push(await summarize(t));
-          if (out.length >= filter.limit) break;
-        }
-        if (!page.cursor) break;
-        cursor = page.cursor;
-      }
-      return out;
+      // Every filter is the query's: the list never walks a mailbox to find the few Threads that match.
+      const page = await mailstore.listThreads(workspaceId, {
+        limit: filter.limit,
+        includeArchived: filter.includeArchived ?? false,
+        ...(filter.section !== undefined ? { section: filter.section } : {}),
+        ...(filter.group !== undefined ? { group: filter.group } : {}),
+        ...(filter.unread !== undefined ? { unread: filter.unread } : {}),
+        ...(filter.olderThan !== undefined ? { before: filter.olderThan } : {}),
+      });
+      return Promise.all(page.threads.map(summarize));
     },
 
     async threadsById(ids) {
@@ -140,6 +164,7 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async readThread(threadId) {
+      if (!(await ownsThread(threadId))) return null;
       let subject: string;
       try {
         subject = await mailstore.readThreadSubject(threadId);
@@ -163,11 +188,22 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async listGroups() {
+      // The Groups table, not the ids Threads happen to carry: names are what the model reads.
       const rows = await db
-        .selectDistinct({ id: threads.groupId })
-        .from(threads)
-        .where(and(eq(threads.workspaceId, workspaceId), isNotNull(threads.groupId)));
-      return rows.flatMap((r) => (r.id ? [{ id: r.id, name: r.id }] : []));
+        .select({ id: groups.id, name: groups.name, parentId: groups.parentId })
+        .from(groups)
+        .where(eq(groups.workspaceId, workspaceId))
+        .orderBy(asc(groups.createdAt), asc(groups.id));
+      // Each Group in creation order, its Sub-groups right under it.
+      const out: Array<{ id: string; name: string }> = [];
+      for (const g of rows) {
+        if (g.parentId) continue;
+        out.push({ id: g.id, name: g.name });
+        for (const c of rows) {
+          if (c.parentId === g.id) out.push({ id: c.id, name: `${g.name} / ${c.name}` });
+        }
+      }
+      return out;
     },
 
     async listSections() {
@@ -196,8 +232,10 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
 
     async applyIntents(list: readonly (IntentArgs & { threadId: string })[], opts = {}) {
       const actor = opts.actor ?? "automation";
+      const owned = await ownedThreads(list.map((i) => i.threadId));
       let applied = 0;
       for (const intent of list) {
+        if (!owned.has(intent.threadId)) continue;
         try {
           const result = await mailstore.applyIntent({
             ...intent,
@@ -225,10 +263,12 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async deleteDraft(draftId) {
+      if (!(await ownsDraft(draftId))) return;
       await drafts.remove(draftId, { actor: "user" });
     },
 
     async readDraft(draftId) {
+      if (!(await ownsDraft(draftId))) return null;
       try {
         return await drafts.get(draftId);
       } catch (error) {
@@ -238,11 +278,17 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async scheduleSend(draftId) {
+      if (!(await ownsDraft(draftId))) throw new NotFoundError("draft", draftId);
       const outcome = await drafts.schedule(draftId, { actor: "automation" });
       return { sendId: outcome.sendId, runAt: outcome.runAt };
     },
 
     async cancelSend(sendId) {
+      const send = await drafts.getSend(sendId).catch((error: unknown) => {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      });
+      if (!send || send.workspaceId !== workspaceId) return { applied: false };
       const result = await drafts.cancel(sendId);
       return { applied: result.applied };
     },
@@ -266,6 +312,7 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async readAttachment(attachmentId) {
+      if (!(await ownsAttachment(attachmentId))) return null;
       try {
         const a = await mailstore.readAttachment(attachmentId);
         return { name: a.name, mediaType: a.mediaType, bytes: a.bytes };

@@ -1,10 +1,12 @@
 // Settings routes (ADR 0004). A Setting is global or per Device; the Device is
-// the caller. Values are any JSON for now: the settings schema from
-// packages/shared arrives on another branch and will validate keys here.
+// the caller. Every key is one the shared schema knows and every value is one
+// its type accepts, so what the Server holds always renders and validates the
+// same way on every Device and for the Agent.
 //   GET /settings           {global: {key: value}, device: {key: value}}
-//   PUT /settings/:key      {value, scope?: "global" | "device"}
+//   PUT /settings/:key      {value, scope?: "global" | "device"}   400 unknown_key, 400 invalid_value
 //   DELETE /settings/:key   ?scope=global|device
 
+import { isSettingKey, validateSetting } from "@monday/shared";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -43,6 +45,12 @@ export function settingsRoutes(db: Db): Hono<AppEnv> {
     if (!k.success) return c.json({ error: "invalid_key" }, 400);
     const body = await parseBody(c, putBody);
     if (!body.ok) return body.response;
+    if (!isSettingKey(k.data)) return c.json({ error: "unknown_key", key: k.data }, 400);
+    const checked = validateSetting(k.data, body.data.value);
+    if (!checked.ok) {
+      return c.json({ error: "invalid_value", key: k.data, detail: checked.error }, 400);
+    }
+    const value = checked.value as object;
     const { deviceId } = principalOf(c);
     const target: { scope: SettingScope; deviceId: string | null } =
       body.data.scope === "device"
@@ -50,12 +58,12 @@ export function settingsRoutes(db: Db): Hono<AppEnv> {
         : { scope: "global", deviceId: null };
     await db
       .insert(settings)
-      .values({ ...target, key: k.data, value: body.data.value, updatedAt: new Date() })
+      .values({ ...target, key: k.data, value, updatedAt: new Date() })
       .onConflictDoUpdate({
         target: [settings.scope, settings.deviceId, settings.key],
-        set: { value: body.data.value, updatedAt: new Date() },
+        set: { value, updatedAt: new Date() },
       });
-    return c.json({ key: k.data, scope: target.scope, value: body.data.value });
+    return c.json({ key: k.data, scope: target.scope, value });
   });
 
   app.delete("/:key", async (c) => {

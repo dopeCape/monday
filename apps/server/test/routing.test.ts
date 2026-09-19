@@ -18,11 +18,13 @@ import type {
   Thread,
   ThreadRoute,
 } from "@monday/shared";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys, type Keys } from "../src/crypto/keys.ts";
+import { threads as threadsTable } from "../src/db/schema.ts";
 import { createIntelligence, type Intelligence, ROUTE_STEP } from "../src/intelligence/index.ts";
 import {
   classifyPrompt,
@@ -703,5 +705,12 @@ describe("routing over the fixture mailbox", () => {
     const groups = await groupsNow();
     expect(groups.map((g) => g.name)).toEqual(["Finance", "Press"]);
     expect((await request(`/groups/${groupIds.Interviews}`)).status).toBe(404);
+    // A Thread routing had placed is still routing's to place: the fall-back move
+    // did not turn it into a user placement (ADR 0005 would then keep routing off it).
+    const rows = await db.handle.db
+      .select({ writes: threadsTable.writes })
+      .from(threadsTable)
+      .where(eq(threadsTable.id, threadOf("Interview loop for Monday")?.id ?? ""));
+    expect(rows[0]?.writes.placement?.by).toBe("automation");
   });
 });

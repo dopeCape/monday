@@ -6,14 +6,23 @@
 // A Sidecar that claims these Jobs while no Cloud is alive finds no public
 // URL and simply sleeps; its in-process watch (Pub/Sub pull, Graph delta
 // polling) carries push meanwhile.
+//
+// A Gmail push delivery is verified twice: the Pub/Sub OIDC token in its
+// Authorization header (Google's signature, the audience the registration
+// named, the service account it signs as: gmail/oidc.ts) and then the
+// per-Account secret in the URL. The service account is a Setting
+// (sync.gmail_push_service_account); without one no push subscription is
+// registered, so a webhook never has to accept a delivery it cannot verify.
 
 import type { Provider as ProviderKind } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { timingSafeEqual } from "../auth/index.ts";
 import type { Db } from "../db/client.ts";
 import { accounts, settings } from "../db/schema.ts";
 import type { Jobs } from "../jobs/index.ts";
 import { isGmailSession } from "./gmail/index.ts";
+import { createGoogleJwks, type JwkSource, verifyGoogleIdToken } from "./gmail/oidc.ts";
 import { decodePubsubData } from "./gmail/pubsub.ts";
 import {
   createSubscription,
@@ -40,6 +49,10 @@ export interface GmailPushState {
   pushSubscription: string | null;
   pushSecret: string | null;
   registeredBy: string | null;
+  /** The service account the push subscription signs as; the webhook checks the token's email against it. */
+  pushServiceAccount?: string | null;
+  /** The audience the registration named: the endpoint URL without the secret. */
+  pushAudience?: string | null;
 }
 
 export interface GraphPushState {
@@ -58,6 +71,8 @@ export interface PushSettings {
   gmailWatchRenewHours: number;
   graphSubscriptionRenewHours: number;
   publicUrl: string;
+  /** sync.gmail_push_service_account; empty means no push subscription is registered. */
+  gmailPushServiceAccount?: string;
 }
 
 export function defaultPushSettings(): PushSettings {
@@ -65,6 +80,7 @@ export function defaultPushSettings(): PushSettings {
     gmailWatchRenewHours: settingsSchema["sync.gmail_watch_renew_hours"].default,
     graphSubscriptionRenewHours: settingsSchema["sync.graph_subscription_renew_hours"].default,
     publicUrl: settingsSchema["server.public_url"].default,
+    gmailPushServiceAccount: settingsSchema["sync.gmail_push_service_account"].default,
   };
 }
 
@@ -85,7 +101,14 @@ export async function readPushSettings(db: Db): Promise<PushSettings> {
   );
   const url = rows.find((r) => r.key === "server.public_url");
   if (typeof url?.value === "string") out.publicUrl = url.value;
+  const account = rows.find((r) => r.key === "sync.gmail_push_service_account");
+  if (typeof account?.value === "string") out.gmailPushServiceAccount = account.value;
   return out;
+}
+
+/** The audience a Gmail push registration names: the endpoint without its secret. */
+export function gmailPushAudience(origin: string, accountId: string): string {
+  return `${origin}/webhooks/gmail/${encodeURIComponent(accountId)}`;
 }
 
 export async function readPushState(db: Db, accountId: string): Promise<PushState> {
@@ -115,14 +138,35 @@ export interface PushManagerOptions {
   settings?: () => Promise<PushSettings>;
   now?: () => Date;
   log?: (message: string) => void;
+  /** Google's signing keys; tests hand in their own. */
+  jwks?: JwkSource;
 }
+
+export type GmailWebhookVerdict =
+  | { ok: true; woke: boolean }
+  | { ok: false; reason: "no_registration" | "no_token" | "token" | "secret" | "unknown_account" };
 
 export interface PushManager {
   registerSteps(jobs: Jobs): void;
   /** Enqueues the push Jobs an Account of this Provider needs; idempotent. */
   startAccount(jobs: Jobs, accountId: string, provider: ProviderKind | "fake"): Promise<void>;
-  /** Pub/Sub push delivery for one Account. Returns false when the secret does not match. */
-  gmailWebhook(accountId: string, secret: string | null, body: unknown): Promise<boolean>;
+  /**
+   * Pub/Sub push delivery for one Account: the OIDC bearer must verify against
+   * the registration, then the secret must match. False for anything else.
+   */
+  gmailWebhook(
+    accountId: string,
+    secret: string | null,
+    body: unknown,
+    bearer: string | null,
+  ): Promise<boolean>;
+  /** gmailWebhook with the reason, for the log and the tests. */
+  gmailWebhookVerdict(
+    accountId: string,
+    secret: string | null,
+    body: unknown,
+    bearer: string | null,
+  ): Promise<GmailWebhookVerdict>;
   /** Graph change notifications. Returns how many were accepted. */
   graphNotifications(body: unknown): Promise<number>;
   graphLifecycle(body: unknown): Promise<number>;
@@ -137,6 +181,7 @@ export function createPushManager(options: PushManagerOptions): PushManager {
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
   const readSettings = options.settings ?? (() => readPushSettings(db));
+  const jwks = options.jwks ?? createGoogleJwks({ now: () => now().getTime() });
   const publicUrl =
     options.publicUrl ??
     (async () => {
@@ -182,10 +227,37 @@ export function createPushManager(options: PushManagerOptions): PushManager {
         if (!origin) return { sleepMs: NO_PUBLIC_URL_SLEEP_MS };
         const session = await engine.session(job.payload.accountId);
         if (!isGmailSession(session) || !session.pubsubTopic) return "done";
+        const s = await readSettings();
         const current = (await readPushState(db, job.payload.accountId)).gmail;
+        const serviceAccount = s.gmailPushServiceAccount?.trim() ?? "";
+        if (!serviceAccount) {
+          // Nothing to verify deliveries with: no push subscription, and none left over
+          // from before the check existed. Pull and the reconcile pass carry Gmail meanwhile.
+          if (current?.pushSubscription) {
+            await session.unsubscribePush(current.pushSubscription).catch((error) => {
+              log(`gmail push unsubscribe for ${job.payload.accountId}: ${error}`);
+            });
+            await writePushState(db, job.payload.accountId, {
+              gmail: {
+                ...current,
+                pushSubscription: null,
+                pushServiceAccount: null,
+                pushAudience: null,
+              },
+            });
+          }
+          log(
+            `gmail push for ${job.payload.accountId} not registered: sync.gmail_push_service_account is empty`,
+          );
+          return { sleepMs: NO_PUBLIC_URL_SLEEP_MS };
+        }
         const secret = current?.pushSecret ?? randomState();
-        const endpoint = `${origin}/webhooks/gmail/${encodeURIComponent(job.payload.accountId)}?secret=${encodeURIComponent(secret)}`;
-        const subscription = await session.subscribePush(endpoint);
+        const audience = gmailPushAudience(origin, job.payload.accountId);
+        const endpoint = `${audience}?secret=${encodeURIComponent(secret)}`;
+        const subscription = await session.subscribePush(endpoint, {
+          serviceAccountEmail: serviceAccount,
+          audience,
+        });
         await writePushState(db, job.payload.accountId, {
           gmail: {
             watchExpiration: current?.watchExpiration ?? null,
@@ -193,9 +265,10 @@ export function createPushManager(options: PushManagerOptions): PushManager {
             pushSubscription: subscription,
             pushSecret: secret,
             registeredBy: serverId,
+            pushServiceAccount: serviceAccount,
+            pushAudience: audience,
           },
         });
-        const s = await readSettings();
         return { sleepMs: s.gmailWatchRenewHours * 3_600_000 };
       });
 
@@ -258,18 +331,39 @@ export function createPushManager(options: PushManagerOptions): PushManager {
       }
     },
 
-    async gmailWebhook(accountId, secret, body) {
+    async gmailWebhook(accountId, secret, body, bearer) {
+      const verdict = await manager.gmailWebhookVerdict(accountId, secret, body, bearer);
+      if (!verdict.ok) log(`gmail webhook for ${accountId} refused: ${verdict.reason}`);
+      return verdict.ok;
+    },
+
+    async gmailWebhookVerdict(accountId, secret, body, bearer) {
       const state = (await readPushState(db, accountId)).gmail;
-      if (!state?.pushSecret || !secret || state.pushSecret !== secret) return false;
+      if (!state?.pushSecret || !state.pushServiceAccount || !state.pushAudience) {
+        return { ok: false, reason: "no_registration" };
+      }
+      // First factor: Google's signature over the audience and the signing account.
+      if (!bearer) return { ok: false, reason: "no_token" };
+      const token = await verifyGoogleIdToken(
+        bearer,
+        { audience: state.pushAudience, email: state.pushServiceAccount },
+        jwks,
+        () => now().getTime(),
+      );
+      if (!token.ok) return { ok: false, reason: "token" };
+      // Second factor: the secret only the registration put in the URL.
+      if (!secret || !timingSafeEqual(secret, state.pushSecret)) {
+        return { ok: false, reason: "secret" };
+      }
       const envelope = (body ?? {}) as { message?: { data?: string } };
       const data = decodePubsubData(envelope.message?.data);
       const row = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
-      if (!row) return false;
+      if (!row) return { ok: false, reason: "unknown_account" };
       if (data.emailAddress && data.emailAddress.toLowerCase() !== row.address.toLowerCase()) {
-        return true; // Not ours; acknowledge so Pub/Sub stops redelivering.
+        return { ok: true, woke: false }; // Not ours; acknowledge so Pub/Sub stops redelivering.
       }
       await engine.wake(accountId);
-      return true;
+      return { ok: true, woke: true };
     },
 
     async graphNotifications(body) {

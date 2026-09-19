@@ -25,7 +25,7 @@ import type {
   VoiceProfile,
 } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { ALWAYS_ON_NEED } from "../capabilities.ts";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
@@ -75,6 +75,8 @@ export interface VoicePatch {
   description?: string | undefined;
   excerpts?: string[] | undefined;
   enabled?: boolean | undefined;
+  /** When the profile was last built from sent mail. */
+  builtAt?: string | undefined;
 }
 
 export interface ScheduleOutcome extends IntentResult {
@@ -107,15 +109,31 @@ export interface Drafts {
   getSend(id: string): Promise<ScheduledSend>;
   /** The mirror step's body, for tests and the step. */
   mirror(draftId: string): Promise<"mirrored" | "unchanged" | "skipped">;
-  /** The deliver step's body: sends, or records the typed failure. */
-  deliver(sendId: string, jobId: string | null): Promise<ScheduledSend>;
+  /**
+   * The deliver step's body: sends, or records the typed failure. A transient
+   * Provider failure is rethrown so the Job retries, unless `lastAttempt`
+   * says the retries are spent, in which case the send is marked failed so
+   * the client stops waiting on it.
+   */
+  deliver(
+    sendId: string,
+    jobId: string | null,
+    options?: { lastAttempt?: boolean },
+  ): Promise<ScheduledSend>;
   registerSteps(jobs: Jobs): void;
   /** Turns a Provider draft the engine found into a Server Draft. */
   importProviderDraft(draft: ProviderDraft): Promise<Draft>;
   /** Provider ids the Workspace's Drafts already mirror, for the engine's import pass. */
   knownProviderDraftIds(workspaceId: string): Promise<Set<string>>;
+  /** The Voice profile in the clear. Throws LockedError once the row is sealed. */
   getVoice(workspaceId: string): Promise<VoiceProfile>;
+  /** Seals the merged profile under the "voice" kind. Throws LockedError. */
   putVoice(workspaceId: string, patch: VoicePatch): Promise<VoiceProfile>;
+  /**
+   * Moves Voice profiles written in the clear before migration 0014 under
+   * the envelope; returns how many. Needs the root key.
+   */
+  sealLegacyVoices(): Promise<number>;
 }
 
 export class NoRecipientsError extends Error {
@@ -271,6 +289,34 @@ export function createDrafts(options: DraftsOptions): Drafts {
       updatedAt: r.updatedAt.toISOString(),
       updatedBy: r.updatedBy,
     };
+  };
+
+  /** The Voice profile's text, from the envelope when the row is sealed, from the legacy columns otherwise. */
+  const openVoice = async (
+    row: typeof voiceProfiles.$inferSelect,
+  ): Promise<{ description: string; excerpts: string[] }> => {
+    if (row.profileEnc && row.profileKey) {
+      return JSON.parse(
+        await mailstore.readText({
+          workspaceId: row.workspaceId,
+          kind: "voice",
+          key: row.profileKey,
+          chunks: [row.profileEnc],
+          size: -1,
+        }),
+      ) as { description: string; excerpts: string[] };
+    }
+    return { description: row.description, excerpts: row.excerpts };
+  };
+
+  const sealVoice = async (
+    workspaceId: string,
+    text: { description: string; excerpts: string[] },
+  ): Promise<{ profileEnc: Uint8Array; profileKey: Uint8Array }> => {
+    const ref = await mailstore.storeContent(workspaceId, "voice", JSON.stringify(text));
+    const profileEnc = ref.chunks[0];
+    if (!profileEnc) throw new RangeError("voice envelope missing");
+    return { profileEnc, profileKey: ref.key };
   };
 
   const recordDraft = (executor: Db | Tx, r: DraftRow) =>
@@ -628,7 +674,7 @@ export function createDrafts(options: DraftsOptions): Drafts {
       return "mirrored";
     },
 
-    async deliver(sendId, jobId) {
+    async deliver(sendId, jobId, deliverOptions = {}) {
       const send = await requireSend(db, sendId);
       if (send.status !== "scheduled") return projectSend(send);
       const row = await requireRow(db, send.draftId);
@@ -691,8 +737,10 @@ export function createDrafts(options: DraftsOptions): Drafts {
         }
         if (error instanceof LockedError) throw error;
         if (error instanceof ProviderError && (error.code === "network" || error.code === "auth")) {
-          // Transient: let the Job retry with backoff.
-          throw error;
+          // Transient: let the Job retry with backoff, until the retries are spent.
+          if (!deliverOptions.lastAttempt) throw error;
+          log(`send ${sendId} failed on its last attempt: ${error.message}`);
+          return fail({ code: "failed", message: error.message });
         }
         log(`send ${sendId} failed: ${error instanceof Error ? error.message : String(error)}`);
         return fail({
@@ -736,7 +784,9 @@ export function createDrafts(options: DraftsOptions): Drafts {
         return "done";
       });
       jobs.registerStep<{ sendId: string }>(DELIVER_STEP, async (job) => {
-        await api.deliver(job.payload.sendId, job.id);
+        await api.deliver(job.payload.sendId, job.id, {
+          lastAttempt: job.attempts >= jobs.maxAttempts,
+        });
         return "done";
       });
     },
@@ -785,20 +835,28 @@ export function createDrafts(options: DraftsOptions): Drafts {
       const row = await db.query.voiceProfiles.findFirst({
         where: eq(voiceProfiles.workspaceId, workspaceId),
       });
+      const text = row ? await openVoice(row) : { description: "", excerpts: [] };
       return {
         workspaceId,
-        description: row?.description ?? "",
-        excerpts: row?.excerpts ?? [],
+        description: text.description,
+        excerpts: text.excerpts,
         builtAt: row?.builtAt?.toISOString() ?? null,
         enabled: row?.enabled ?? false,
       };
     },
 
     async putVoice(workspaceId, patch) {
+      const current = await api.getVoice(workspaceId);
+      const sealed = await sealVoice(workspaceId, {
+        description: patch.description ?? current.description,
+        excerpts: patch.excerpts ?? current.excerpts,
+      });
       const values = {
-        ...(patch.description !== undefined ? { description: patch.description } : {}),
-        ...(patch.excerpts !== undefined ? { excerpts: patch.excerpts } : {}),
+        ...sealed,
+        description: "",
+        excerpts: [],
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.builtAt !== undefined ? { builtAt: new Date(patch.builtAt) } : {}),
         updatedAt: now(),
       };
       await db
@@ -806,6 +864,29 @@ export function createDrafts(options: DraftsOptions): Drafts {
         .values({ workspaceId, ...values })
         .onConflictDoUpdate({ target: voiceProfiles.workspaceId, set: values });
       return api.getVoice(workspaceId);
+    },
+
+    async sealLegacyVoices() {
+      const rows = await db
+        .select()
+        .from(voiceProfiles)
+        .where(
+          and(
+            isNull(voiceProfiles.profileEnc),
+            sql`(${voiceProfiles.description} <> '' or jsonb_array_length(${voiceProfiles.excerpts}) > 0)`,
+          ),
+        );
+      for (const row of rows) {
+        const sealed = await sealVoice(row.workspaceId, {
+          description: row.description,
+          excerpts: row.excerpts,
+        });
+        await db
+          .update(voiceProfiles)
+          .set({ ...sealed, description: "", excerpts: [], updatedAt: now() })
+          .where(eq(voiceProfiles.workspaceId, row.workspaceId));
+      }
+      return rows.length;
     },
   };
 

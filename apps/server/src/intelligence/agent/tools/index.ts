@@ -1,6 +1,6 @@
 // The MCP tool server (ADR 0002): one catalog, exposed in-process to the
-// LangGraph loop now and over stdio and streamable HTTP for the Local
-// runtimes and external MCP later (slices 15 and 19). Approvals live here,
+// LangGraph loop and over stdio and streamable HTTP to the Local runtimes
+// (slice 15) and the external MCP server (slice 19). Approvals live here,
 // inside call(): a tool above the free tier, or a reversible batch above the
 // preview threshold, asks through `ask` before it applies. Every call is a
 // row in the Activity log from the moment it starts, and a call id already
@@ -445,6 +445,14 @@ export async function replayUndo(
       }
       for (const id of undo.groupIds) await onboarding.deleteGroup(id);
       return `Undone: ${plural(undo.groupIds.length, "Group")} removed and ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
+    }
+    case "voice": {
+      const voice = extensions?.voice;
+      if (!voice) return "Cannot undo: the Voice profile is not available from this host.";
+      await voice.put(undo.workspaceId, undo.previous);
+      return undo.previous.description
+        ? "Undone: the previous voice profile is back."
+        : "Undone: the voice profile is empty again.";
     }
     case "event": {
       const calendar = extensions?.calendar;

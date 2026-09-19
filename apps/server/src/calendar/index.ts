@@ -34,6 +34,7 @@ import type {
 } from "@monday/shared";
 import { resolveWrite, settingsSchema } from "@monday/shared";
 import { and, asc, eq, gt, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
+import { timingSafeEqual } from "../auth/index.ts";
 import type { Db } from "../db/client.ts";
 import {
   accounts,
@@ -1381,7 +1382,9 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       const acct = await account(accountId).catch(() => null);
       if (!acct) return false;
       const rows = await calendarRows(acct.workspaceId);
-      if (!rows.some((r) => r.subscription?.token === token)) return false;
+      if (!rows.some((r) => r.subscription && timingSafeEqual(r.subscription.token, token))) {
+        return false;
+      }
       await enqueueSync(accountId);
       return true;
     },

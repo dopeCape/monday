@@ -6,13 +6,15 @@
 // Locked servers: storeContent and readContent throw LockedError, so a content
 // write or read while no root key is in memory fails before any row is
 // touched. Header-only operations (listThreads, setLabels, setTags, applyIntent)
-// work locked. Queueing content writes for a locked Cloud is a later slice.
+// work locked; a content write on a locked Cloud is refused, not queued: the
+// Sidecar, which always holds the key, syncs the bodies when it is next up.
 //
 // Changes feed: every write a client cares about appends a row to `changes`
 // through recordChange, inside the same transaction, and NOTIFYs the in-process
 // listeners (src/changes/bus.ts). Intents from the Outbox go through applyIntent,
 // which applies per-field last-writer-wins (packages/shared sync.ts) and logs
-// the losers to `activity`.
+// the losers to `activity`; a winning intent is then handed to the intent
+// observer (the sync engine, which mirrors it and pushes it to the Provider).
 
 import type {
   Account,
@@ -36,25 +38,50 @@ import type {
   Workspace,
 } from "@monday/shared";
 import { FIELD_GROUP_OF, resolveWrite } from "@monday/shared";
-import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableName,
+  gt,
+  gte,
+  inArray,
+  lt,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import { CHANGES_CHANNEL, encodeNotice } from "../changes/bus.ts";
 import { CHUNK_BYTES } from "../crypto/aead.ts";
 import { type Keys, LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
 import {
+  accountCredentials,
   accounts,
   activity,
   attachments,
   blobChunks,
   blobs,
+  briefs,
   changes,
+  drafts,
+  events,
+  groups,
+  integrationSecrets,
+  invites,
   labels,
   messages,
   PARTICIPANTS_TEXT_SQL,
+  providerKeys,
+  sessionEvents,
+  sessions,
   tags,
   threadLabels,
   threads,
   threadTags,
+  voiceProfiles,
   workspaces,
 } from "../db/schema.ts";
 import { type ContentStore, createContentStore } from "./content.ts";
@@ -171,6 +198,10 @@ export interface ListThreadsOptions {
   includeArchived?: boolean;
   /** Restrict to these Thread ids. */
   ids?: Id[];
+  /** Only unread (true) or only read (false) Threads. */
+  unread?: boolean;
+  /** Only Threads whose last activity is before this moment (exclusive). */
+  before?: IsoDate;
 }
 
 export interface ThreadPage {
@@ -209,6 +240,13 @@ export interface ListChangesOptions {
   limit: number;
 }
 
+/**
+ * Told after every intent that won last-writer-wins, once its transaction
+ * committed. The sync engine registers itself to mirror the write and push
+ * it to the Provider; a failure is logged and never reaches the caller.
+ */
+export type IntentObserver = (intent: Intent, workspaceId: Id) => Promise<void>;
+
 export interface Mailstore extends ContentStore {
   createWorkspace(account: Account): Promise<Workspace>;
   /**
@@ -228,15 +266,20 @@ export interface Mailstore extends ContentStore {
    * written to the Activity log and reported with `applied: false`.
    */
   applyIntent(intent: Intent): Promise<IntentResult>;
+  /** Registers who hears about winning intents (the sync engine). One at a time. */
+  setIntentObserver(observer: IntentObserver | null): void;
   /** Insert or update by (workspace, provider thread id). Encrypts the subject. */
   upsertThread(input: ThreadInput): Promise<Id>;
   /** The header projection of one Thread by its Provider id, or null. */
   findThread(workspaceId: Id, providerThreadId: string): Promise<Thread | null>;
-  /** Header-only update; works locked. */
+  /** Header-only update; works locked. Records a thread change when something actually changed. */
   updateThread(threadId: Id, patch: ThreadPatch): Promise<void>;
-  /** Removes a Message and, when it was the last one, its Thread. */
+  /** Removes a Message and, when it was the last one, its Thread; the feed says so either way. */
   deleteMessage(messageId: Id): Promise<{ threadDeleted: boolean }>;
-  /** Moves every Message and label of `fromThreadId` into `intoThreadId` and deletes the former. */
+  /**
+   * Moves every Message and label of `fromThreadId` into `intoThreadId` and
+   * deletes the former; the feed carries the moved Messages and the removal.
+   */
   mergeThreads(fromThreadId: Id, intoThreadId: Id): Promise<void>;
   /** Insert or update by (workspace, provider message id). Encrypts body and snippet. */
   upsertMessage(input: MessageInput): Promise<Id>;
@@ -471,8 +514,14 @@ function describeIntent(intent: Intent): string {
   }
 }
 
-export function createMailstore(db: Db, keys: Keys): Mailstore {
+export interface MailstoreOptions {
+  log?: (message: string) => void;
+}
+
+export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = {}): Mailstore {
   const content = createContentStore(keys);
+  const log = options.log ?? (() => {});
+  let intentObserver: IntentObserver | null = null;
 
   const requireThread = async (executor: Db | Tx, threadId: string) => {
     const row = await executor.query.threads.findFirst({ where: eq(threads.id, threadId) });
@@ -534,6 +583,76 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     });
   };
 
+  /** Records that a Thread row is gone: its last projection, marked removed (and deleted, for older clients). */
+  const recordThreadRemoved = async (executor: Db | Tx, row: ThreadRow) => {
+    const { tagIds, labelIds } = await linksOf(executor, row.id);
+    return store.recordChange(executor, {
+      workspaceId: row.workspaceId,
+      kind: "thread",
+      entityId: row.id,
+      payload: { ...projectThread(row, tagIds, labelIds), deleted: true, removed: true },
+    });
+  };
+
+  const messagePayload = (m: typeof messages.$inferSelect, removed = false) => ({
+    id: m.id,
+    threadId: m.threadId,
+    from: m.from,
+    to: m.to,
+    cc: m.cc,
+    date: m.date.toISOString(),
+    hasAttachments: m.hasAttachments,
+    ...(removed ? { removed: true } : {}),
+  });
+
+  /** The transactional half of applyIntent: last-writer-wins, the row, the feed. */
+  const applyIntentTx = (intent: Intent): Promise<IntentResult & { workspaceId: string }> =>
+    db.transaction(async (tx) => {
+      const row = await requireThread(tx, intent.threadId);
+      const group = FIELD_GROUP_OF[intent.kind];
+      const last = row.writes[group] ?? null;
+      const resolution = resolveWrite(intent, last);
+      if (!resolution.wins) {
+        await tx.insert(activity).values({
+          id: crypto.randomUUID(),
+          workspaceId: row.workspaceId,
+          actor: intent.actor,
+          tool: `thread.${intent.kind}`,
+          summary: `${describeIntent(intent)} on thread ${row.id} not applied: ${resolution.reason}`,
+          at: new Date(intent.at),
+        });
+        return { applied: false, reason: resolution.reason, workspaceId: row.workspaceId };
+      }
+      const writes: FieldWrites = {
+        ...row.writes,
+        [group]: { at: intent.at, by: intent.actor },
+      };
+      if (intent.kind === "tags") {
+        await tx.delete(threadTags).where(eq(threadTags.threadId, row.id));
+        const ids = [...new Set(intent.tags)];
+        if (ids.length > 0) {
+          await tx.insert(threadTags).values(ids.map((tagId) => ({ threadId: row.id, tagId })));
+        }
+        await tx
+          .update(threads)
+          .set({ writes, updatedAt: new Date() })
+          .where(eq(threads.id, row.id));
+        await store.recordChange(tx, {
+          workspaceId: row.workspaceId,
+          kind: "thread_tags",
+          entityId: row.id,
+          payload: { threadId: row.id, ids },
+        });
+        return { applied: true, workspaceId: row.workspaceId };
+      }
+      await tx
+        .update(threads)
+        .set({ ...intentColumns(intent), writes, updatedAt: new Date() })
+        .where(eq(threads.id, row.id));
+      await recordThread(tx, row.id);
+      return { applied: true, workspaceId: row.workspaceId };
+    });
+
   const store: Mailstore = {
     storeContent: content.storeContent,
     readContent: content.readContent,
@@ -589,52 +708,22 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       return Number(row?.seq ?? 0);
     },
 
+    setIntentObserver(observer) {
+      intentObserver = observer;
+    },
+
     async applyIntent(intent) {
-      return db.transaction(async (tx) => {
-        const row = await requireThread(tx, intent.threadId);
-        const group = FIELD_GROUP_OF[intent.kind];
-        const last = row.writes[group] ?? null;
-        const resolution = resolveWrite(intent, last);
-        if (!resolution.wins) {
-          await tx.insert(activity).values({
-            id: crypto.randomUUID(),
-            workspaceId: row.workspaceId,
-            actor: intent.actor,
-            tool: `thread.${intent.kind}`,
-            summary: `${describeIntent(intent)} on thread ${row.id} not applied: ${resolution.reason}`,
-            at: new Date(intent.at),
-          });
-          return { applied: false, reason: resolution.reason };
+      const result = await applyIntentTx(intent);
+      if (result.applied && intentObserver) {
+        try {
+          await intentObserver(intent, result.workspaceId);
+        } catch (error) {
+          log(
+            `intent observer ${intent.kind} on ${intent.threadId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-        const writes: FieldWrites = {
-          ...row.writes,
-          [group]: { at: intent.at, by: intent.actor },
-        };
-        if (intent.kind === "tags") {
-          await tx.delete(threadTags).where(eq(threadTags.threadId, row.id));
-          const ids = [...new Set(intent.tags)];
-          if (ids.length > 0) {
-            await tx.insert(threadTags).values(ids.map((tagId) => ({ threadId: row.id, tagId })));
-          }
-          await tx
-            .update(threads)
-            .set({ writes, updatedAt: new Date() })
-            .where(eq(threads.id, row.id));
-          await store.recordChange(tx, {
-            workspaceId: row.workspaceId,
-            kind: "thread_tags",
-            entityId: row.id,
-            payload: { threadId: row.id, ids },
-          });
-          return { applied: true };
-        }
-        await tx
-          .update(threads)
-          .set({ ...intentColumns(intent), writes, updatedAt: new Date() })
-          .where(eq(threads.id, row.id));
-        await recordThread(tx, row.id);
-        return { applied: true };
-      });
+      }
+      return { applied: result.applied, ...(result.reason ? { reason: result.reason } : {}) };
     },
 
     async createWorkspace(account) {
@@ -714,35 +803,53 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     },
 
     async updateThread(threadId, patch) {
-      await requireThread(db, threadId);
-      await db
-        .update(threads)
-        .set({
-          ...(patch.unread !== undefined ? { unread: patch.unread } : {}),
-          ...(patch.starred !== undefined ? { starred: patch.starred } : {}),
-          ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
-          ...(patch.participants !== undefined ? { participants: patch.participants } : {}),
-          ...(patch.lastActivity !== undefined
-            ? { lastActivity: new Date(patch.lastActivity) }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(threads.id, threadId));
+      const row = await requireThread(db, threadId);
+      const next = {
+        unread: patch.unread ?? row.unread,
+        starred: patch.starred ?? row.starred,
+        archived: patch.archived ?? row.archived,
+        participants: patch.participants ?? row.participants,
+        lastActivity: patch.lastActivity ? new Date(patch.lastActivity) : row.lastActivity,
+      };
+      const changed =
+        next.unread !== row.unread ||
+        next.starred !== row.starred ||
+        next.archived !== row.archived ||
+        next.lastActivity.getTime() !== row.lastActivity.getTime() ||
+        JSON.stringify(next.participants) !== JSON.stringify(row.participants);
+      if (!changed) return;
+      await db.transaction(async (tx) => {
+        await tx
+          .update(threads)
+          .set({ ...next, updatedAt: new Date() })
+          .where(eq(threads.id, threadId));
+        // A flag the Provider flipped (read on the phone) reaches every Device through the feed.
+        await recordThread(tx, threadId);
+      });
     },
 
     async deleteMessage(messageId) {
       const message = await requireMessage(db, messageId);
       return db.transaction(async (tx) => {
         await tx.delete(messages).where(eq(messages.id, messageId));
+        await store.recordChange(tx, {
+          workspaceId: message.workspaceId,
+          kind: "message",
+          entityId: message.id,
+          payload: messagePayload(message, true),
+        });
         const [agg] = await tx
           .select({ count: sql<number>`count(*)::int` })
           .from(messages)
           .where(eq(messages.threadId, message.threadId));
         if ((agg?.count ?? 0) === 0) {
+          const thread = await requireThread(tx, message.threadId);
+          await recordThreadRemoved(tx, thread);
           await tx.delete(threads).where(eq(threads.id, message.threadId));
           return { threadDeleted: true };
         }
         await refreshThread(tx, message.threadId);
+        await recordThread(tx, message.threadId);
         return { threadDeleted: false };
       });
     },
@@ -752,10 +859,19 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const from = await requireThread(db, fromThreadId);
       const into = await requireThread(db, intoThreadId);
       await db.transaction(async (tx) => {
-        await tx
+        const moved = await tx
           .update(messages)
           .set({ threadId: intoThreadId })
-          .where(eq(messages.threadId, fromThreadId));
+          .where(eq(messages.threadId, fromThreadId))
+          .returning();
+        for (const m of moved) {
+          await store.recordChange(tx, {
+            workspaceId: m.workspaceId,
+            kind: "message",
+            entityId: m.id,
+            payload: messagePayload(m),
+          });
+        }
         const fromLabels = await tx
           .select({ labelId: threadLabels.labelId })
           .from(threadLabels)
@@ -778,8 +894,10 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
             updatedAt: new Date(),
           })
           .where(eq(threads.id, intoThreadId));
+        await recordThreadRemoved(tx, from);
         await tx.delete(threads).where(eq(threads.id, fromThreadId));
         await refreshThread(tx, intoThreadId);
+        await recordThread(tx, intoThreadId);
       });
     },
 
@@ -831,15 +949,7 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
           workspaceId,
           kind: "message",
           entityId: stored,
-          payload: {
-            id: stored,
-            threadId: input.threadId,
-            from: message.from,
-            to: message.to,
-            cc: message.cc,
-            date: message.date.toISOString(),
-            hasAttachments: message.hasAttachments,
-          },
+          payload: messagePayload(message),
         });
         await recordThread(tx, input.threadId);
         return stored;
@@ -1199,6 +1309,10 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
       const conditions = [eq(threads.workspaceId, workspaceId), eq(threads.deleted, false)];
       if (!options.includeArchived) conditions.push(eq(threads.archived, false));
       if (options.section !== undefined) conditions.push(eq(threads.section, options.section));
+      if (options.unread !== undefined) conditions.push(eq(threads.unread, options.unread));
+      if (options.before !== undefined) {
+        conditions.push(lt(threads.lastActivity, new Date(options.before)));
+      }
       if (options.ids !== undefined) {
         if (options.ids.length === 0) return { threads: [], cursor: null };
         conditions.push(inArray(threads.id, options.ids));
@@ -1326,54 +1440,178 @@ export function createMailstore(db: Db, keys: Keys): Mailstore {
     async rotateWorkspaceKey(workspaceId) {
       return keys.rotateWorkspaceKey(workspaceId, async (tx, rewrap) => {
         let count = 0;
-        const scope = eq(threads.workspaceId, workspaceId);
-        for (const row of await tx
-          .select({ id: threads.id, key: threads.subjectKey })
-          .from(threads)
-          .where(scope)) {
-          await tx
-            .update(threads)
-            .set({ subjectKey: rewrap(row.key) })
-            .where(eq(threads.id, row.id));
-          count += 1;
+        // Every column that holds a data key wrapped under K_ws, table by table.
+        // A table missing here would go dark after a rotation, so the test
+        // pins this list against the schema's *_key columns.
+        for (const spec of REWRAP_SPECS) {
+          const rows = await tx
+            .select({ id: spec.id, ...Object.fromEntries(spec.keys.map((k, i) => [`k${i}`, k])) })
+            .from(spec.table)
+            .where(eq(spec.workspace, workspaceId));
+          for (const row of rows as Array<Record<string, Uint8Array | string | null>>) {
+            const sets: SQL[] = [];
+            spec.keys.forEach((column, i) => {
+              const wrapped = row[`k${i}`];
+              if (wrapped instanceof Uint8Array) {
+                sets.push(sql`${sql.identifier(column.name)} = ${rewrap(wrapped)}`);
+                count += 1;
+              }
+            });
+            if (sets.length === 0) continue;
+            await tx.execute(
+              sql`update ${spec.table} set ${sql.join(sets, sql`, `)} where ${spec.id} = ${row.id}`,
+            );
+          }
         }
-        for (const row of await tx
-          .select({ id: messages.id, bodyKey: messages.bodyKey, snippetKey: messages.snippetKey })
-          .from(messages)
-          .where(eq(messages.workspaceId, workspaceId))) {
-          await tx
-            .update(messages)
-            .set({ bodyKey: rewrap(row.bodyKey), snippetKey: rewrap(row.snippetKey) })
-            .where(eq(messages.id, row.id));
-          count += 2;
-        }
-        for (const row of await tx
-          .select({ id: attachments.id, textKey: attachments.textKey })
-          .from(attachments)
-          .where(eq(attachments.workspaceId, workspaceId))) {
-          if (!row.textKey) continue;
-          await tx
-            .update(attachments)
-            .set({ textKey: rewrap(row.textKey) })
-            .where(eq(attachments.id, row.id));
-          count += 1;
-        }
-        for (const row of await tx
-          .select({ id: blobs.id, key: blobs.key })
-          .from(blobs)
-          .where(eq(blobs.workspaceId, workspaceId))) {
-          await tx
-            .update(blobs)
-            .set({ key: rewrap(row.key) })
-            .where(eq(blobs.id, row.id));
-          count += 1;
-        }
+        // LangGraph's sealed checkpoint blobs carry their wrapped key inside the
+        // blob (intelligence/agent/checkpointer.ts): u16 length, the key, the envelope.
+        count += await rewrapCheckpointBlobs(tx, workspaceId, rewrap);
         return count;
       });
     },
   };
 
   return store;
+}
+
+interface RewrapSpec {
+  table: PgTable;
+  id: AnyPgColumn;
+  workspace: AnyPgColumn;
+  /** The columns holding a wrapped data key; nullable ones are skipped when null. */
+  keys: AnyPgColumn[];
+}
+
+/** Every wrapped data key in the schema, by table (docs/spec/architecture.md, "Data model"). */
+const REWRAP_SPECS: readonly RewrapSpec[] = [
+  { table: threads, id: threads.id, workspace: threads.workspaceId, keys: [threads.subjectKey] },
+  {
+    table: messages,
+    id: messages.id,
+    workspace: messages.workspaceId,
+    keys: [messages.bodyKey, messages.snippetKey],
+  },
+  {
+    table: attachments,
+    id: attachments.id,
+    workspace: attachments.workspaceId,
+    keys: [attachments.textKey],
+  },
+  { table: blobs, id: blobs.id, workspace: blobs.workspaceId, keys: [blobs.key] },
+  {
+    table: accountCredentials,
+    id: accountCredentials.id,
+    workspace: accountCredentials.workspaceId,
+    keys: [accountCredentials.key],
+  },
+  {
+    table: drafts,
+    id: drafts.id,
+    workspace: drafts.workspaceId,
+    keys: [drafts.subjectKey, drafts.bodyKey],
+  },
+  {
+    table: providerKeys,
+    id: providerKeys.provider,
+    workspace: providerKeys.workspaceId,
+    keys: [providerKeys.key],
+  },
+  {
+    table: integrationSecrets,
+    id: integrationSecrets.integration,
+    workspace: integrationSecrets.workspaceId,
+    keys: [integrationSecrets.key],
+  },
+  {
+    table: briefs,
+    id: briefs.threadId,
+    workspace: briefs.workspaceId,
+    keys: [briefs.bulletsKey, briefs.actionsKey],
+  },
+  {
+    table: voiceProfiles,
+    id: voiceProfiles.workspaceId,
+    workspace: voiceProfiles.workspaceId,
+    keys: [voiceProfiles.profileKey],
+  },
+  { table: groups, id: groups.id, workspace: groups.workspaceId, keys: [groups.promptKey] },
+  { table: events, id: events.id, workspace: events.workspaceId, keys: [events.contentKey] },
+  {
+    table: invites,
+    id: invites.id,
+    workspace: invites.workspaceId,
+    keys: [invites.titleKey, invites.icalKey],
+  },
+];
+
+/** The (table, column) pairs the rotation re-wraps, for the test that pins them to the schema. */
+export function rewrappedColumns(): string[] {
+  return REWRAP_SPECS.flatMap((spec) =>
+    spec.keys.map((k) => `${getTableName(spec.table)}.${k.name}`),
+  ).concat([
+    "session_events.event_key",
+    "langgraph.checkpoint_blobs.blob",
+    "langgraph.checkpoint_writes.blob",
+  ]);
+}
+
+/**
+ * Re-wraps the sealed checkpoint blobs of the Workspace's graph threads, and
+ * the transcript events of its Sessions. Rows in the clear (from before
+ * migration 0014) are left as they are.
+ */
+async function rewrapCheckpointBlobs(
+  tx: Tx,
+  workspaceId: string,
+  rewrap: (wrapped: Uint8Array) => Uint8Array,
+): Promise<number> {
+  let count = 0;
+  const transcript = await tx
+    .select({ seq: sessionEvents.seq, key: sessionEvents.eventKey })
+    .from(sessionEvents)
+    .innerJoin(sessions, eq(sessions.id, sessionEvents.sessionId))
+    .where(eq(sessions.workspaceId, workspaceId));
+  for (const row of transcript) {
+    if (!row.key) continue;
+    await tx
+      .update(sessionEvents)
+      .set({ eventKey: rewrap(row.key) })
+      .where(eq(sessionEvents.seq, row.seq));
+    count += 1;
+  }
+  for (const table of ["checkpoint_blobs", "checkpoint_writes"] as const) {
+    const exists = await tx.execute<{ n: number }>(
+      sql`select count(*)::int as n from information_schema.tables where table_schema = 'langgraph' and table_name = ${table}`,
+    );
+    if (Number(exists[0]?.n ?? 0) === 0) continue;
+    const rows = await tx.execute<{ ctid: string; blob: Uint8Array }>(
+      sql.raw(
+        `select ctid::text as ctid, blob from langgraph.${table} where type like 'monday-sealed+%' and blob is not null and ${mineSql(workspaceId)}`,
+      ),
+    );
+    for (const row of rows) {
+      const bytes = new Uint8Array(row.blob);
+      const keyLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(0);
+      const wrapped = bytes.slice(2, 2 + keyLength);
+      const fresh = rewrap(wrapped);
+      if (fresh.length !== keyLength) throw new RangeError("re-wrapped key changed length");
+      const next = new Uint8Array(bytes.length);
+      next.set(bytes.subarray(0, 2), 0);
+      next.set(fresh, 2);
+      next.set(bytes.subarray(2 + keyLength), 2 + keyLength);
+      await tx.execute(
+        sql`update ${sql.raw(`langgraph.${table}`)} set blob = ${next} where ctid = ${row.ctid}::tid`,
+      );
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** The SQL predicate for checkpoint rows of the Workspace's Sessions and Runs; the id is quoted. */
+function mineSql(workspaceId: string): string {
+  const quoted = `'${workspaceId.replaceAll("'", "''")}'`;
+  return `((split_part(thread_id, '#', 1) in (select id from sessions where workspace_id = ${quoted})) or (thread_id like 'run:%' and split_part(thread_id, ':', 2) in (select id from workflow_runs where workspace_id = ${quoted})))`;
 }
 
 /** Recomputes the counters a Thread derives from its Messages. */

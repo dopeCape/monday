@@ -208,6 +208,8 @@ interface StepEnv {
   settings: WorkflowSettings;
   /** The Step row from an earlier attempt (a wait in progress). */
   existing: StepRow | null;
+  /** The Job's lease renewal, for a Step that outlives one lease (an agentic Step). */
+  heartbeat?: (() => Promise<void>) | undefined;
 }
 
 const personLine = (p: { name: string; email: string }) =>
@@ -748,8 +750,12 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         allow: step.tools.length ? step.tools : null,
         maxToolCalls: budget.calls,
         maxTokens: budget.tokens,
-        deadline: Math.min(env.deadline, now().getTime() + budget.minutes * 60_000),
+        // With a heartbeat the lease follows the Step, so the Budget's minutes bound it; without one the lease does.
+        deadline: env.heartbeat
+          ? now().getTime() + budget.minutes * 60_000
+          : Math.min(env.deadline, now().getTime() + budget.minutes * 60_000),
         approve: async () => (env.standing ? "standing" : null),
+        heartbeat: env.heartbeat,
         ...(env.decision ? { resume: env.decision } : {}),
       });
       if (result.interrupted) {
@@ -985,6 +991,9 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       deadline: ctx.deadline,
       settings,
       existing,
+      heartbeat: async () => {
+        await ctx.extend();
+      },
     };
     let outcome: StepOutcome;
     try {

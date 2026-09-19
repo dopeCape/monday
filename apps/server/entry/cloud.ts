@@ -137,8 +137,8 @@ export async function bootCloud(
       ? createVercelKicker({ ...kickerOptions, cronSecret: env.CRON_SECRET })
       : createNetlifyKicker({ ...kickerOptions, waitUntil: (p) => waitUntilNow?.(p) });
   await services.startAccounts();
-  // LangGraph checkpoints for paused Agent turns, set up right after the migrations.
-  const checkpointer = await createCheckpointer(databaseUrl);
+  // LangGraph checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after the migrations.
+  const checkpointer = await createCheckpointer(databaseUrl, handle.db, services.mailstore);
 
   const app = createApp({
     db: handle.db,
@@ -160,6 +160,7 @@ export async function bootCloud(
     // No desktop on a Cloud Server: an external approval waits in the pending items and is logged.
     notifier: createMemoryNotifier((line) => log(line)),
     publicUrl: publicUrlReader(handle.db, env),
+    log,
   });
 
   const boot: CloudBoot = {
@@ -180,6 +181,7 @@ export async function bootCloud(
     async close() {
       await kicker?.stop();
       await services.sync.close();
+      await services.calendar.close();
       await checkpointer.end().catch(() => {});
       await handle.close();
     },

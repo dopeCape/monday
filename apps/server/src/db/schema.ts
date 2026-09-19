@@ -21,6 +21,7 @@ import type {
   ExternalScope,
   FieldWrites,
   HostedProvider,
+  Integration,
   InviteMethod,
   Person,
   Predicate,
@@ -245,6 +246,9 @@ export const threads = pgTable(
     index("threads_list_idx").on(t.workspaceId, t.archived, t.lastActivity, t.id),
     index("threads_section_idx").on(t.workspaceId, t.section),
     index("threads_group_idx").on(t.workspaceId, t.groupId),
+    index("threads_subgroup_idx").on(t.workspaceId, t.subgroupId),
+    /** The snooze wake Job's sweep: every Thread whose wake time has passed. */
+    index("threads_snoozed_idx").on(t.workspaceId, t.snoozedUntil),
     index("threads_search_idx").using("gin", t.searchVector),
   ],
 );
@@ -277,6 +281,8 @@ export const messages = pgTable(
   (t) => [
     unique("messages_workspace_provider").on(t.workspaceId, t.providerMessageId),
     index("messages_thread_idx").on(t.threadId, t.date),
+    /** /messages/bodies pages a Workspace by date (the Cache pre-warm, "search older mail"). */
+    index("messages_workspace_date_idx").on(t.workspaceId, t.date, t.id),
   ],
 );
 
@@ -580,7 +586,13 @@ export const sessions = pgTable(
   (t) => [index("sessions_workspace_idx").on(t.workspaceId, t.lastActivity)],
 );
 
-/** The persisted events of a Session, in order: user turns, answers, tool cards. */
+/**
+ * The persisted events of a Session, in order: user turns, answers, tool
+ * cards. What was said quotes mail, so each event is content under the
+ * "transcript" kind (event_enc, event_key). `event` is the plaintext column
+ * rows carried before migration 0014; a row has one or the other, and the
+ * boot sweep seals the old ones once the Server is unlocked.
+ */
 export const sessionEvents = pgTable(
   "session_events",
   {
@@ -588,7 +600,10 @@ export const sessionEvents = pgTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
-    event: jsonb("event").$type<AgentEvent>().notNull(),
+    /** Plaintext, only on rows written before migration 0014. */
+    event: jsonb("event").$type<AgentEvent>(),
+    eventEnc: bytea("event_enc"),
+    eventKey: bytea("event_key"),
     at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("session_events_session_idx").on(t.sessionId, t.seq)],
@@ -684,6 +699,24 @@ export const providerKeys = pgTable("provider_keys", {
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 
+/**
+ * A Workflow integration's secret (the Slack token or webhook URL, the Notion
+ * or Drive token, the webhook bearer): one row per integration under the
+ * envelope as an "integration" object, wrapped under the K_ws of whichever
+ * Workspace the saving Device was showing, like provider_keys. The
+ * workflows.integrations Setting says only which integrations are set up;
+ * nothing that opens a third party lives in the plaintext settings table.
+ */
+export const integrationSecrets = pgTable("integration_secrets", {
+  integration: text("integration").$type<Integration>().primaryKey(),
+  workspaceId: text("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  key: bytea("key").notNull(),
+  dataEnc: bytea("data_enc").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
 /** The Meter: one row per Hosted model call. Cost is an estimate in USD micro-units. */
 export const meter = pgTable(
   "meter",
@@ -732,13 +765,24 @@ export const briefs = pgTable("briefs", {
   latestMessageId: text("latest_message_id").notNull().default(""),
 });
 
-/** The Voice profile: storage and routes here; building it from sent mail is a later slice. */
+/**
+ * The Voice profile (CONTEXT.md): how the user writes, with excerpts from
+ * sent mail. Excerpts are mail content, so the description and the excerpts
+ * sit together under one "voice" envelope (profile_enc, profile_key). The
+ * plaintext columns are what rows carried before migration 0014; the boot
+ * sweep seals them once the Server is unlocked and empties them.
+ */
 export const voiceProfiles = pgTable("voice_profiles", {
   workspaceId: text("workspace_id")
     .primaryKey()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  /** Plaintext, only on rows written before migration 0014. */
   description: text("description").notNull().default(""),
+  /** Plaintext, only on rows written before migration 0014. */
   excerpts: jsonb("excerpts").$type<string[]>().notNull().default([]),
+  /** JSON {description, excerpts} under one envelope. */
+  profileEnc: bytea("profile_enc"),
+  profileKey: bytea("profile_key"),
   builtAt: timestamp("built_at", { withTimezone: true, mode: "date" }),
   enabled: boolean("enabled").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
@@ -915,6 +959,8 @@ export const workflowRuns = pgTable(
   (t) => [
     index("workflow_runs_workflow_idx").on(t.workflowId, t.startedAt),
     index("workflow_runs_workspace_status_idx").on(t.workspaceId, t.status),
+    /** GET /workflows/runs: a Workspace's Runs newest first. */
+    index("workflow_runs_workspace_started_idx").on(t.workspaceId, t.startedAt),
   ],
 );
 

@@ -130,6 +130,8 @@ export interface StepRunInput {
   /** A Standing approval answers "standing"; null pauses the Run at the interrupt. */
   approve(row: ActivityRow): Promise<"standing" | null>;
   onTool?: ((row: ActivityRow) => void) | undefined;
+  /** Renews the Job's lease; called before every model and tool call so a long Step is not swept. */
+  heartbeat?: (() => Promise<void>) | undefined;
   /** Resumes the paused thread with the decision instead of starting a new one. */
   resume?: ApprovalDecision | undefined;
 }
@@ -201,6 +203,8 @@ export interface AgentHost {
     workspaceId: string,
     options?: { limit?: number; sessionId?: string },
   ): Promise<ActivityRecord[]>;
+  /** One Activity row by id, as the API shows it; null when unknown. */
+  activityRecord(id: string): Promise<ActivityRecord | null>;
   /** Undo from a card or the Activity page; the Session, when given, gets the event. */
   undo(activityId: string, sessionId?: string | null): Promise<ActivityRecord>;
   /** The tool server for a Workspace, for the loopback MCP transports. */
@@ -416,6 +420,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           if (now().getTime() > input.deadline) throw new BudgetExceededError("minutes");
         },
         approve: input.approve,
+        heartbeat: input.heartbeat,
       });
       try {
         const result = input.resume
@@ -556,6 +561,11 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     async listActivity(workspaceId, opts) {
       const rows = await activity.list(workspaceId, opts);
       return rows.map(publicActivity);
+    },
+
+    async activityRecord(id) {
+      const row = await activity.get(id);
+      return row ? publicActivity(row) : null;
     },
 
     async undo(activityId, sessionId = null) {

@@ -128,6 +128,7 @@ describe("the tool catalog", () => {
       run_workflow: "reversible",
       // Slice 19: an external key the Agent makes; revoking it is the undo.
       create_external_key: "reversible",
+      build_voice_profile: "reversible",
       // Slice 20: onboarding.
       onboarding_context: "read",
       propose_groups: "reversible",

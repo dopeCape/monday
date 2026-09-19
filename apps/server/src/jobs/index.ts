@@ -23,11 +23,17 @@ export interface Job<P = unknown> {
 }
 
 export interface StepContext {
-  /** Epoch milliseconds by which the step must return. */
+  /** Epoch milliseconds by which the step must return; moves forward on extend(). */
   deadline: number;
   owner: string;
   /** Milliseconds left before the deadline. */
   remainingMs(): number;
+  /**
+   * Renews the lease for another budget from now, so a step that is still
+   * working (a long model call, a slow Provider) is not swept and run twice
+   * by another Server. False when the lease is no longer this step's.
+   */
+  extend(): Promise<boolean>;
 }
 
 export type StepResult = "done" | "again" | { sleepMs: number };
@@ -54,12 +60,22 @@ export interface JobsOptions {
 }
 
 export interface Jobs {
+  /** Attempts a job gets before it is marked failed; a step that wants a last word compares `job.attempts` to it. */
+  readonly maxAttempts: number;
   enqueue(cls: string, payload: unknown, options?: EnqueueOptions): Promise<string>;
   claim(owner: string, canServe: string[], budgetMs: number): Promise<Job | null>;
   complete(id: string, owner: string): Promise<void>;
   fail(id: string, owner: string, error: string): Promise<void>;
   /** Requeue a job the step wants to continue, now or after a sleep. */
   requeue(id: string, owner: string, sleepMs?: number): Promise<void>;
+  /** Pushes a running job's lease to now plus `budgetMs`; false when the job is not this owner's any more. */
+  extend(id: string, owner: string, budgetMs: number): Promise<boolean>;
+  /**
+   * Removes every job, queued or asleep, whose payload names `value` under
+   * `field` (an Account that was removed). Running ones finish and are not
+   * requeued by their owner, whose complete and requeue find no row.
+   */
+  cancelByPayload(field: string, value: string): Promise<number>;
   sweepExpiredLeases(): Promise<number>;
   /**
    * Removes a job that has not started. True when a queued row was removed;
@@ -104,6 +120,7 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
   });
 
   const api: Jobs = {
+    maxAttempts,
     async enqueue(cls, payload, opts = {}) {
       const id = opts.id ?? crypto.randomUUID();
       await db
@@ -198,6 +215,23 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
       }
     },
 
+    async cancelByPayload(field, value) {
+      const removed = await db
+        .delete(jobs)
+        .where(and(sql`${jobs.payload} ->> ${field} = ${value}`, eq(jobs.status, "queued")))
+        .returning({ id: jobs.id });
+      return removed.length;
+    },
+
+    async extend(id, owner, budgetMs) {
+      const rows = await db
+        .update(jobs)
+        .set({ leaseUntil: new Date(now().getTime() + budgetMs) })
+        .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")))
+        .returning({ id: jobs.id });
+      return rows.length > 0;
+    },
+
     async sweepExpiredLeases() {
       const at = now();
       const expired = and(eq(jobs.status, "running"), lt(jobs.leaseUntil, at));
@@ -248,11 +282,15 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
         await api.fail(job.id, owner, new NoStepError(job.class).message);
         return "failed";
       }
-      const deadline = now().getTime() + budgetMs;
       const ctx: StepContext = {
-        deadline,
+        deadline: now().getTime() + budgetMs,
         owner,
-        remainingMs: () => Math.max(0, deadline - now().getTime()),
+        remainingMs: () => Math.max(0, ctx.deadline - now().getTime()),
+        extend: async () => {
+          const kept = await api.extend(job.id, owner, budgetMs);
+          if (kept) ctx.deadline = now().getTime() + budgetMs;
+          return kept;
+        },
       };
       let result: StepResult;
       try {

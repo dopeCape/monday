@@ -52,6 +52,8 @@ export const EXTERNAL_PUBLIC_PREFIXES: readonly string[] = [
 ];
 
 export interface ExternalRoutesOptions {
+  /** How often an idle /external/live stream sends a keepalive comment. */
+  keepaliveMs?: number | undefined;
   external: External;
   /** The consent page's texts, from the strings Settings. */
   consentStrings(): Promise<ConsentPageInput["strings"]>;
@@ -88,6 +90,7 @@ export function issuerOf(req: Request, configured: string | null): string {
 }
 
 export function externalRoutes(options: ExternalRoutesOptions): Hono<AppEnv> {
+  const keepaliveMs = options.keepaliveMs ?? 25_000;
   const { external } = options;
   const app = new Hono<AppEnv>();
   const issuer = async (req: Request) => issuerOf(req, (await options.publicUrl?.()) ?? null);
@@ -293,10 +296,20 @@ export function externalRoutes(options: ExternalRoutesOptions): Hono<AppEnv> {
           stream.writeSSE({ event: "pending", data: JSON.stringify(pending) }).catch(() => {}),
         );
       });
+      // A comment every so often, so an idle stream is not cut by the server or a proxy.
+      const keepalive = setInterval(() => {
+        chain = chain.then(() =>
+          stream.write(": keepalive\n\n").then(
+            () => {},
+            () => {},
+          ),
+        );
+      }, keepaliveMs);
       await new Promise<void>((resolve) => {
         stream.onAbort(() => resolve());
         c.req.raw.signal.addEventListener("abort", () => resolve(), { once: true });
       });
+      clearInterval(keepalive);
       unsubscribe();
       await chain;
     });

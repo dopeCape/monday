@@ -217,6 +217,35 @@ describe("jobs", () => {
     expect(seen).toEqual(["1:server-a", "2:server-a", "3:server-a"]);
   });
 
+  test("a long step renews its lease, so the sweeper leaves it alone and its deadline moves", async () => {
+    let extended = false;
+    jobs.registerStep("slow", async (_job, ctx) => {
+      const before = ctx.deadline;
+      // Halfway through the lease, the step is still working.
+      clock.advance(3_000);
+      expect(await ctx.extend()).toBe(true);
+      extended = true;
+      expect(ctx.deadline).toBe(clock.now().getTime() + 5_000);
+      expect(ctx.deadline).toBeGreaterThan(before);
+      // Past the original lease: without the renewal this job would be swept and run twice.
+      clock.advance(3_000);
+      expect(await jobs.sweepExpiredLeases()).toBe(0);
+      return "done";
+    });
+    const id = await jobs.enqueue("slow", {});
+    const claimed = await jobs.claim("server-a", ANY, 5_000);
+    expect(await jobs.run(claimed as NonNullable<typeof claimed>, 5_000)).toBe("done");
+    expect(extended).toBe(true);
+    expect((await jobs.get(id))?.status).toBe("done");
+    // Extending a job another Server owns, or one that is not running, changes nothing.
+    expect(await jobs.extend(id, "server-a", 5_000)).toBe(false);
+    const other = await jobs.enqueue("slow-other", {});
+    await jobs.claim("server-b", ANY, 5_000);
+    expect(await jobs.extend(other, "server-a", 5_000)).toBe(false);
+    expect(await jobs.extend(other, "server-b", 5_000)).toBe(true);
+    await jobs.complete(other, "server-b");
+  });
+
   test("a step that throws fails the job; a missing step fails it too", async () => {
     jobs.registerStep("explode", async () => {
       throw new Error("kaboom");

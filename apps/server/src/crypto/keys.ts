@@ -51,6 +51,13 @@ export interface Keys {
   unlock(rootKey: Uint8Array): Promise<void>;
   lock(): void;
   isUnlocked(): boolean;
+  /**
+   * Called after every successful unlock, so work that waits for the root
+   * key (sealing rows written in the clear before an upgrade) can start.
+   * Returns the function that removes the listener. A listener's failure is
+   * reported to `onError`, never thrown at the unlocker.
+   */
+  onUnlock(listener: () => Promise<void> | void): () => void;
   /** The root key, for the recovery file. Throws LockedError. */
   rootKey(): Uint8Array;
   /** Generates and stores a wrapped K_ws for a new Workspace. Throws LockedError. */
@@ -75,9 +82,16 @@ const encoder = new TextEncoder();
 const workspaceAad = (id: string) => encoder.encode(`monday:workspace-key:${id}`);
 const dataKeyAad = (id: string) => encoder.encode(`monday:data-key:${id}`);
 
-export function createKeys(db: Db): Keys {
+export interface KeysOptions {
+  /** Where an unlock listener's failure goes; defaults to console.error. */
+  onError?: (error: unknown) => void;
+}
+
+export function createKeys(db: Db, options: KeysOptions = {}): Keys {
   let root: Uint8Array | null = null;
   const cache = new Map<string, Uint8Array>();
+  const listeners = new Set<() => Promise<void> | void>();
+  const onError = options.onError ?? ((error: unknown) => console.error(error));
 
   const requireRoot = (): Uint8Array => {
     if (!root) throw new LockedError();
@@ -104,6 +118,18 @@ export function createKeys(db: Db): Keys {
       }
       cache.clear();
       root = new Uint8Array(rootKey);
+      for (const listener of [...listeners]) {
+        Promise.resolve()
+          .then(() => listener())
+          .catch(onError);
+      }
+    },
+
+    onUnlock(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
 
     lock() {
