@@ -582,6 +582,9 @@ export interface EventInput {
   createdByAgent?: boolean | undefined;
 }
 
+/** What updates an Event: any subset of the input; an absent field keeps its value. */
+export type EventPatch = { [K in keyof EventInput]?: EventInput[K] | undefined };
+
 export type InviteMethod = "REQUEST" | "REPLY" | "CANCEL" | "PUBLISH";
 
 /** A text/calendar part in a Message (CONTEXT.md "Invite"), as the invite bar renders it. */

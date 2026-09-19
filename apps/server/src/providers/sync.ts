@@ -135,6 +135,18 @@ export interface ThreadArrival {
 
 export type ArrivalHook = (arrival: ThreadArrival) => Promise<void>;
 
+/**
+ * Told about each body as it lands, with the parsed Message (slice 18: the
+ * calendar module reads text/calendar parts into Invites). Runs inline after
+ * the body is stored; a failure is logged and never stops the pass.
+ */
+export type BodyObserver = (
+  account: { id: string; workspaceId: string; address: string },
+  messageId: string,
+  threadId: string,
+  raw: RawMessage,
+) => Promise<void>;
+
 export interface SyncEngine {
   syncAccount(accountId: string, options?: SyncAccountOptions): Promise<SyncReport>;
   /** The cached Session for an Account, connecting when needed (push Jobs use adapter extras). */
@@ -156,6 +168,8 @@ export interface SyncEngine {
   ): void;
   /** Registers who hears about Threads whose content changed (the Briefs module). One at a time. */
   setThreadObserver(observer: ThreadObserver | null): void;
+  /** Registers who sees each body as it lands (the calendar module's Invites). One at a time. */
+  setBodyObserver(observer: BodyObserver | null): void;
   /**
    * Registers who hears about a new Thread. The engine calls it once per
    * Thread it creates, after the first Message is stored; the hook enqueues
@@ -217,6 +231,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   let draftImporter: DraftImporter | null = null;
   let knownDraftIds: ((workspaceId: string) => Promise<Set<string>>) | null = null;
   let threadObserver: ThreadObserver | null = null;
+  let bodyObserver: BodyObserver | null = null;
   /** Per Account, the Threads a pass touched, drained into the observer at the end of the pass. */
   const touched = new Map<string, Set<string>>();
 
@@ -830,6 +845,18 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       .set({ bodyState: "fetched", updatedAt: now() })
       .where(eq(syncMessages.messageId, messageId));
     touch(acct.id, message.threadId);
+    if (bodyObserver) {
+      try {
+        await bodyObserver(
+          { id: acct.id, workspaceId: acct.workspaceId, address: acct.address },
+          messageId,
+          message.threadId,
+          raw,
+        );
+      } catch (error) {
+        log(`body observer ${messageId}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
   }
 
   /**
@@ -1054,6 +1081,10 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     setThreadObserver(observer) {
       threadObserver = observer;
       if (!observer) touched.clear();
+    },
+
+    setBodyObserver(observer) {
+      bodyObserver = observer;
     },
 
     async applyChange(accountId, target, change) {

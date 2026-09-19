@@ -311,6 +311,9 @@ export interface CreateEventInput extends EventInput {
   customLink: string | null;
 }
 
+/** What updateEvent takes: any subset of the create input; absent fields keep their value. */
+export type UpdateEventInput = { [K in keyof CreateEventInput]?: CreateEventInput[K] | undefined };
+
 /**
  * A Provider's calendar API behind one interface (research 6, "Recommended
  * minimum surface for v1"): Google Calendar, Graph, CalDAV. Google, Graph
@@ -330,7 +333,7 @@ export interface CalendarSession {
   updateEvent(
     calendarId: string,
     eventId: string,
-    input: Partial<CreateEventInput>,
+    input: UpdateEventInput,
     etag: string | null,
   ): Promise<ProviderEvent>;
   deleteEvent(calendarId: string, eventId: string): Promise<void>;

@@ -8,6 +8,7 @@ import type { DeploymentMode } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
 import { type AccountService, createAccountService } from "../src/accounts.ts";
 import { type Auth, createAuth, randomCode } from "../src/auth/index.ts";
+import { type CalendarModule, createCalendar } from "../src/calendar/index.ts";
 import { createKeys, type Keys } from "../src/crypto/keys.ts";
 import type { Db } from "../src/db/client.ts";
 import { createJobs, type Jobs, type JobsOptions } from "../src/jobs/index.ts";
@@ -39,6 +40,7 @@ export interface Services {
   sync: SyncEngine;
   push: PushManager;
   accounts: AccountService;
+  calendar: CalendarModule;
   /** The setup code printed at first boot, when this boot generated one. */
   setupCode: string | null;
   /** Enqueues every connected Account's sync, watch and push Jobs (idempotent ids). */
@@ -97,6 +99,16 @@ export async function createServices(options: ServicesOptions): Promise<Services
     publicUrl: publicUrlReader(db, env),
   });
   push.registerSteps(jobs);
+  const calendar = createCalendar({
+    db,
+    mailstore,
+    sync,
+    credentials,
+    serverId,
+    log: debug,
+    publicUrl: publicUrlReader(db, env),
+  });
+  calendar.registerSteps(jobs);
   const accounts = createAccountService({
     db,
     mailstore,
@@ -105,6 +117,7 @@ export async function createServices(options: ServicesOptions): Promise<Services
     onAdded: async (accountId, provider) => {
       await sync.startAccount(jobs, accountId);
       await push.startAccount(jobs, accountId, provider);
+      await calendar.startAccount(jobs, accountId);
     },
   });
 
@@ -118,12 +131,14 @@ export async function createServices(options: ServicesOptions): Promise<Services
     sync,
     push,
     accounts,
+    calendar,
     setupCode: firstBoot ? setupCode : null,
     async startAccounts() {
       for (const row of await db.query.accounts.findMany()) {
         if (!row.credentialsRef) continue;
         await sync.startAccount(jobs, row.id);
         await push.startAccount(jobs, row.id, row.provider);
+        await calendar.startAccount(jobs, row.id);
       }
     },
   };

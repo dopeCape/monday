@@ -154,6 +154,7 @@ export async function bootCloud(
     // No loopback listener off the user's machine: the wizard pastes the code instead.
     oauth: { flow: createOAuthFlow(), loopback: null },
     push: services.push,
+    calendar: services.calendar,
     mounts: [kicker.routes()],
   });
 

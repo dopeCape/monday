@@ -308,7 +308,10 @@ export class NotFoundError extends Error {
       | "blob"
       | "draft"
       | "send"
-      | "group",
+      | "group"
+      | "calendar"
+      | "event"
+      | "invite",
     readonly id: string,
   ) {
     super(`${entity} ${id} not found`);

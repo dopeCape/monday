@@ -4,6 +4,7 @@
 
 import type {
   Attendee,
+  CalendarSource,
   DraftAttachment,
   DraftKind,
   DraftStatus,
@@ -37,7 +38,9 @@ export type FieldGroup =
   | "snoozed"
   | "placement"
   | "deleted"
-  | "tags";
+  | "tags"
+  /** An Invite's answer (slice 18); the group lives on the Invite row, not the Thread. */
+  | "rsvp";
 
 export type IntentKind =
   | "archive"
@@ -220,8 +223,23 @@ export type ChangeKind =
   | "brief"
   | "group"
   | "decision"
+  | "calendar"
   | "event"
   | "invite";
+
+/** A calendar of the Workspace as the feed carries it; `deleted` when the Provider stopped listing it. */
+export interface CalendarChange {
+  id: Id;
+  workspaceId: Id;
+  source: CalendarSource;
+  providerId: string;
+  name: string;
+  primary: boolean;
+  writable: boolean;
+  visible: boolean;
+  color: string | null;
+  deleted?: boolean | undefined;
+}
 
 /**
  * An Event as the feed carries it (slice 18): times, attendees, link and
@@ -373,6 +391,7 @@ export type ChangePayload =
   | { kind: "brief"; payload: BriefChange }
   | { kind: "group"; payload: GroupChange }
   | { kind: "decision"; payload: DecisionChange }
+  | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange };
 

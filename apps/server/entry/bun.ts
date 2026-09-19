@@ -129,7 +129,7 @@ async function main() {
     log,
     debug,
   });
-  const { auth, keys, jobs, mailstore, sync, push, accounts } = services;
+  const { auth, keys, jobs, mailstore, sync, push, accounts, calendar } = services;
   await services.startAccounts();
 
   const timing = await readHeartbeatTiming(handle.db);
@@ -194,6 +194,7 @@ async function main() {
       loopback: mode === "sidecar" ? createLoopbackListener() : null,
     },
     push,
+    calendar,
     mounts: mode === "sidecar" ? [upgradeRoutes(upgrade)] : [],
   });
 
