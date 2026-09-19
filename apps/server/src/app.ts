@@ -8,6 +8,7 @@ import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "./auth/cors.ts";
 import type { Auth } from "./auth/index.ts";
+import { PairingError } from "./auth/index.ts";
 import {
   type AppEnv,
   authenticate,
@@ -21,7 +22,7 @@ import { type CalendarModule, CalendarUnavailableError } from "./calendar/index.
 import { capabilitiesFor } from "./capabilities.ts";
 import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
-import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
+import { createKeys, type Keys, LockedError, UnknownWorkspaceKeyError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
 import { accounts, type BodyState, syncMessages, threads, workspaces } from "./db/schema.ts";
 import {
@@ -39,6 +40,7 @@ import {
   type Notifier,
 } from "./external/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
+import { LocalSessionError } from "./intelligence/agent/index.ts";
 import {
   AiOffError,
   BriefNotReadyError,
@@ -57,6 +59,7 @@ import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
+import { ProviderError } from "./providers/types.ts";
 import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { agentRoutes } from "./routes/agent.ts";
 import { calendarRoutes } from "./routes/calendar.ts";
@@ -81,6 +84,8 @@ import { webhookRoutes } from "./routes/webhooks.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
 import { readGlobalSettings } from "./settings/read.ts";
 import { createSnoozeWaker } from "./snooze.ts";
+import { IntegrationNotConfiguredError } from "./workflows/integrations.ts";
+import { McpServerUnknownError } from "./workflows/mcp.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -91,6 +96,17 @@ const EXTERNAL_SETTING_KEYS = [
   "external.key_expiry_days",
   "external.consent_timeout_minutes",
 ] as const;
+
+/** What a Provider's failure means to the caller of the route that hit it. */
+const PROVIDER_ERROR_STATUS: Record<ProviderError["code"], 400 | 401 | 404 | 413 | 429 | 502> = {
+  auth: 401,
+  network: 502,
+  unsupported: 400,
+  "not-found": 404,
+  protocol: 502,
+  "too-large": 413,
+  "rate-limit": 429,
+};
 
 const CONSENT_STRING_KEYS = [
   "strings.external.consent.title",
@@ -442,6 +458,25 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     // A locked server answers 423 for anything that needs the root key.
     if (error instanceof LockedError) return c.json({ error: "locked" }, 423);
     if (error instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+    if (error instanceof UnknownWorkspaceKeyError) {
+      return c.json({ error: "not_found", workspace: error.workspaceId }, 404);
+    }
+    if (error instanceof PairingError) return c.json({ error: error.code }, 400);
+    if (error instanceof LocalSessionError) return c.json({ error: "local_session" }, 409);
+    if (error instanceof IntegrationNotConfiguredError) {
+      return c.json({ error: "integration_not_configured", integration: error.integration }, 409);
+    }
+    if (error instanceof McpServerUnknownError) {
+      return c.json({ error: "unknown_mcp_server", server: error.server }, 400);
+    }
+    if (error instanceof ProviderError) {
+      const status = PROVIDER_ERROR_STATUS[error.code];
+      return c.json({ error: `provider_${error.code}`, message: error.message }, status);
+    }
+    // The Mailstore and the Drafts refuse a malformed cursor, chunk or range with a RangeError.
+    if (error instanceof RangeError) {
+      return c.json({ error: "invalid_request", detail: error.message }, 400);
+    }
     if (error instanceof NoRecipientsError) return c.json({ error: "no_recipients" }, 400);
     if (error instanceof DraftNotOpenError) {
       return c.json({ error: "draft_not_open", status: error.draftStatus }, 409);

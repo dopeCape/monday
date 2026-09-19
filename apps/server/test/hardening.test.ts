@@ -27,7 +27,12 @@ import { createServerToolHost } from "../src/intelligence/agent/host.ts";
 import { createSessionStore } from "../src/intelligence/agent/sessions.ts";
 import { createIntelligence, type Intelligence } from "../src/intelligence/index.ts";
 import { createFakeChat, createFakeConverse } from "../src/intelligence/runtime/fake/index.ts";
-import { createMailstore, type Mailstore, rewrappedColumns } from "../src/mailstore/index.ts";
+import {
+  createMailstore,
+  type Mailstore,
+  NotFoundError,
+  rewrappedColumns,
+} from "../src/mailstore/index.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const SIDECAR_TOKEN = "per-launch-token";
@@ -526,6 +531,96 @@ describe("transcripts and checkpoints under the envelope", () => {
     });
     expect(page.threads.map((t) => t.subject)).toEqual(["filter 1"]);
     await intelligence.routing.deleteGroup(parent.id);
+  });
+
+  test("the Agent's host never reads or writes across Workspaces, whatever id it is handed", async () => {
+    const otherWorkspace = (await store.createWorkspace({ ...account, id: "acct-other-ws" })).id;
+    const foreign = await store.upsertThread({
+      workspaceId: otherWorkspace,
+      providerThreadId: "foreign-1",
+      subject: "Not yours",
+      participants: [{ name: "Elsewhere", email: "else@example.test" }],
+      lastActivity: NOW.toISOString(),
+      unread: true,
+    });
+    const foreignMessage = await store.upsertMessage({
+      threadId: foreign,
+      providerMessageId: "foreign-m1",
+      from: { name: "Elsewhere", email: "else@example.test" },
+      to: [],
+      cc: [],
+      date: NOW.toISOString(),
+      headers: {},
+      bodyText: "secret elsewhere",
+      bodyHtml: null,
+      snippet: "secret",
+    });
+    const foreignAttachment = await store.putAttachment(foreignMessage, {
+      name: "a.txt",
+      mediaType: "text/plain",
+      bytes: new TextEncoder().encode("attached elsewhere"),
+    });
+    const foreignDrafts = createDrafts({ db: db.handle.db, mailstore: store });
+    const foreignDraft = await foreignDrafts.save({
+      id: "foreign-draft",
+      workspaceId: otherWorkspace,
+      content: {
+        threadId: null,
+        kind: "new",
+        inReplyToMessageId: null,
+        to: [{ name: "X", email: "x@example.test" }],
+        cc: [],
+        bcc: [],
+        subject: "Foreign draft",
+        bodyText: "foreign",
+        bodyHtml: "<p>foreign</p>",
+        attachments: [],
+      },
+    });
+    expect(foreignDraft.applied).toBe(true);
+    const host = createServerToolHost({
+      db: db.handle.db,
+      mailstore: store,
+      drafts: foreignDrafts,
+      workspaceId,
+    });
+    expect(await host.readThread(foreign)).toBeNull();
+    expect(await host.threadsById([foreign])).toEqual([]);
+    expect(await host.readAttachment?.(foreignAttachment)).toBeNull();
+    expect(await host.readDraft("foreign-draft")).toBeNull();
+    await expect(host.scheduleSend("foreign-draft")).rejects.toBeInstanceOf(NotFoundError);
+    expect(await host.applyIntents([{ kind: "archive", threadId: foreign }])).toEqual({
+      applied: 0,
+    });
+    expect((await store.findThread(otherWorkspace, "foreign-1"))?.archived).toBe(false);
+    await host.deleteDraft("foreign-draft");
+    expect((await foreignDrafts.get("foreign-draft")).status).toBe("open");
+    // The other Workspace's own host sees all of it.
+    const theirs = createServerToolHost({
+      db: db.handle.db,
+      mailstore: store,
+      drafts: foreignDrafts,
+      workspaceId: otherWorkspace,
+    });
+    expect((await theirs.readThread(foreign))?.messages[0]?.text).toBe("secret elsewhere");
+    expect((await theirs.readAttachment?.(foreignAttachment))?.name).toBe("a.txt");
+    expect(await theirs.applyIntents([{ kind: "archive", threadId: foreign }])).toEqual({
+      applied: 1,
+    });
+  });
+
+  test("typed failures answer as 4xx, not 500", async () => {
+    // A cursor the Mailstore cannot read is the client's mistake.
+    const bad = await request(`/threads?workspace=${workspaceId}&cursor=not-a-cursor`);
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: "invalid_request", detail: "bad cursor" });
+    // Content for a Workspace this database has no key for.
+    const missing = await send(
+      "/integrations/notion",
+      { workspace: "no-such-workspace", token: "x" },
+      "PUT",
+    );
+    expect(missing.status).toBe(404);
   });
 
   test("rotating the Workspace key re-wraps every envelope in the schema, checkpoints and transcripts included", async () => {
