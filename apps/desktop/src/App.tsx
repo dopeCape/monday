@@ -16,11 +16,11 @@ import {
   workspace,
 } from "@monday/ui/fixtures";
 import { ClockIcon } from "@phosphor-icons/react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
 import { runtimeLine } from "./agent/runtimeLine.ts";
-import { suggestionsFor } from "./agent/suggestions.ts";
+import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
@@ -31,6 +31,8 @@ import { Routing } from "./screens/Routing.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Search } from "./screens/Search.tsx";
 import { Settings } from "./screens/Settings.tsx";
+import { Workflows } from "./screens/Workflows.tsx";
+import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { useShell } from "./shell/Shell.tsx";
 
@@ -55,6 +57,8 @@ export interface AppProps {
   agentClient?: AgentClient | null | undefined;
   /** The wall clock for the composer's relative times. */
   now?: Date | undefined;
+  /** The Workflows page's Server side; the Shell's client or the fixture by default, a fake in tests. */
+  workflowsApi?: WorkflowsApi | undefined;
 }
 
 const defaultComposer = fixtureComposer();
@@ -70,6 +74,7 @@ export function App({
   routing,
   agentClient,
   now: nowProp,
+  workflowsApi,
 }: AppProps) {
   const shell = useShell();
   const now = nowProp ?? new Date();
@@ -111,14 +116,47 @@ export function App({
   });
   const runtime = runtimeLine(agent.session, shell.settings, account.address);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
+  // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
+  // Agent's approve_workflow_step tool then shows the card in the composer.
+  const [pausedRuns, setPausedRuns] = useState<PausedRunChip[]>([]);
+  const workflowsClient = workflowsApi ?? (shell.server ? shell.api.workflows : null);
+  const refreshSeconds = shell.settings["workflows.page.refresh_seconds"];
+  useEffect(() => {
+    if (!workflowsClient) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [runs, list] = await Promise.all([
+          workflowsClient.runs(workspace.id, { status: "paused" }),
+          workflowsClient.list(workspace.id),
+        ]);
+        if (cancelled) return;
+        setPausedRuns(
+          runs.map((r) => ({
+            workflowName: list.find((w) => w.id === r.workflowId)?.name ?? r.workflowId,
+            stepName: r.steps.find((s) => s.index === r.waitingStep)?.name ?? "waiting",
+          })),
+        );
+      } catch {
+        if (!cancelled) setPausedRuns([]);
+      }
+    };
+    void load();
+    const timer = refreshSeconds > 0 ? setInterval(() => void load(), refreshSeconds * 1000) : null;
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [workflowsClient, refreshSeconds]);
   const chips = useMemo(
     () =>
       suggestionsFor({
         settings: shell.settings,
         waiting: agent.waiting,
+        pausedRuns,
         needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
       }),
-    [shell.settings, agent.waiting, inbox],
+    [shell.settings, agent.waiting, pausedRuns, inbox],
   );
   const column = (side: "left" | "right") => (
     <AgentComposer
@@ -168,6 +206,8 @@ export function App({
         setActive("settings");
       } else if (target === "search") setActive("search");
       else if (target === "routing") setActive("routing");
+      else if (target === "workflows") setActive("workflows");
+      else if (target === "activity") setActive("settings");
       else if (target.startsWith("thread:")) {
         setOpenThread(target.slice("thread:".length));
         setActive("inbox");
@@ -240,6 +280,24 @@ export function App({
         inbox={inbox}
         workspaceId={workspace.id}
         onNavigate={navigate}
+      />
+    ) : active === "workflows" ? (
+      <Workflows
+        key="screen"
+        workspaceId={workspace.id}
+        api={workflowsApi}
+        groupName={(id) => {
+          const g = navGroups.find((x) => x.id === id);
+          if (!g) return id;
+          const parent = g.parentId ? navGroups.find((x) => x.id === g.parentId) : null;
+          return parent ? `${parent.name} › ${g.name}` : g.name;
+        }}
+        onNavigate={navigate}
+        onAsk={(text) => {
+          setAgentText(text);
+          setActive("inbox");
+        }}
+        now={now}
       />
     ) : active === "scheduled" ? (
       <div key="screen" className="main inbox">

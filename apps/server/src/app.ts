@@ -38,8 +38,10 @@ import {
   GroupNestingError,
   type Intelligence,
   NoProviderKeyError,
+  RunNotWaitingError,
   SessionNotFoundError,
   TurnBusyError,
+  WorkflowNotFoundError,
 } from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
@@ -59,6 +61,7 @@ import { settingsRoutes } from "./routes/settings.ts";
 import { storageRoutes } from "./routes/storage.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
+import { workflowRoutes } from "./routes/workflows.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -153,7 +156,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   options.sync?.setThreadObserver((workspaceId, threadId) =>
     intelligence.briefs.threadReady(workspaceId, threadId),
   );
-  // New Threads are routed on arrival, as route Jobs (slice 12).
+  // New Threads are routed on arrival, as route Jobs (slice 12), and start
+  // the Workflows that listen for arrivals, as trigger Jobs (slice 16).
   if (options.sync) {
     options.sync.setArrivalHook(async (arrival) => {
       await intelligence.routing.onArrival(
@@ -161,6 +165,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         arrival.threadId,
         arrival.lastActivity,
       );
+      await intelligence.workflows.onArrival(arrival.workspaceId, arrival.threadId);
     });
   }
   const placement = async (threadId: string) => {
@@ -171,6 +176,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     return row ? { group: row.groupId, subgroup: row.subgroupId } : null;
   };
   const bus = options.changes ?? createChangeBus();
+  // Thread events (a Tag applied, an archive) reach Workflows off the same feed the clients read.
+  intelligence.workflows.watch(bus);
   const bodyStates = async (messageIds: string[]) => {
     const out = new Map<string, BodyState>();
     if (messageIds.length === 0) return out;
@@ -237,6 +244,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", intelligenceRoutes(intelligence));
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
+  app.route("/", workflowRoutes(intelligence.workflows));
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {
@@ -269,6 +277,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
     if (error instanceof SessionNotFoundError) return c.json({ error: "not_found" }, 404);
     if (error instanceof TurnBusyError) return c.json({ error: "turn_running" }, 409);
+    if (error instanceof WorkflowNotFoundError) return c.json({ error: "not_found" }, 404);
+    if (error instanceof RunNotWaitingError) return c.json({ error: "run_not_waiting" }, 409);
     if (error instanceof DecryptError) {
       console.error(error);
       return c.json({ error: "unreadable_content" }, 500);

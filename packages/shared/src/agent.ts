@@ -36,6 +36,21 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   send_draft: "leaves_mailbox",
   forward_thread: "leaves_mailbox",
   undo: "read",
+  // The integrations, MCP servers and the Workflow tools (slice 16).
+  post_to_slack: "leaves_mailbox",
+  post_to_discord: "leaves_mailbox",
+  add_notion_row: "leaves_mailbox",
+  save_to_drive: "leaves_mailbox",
+  call_webhook: "leaves_mailbox",
+  call_mcp_tool: "leaves_mailbox",
+  list_workflows: "read",
+  create_workflow: "reversible",
+  update_workflow: "reversible",
+  enable_workflow: "reversible",
+  dry_run_workflow: "read",
+  list_workflow_runs: "read",
+  approve_workflow_step: "leaves_mailbox",
+  run_workflow: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -79,7 +94,13 @@ export type UndoRecord =
   | { kind: "intents"; intents: (IntentArgs & { threadId: Id })[] }
   | { kind: "settings"; entries: Array<{ key: string; previous: unknown }> }
   | { kind: "draft"; draftId: Id }
-  | { kind: "send"; sendId: Id };
+  | { kind: "send"; sendId: Id }
+  /** A Workflow made, edited or switched: null previous means it was created and Undo deletes it. */
+  | {
+      kind: "workflow";
+      workflowId: Id;
+      previous: { version: number; enabled: boolean } | null;
+    };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {
@@ -88,7 +109,8 @@ export interface ActivityRecord extends ToolCall {
   callId: string | null;
   input: Record<string, unknown> | null;
   preview: ToolPreview | null;
-  decision: ApprovalDecision | "auto" | null;
+  /** "standing" is a Standing approval on a Workflow Step (CONTEXT.md). */
+  decision: ApprovalDecision | "auto" | "standing" | null;
   /** The Activity row that undid this one, once it has been undone. */
   undoneAt: IsoDate | null;
   at: IsoDate;
@@ -175,6 +197,10 @@ export interface ToolHost {
   cancelSend(sendId: Id): Promise<{ applied: boolean }>;
   readSetting(key: string): Promise<SettingRead>;
   writeSetting(key: string, value: unknown): Promise<void>;
+  /** An attachment's bytes, for the Drive integration; absent on hosts that hold no bodies. */
+  readAttachment?(
+    attachmentId: Id,
+  ): Promise<{ name: string; mediaType: string; bytes: Uint8Array } | null>;
 }
 
 export type { Intent, Runtime, Thread };

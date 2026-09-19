@@ -20,6 +20,7 @@ import type {
   ThemeMode,
 } from "../domain.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
+import { mcpServerSchema } from "../workflow/index.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -155,16 +156,8 @@ export const PROVIDER_LABELS: Readonly<Record<HostedProvider, string>> = {
 };
 const meetingLink = z.enum(["none", "google-meet", "teams", "jitsi", "custom"]);
 export type MeetingLink = z.output<typeof meetingLink>;
-/** One MCP server a Workflow Step or the Agent may call (docs/spec/external-mcp.md). */
-export const mcpServerShape = z.object({
-  name: z.string().min(1),
-  /** A command to spawn (stdio) or an http(s) URL. */
-  target: z.string().min(1),
-  auth: z.string(),
-  /** Tool names exposed as Workflow steps and Agent tools; empty means all. */
-  tools: z.array(z.string().min(1)),
-});
-export type McpServerSetting = z.output<typeof mcpServerShape>;
+/** One MCP server a Workflow Step or the Agent may call: the workflow module owns the shape. */
+export const mcpServerShape = mcpServerSchema;
 
 const role = z.enum(["main", "fast"]) satisfies z.ZodType<Role>;
 const roles = z.object({
@@ -220,6 +213,13 @@ export const sectionRuleShape = z.object({
 });
 export type SectionRuleValue = z.output<typeof sectionRuleShape>;
 const placement = z.enum(["server", "local"]);
+const integrationsShape = z.object({
+  slack: z.object({ webhookUrl: z.url().optional(), token: z.string().optional() }).optional(),
+  discord: z.object({ webhookUrl: z.url().optional() }).optional(),
+  notion: z.object({ token: z.string().optional() }).optional(),
+  drive: z.object({ token: z.string().optional() }).optional(),
+  webhook: z.object({ token: z.string().optional() }).optional(),
+});
 const keymap = z.enum(["vim", "gmail", "natural"]);
 const direction = z.enum(["next", "previous"]);
 const colorOverrides = z.record(z.string(), z.string());
@@ -1417,6 +1417,67 @@ export const settingsSchema = {
     label: "Budget: tokens",
     help: "Default cap on model tokens for one agentic Step.",
   }),
+  "workflows.agentic.system_prompt": setting({
+    type: z.string().min(1),
+    default: [
+      "You are monday, running one agentic step of a Workflow the user asked for.",
+      "Do exactly what the step's instructions say using the tools you are given, then stop.",
+      "When the step names output fields, finish with one line of JSON holding them, nothing else after it.",
+      "Never send, post or forward anything the instructions did not ask for.",
+    ].join(" "),
+    scope: "global",
+    section: "workflows",
+    label: "Agentic step prompt",
+    help: "The system prompt every agentic Step runs under, before the Step's own instructions.",
+  }),
+  "workflows.step_retries": setting({
+    type: z.int().min(0).max(10),
+    default: 2,
+    scope: "global",
+    section: "workflows",
+    label: "Step retries",
+    help: "Times a Step that failed with an error is retried with backoff before the failure policy applies.",
+  }),
+  "workflows.trigger.routing_wait_seconds": setting({
+    type: z.int().min(0).max(600),
+    default: 5,
+    scope: "global",
+    section: "workflows",
+    label: "Wait for routing",
+    help: "Seconds an arrival trigger with a Group filter waits for routing to place the Thread before checking again.",
+  }),
+  "workflows.silence.check_cron": setting({
+    type: z.string().min(9),
+    default: "0 9 * * *",
+    scope: "global",
+    section: "workflows",
+    label: "Silence check",
+    help: "When Workflows with a silence trigger look for Threads with no reply, as a five-field cron in UTC.",
+  }),
+  "workflows.dry_run.recent": setting({
+    type: z.int().min(1).max(200),
+    default: 10,
+    scope: "global",
+    section: "workflows",
+    label: "Dry run sample",
+    help: "How many recent matching Threads a Dry run reports over.",
+  }),
+  "workflows.page.refresh_seconds": setting({
+    type: z.int().min(0).max(600),
+    default: 15,
+    scope: "global",
+    section: "workflows",
+    label: "Workflows page refresh",
+    help: "Seconds between refreshes of the Run log while the Workflows page is open; 0 turns it off.",
+  }),
+  "workflows.integrations": setting({
+    type: integrationsShape,
+    default: {},
+    scope: "global",
+    section: "workflows",
+    label: "Integrations",
+    help: "Where the Slack, Notion, Drive, Discord and webhook steps post: a webhook URL or a token per integration.",
+  }),
   "workflows.mcp_servers": setting({
     type: z.array(mcpServerShape),
     default: [],
@@ -1689,6 +1750,113 @@ export const settingsSchema = {
   "strings.section.fyi": str("routing", "Section: for your information", "For your information"),
   "strings.section.newsletters": str("routing", "Section: newsletters", "Newsletters"),
   "strings.routing.decisions": str("routing", "Needs a decision heading", "Needs a decision"),
+  "strings.workflows.title": str("workflows", "Workflows page title", "Workflows"),
+  "strings.workflows.subtitle": str(
+    "workflows",
+    "Workflows page subtitle",
+    "Written by the agent from what you asked for. No editor to learn, describe the change instead.",
+  ),
+  "strings.workflows.new": str("workflows", "New workflow button", "New workflow"),
+  "strings.workflows.history": str("workflows", "Run history button", "Run history"),
+  "strings.workflows.active": str("workflows", "Active tab", "Active"),
+  "strings.workflows.paused": str("workflows", "Paused tab", "Paused"),
+  "strings.workflows.paused_tag": str("workflows", "Paused card tag", "Paused"),
+  "strings.workflows.today": str("workflows", "Runs today tag", "{n} today"),
+  "strings.workflows.waiting_tag": str("workflows", "Waiting card tag", "{n} waiting"),
+  "strings.workflows.runs_on_server": str("workflows", "Placement: server", "Runs on your server"),
+  "strings.workflows.runs_on_local": str(
+    "workflows",
+    "Placement: local",
+    "Runs here via Claude Code",
+  ),
+  "strings.workflows.last_run": str("workflows", "Last run line", "Last run {when}"),
+  "strings.workflows.never_ran": str("workflows", "No runs yet", "Not run yet"),
+  "strings.workflows.source": str("workflows", "Source button", "Source"),
+  "strings.workflows.ask_placeholder": str(
+    "workflows",
+    "Change with monday placeholder",
+    "Ask monday to change this workflow",
+  ),
+  "strings.workflows.recent_runs": str("workflows", "Recent runs heading", "Recent runs"),
+  "strings.workflows.where": str("workflows", "Where it runs heading", "Where it runs"),
+  "strings.workflows.where_server": str(
+    "workflows",
+    "Where it runs: server",
+    "Runs on {address} with your shared key, so it keeps working when this laptop is closed.",
+  ),
+  "strings.workflows.where_local": str(
+    "workflows",
+    "Where it runs: local",
+    "Runs on this machine through a Local runtime. It waits while the app is closed and catches up on launch.",
+  ),
+  "strings.workflows.dry_run": str("workflows", "Dry run button", "Dry run"),
+  "strings.workflows.dry_run_title": str(
+    "workflows",
+    "Dry run heading",
+    "Dry run over {n} threads",
+  ),
+  "strings.workflows.dry_run_empty": str(
+    "workflows",
+    "Dry run with no matches",
+    "No recent thread matches this trigger.",
+  ),
+  "strings.workflows.dry_run_note": str(
+    "workflows",
+    "Dry run note",
+    "Nothing was applied. This is what the workflow would have done.",
+  ),
+  "strings.workflows.approve": str("workflows", "Run approval: approve", "Approve"),
+  "strings.workflows.decline": str("workflows", "Run approval: decline", "Decline"),
+  "strings.workflows.standing": str(
+    "workflows",
+    "Run approval: always for this step",
+    "Always allow this step",
+  ),
+  "strings.workflows.standing_on": str("workflows", "Standing approval label", "Standing approval"),
+  "strings.workflows.revoke": str("workflows", "Revoke standing approval", "Revoke"),
+  "strings.workflows.waiting": str("workflows", "Run waiting line", "Waiting for your approval"),
+  "strings.workflows.run_now": str("workflows", "Run now button", "Run now"),
+  "strings.workflows.enable": str("workflows", "Enable switch", "Enabled"),
+  "strings.workflows.status.done": str("workflows", "Run status: done", "Done"),
+  "strings.workflows.status.failed": str("workflows", "Run status: failed", "Failed"),
+  "strings.workflows.status.paused": str("workflows", "Run status: paused", "Paused"),
+  "strings.workflows.status.running": str("workflows", "Run status: running", "Running"),
+  "strings.workflows.status.queued": str("workflows", "Run status: queued", "Queued"),
+  "strings.workflows.version": str("workflows", "Version line", "Version {n}"),
+  "strings.workflows.empty_title": str("workflows", "Empty state heading", "Describe the next one"),
+  "strings.workflows.empty_body": str(
+    "workflows",
+    "Empty state body",
+    "Say what should happen and when. The agent writes the workflow, shows you the steps, and asks before anything leaves your mailbox.",
+  ),
+  "strings.workflows.examples": setting({
+    type: z.array(z.string()),
+    default: [
+      "When a customer replies angry, draft an apology and flag it to me on Slack",
+      "Every Monday, list open threads older than 5 days and snooze the rest",
+      "Forward every invoice over 500 EUR to accounting with a summary",
+    ],
+    scope: "global",
+    section: "workflows",
+    label: "Example prompts",
+    help: "The example sentences under the Workflows list.",
+  }),
+  "strings.workflows.change_prefix": str(
+    "workflows",
+    "Change with monday prefix",
+    'Change the workflow "{name}": ',
+  ),
+  "strings.workflows.new_prompt": str("workflows", "New workflow prompt", "Write a new workflow: "),
+  "strings.workflows.none_selected": str(
+    "workflows",
+    "No workflow selected",
+    "No workflows yet. Describe one to the agent.",
+  ),
+  "strings.workflows.failed_notice": str(
+    "workflows",
+    "Failure notification",
+    "Workflow {name} failed at {step}",
+  ),
   "strings.routing.title": str("routing", "Routing page title", "Routing"),
   "strings.routing.subtitle": str(
     "routing",
@@ -2074,7 +2242,12 @@ export const settingsSchema = {
   "strings.settings.activity.refresh": str("ai", "Activity refresh", "Refresh"),
   "strings.settings.mcp.name": str("workflows", "MCP server: name", "Name"),
   "strings.settings.mcp.target": str("workflows", "MCP server: target", "Command or URL"),
-  "strings.settings.mcp.auth": str("workflows", "MCP server: auth", "Auth"),
+  "strings.settings.mcp.auth": str(
+    "workflows",
+    "MCP server: token",
+    "Token, if the server needs one",
+  ),
+  "strings.settings.mcp.has_token": str("workflows", "MCP server: has token", "token set"),
   "strings.settings.mcp.tools": str("workflows", "MCP server: tools", "Tools, comma separated"),
   "strings.settings.mcp.all_tools": str("workflows", "MCP server: all tools", "all tools"),
   "strings.settings.mcp.add": str("workflows", "MCP server: add", "Add server"),
@@ -2524,6 +2697,7 @@ export const settingsSchema = {
   "strings.palette.nav.settings": str("appearance", "Palette: Settings", "Settings"),
   "strings.palette.nav.search": str("appearance", "Palette: Search", "Search"),
   "strings.palette.nav.routing": str("appearance", "Palette: Routing", "Routing"),
+  "strings.palette.nav.workflows": str("appearance", "Palette: Workflows", "Workflows"),
   "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
   "strings.palette.nav.settings_page": str(
     "appearance",

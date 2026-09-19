@@ -17,6 +17,7 @@ import type {
   Draft,
   DraftContent,
   DraftIntent,
+  DryRunPreview,
   GroupInput,
   GroupView,
   HeaderSearchPage,
@@ -31,12 +32,16 @@ import type {
   RoutingApplied,
   RoutingDecision,
   RoutingPreview,
+  RunView,
   ScheduledSend,
   ScheduleResult,
   SessionSummary,
   ThreadRoute,
   TurnContext,
   VoiceProfile,
+  WorkflowInput,
+  WorkflowInputRaw,
+  WorkflowView,
 } from "@monday/shared";
 
 export interface ServerTarget {
@@ -441,6 +446,71 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           throw error;
         }
       },
+    },
+    /** Workflows (slice 16, ADR 0003): documents, versions, Runs, approvals, Dry runs. */
+    workflows: {
+      list: (workspaceId: Id) =>
+        request<{ workflows: WorkflowView[] }>(
+          `/workflows?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.workflows),
+      get: (workflowId: Id) =>
+        request<WorkflowView>(`/workflows/${encodeURIComponent(workflowId)}`),
+      create: (workspaceId: Id, input: WorkflowInputRaw) =>
+        request<WorkflowView>("/workflows", json("POST", { workspace: workspaceId, ...input })),
+      /** A new version; Runs keep the one they ran under. */
+      update: (workflowId: Id, input: WorkflowInputRaw) =>
+        request<WorkflowView>(`/workflows/${encodeURIComponent(workflowId)}`, json("PUT", input)),
+      remove: (workflowId: Id) =>
+        raw(`/workflows/${encodeURIComponent(workflowId)}`, { method: "DELETE" }).then(
+          () => undefined,
+        ),
+      enable: (workflowId: Id, enabled: boolean) =>
+        request<WorkflowView>(
+          `/workflows/${encodeURIComponent(workflowId)}/enable`,
+          json("POST", { enabled }),
+        ),
+      version: (workflowId: Id, version: number) =>
+        request<{ version: number; document: WorkflowInput }>(
+          `/workflows/${encodeURIComponent(workflowId)}/versions/${version}`,
+        ),
+      /** Over the last N matching Threads; nothing is applied. */
+      dryRun: (workflowId: Id, recent?: number) =>
+        request<DryRunPreview>(
+          `/workflows/${encodeURIComponent(workflowId)}/dry-run`,
+          json("POST", recent ? { recent } : {}),
+        ),
+      /** A manual Run, on a Thread when the Workflow is about one. */
+      run: (workflowId: Id, threadId: Id | null = null) =>
+        request<RunView>(
+          `/workflows/${encodeURIComponent(workflowId)}/run`,
+          json("POST", { threadId }),
+        ),
+      /** Grants or revokes a Standing approval on one Step. */
+      standing: (workflowId: Id, step: string, granted: boolean) =>
+        request<WorkflowView>(
+          `/workflows/${encodeURIComponent(workflowId)}/approvals`,
+          json("POST", { step, granted }),
+        ),
+      runs: (workspaceId: Id, options: { workflowId?: Id; status?: RunView["status"] } = {}) =>
+        request<{ runs: RunView[] }>(
+          `/workflows/runs?${new URLSearchParams({
+            workspace: workspaceId,
+            ...(options.workflowId ? { workflow: options.workflowId } : {}),
+            ...(options.status ? { status: options.status } : {}),
+          })}`,
+        ).then((r) => r.runs),
+      runOf: (runId: Id) => request<RunView>(`/workflows/runs/${encodeURIComponent(runId)}`),
+      /** The Activity rows a Run's Steps wrote, oldest first; the waiting one carries the card's preview. */
+      runActivity: (runId: Id) =>
+        request<{ activity: ActivityRecord[] }>(
+          `/workflows/runs/${encodeURIComponent(runId)}/activity`,
+        ).then((r) => r.activity),
+      /** Answers a paused Run; `standing` also grants a Standing approval on that Step. */
+      decide: (runId: Id, decision: ApprovalDecision, standing = false) =>
+        request<RunView>(
+          `/workflows/runs/${encodeURIComponent(runId)}/approvals`,
+          json("POST", { decision, standing }),
+        ),
     },
     /** The Agent host (ADR 0002): Sessions, turns streamed over SSE, approvals, the Activity log. */
     agent: {

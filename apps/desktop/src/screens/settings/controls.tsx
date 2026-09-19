@@ -1136,21 +1136,30 @@ controlKinds.bindings = BindingsControl;
 
 /* ------------------------------ Workflows ------------------------------ */
 
-const EMPTY_MCP: McpServerSetting = { name: "", target: "", auth: "", tools: [] };
+/** The form's draft: one target field that becomes `url` when it is http(s), else `command`. */
+interface McpDraft {
+  name: string;
+  target: string;
+  token: string;
+}
+const EMPTY_MCP: McpDraft = { name: "", target: "", token: "" };
+const mcpTarget = (m: McpServerSetting) => m.url ?? m.command ?? "";
 
 /** MCP servers as schema-backed records: add by command or URL, auth, tools, remove. */
 function McpServersControl({ k }: ControlProps) {
   const { value, change, error, shell } = useSetting(k);
   const s = shell.settings;
   const servers = (value ?? []) as McpServerSetting[];
-  const [draft, setDraft] = useState<McpServerSetting>(EMPTY_MCP);
+  const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP);
   const [tools, setTools] = useState("");
   const add = () => {
     if (!draft.name.trim() || !draft.target.trim()) return;
+    const target = draft.target.trim();
+    const token = draft.token.trim();
     const next: McpServerSetting = {
-      ...draft,
       name: draft.name.trim(),
-      target: draft.target.trim(),
+      ...(/^https?:\/\//.test(target) ? { url: target } : { command: target }),
+      ...(token ? { token } : {}),
       tools: tools
         .split(",")
         .map((t) => t.trim())
@@ -1172,8 +1181,8 @@ function McpServersControl({ k }: ControlProps) {
             <span className="record-key">
               <b>{m.name}</b>
               <span>
-                {m.target}
-                {m.auth ? ` · ${m.auth}` : ""} ·{" "}
+                {mcpTarget(m)}
+                {m.token ? ` · ${s["strings.settings.mcp.has_token"]}` : ""} ·{" "}
                 {m.tools.length > 0 ? m.tools.join(", ") : s["strings.settings.mcp.all_tools"]}
               </span>
             </span>
@@ -1198,10 +1207,10 @@ function McpServersControl({ k }: ControlProps) {
           />
           <Input
             className="text"
-            value={draft.auth}
+            value={draft.token}
             placeholder={s["strings.settings.mcp.auth"]}
             spellCheck={false}
-            onChange={(e) => setDraft({ ...draft, auth: e.target.value })}
+            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
           />
           <Input
             className="text"

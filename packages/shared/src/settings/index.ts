@@ -12,7 +12,6 @@ export {
 } from "./hosted.ts";
 export type {
   Effort,
-  McpServerSetting,
   MeetingLink,
   ModelPrice,
   PartialSettings,

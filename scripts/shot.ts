@@ -44,6 +44,8 @@ const states: Array<{ name: string; app: string; mock: string }> = [
     app: `/?screen=settings&section=${s}`,
     mock: `/app.html?chrome=0#/settings/${s}`,
   })),
+  // Slice 16: the Workflows page over the fixture documents and Runs.
+  { name: "workflows", app: "/?screen=workflows", mock: "/app.html?chrome=0#/workflows" },
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {

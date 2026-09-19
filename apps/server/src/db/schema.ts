@@ -21,15 +21,21 @@ import type {
   Predicate,
   Provider,
   RouteBy,
+  RunStatus,
+  RunStepStatus,
+  RunTrigger,
   Runtime,
   ScheduledSendStatus,
   Score,
   SendError,
+  StepContext,
+  StepKind,
   Task,
   Tier,
   ToolCall,
   ToolPreview,
   UndoRecord,
+  WorkflowInput,
 } from "@monday/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -521,15 +527,18 @@ export const activity = pgTable(
     tier: text("tier").$type<Tier>(),
     input: jsonb("input").$type<Record<string, unknown>>(),
     preview: jsonb("preview").$type<ToolPreview>(),
-    decision: text("decision").$type<ApprovalDecision | "auto">(),
+    decision: text("decision").$type<ApprovalDecision | "auto" | "standing">(),
     status: text("status").$type<ToolCall["status"]>().notNull().default("done"),
     result: jsonb("result"),
     undo: jsonb("undo").$type<UndoRecord>(),
     undoneAt: timestamp("undone_at", { withTimezone: true, mode: "date" }),
+    /** The Workflow Run a Step ran under (slice 16); the ledger key beside call_id for Runs. */
+    runId: text("run_id"),
   },
   (t) => [
     index("activity_workspace_at_idx").on(t.workspaceId, t.at),
     unique("activity_session_call").on(t.sessionId, t.callId),
+    index("activity_run_idx").on(t.runId),
   ],
 );
 
@@ -817,4 +826,102 @@ export const routingDecisions = pgTable(
     at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("routing_decisions_workspace_idx").on(t.workspaceId, t.at)],
+);
+
+/* ------------------------------ Workflows (ADR 0003, slice 16) ------------------------------ */
+
+/**
+ * A Workflow row is the mutable state around an immutable document: the
+ * current version, the enabled switch and the Standing approvals. The
+ * document itself lives in workflow_versions; every edit is a new version and
+ * a Run always names the one it ran under.
+ */
+export const workflows = pgTable(
+  "workflows",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    currentVersion: integer("current_version").notNull().default(1),
+    /** Step ids whose always-ask calls run unattended (CONTEXT.md "Standing approval"). */
+    standingApprovals: jsonb("standing_approvals").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("workflows_workspace_idx").on(t.workspaceId, t.updatedAt)],
+);
+
+/** One immutable document per version. */
+export const workflowVersions = pgTable(
+  "workflow_versions",
+  {
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    document: jsonb("document").$type<WorkflowInput>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.workflowId, t.version] })],
+);
+
+/**
+ * A Run (CONTEXT.md): one execution of a Workflow, a chain of Jobs one per
+ * Step, with its state here and each Step's outcome in workflow_run_steps.
+ * `context` is what the Steps reported, for the templates of later Steps.
+ */
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    status: text("status").$type<RunStatus>().notNull().default("queued"),
+    trigger: jsonb("trigger").$type<RunTrigger>().notNull(),
+    threadId: text("thread_id"),
+    /** The plaintext subject prefix, for the log line. */
+    subject: text("subject").notNull().default(""),
+    currentStep: integer("current_step").notNull().default(0),
+    failedStep: integer("failed_step"),
+    /** The Activity row that waits for approval while paused. */
+    waitingActivityId: text("waiting_activity_id"),
+    /** The user's answer to the waiting Step, consumed when the Step resumes. */
+    decision: text("decision").$type<ApprovalDecision>(),
+    error: text("error"),
+    context: jsonb("context").$type<Record<string, StepContext>>().notNull().default({}),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    index("workflow_runs_workflow_idx").on(t.workflowId, t.startedAt),
+    index("workflow_runs_workspace_status_idx").on(t.workspaceId, t.status),
+  ],
+);
+
+/** One Step's outcome in a Run: the Run log line and the Activity row it ran as. */
+export const workflowRunSteps = pgTable(
+  "workflow_run_steps",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: "cascade" }),
+    index: integer("index").notNull(),
+    stepId: text("step_id").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").$type<StepKind>().notNull(),
+    status: text("status").$type<RunStepStatus>().notNull(),
+    detail: text("detail").notNull().default(""),
+    activityId: text("activity_id"),
+    result: jsonb("result"),
+    at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.index] })],
 );

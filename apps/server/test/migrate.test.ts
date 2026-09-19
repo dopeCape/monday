@@ -56,6 +56,10 @@ describe("migrations", () => {
       "thread_tags",
       "threads",
       "voice_profiles",
+      "workflow_run_steps",
+      "workflow_runs",
+      "workflow_versions",
+      "workflows",
       "workspace_keys",
       "workspaces",
     ]);

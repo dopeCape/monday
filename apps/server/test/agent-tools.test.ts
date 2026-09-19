@@ -111,6 +111,21 @@ describe("the tool catalog", () => {
       send_draft: "leaves_mailbox",
       forward_thread: "leaves_mailbox",
       undo: "read",
+      // Slice 16: the integrations, MCP servers and the Workflow tools.
+      post_to_slack: "leaves_mailbox",
+      post_to_discord: "leaves_mailbox",
+      add_notion_row: "leaves_mailbox",
+      save_to_drive: "leaves_mailbox",
+      call_webhook: "leaves_mailbox",
+      call_mcp_tool: "leaves_mailbox",
+      list_workflows: "read",
+      create_workflow: "reversible",
+      update_workflow: "reversible",
+      enable_workflow: "reversible",
+      dry_run_workflow: "read",
+      list_workflow_runs: "read",
+      approve_workflow_step: "leaves_mailbox",
+      run_workflow: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

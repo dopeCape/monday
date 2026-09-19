@@ -19,6 +19,7 @@ import type {
 } from "@monday/shared";
 import { isSettingKey, PREVIEW_LIST_MAX, settingsSchema, validateSetting } from "@monday/shared";
 import { z } from "zod";
+import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 
 export interface ToolSettings {
   /** A reversible batch above this many Threads previews first. */
@@ -38,6 +39,8 @@ export interface ToolContext {
   /** The latest undoable call, for the undo tool; the tool server supplies it. */
   latestUndoable(): Promise<{ id: string; tool: string; undo: UndoRecord | null } | null>;
   undoActivity(id: string): Promise<{ text: string }>;
+  /** The integrations, MCP servers and Workflows seams, when this host has them (slice 16). */
+  extensions?: ToolExtensions | undefined;
 }
 
 export interface Applied {
@@ -684,6 +687,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   sendDraft,
   forwardThread,
   undo,
+  ...EXTENSION_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {
