@@ -129,8 +129,10 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const s = { ...DEFAULT_STRINGS, ...overrides };
   const input = useRef<HTMLInputElement>(null);
+  // On the way out the input lets go of the keys; opened again mid-leave it takes them back.
   useEffect(() => {
     if (leaving) input.current?.blur();
+    else input.current?.focus();
   }, [leaving]);
   const first = sections[0]?.items[0]?.key;
   const active = activeKey ?? first;
