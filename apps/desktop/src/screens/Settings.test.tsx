@@ -406,7 +406,7 @@ describe("Settings pages come from the schema", () => {
     await clickText("Fix with monday");
     expect(asked[0]).toContain("line 2: unknown key");
 
-    const ask = q<HTMLInputElement>('[data-setting="views.list"] .ask input');
+    const ask = q<HTMLInputElement>('[data-setting="views.list"] .set-ask input');
     await type(ask, "no nav, agent on the right");
     await clickText("Ask", q('[data-setting="views.list"]') ?? document);
     expect(asked[1]).toBe("Make me a view: no nav, agent on the right");

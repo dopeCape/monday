@@ -418,7 +418,7 @@ export function ActivityPanel(_: PanelProps) {
   return (
     <div className="activity" data-panel="activity">
       <p>{s["strings.settings.activity.intro"]}</p>
-      <div className="ask-row">
+      <div className="set-ask-row">
         <Input
           value={q}
           placeholder={s["strings.settings.activity.search"]}

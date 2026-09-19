@@ -2029,24 +2029,24 @@ details.advanced > summary::before {
 details.advanced[open] > summary::before {
   content: "- ";
 }
-.list {
+.set-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }
-.list .chip .x {
+.set-list .chip .x {
   display: inline-flex;
   color: var(--fg-faint);
   padding: 0;
   margin-left: 2px;
 }
-.list-add {
+.set-list-add {
   display: inline-flex;
   gap: 6px;
   align-items: center;
 }
-.list-add .input {
+.set-list-add .input {
   width: 180px;
   height: 28px;
 }
@@ -2088,16 +2088,16 @@ details.advanced[open] > summary::before {
   gap: 8px;
   align-items: center;
 }
-.ask {
+.set-ask {
   margin-top: 12px;
 }
-.ask > div > b {
+.set-ask > div > b {
   display: block;
   font-weight: 500;
   font-size: var(--fs-md);
   margin-bottom: 6px;
 }
-.ask-row {
+.set-ask-row {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -2128,7 +2128,7 @@ details.advanced[open] > summary::before {
 .views .v .input {
   height: 28px;
 }
-.rules .rule {
+.set-rules .set-rule {
   display: grid;
   grid-template-columns: 1fr auto auto auto auto;
   gap: 8px;
@@ -2136,18 +2136,18 @@ details.advanced[open] > summary::before {
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
-.rules .rule:last-child {
+.set-rules .set-rule:last-child {
   border-bottom: 0;
 }
-.rules .rule.off > div {
+.set-rules .set-rule.off > div {
   opacity: 0.5;
 }
-.rules .rule b {
+.set-rules .set-rule b {
   display: block;
   font-weight: 500;
   font-size: var(--fs-md);
 }
-.rules .rule > div > span {
+.set-rules .set-rule > div > span {
   color: var(--fg-faint);
   font-size: var(--fs-xs);
 }
@@ -2320,7 +2320,7 @@ details.advanced[open] > summary::before {
   color: var(--fg-faint);
   font-size: var(--fs-xs);
 }
-.activity .ask-row {
+.activity .set-ask-row {
   margin-bottom: 8px;
 }
 .note.warn {

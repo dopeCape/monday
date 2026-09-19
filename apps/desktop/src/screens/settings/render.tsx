@@ -530,7 +530,7 @@ function ListControl({ k, shape }: ControlProps) {
   };
   return (
     <Row k={k} block error={error}>
-      <div className="list">
+      <div className="set-list">
         {items.map((it, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: a list may repeat a value; the position is the identity
           <span className="chip on" key={`${String(it)}-${i}`}>
@@ -545,7 +545,7 @@ function ListControl({ k, shape }: ControlProps) {
             </button>
           </span>
         ))}
-        <span className="list-add">
+        <span className="set-list-add">
           <ItemEditor
             shape={item}
             value={adding}
@@ -719,10 +719,10 @@ export function AskInput({
     setText("");
   };
   return (
-    <div className="ask">
+    <div className="set-ask">
       <div>
         <b>{label}</b>
-        <span className="ask-row">
+        <span className="set-ask-row">
           <Input
             value={text}
             placeholder={placeholder}

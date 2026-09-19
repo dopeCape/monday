@@ -379,13 +379,13 @@ function SectionRulesControl({ k }: ControlProps) {
   };
   return (
     <Row k={k} block error={error}>
-      <div className="rules" data-setting="sections.order">
+      <div className="set-rules" data-setting="sections.order">
         {ordered.map((r, i) => {
           const nameKey = `strings.section.${r.id}`;
           const renamable = isSettingKey(nameKey);
           const conditions = Object.keys(r.when).length;
           return (
-            <div className={`rule ${r.hidden ? "off" : ""}`} key={r.id} data-rule={r.id}>
+            <div className={`set-rule ${r.hidden ? "off" : ""}`} key={r.id} data-rule={r.id}>
               <div>
                 {renaming?.id === r.id ? (
                   <Input
