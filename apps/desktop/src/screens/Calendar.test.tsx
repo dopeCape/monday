@@ -265,6 +265,26 @@ describe("the Calendar screen", () => {
     await click(day18);
     expect(el.querySelectorAll(".cal-day")).toHaveLength(1);
     expect(el.querySelector(".cal-dh")?.textContent).toContain("Fri 18");
+    // The head names the one day, not a span that ends the day before.
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Fri 18 Sep");
+    // Previous and next step one day; Today comes back to the 17th.
+    await click(el.querySelector('.col-head button[title="Previous"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Sat 19 Sep");
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
+    );
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
+    // Month steps a month at a time and Today returns to September.
+    await click([...el.querySelectorAll(".seg button")].find((b) => b.textContent === "Month"));
+    await click(el.querySelector('.col-head button[title="Next"]'));
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("October 2026");
+    await click(
+      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
+    );
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("September 2026");
   });
 
   test("the calendar list hides a calendar; the form adds an Event; Schedule hands the composer a sentence", async () => {

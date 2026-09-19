@@ -168,7 +168,8 @@ export function Calendar({
     view === "month"
       ? formatMonth(anchor)
       : view === "day"
-        ? formatSpan(anchor.toISOString(), anchor.toISOString(), true)
+        ? // One all-day span: it ends at the next midnight, as the calendar counts days.
+          formatSpan(anchor.toISOString(), addDays(anchor, 1).toISOString(), true)
         : `${formatMonth(range.from)}${range.from.getMonth() !== addDays(range.to, -1).getMonth() ? ` to ${formatMonth(addDays(range.to, -1))}` : ""}`;
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
