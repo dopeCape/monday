@@ -1088,7 +1088,7 @@ button.msg {
   color: var(--success);
 }
 .tool.run .st i {
-  animation: spin 1s linear infinite;
+  animation: spin var(--t-spin) linear infinite;
 }
 .tool.wait {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
@@ -4230,8 +4230,8 @@ button.prov {
   color: var(--fg);
   cursor: pointer;
   transition:
-    border-color 120ms,
-    background 120ms;
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
 }
 .choice-card:hover {
   border-color: var(--fg-faint);
@@ -4360,6 +4360,7 @@ button.prov {
     --t-fast: 0ms;
     --t-med: 0ms;
     --t-slow: 0ms;
+    --t-spin: 0ms;
   }
 }
 :root[data-transitions="off"] *,
@@ -4367,6 +4368,156 @@ button.prov {
 :root[data-transitions="off"] *::after {
   animation-duration: 0ms !important;
   transition-duration: 0ms !important;
+}
+/* =========================== STATES AND MOTION ===========================
+   The shared primitives' hover, pressed, focus-visible and disabled states,
+   and the transitions between them. Every duration is a motion token, so the
+   appearance.transitions Setting and reduce-motion stop all of it at once.
+   Focus rings use --accent-ring, the token every palette already carries. */
+.btn,
+.chip,
+.switch,
+.seg button,
+.tabs button,
+.nav-item,
+.rail button,
+.pop-item,
+.link,
+.sw,
+.choice-card {
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+.btn:focus-visible,
+.chip:focus-visible,
+.switch:focus-visible,
+.seg button:focus-visible,
+.tabs button:focus-visible,
+.nav-item:focus-visible,
+.rail button:focus-visible,
+.pop-item:focus-visible,
+.link:focus-visible,
+.sw:focus-visible,
+.choice-card:focus-visible,
+.select:focus-visible,
+.ws:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+.btn:disabled,
+.chip:disabled,
+.switch:disabled,
+.seg button:disabled,
+.tabs button:disabled,
+.link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn:active:not(:disabled),
+.chip:active:not(:disabled),
+.seg button:active:not(:disabled),
+.tabs button:active:not(:disabled),
+.nav-item:active,
+.rail button:active {
+  transform: translateY(1px);
+}
+.btn.primary:active:not(:disabled) {
+  opacity: 0.8;
+}
+.chip:active:not(:disabled) {
+  background: var(--active);
+}
+.switch:hover:not(:disabled) {
+  background: var(--fg-faint);
+}
+.switch.on:hover:not(:disabled) {
+  background: var(--fg);
+  opacity: 0.88;
+}
+.seg button:hover:not(.on) {
+  color: var(--fg);
+  background: var(--hover);
+}
+.input,
+.input.area,
+textarea.input,
+.select {
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+.input:focus,
+textarea.input:focus,
+.select:focus {
+  border-color: var(--fg-faint);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled,
+textarea.input:disabled,
+.select:disabled {
+  opacity: 0.55;
+  background: var(--sunken);
+  cursor: not-allowed;
+}
+.input[aria-invalid="true"],
+textarea.input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+/* tags and chips arriving: a short fade, never a bounce */
+.tag,
+.chip {
+  animation: tag-in var(--t-fast) var(--ease);
+}
+@keyframes tag-in {
+  from {
+    opacity: 0;
+  }
+}
+/* the toast: rises in, sinks out; the component adds .leaving one beat before it unmounts */
+.toast.leaving {
+  animation: toast-out var(--t-fast) var(--ease-in) forwards;
+}
+@keyframes toast-out {
+  to {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+/* sheets slide, dialogs and popovers rise (sheet-in, rise and fade above), the
+   scrim fades, the palette swatch and the choice cards ease their border; a
+   density or font size change eases the row, nav and bar heights */
+.row,
+.nav-item,
+.rail button {
+  transition:
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease),
+    height var(--t-med) var(--ease),
+    padding var(--t-med) var(--ease);
+}
+.col-head,
+.agent-bar {
+  transition: height var(--t-med) var(--ease);
+}
+/* screens: the App swaps the main column between inbox, calendar, routing,
+   workflows and settings (and onboarding); each new one fades and settles in */
+.app > .main,
+.app > .page {
+  animation: screen-in var(--t-med) var(--ease);
+}
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 /* Light to dark and back: the Shell sets data-theme-fade for one slow beat
    after the mode flips, and every surface eases its colors over it. */

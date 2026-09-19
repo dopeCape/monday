@@ -89,6 +89,9 @@ i.ph, i.ph-fill, i.ph-bold { font-size: var(--icon); line-height: 1; display: in
 .btn.primary:hover { background: var(--fg); color: var(--bg); opacity: .88; }
 .btn.outline { border: 1px solid var(--border-strong); color: var(--fg); }
 .btn.on { background: var(--active); color: var(--fg); }
+/* states shared with the app (packages/ui app.css "STATES AND MOTION"): a disabled control dims, keyboard focus rings with the accent */
+.btn:disabled, .chip:disabled, .switch:disabled, .seg button:disabled, .tabs button:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+.btn:focus-visible, .chip:focus-visible, .switch:focus-visible, .seg button:focus-visible, .tabs button:focus-visible, .nav-item:focus-visible, .rail button:focus-visible, .choice-card:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px; font-size: var(--fs-sm); color: var(--fg-muted); border: 1px solid var(--border); background: transparent; white-space: nowrap; transition: background var(--t-fast), color var(--t-fast); }
 .chip:hover { background: var(--hover); color: var(--fg); border-color: var(--border-strong); }
 .chip.on { background: var(--fg); color: var(--bg); border-color: transparent; }

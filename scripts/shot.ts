@@ -9,7 +9,8 @@
 // equivalent in apps/desktop/test/baselines/. Diff images land in
 // apps/desktop/test/diffs/ (gitignored). Fails above SHOT_TOLERANCE (2%).
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
@@ -25,6 +26,7 @@ const update = process.argv.includes("--update");
 const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt >= 0 ? process.argv[onlyAt + 1] : null;
 const size = { width: 1440, height: 900 };
+const profileDir = mkdtempSync(join(tmpdir(), "monday-shot-"));
 
 /** Each state: the app URL and the mock's equivalent. */
 const states: Array<{ name: string; app: string; mock: string }> = [
@@ -55,6 +57,19 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   },
 ];
 
+/**
+ * The app URL for a state. Every state but the Appearance page pins
+ * `appearance.transitions = false` through the dev server's `?config=` seed:
+ * the states are still frames, and a transition in flight when the virtual
+ * time budget runs out would blur the diff. The Appearance page keeps the
+ * default, since the pin would show on its own Transitions card.
+ */
+function appUrl(state: { name: string; app: string }): string {
+  if (state.name === "settings-appearance") return state.app;
+  const config = Buffer.from("[appearance]\ntransitions = false\n", "utf8").toString("base64");
+  return `${state.app}${state.app.includes("?") ? "&" : "?"}config=${encodeURIComponent(config)}`;
+}
+
 async function waitFor(url: string, ms = 30_000): Promise<void> {
   const until = Date.now() + ms;
   while (Date.now() < until) {
@@ -75,6 +90,8 @@ async function shoot(url: string, out: string): Promise<void> {
       "--no-sandbox",
       "--disable-gpu",
       "--hide-scrollbars",
+      // A fresh profile per run, so a mock module edited between runs is never served from Chrome's cache.
+      `--user-data-dir=${profileDir}`,
       "--force-device-scale-factor=1",
       `--window-size=${size.width},${size.height}`,
       "--virtual-time-budget=4000",
@@ -125,7 +142,7 @@ async function main(): Promise<number> {
       const expected = join(baselines, `${s.name}.png`);
       const actual = join(diffs, `${s.name}.actual.png`);
       if (update) await shoot(`http://localhost:${designPort}${s.mock}`, expected);
-      await shoot(`http://localhost:${appPort}${s.app}`, actual);
+      await shoot(`http://localhost:${appPort}${appUrl(s)}`, actual);
       const pct = compare(s.name, actual, expected);
       const ok = pct <= tolerance;
       if (!ok) failed++;
@@ -135,6 +152,7 @@ async function main(): Promise<number> {
   } finally {
     design.kill();
     app.kill();
+    rmSync(profileDir, { recursive: true, force: true });
   }
 }
 

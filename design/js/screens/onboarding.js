@@ -21,7 +21,6 @@ const levels = [
     key: "automate",
     t: "Mail that sorts and acts for me",
     s: "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.",
-    on: true,
   },
 ];
 
@@ -70,10 +69,10 @@ function first() {
     <div class="onboarding">
       <div class="onboarding-in">
         <h1>What do you want from monday?</h1>
-        <p>Your mail is syncing. Pick how much monday should do; the choice is yours and you can change it any time.</p>
+        <p>Pick how much monday should do. The choice is yours and you can change it any time.</p>
         ${cards(levels)}
         <p class="choice-note">Yours to change at any time. Moving down disables, never deletes; moving up brings everything back.</p>
-        <div class="actions"><span class="sp"></span><button class="btn">Skip</button><button class="btn primary">Continue</button></div>
+        <div class="actions"><span class="sp"></span><button class="btn">Skip</button><button class="btn primary" disabled>Continue</button></div>
       </div>
     </div>
   </div>`;

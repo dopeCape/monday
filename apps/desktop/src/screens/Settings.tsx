@@ -16,7 +16,7 @@ import {
   type SettingSection,
   settingsSchema,
 } from "@monday/shared";
-import { Btn, Kbd } from "@monday/ui";
+import { Btn, Kbd, Toast } from "@monday/ui";
 import {
   AtIcon,
   CloudIcon,
@@ -45,7 +45,7 @@ import { isTypingTarget } from "../keyboard/useKeymap.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "../platform/providerKeys.ts";
 import { platform } from "../platform/tauri.ts";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
-import { Toast } from "./inbox/Toast.tsx";
+
 import "./settings/controls.tsx";
 import "./settings/panels.tsx";
 import {
