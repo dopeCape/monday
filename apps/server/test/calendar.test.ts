@@ -258,7 +258,7 @@ describe("a Google-shaped Account: the Provider's calendar is synced and written
 
     const feed = await changesOf(w, "event");
     expect(feed).toHaveLength(1);
-    const payload = feed[0]?.payload as Record<string, unknown>;
+    const payload = feed[0]?.payload as unknown as Record<string, unknown>;
     expect(payload.start).toBe(at(1));
     expect("title" in payload).toBe(false);
     const calendarRows = await changesOf(w, "calendar");
