@@ -5,8 +5,9 @@ import * as workflows from "./screens/workflows.js";
 import * as routing from "./screens/routing.js";
 import * as settings from "./screens/settings.js";
 import * as calendar from "./screens/calendar.js";
+import * as onboarding from "./screens/onboarding.js";
 
-const screens = { inbox, workflows, routing, settings, calendar };
+const screens = { inbox, workflows, routing, settings, calendar, onboarding };
 const q = new URLSearchParams(location.search);
 
 export const ui = {
@@ -30,6 +31,11 @@ function render() {
   const route = parseRoute();
   const root = document.getElementById("app");
   const parts = [], cols = [];
+  if (route.screen === "onboarding") {
+    root.style.gridTemplateColumns = "minmax(0, 1fr)";
+    root.innerHTML = screens.onboarding.render(route, ui);
+    return;
+  }
   if (state.nav === "full") { parts.push(navSidebar(route)); cols.push("var(--nav-w)"); }
   if (state.nav === "rail") { parts.push(rail(route)); cols.push("var(--rail-w)"); }
   if (state.agent === "left") { parts.push(agentColumn("left")); cols.push("var(--agent-w)"); }

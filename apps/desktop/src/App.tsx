@@ -37,6 +37,10 @@ import { composeStrings } from "./screens/compose/strings.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { Onboarding } from "./screens/Onboarding.tsx";
+import {
+  ONBOARDING_FIXTURE_SENDERS,
+  onboardingFixtureClient,
+} from "./screens/onboarding-fixture.ts";
 import { Routing } from "./screens/Routing.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Search } from "./screens/Search.tsx";
@@ -396,6 +400,11 @@ export function App({
   }, []);
 
   if (active === "onboarding") {
+    // The dev server's fixture state: the conversation from the mock, with no Server behind it.
+    const fixtureChat =
+      !shell.server &&
+      agentClient === undefined &&
+      new URLSearchParams(location.search).get("step") === "chat";
     return (
       <div className="app" data-online={online ? "true" : "false"}>
         <Onboarding
@@ -403,10 +412,11 @@ export function App({
           accountId={onboarding?.account?.id ?? account.id}
           workspaceId={onboarding?.account?.workspaceId ?? workspace.id}
           address={onboarding?.account?.address ?? account.address}
-          agentClient={client}
+          agentClient={fixtureChat ? onboardingFixtureClient(() => now) : client}
+          initialStep={fixtureChat ? "chat" : undefined}
           runtimes={detection}
           keys={keys}
-          senders={senders}
+          senders={fixtureChat ? ONBOARDING_FIXTURE_SENDERS : senders}
           threadCount={inbox?.threads().length ?? 0}
           rerun={onboarding?.rerun ?? false}
           now={now}

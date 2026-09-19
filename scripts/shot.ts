@@ -46,6 +46,13 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   })),
   // Slice 16: the Workflows page over the fixture documents and Runs.
   { name: "workflows", app: "/?screen=workflows", mock: "/app.html?chrome=0#/workflows" },
+  // Slice 20: onboarding's first screen (the three cards) and the conversation.
+  { name: "onboarding", app: "/?screen=onboarding", mock: "/app.html?chrome=0#/onboarding" },
+  {
+    name: "onboarding-chat",
+    app: "/?screen=onboarding&step=chat",
+    mock: "/app.html?chrome=0#/onboarding/chat",
+  },
 ];
 
 async function waitFor(url: string, ms = 30_000): Promise<void> {

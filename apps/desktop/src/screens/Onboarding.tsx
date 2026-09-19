@@ -46,6 +46,8 @@ export interface OnboardingProps {
   rerun?: boolean | undefined;
   /** The window width, for density; defaults to the browser's. */
   screenWidth?: number | undefined;
+  /** Opens on the conversation at once (the dev server's fixture state); the level is not touched. */
+  initialStep?: "chat" | undefined;
   now?: Date | undefined;
   /** Leaves the screen: after Done, Skip the rest, or when nothing is left to ask. */
   onDone: () => void;
@@ -133,6 +135,7 @@ function OnboardingBody({
   threadCount = 0,
   rerun = false,
   screenWidth,
+  initialStep,
   now: nowProp,
   onDone,
 }: OnboardingProps) {
@@ -140,7 +143,7 @@ function OnboardingBody({
   const s = shell.settings;
   const now = nowProp ?? new Date();
   const current = s["ai.level"];
-  const [step, setStep] = useState<Step>("level");
+  const [step, setStep] = useState<Step>(initialStep ?? "level");
   const [chosen, setChosen] = useState<AiLevel | null>(rerun ? current : null);
   const [finished, setFinished] = useState(false);
   const seeded = useRef(false);
