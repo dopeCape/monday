@@ -623,6 +623,86 @@ describe("transcripts and checkpoints under the envelope", () => {
     expect(missing.status).toBe(404);
   });
 
+  test("the hot request paths have the indexes they need (explain)", async () => {
+    // With sequential scans discouraged, the planner picks the index when one fits; a
+    // missing index shows up as a scan of the table.
+    const plan = async (query: string): Promise<string> => {
+      const rows = await db.handle.sql.begin(async (tx) => {
+        await tx`set local enable_seqscan = off`;
+        return tx.unsafe(`explain (format text) ${query}`);
+      });
+      return (rows as unknown as Array<{ "QUERY PLAN": string }>)
+        .map((r) => r["QUERY PLAN"])
+        .join("\n");
+    };
+    const w = workspaceId.replaceAll("'", "''");
+    const cases: Array<[string, string]> = [
+      // GET /messages/bodies: a Workspace's Messages by date, newest first.
+      [
+        `select id from messages where workspace_id = '${w}' and date >= now() - interval '2 years' order by date desc, id desc limit 200`,
+        "messages_workspace_date_idx",
+      ],
+      // GET /threads?group=: a Sub-group's Threads.
+      [
+        `select id from threads where workspace_id = '${w}' and subgroup_id = 'g' and deleted = false`,
+        "threads_subgroup_idx",
+      ],
+      // The snooze sweep at boot.
+      [
+        `select id from threads where workspace_id = '${w}' and snoozed_until is not null`,
+        "threads_snoozed_idx",
+      ],
+      // GET /workflows/runs: a Workspace's Runs, newest first.
+      [
+        `select id from workflow_runs where workspace_id = '${w}' order by started_at desc limit 100`,
+        "workflow_runs_workspace_started_idx",
+      ],
+      // GET /changes: the feed from a cursor.
+      [
+        `select seq from changes where workspace_id = '${w}' and seq > 10 order by seq limit 500`,
+        "changes_workspace_seq_idx",
+      ],
+      // GET /activity: a Workspace's log, newest first.
+      [
+        `select id from activity where workspace_id = '${w}' order by at desc limit 100`,
+        "activity_workspace_at_idx",
+      ],
+      // The Jobs claim.
+      [
+        `select id from jobs where status = 'queued' and run_at <= now() order by run_at limit 1`,
+        "jobs_claim_idx",
+      ],
+      // The calendar window.
+      [
+        `select id from events where workspace_id = '${w}' and start < now() and "end" > now() - interval '1 day'`,
+        "events_window_idx",
+      ],
+    ];
+    const defined = await db.handle.sql<{ indexname: string; indexdef: string }[]>`
+      select indexname, indexdef from pg_indexes where schemaname = 'public'
+    `;
+    const columnsOf = (name: string) =>
+      /\((.*)\)/.exec(defined.find((i) => i.indexname === name)?.indexdef ?? "")?.[1] ?? "";
+    const expectedColumns: Record<string, string> = {
+      messages_workspace_date_idx: "workspace_id, date, id",
+      threads_subgroup_idx: "workspace_id, subgroup_id",
+      threads_snoozed_idx: "workspace_id, snoozed_until",
+      workflow_runs_workspace_started_idx: "workspace_id, started_at",
+      changes_workspace_seq_idx: "workspace_id, seq",
+      activity_workspace_at_idx: "workspace_id, at",
+      jobs_claim_idx: "status, run_at",
+      events_window_idx: 'workspace_id, start, "end"',
+    };
+    for (const [query, index] of cases) {
+      // The index exists with the columns the query filters and orders by...
+      expect(columnsOf(index), index).toBe(expectedColumns[index] ?? "");
+      // ...and the planner reaches the rows through an index, never a scan of the table.
+      const text = await plan(query);
+      expect(text, `${query}\n${text}`).toMatch(/Index (Only )?Scan/);
+      expect(text, `${query}\n${text}`).not.toContain("Seq Scan");
+    }
+  });
+
   test("rotating the Workspace key re-wraps every envelope in the schema, checkpoints and transcripts included", async () => {
     // Everything sealed so far: threads, a transcript, checkpoint blobs, the
     // Voice profile, integration secrets, the shared provider key; plus a Draft.

@@ -232,6 +232,7 @@ async function main() {
       server.stop(true);
       await kicker.stop();
       await sync.close();
+      await calendar.close();
       await changeListener?.stop();
       await checkpointer.end().catch(() => {});
       await handle.close();

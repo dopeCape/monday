@@ -181,6 +181,7 @@ export async function bootCloud(
     async close() {
       await kicker?.stop();
       await services.sync.close();
+      await services.calendar.close();
       await checkpointer.end().catch(() => {});
       await handle.close();
     },
