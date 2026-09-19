@@ -448,6 +448,12 @@ export function PageIndex({
       .filter((el): el is HTMLElement => el !== null);
     const read = () => {
       if (Date.now() < holdUntil.current) return;
+      // Scrolled to the end: the last group is the one being read, even when the
+      // page is too short for its anchor to ever reach the reading line.
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 1 && root.scrollTop > 0) {
+        setActive(anchors.at(-1)?.dataset.group ?? null);
+        return;
+      }
       const top = root.getBoundingClientRect().top;
       const line = top + root.clientHeight * 0.33;
       let current: string | null = null;
@@ -459,7 +465,12 @@ export function PageIndex({
     };
     const io = new IntersectionObserver(read, { root, threshold: [0, 0.25, 0.5, 0.75, 1] });
     for (const el of anchors) io.observe(el);
-    return () => io.disconnect();
+    // The observer fires as anchors cross the edges; the end of the page needs the scroll itself.
+    root.addEventListener("scroll", read, { passive: true });
+    return () => {
+      io.disconnect();
+      root.removeEventListener("scroll", read);
+    };
   }, [key, scroller]);
   if (groups.length < 2) return <aside className="settings-index" aria-hidden="true" />;
   return (
