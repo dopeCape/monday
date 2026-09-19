@@ -21,7 +21,7 @@ import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
 import { createKeys, type Keys, LockedError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
-import { type BodyState, syncMessages, threads } from "./db/schema.ts";
+import { accounts, type BodyState, syncMessages, threads, workspaces } from "./db/schema.ts";
 import {
   createDrafts,
   DraftNotOpenError,
@@ -29,6 +29,13 @@ import {
   NoRecipientsError,
   SendTooLargeError,
 } from "./drafts/index.ts";
+import {
+  createCredentialStore,
+  createExternal,
+  createMemoryNotifier,
+  type External,
+  type Notifier,
+} from "./external/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
 import {
   BriefNotReadyError,
@@ -52,6 +59,11 @@ import { agentRoutes } from "./routes/agent.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
 import { draftsRoutes } from "./routes/drafts.ts";
+import {
+  EXTERNAL_PUBLIC_PATHS,
+  EXTERNAL_PUBLIC_PREFIXES,
+  externalRoutes,
+} from "./routes/external.ts";
 import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
@@ -62,8 +74,30 @@ import { storageRoutes } from "./routes/storage.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
+import { readGlobalSettings } from "./settings/read.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
+
+const EXTERNAL_SETTING_KEYS = [
+  "external.rate_per_minute",
+  "external.search_cap",
+  "external.approval_timeout_minutes",
+  "external.key_expiry_days",
+  "external.consent_timeout_minutes",
+] as const;
+
+const CONSENT_STRING_KEYS = [
+  "strings.external.consent.title",
+  "strings.external.consent.intro",
+  "strings.external.scope.read",
+  "strings.external.scope.act",
+  "strings.external.consent.code_hint",
+  "strings.external.consent.waiting",
+  "strings.external.consent.deny",
+  "strings.external.consent.approved",
+  "strings.external.consent.denied",
+  "strings.external.consent.expired",
+] as const;
 
 export interface AppOptions {
   db: Db;
@@ -117,6 +151,15 @@ export interface AppOptions {
   now?: () => Date;
   /** Extra route groups mounted at the root: the cron tick, the upgrade routes. */
   mounts?: Hono<AppEnv>[];
+  /**
+   * The external MCP module (slice 19). Defaults to one over `db` and the
+   * Agent host; tests pass one over the memory store.
+   */
+  external?: External;
+  /** Where an external approval's desktop notification goes when no client is open; the entry supplies it. */
+  notifier?: Notifier;
+  /** The Server's public URL, the OAuth issuer, when configured; the request's origin otherwise. */
+  publicUrl?: () => Promise<string | null>;
 }
 
 export function createApp(options: AppOptions): Hono<AppEnv> {
@@ -196,10 +239,45 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   const uptimeMs = options.uptimeMs ?? (() => Date.now() - started);
   const isLoopback: LoopbackCheck = (c) => isLoopbackAddress(options.remoteAddress?.(c));
 
+  // The external MCP server (slice 19): credentials beside Device tokens, the
+  // Agent host's tools behind a scope, approvals routed to the owner.
+  const external =
+    options.external ??
+    createExternal({
+      agent: intelligence.agent,
+      store: createCredentialStore(db, options.now ? { now: options.now } : {}),
+      notify: options.notifier ?? createMemoryNotifier((line) => console.warn(line)),
+      ...(options.now ? { now: options.now } : {}),
+      settings: async () => {
+        const s = await readGlobalSettings(db, EXTERNAL_SETTING_KEYS);
+        return {
+          ratePerMinute: s["external.rate_per_minute"],
+          searchCap: s["external.search_cap"],
+          approvalTimeoutMs: s["external.approval_timeout_minutes"] * 60_000,
+          keyExpiryDays: s["external.key_expiry_days"],
+          consentTtlMs: s["external.consent_timeout_minutes"] * 60_000,
+        };
+      },
+      workspaces: async () => {
+        const rows = await db
+          .select({ id: workspaces.id, address: accounts.address })
+          .from(workspaces)
+          .innerJoin(accounts, eq(accounts.id, workspaces.accountId));
+        return rows;
+      },
+    });
+  intelligence.extensions.external = external;
+
   const app = new Hono<AppEnv>();
 
   app.use("*", authenticate(auth, isLoopback));
-  app.use("*", requireAuth(PUBLIC_PATHS, PUBLIC_PREFIXES));
+  app.use(
+    "*",
+    requireAuth(
+      [...PUBLIC_PATHS, ...EXTERNAL_PUBLIC_PATHS],
+      [...PUBLIC_PREFIXES, ...EXTERNAL_PUBLIC_PREFIXES],
+    ),
+  );
 
   app.get("/health", async (c) => {
     try {
@@ -245,6 +323,29 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
   app.route("/", workflowRoutes(intelligence.workflows));
+  // Before the provider OAuth wizard routes, whose /oauth/:provider/* must not catch these.
+  app.route(
+    "/",
+    externalRoutes({
+      external,
+      ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+      consentStrings: async () => {
+        const s = await readGlobalSettings(db, CONSENT_STRING_KEYS);
+        return {
+          title: s["strings.external.consent.title"],
+          intro: s["strings.external.consent.intro"],
+          scopeRead: s["strings.external.scope.read"],
+          scopeAct: s["strings.external.scope.act"],
+          codeHint: s["strings.external.consent.code_hint"],
+          waiting: s["strings.external.consent.waiting"],
+          deny: s["strings.external.consent.deny"],
+          approved: s["strings.external.consent.approved"],
+          denied: s["strings.external.consent.denied"],
+          expired: s["strings.external.consent.expired"],
+        };
+      },
+    }),
+  );
   if (options.accounts) {
     app.route("/", accountRoutes(options.accounts));
     if (options.oauth) {

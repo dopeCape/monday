@@ -537,7 +537,11 @@ const createExternalKey: ToolDefinition<{
     "Make a key another agent can use on monday's external MCP server (Settings, AI, External access). Read scope lists only read tools; act scope adds the rest, which still ask the user. The key is shown once, in the card. Reversible: undo revokes it.",
   tier: "reversible",
   input: z.object({
-    name: z.string().min(1).max(80).describe("Who the key is for, as the list and approvals name it"),
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .describe("Who the key is for, as the list and approvals name it"),
     scope: z.enum(["read", "act"]).default("read"),
     workspace_ids: z
       .array(z.string().min(1))
