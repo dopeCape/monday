@@ -12,6 +12,18 @@ import type { GroupId, Section, Thread } from "../domain.ts";
 import type { SectionJudged } from "./sections.ts";
 import { DEFAULT_SECTION_JUDGE_THRESHOLD } from "./sections.ts";
 
+/** The tools a custom action may call: one Thread in, an ordinary tool call out (the tool server's names). */
+export const CUSTOM_ACTION_TOOLS = [
+  "forward_thread",
+  "draft_message",
+  "archive_threads",
+  "snooze_threads",
+  "tag_threads",
+  "move_threads",
+  "trash_threads",
+] as const;
+export type CustomActionTool = (typeof CUSTOM_ACTION_TOOLS)[number];
+
 /** Where an action shows: on the Threads of a Group, of a Section, or where a judge statement holds. */
 export interface CustomActionOn {
   /** A Group or Sub-group id or name. */

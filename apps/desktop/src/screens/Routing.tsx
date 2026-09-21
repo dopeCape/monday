@@ -4,7 +4,10 @@
 // routed"; and the re-run with preview, which asks the Server for a dry run
 // and applies only on the second click. Groups and decisions come from the
 // Store (the feed keeps them current); Examples, Confidence and the actions
-// go through the API. Every string is a Setting (strings.routing.*).
+// go through the API. Under the tree, the Sections block and the Actions
+// block (slice 26, OrganizeBlocks.tsx) edit sections.rules, sections.order
+// and actions.custom through the Shell, the same rows the Agent writes.
+// Every string is a Setting (strings.routing.*).
 
 import type {
   Group,
@@ -40,6 +43,7 @@ import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
 import { fixtureInbox, type InboxSource } from "./inbox/actions.ts";
 import { fill } from "./inbox/triage.ts";
+import { ActionsBlock, SectionsBlock, sectionNameOf } from "./routing/OrganizeBlocks.tsx";
 import { fixtureRouting, type RoutingSource } from "./routing/routing-data.ts";
 
 export interface RoutingProps {
@@ -228,6 +232,32 @@ export function Routing({
   const confidenceOf = (id: string): number | null => views?.get(id)?.confidence ?? null;
 
   const recent = threads.filter((t) => t.group !== null).slice(0, 8);
+  const sectionRules = settings["sections.rules"];
+  const sectionOrder = settings["sections.order"];
+  const sectionOptions = useMemo(
+    () => sectionRules.map((r) => ({ id: r.id, name: sectionNameOf(settings, r) })),
+    [sectionRules, settings],
+  );
+  const groupOptions = useMemo(() => groups.map((g) => ({ id: g.id, name: g.name })), [groups]);
+  const changeSections = useCallback(
+    async (rules: typeof sectionRules, order: typeof sectionOrder) => {
+      const a = await shell.set("sections.rules", rules);
+      if (!a.ok) {
+        setError(a.message);
+        return;
+      }
+      const b = await shell.set("sections.order", order);
+      if (!b.ok) setError(b.message);
+    },
+    [shell],
+  );
+  const changeActions = useCallback(
+    async (actions: (typeof settings)["actions.custom"]) => {
+      const r = await shell.set("actions.custom", actions);
+      if (!r.ok) setError(r.message);
+    },
+    [shell],
+  );
   const pending = decisions.filter((d) => !settled.has(d.threadId));
   const stillShown = pending.filter((d) => !leaving.has(d.threadId));
 
@@ -525,6 +555,26 @@ export function Routing({
                   </div>
                 );
               })}
+              <SectionsBlock
+                heading
+                settings={settings}
+                rules={sectionRules}
+                order={sectionOrder}
+                onChange={changeSections}
+                onRenameString={(key, name) =>
+                  shell.set(key as Parameters<typeof shell.set>[0], name as never)
+                }
+                onAsk={onAsk}
+              />
+              <ActionsBlock
+                heading
+                settings={settings}
+                actions={settings["actions.custom"]}
+                onChange={changeActions}
+                groups={groupOptions}
+                sections={sectionOptions}
+                onAsk={onAsk}
+              />
             </div>
             <aside>
               {preview ? (

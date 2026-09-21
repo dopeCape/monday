@@ -9,12 +9,14 @@
 
 import {
   type AiLevel,
+  type CustomActionValue,
   type Effort,
   HOSTED_PROVIDERS,
   type HostedProvider,
   isSettingKey,
   type Layout,
   type McpServerSetting,
+  orderedSectionRules,
   PRESETS,
   PROVIDER_LABELS,
   presetForLayout,
@@ -42,13 +44,7 @@ import {
   Switch,
   Tag,
 } from "@monday/ui";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  KeyIcon,
-  TerminalWindowIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { KeyIcon, TerminalWindowIcon, XIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   chordLabel,
@@ -62,6 +58,7 @@ import {
 } from "../../keyboard/keymaps.ts";
 import type { AccountView } from "../../platform/api.ts";
 import { useShell } from "../../shell/Shell.tsx";
+import { ActionsBlock, SectionsBlock, sectionNameOf } from "../routing/OrganizeBlocks.tsx";
 import {
   AskInput,
   type ControlProps,
@@ -385,119 +382,65 @@ controlKinds.views = ViewsControl;
 
 /* ------------------------------ Routing ------------------------------ */
 
-function sectionName(settings: Settings, id: string): string {
-  const key = `strings.section.${id}`;
-  return isSettingKey(key) ? String(settings[key]) : id;
-}
-
 /**
- * The Section rules in their order: rename (the Section's string Setting),
- * hide, reorder (sections.order, rendered inside this control) and "Ask monday
- * to change" for anything structural.
+ * The Section rules in their order (sections.rules with sections.order
+ * rendered inside): the same block the Routing page shows, so rename, hide,
+ * reorder, placement, the judge statement, delete and "Ask monday to change"
+ * live in one place. A shipped Section renames through its string Setting.
  */
 function SectionRulesControl({ k }: ControlProps) {
-  const { value, change, error, shell } = useSetting(k);
+  const { value, error, shell } = useSetting(k);
   const screen = useSettingsScreen();
   const s = shell.settings;
   const rules = (value ?? []) as SectionRuleValue[];
-  const order = s["sections.order"];
-  const ordered = [
-    ...order.map((id) => rules.find((r) => r.id === id)).filter((r): r is SectionRuleValue => !!r),
-    ...rules.filter((r) => !order.includes(r.id)),
-  ];
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
-  const move = (id: string, by: -1 | 1) => {
-    const ids = ordered.map((r) => r.id);
-    const at = ids.indexOf(id);
-    const to = at + by;
-    if (at < 0 || to < 0 || to >= ids.length) return;
-    const next = [...ids];
-    next.splice(at, 1);
-    next.splice(to, 0, id);
-    void screen.change("sections.order", next);
-  };
   return (
     <Row k={k} block error={error}>
-      <div className="set-rules" data-setting="sections.order">
-        {ordered.map((r, i) => {
-          const nameKey = `strings.section.${r.id}`;
-          const renamable = isSettingKey(nameKey);
-          const conditions = Object.keys(r.when).length;
-          return (
-            <div className={`set-rule ${r.hidden ? "off" : ""}`} key={r.id} data-rule={r.id}>
-              <div>
-                {renaming?.id === r.id ? (
-                  <Input
-                    value={renaming.name}
-                    autoFocus
-                    onChange={(e) => setRenaming({ id: r.id, name: e.target.value })}
-                    onBlur={() => {
-                      if (renaming.name.trim() && renamable) {
-                        void screen.change(nameKey as SettingKey, renaming.name.trim());
-                      }
-                      setRenaming(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                  />
-                ) : (
-                  <b>{sectionName(s, r.id)}</b>
-                )}
-                <span>
-                  {r.sentence
-                    ? `${s["strings.settings.sections.model"]}: ${r.sentence}`
-                    : fill(s["strings.settings.sections.conditions"], { n: conditions })}
-                </span>
-              </div>
-              <Btn
-                sm
-                icon
-                aria-label={s["strings.settings.sections.up"]}
-                disabled={i === 0}
-                onClick={() => move(r.id, -1)}
-              >
-                <ArrowUpIcon />
-              </Btn>
-              <Btn
-                sm
-                icon
-                aria-label={s["strings.settings.sections.down"]}
-                disabled={i === ordered.length - 1}
-                onClick={() => move(r.id, 1)}
-              >
-                <ArrowDownIcon />
-              </Btn>
-              <Btn
-                sm
-                disabled={!renamable}
-                onClick={() => setRenaming({ id: r.id, name: sectionName(s, r.id) })}
-              >
-                {s["strings.settings.views.rename"]}
-              </Btn>
-              <span className="rule-hide">
-                <span>{s["strings.settings.sections.hidden"]}</span>
-                <Switch
-                  on={Boolean(r.hidden)}
-                  onChange={(hidden) =>
-                    void change(rules.map((x) => (x.id === r.id ? { ...x, hidden } : x)))
-                  }
-                />
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <AskInput
-        label={s["strings.settings.sections.ask"]}
-        placeholder={s["strings.settings.sections.ask_placeholder"]}
-        prompt={s["strings.settings.sections.ask_prompt"]}
+      <SectionsBlock
+        settings={s}
+        rules={rules}
+        order={s["sections.order"]}
+        onChange={(nextRules, nextOrder) =>
+          screen.changeMany(
+            [
+              ["sections.rules", nextRules],
+              ["sections.order", nextOrder],
+            ],
+            settingsSchema["sections.rules"].label,
+          )
+        }
+        onRenameString={(key, name) => screen.change(key as SettingKey, name)}
+        onAsk={(text) => screen.onAsk(text)}
       />
     </Row>
   );
 }
 controlKinds["section-rules"] = SectionRulesControl;
+
+/** The custom actions (actions.custom): the same block the Routing page shows. */
+function CustomActionsControl({ k }: ControlProps) {
+  const { value, change, error, shell } = useSetting(k);
+  const screen = useSettingsScreen();
+  const s = shell.settings;
+  const names = useGroupNames();
+  const actions = (value ?? []) as CustomActionValue[];
+  const sections = orderedSectionRules(s["sections.rules"], s["sections.order"]).map((r) => ({
+    id: r.id,
+    name: sectionNameOf(s, r),
+  }));
+  return (
+    <Row k={k} block error={error}>
+      <ActionsBlock
+        settings={s}
+        actions={actions}
+        onChange={(next) => change(next)}
+        groups={Object.entries(names).map(([id, name]) => ({ id, name }))}
+        sections={sections}
+        onAsk={(text) => screen.onAsk(text)}
+      />
+    </Row>
+  );
+}
+controlKinds["custom-actions"] = CustomActionsControl;
 
 /** The Group a Thread stays in when no rule is confident: a pick from the Workspace's Groups. */
 function GroupPickControl({ k }: ControlProps) {

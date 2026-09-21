@@ -17,8 +17,14 @@ export type {
   CustomActionFacts,
   CustomActionOn,
   CustomActionSetting,
+  CustomActionTool,
 } from "./actions.ts";
-export { customActionApplies, customActionIdFor, customActionsFor } from "./actions.ts";
+export {
+  CUSTOM_ACTION_TOOLS,
+  customActionApplies,
+  customActionIdFor,
+  customActionsFor,
+} from "./actions.ts";
 export type { PredicateFacts } from "./predicate.ts";
 export {
   domainMatches,

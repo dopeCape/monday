@@ -21,6 +21,7 @@ import type {
   ToolPreview,
 } from "@monday/shared";
 import {
+  CUSTOM_ACTION_TOOLS,
   customActionIdFor,
   sectionIdFor,
   sectionLabel,
@@ -343,15 +344,7 @@ export function findSection(
 /* ------------------------------ Custom actions ------------------------------ */
 
 /** The tools a custom action may call: one Thread in, an ordinary tool call out. */
-export const ACTION_TOOLS = [
-  "forward_thread",
-  "draft_message",
-  "archive_threads",
-  "snooze_threads",
-  "tag_threads",
-  "move_threads",
-  "trash_threads",
-] as const;
+export const ACTION_TOOLS = CUSTOM_ACTION_TOOLS;
 
 const onInput = z
   .object({
