@@ -2909,6 +2909,50 @@ details.advanced[open] > summary::before {
   font-size: var(--fs-xs);
   color: var(--fg-faint);
 }
+/* The Sections and Actions blocks (slice 26): on the Routing page under the tree, and inside Settings rows. */
+.organize-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tree .organize-block {
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+}
+.organize-block h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.organize-block .set-rule b .tag {
+  margin-left: 8px;
+}
+.organize-block .rule-placement {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.organize-block .judge-line {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.organize-block .judge-line:hover {
+  color: var(--fg);
+}
+/* Custom actions under the Brief share the chip row's look; in the toolbar they sit after the built-in buttons. */
+.reader .custom-actions {
+  margin-top: 10px;
+}
 .roles {
   display: grid;
   grid-template-columns: 1fr 1fr;

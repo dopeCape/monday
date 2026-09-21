@@ -174,6 +174,8 @@ export const nav = {
     { key: "press", label: "Press", icon: "ph-microphone", smart: true, color: "var(--tag-3)" },
   ],
   calendar: [{ key: "calendar", label: "Calendar", icon: "ph-calendar-blank" }],
+  // A Section the user defined and placed in the nav ("put newsletters I have read in Reading").
+  sections: [{ key: "reading", label: "Reading", icon: "ph-stack" }],
   automation: [
     { key: "workflows", label: "Workflows", icon: "ph-flow-arrow" },
     { key: "routing", label: "Routing", icon: "ph-git-branch" },

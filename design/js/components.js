@@ -25,6 +25,8 @@ export function navSidebar(route) {
   const smart = nav.smart.map(g => item({ ...g, href: `#/inbox/${g.key}` }, route.folder === g.key) +
     (g.children ? g.children.map(c => item({ ...c, href: `#/inbox/${c.key}` }, route.folder === c.key, true)).join("") : "")).join("");
   const auto = nav.automation.map(it => item({ ...it, n: 0, href: `#/${it.key}` }, route.screen === it.key)).join("");
+  // Sections the user placed in the nav (CONTEXT.md "Section rule"), under Groups.
+  const sections = (nav.sections ?? []).map(sec => item({ ...sec, href: `#/inbox/section/${sec.key}` }, route.folder === `section:${sec.key}`)).join("");
   return `
   <aside class="nav">
     <button class="ws" title="Connected">
@@ -39,6 +41,7 @@ export function navSidebar(route) {
     ${item({ ...nav.calendar[0], href: "#/calendar" }, route.screen === "calendar")}
     <div class="nav-sec">Groups</div>
     ${smart}
+    ${sections ? `<div class="nav-sec">Sections</div>${sections}` : ""}
     <div class="nav-sec">Automation</div>
     ${auto}
     <div class="nav-foot">
