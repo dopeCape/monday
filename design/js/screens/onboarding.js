@@ -15,12 +15,12 @@ const levels = [
   {
     key: "assist",
     t: "Mail with an assistant",
-    s: "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking.",
+    s: "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking. With a TypeSafe key the palette also answers typed sentences.",
   },
   {
     key: "automate",
     t: "Mail that sorts and acts for me",
-    s: "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.",
+    s: "Everything: routing into Groups and Sections you describe in your own words, Briefs in the background, custom actions, Workflows with their approvals. Sorting runs on TypeSafe when its key exists, on the language model otherwise.",
   },
 ];
 

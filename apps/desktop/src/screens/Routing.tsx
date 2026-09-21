@@ -10,7 +10,7 @@ import type {
   Group,
   GroupInput,
   GroupView,
-  HostedProvider,
+  KeyProvider,
   Predicate,
   ProposedMove,
   Settings,
@@ -188,7 +188,7 @@ export function Routing({
   /** Delete asks once: the button names the Group until the second click. */
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** Whether a shared key exists for routing on the Server; null until known or where it cannot be. */
-  const [sharedKeys, setSharedKeys] = useState<HostedProvider[] | null>(null);
+  const [sharedKeys, setSharedKeys] = useState<KeyProvider[] | null>(null);
 
   const refreshViews = useCallback(() => {
     api

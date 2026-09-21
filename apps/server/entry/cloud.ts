@@ -149,6 +149,7 @@ export async function bootCloud(
     jobs: services.jobs,
     sync: services.sync,
     checkpointer,
+    judge: services.judge,
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     accounts: { accounts: services.accounts, discovery: defaultDiscoveryDeps },

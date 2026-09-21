@@ -473,10 +473,9 @@ export function App({
 
   if (active === "onboarding") {
     // The dev server's fixture state: the conversation from the mock, with no Server behind it.
-    const fixtureChat =
-      !shell.server &&
-      agentClient === undefined &&
-      new URLSearchParams(location.search).get("step") === "chat";
+    const devStep = new URLSearchParams(location.search).get("step");
+    const fixtureChat = !shell.server && agentClient === undefined && devStep === "chat";
+    const fixtureRuntime = !shell.server && agentClient === undefined && devStep === "runtime";
     return (
       <div
         className="app"
@@ -489,7 +488,13 @@ export function App({
           workspaceId={onboarding?.account?.workspaceId ?? ws.id}
           address={onboarding?.account?.address ?? ws.address}
           agentClient={fixtureChat ? onboardingFixtureClient(() => now) : client}
-          initialStep={fixtureChat || onboarding?.afterWelcome ? "chat" : undefined}
+          initialStep={
+            fixtureChat || onboarding?.afterWelcome
+              ? "chat"
+              : fixtureRuntime
+                ? "runtime"
+                : undefined
+          }
           runtimes={detection}
           keys={keys}
           senders={fixtureChat ? ONBOARDING_FIXTURE_SENDERS : senders}

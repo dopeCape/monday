@@ -21,6 +21,7 @@ import {
 import { createIntelligence, type Intelligence } from "../src/intelligence/index.ts";
 import {
   createFakeChat,
+  createFakeJudge,
   createFakeRuntime,
   createMemoryMeter,
 } from "../src/intelligence/runtime/fake/index.ts";
@@ -380,6 +381,14 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
       db: db.handle.db,
       mailstore: store,
       chat: chat.chat,
+      judge: createFakeJudge({ group: "finance" }).judge,
+      // The live check as the Server would run it, scripted: one key is known, every other refused.
+      validateKey: async (provider, key) => {
+        if (provider !== "typesafe") return null;
+        return key === "ts-good"
+          ? { ok: true, models: ["jev-latest", "jev-preview"] }
+          : { ok: false, code: "unauthorized", reason: "TypeSafe does not know this key." };
+      },
       now: () => NOW,
     });
     intelligence.registerSteps(jobs);
@@ -585,5 +594,64 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
     );
     const caps = (await (await request("/capabilities")).json()) as Capabilities;
     expect(caps.hosted.sharedKeys).toEqual([]);
+  });
+
+  test("a TypeSafe key is validated from the Server, shared under the envelope, listed, and a Judgment meters under judge.route on typesafe", async () => {
+    // The live check answers in plain words and never stores anything.
+    const bad = await send("/keys/typesafe/validate", { key: "ts-bad" });
+    expect(bad.status).toBe(200);
+    expect(await bad.json()).toEqual({
+      ok: false,
+      code: "unauthorized",
+      reason: "TypeSafe does not know this key.",
+    });
+    expect(await intelligence.keys.list()).toEqual([]);
+    const good = await send("/keys/typesafe/validate", { key: "ts-good" });
+    expect(await good.json()).toEqual({ ok: true, models: ["jev-latest", "jev-preview"] });
+    expect((await send("/keys/anthropic/validate", { key: "sk-ant" })).status).toBe(404);
+    expect((await send("/keys/typesafe/validate", {})).status).toBe(400);
+
+    // Before the key is shared, judgments go to the language model (auto).
+    let caps = (await (await request("/capabilities")).json()) as Capabilities;
+    expect(caps.hosted.judge).toEqual({ provider: "llm", model: "claude-haiku-4-5" });
+    expect(await intelligence.runtime.judgeAvailable()).toBe(false);
+
+    // The share switch: the key lands under the envelope like any provider's.
+    const put = await send("/keys/typesafe", { workspace: workspaceId, key: "ts-good" }, "PUT");
+    expect(await put.json()).toEqual({ provider: "typesafe", shared: true });
+    expect((await (await request("/keys")).json()) as unknown).toEqual({ shared: ["typesafe"] });
+    const rows = await db.handle.sql<
+      { provider: string; data_enc: Uint8Array }[]
+    >`select provider, data_enc from provider_keys`;
+    expect(rows.map((r) => r.provider)).toEqual(["typesafe"]);
+    expect(Buffer.from(rows[0]?.data_enc ?? []).toString("latin1")).not.toContain("ts-good");
+    caps = (await (await request("/capabilities")).json()) as Capabilities;
+    expect(caps.hosted.sharedKeys).toEqual(["typesafe"]);
+    expect(caps.hosted.judge).toEqual({ provider: "typesafe", model: "jev-1.13.0" });
+    expect(await intelligence.runtime.judgeAvailable()).toBe(true);
+
+    // A Judgment on the fixture Thread appears in the Meter as its own line.
+    const result = await intelligence.runtime.judge(
+      "judge.route",
+      { subject: "Take-home review", from: "aoife@northwind.test" },
+      {
+        group: {
+          type: "choice",
+          instructions: "Which Group?",
+          criteria: { hiring: null, finance: null },
+        },
+      },
+      { workspaceId },
+    );
+    expect(result.answers.group.choice).toBe("finance");
+    const month = (await (await request(`/meter?workspace=${workspaceId}`)).json()) as MeterMonth;
+    const line = month.lines.find((l) => l.task === "judge.route");
+    expect(line).toMatchObject({ provider: "typesafe", calls: 1, outputTokens: 0 });
+    expect(line?.costMicros).toBe(result.costMicros);
+
+    // Forgetting the shared key sends judgments back to the language model.
+    expect((await request("/keys/typesafe", { method: "DELETE" })).status).toBe(204);
+    caps = (await (await request("/capabilities")).json()) as Capabilities;
+    expect(caps.hosted.judge.provider).toBe("llm");
   });
 });

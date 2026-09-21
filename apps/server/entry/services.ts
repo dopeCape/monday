@@ -11,6 +11,7 @@ import { type Auth, createAuth, randomCode } from "../src/auth/index.ts";
 import { type CalendarModule, createCalendar } from "../src/calendar/index.ts";
 import { createKeys, type Keys } from "../src/crypto/keys.ts";
 import type { Db } from "../src/db/client.ts";
+import { createTypeSafeJudge, type JudgeModel } from "../src/intelligence/index.ts";
 import { createJobs, type Jobs, type JobsOptions } from "../src/jobs/index.ts";
 import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
 import { type CredentialStore, createCredentialStore } from "../src/providers/credentials.ts";
@@ -41,6 +42,8 @@ export interface Services {
   push: PushManager;
   accounts: AccountService;
   calendar: CalendarModule;
+  /** The judge (ADR 0012): TypeSafe over fetch, handed to the intelligence module through createApp. */
+  judge: JudgeModel;
   /** The setup code printed at first boot, when this boot generated one. */
   setupCode: string | null;
   /** Enqueues every connected Account's sync, watch and push Jobs (idempotent ids). */
@@ -138,6 +141,8 @@ export async function createServices(options: ServicesOptions): Promise<Services
     },
   });
 
+  const judge = createTypeSafeJudge();
+
   return {
     auth,
     keys,
@@ -149,6 +154,7 @@ export async function createServices(options: ServicesOptions): Promise<Services
     push,
     accounts,
     calendar,
+    judge,
     setupCode: firstBoot ? setupCode : null,
     async startAccounts() {
       for (const row of await db.query.accounts.findMany()) {

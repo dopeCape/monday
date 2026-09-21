@@ -408,6 +408,19 @@ export interface HostedState {
   roles: Record<HostedProvider, Roles>;
   /** Providers whose key the user shared with the Server ("Let the server use this key"); TypeSafe among them. */
   sharedKeys: MeterProvider[];
+  /** Who answers judgments on this Server (ADR 0012), so a client knows without asking one. */
+  judge: JudgeState;
+}
+
+/**
+ * Who answers a Judgment on the Server: TypeSafe when its key is shared and
+ * Settings allow it, the language model's prompt path otherwise, `none` when
+ * Settings pin TypeSafe but no key is shared. `model` is the versioned judge
+ * model, the language model that would answer, or "" for none.
+ */
+export interface JudgeState {
+  provider: "typesafe" | "llm" | "none";
+  model: string;
 }
 
 export interface Session {

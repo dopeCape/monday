@@ -4665,6 +4665,14 @@ button.prov {
   color: var(--fg-muted);
   font-size: var(--fs-sm);
 }
+/* One way in (TypeSafe, or the language model's controls), stacked with the step's rhythm (slice 24). */
+.level-runtime .runtime-way {
+  display: grid;
+  gap: 12px;
+}
+.level-runtime .runtime-way > .choice-note {
+  margin: 0;
+}
 .level-runtime .actions {
   display: flex;
   gap: 8px;

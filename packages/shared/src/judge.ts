@@ -132,3 +132,23 @@ export interface ThreadJudgments {
   model: string;
   judgedAt: string;
 }
+
+/** Why a judge provider refused a request, as the Server's client names it. */
+export type JudgeErrorCode =
+  | "unauthorized"
+  | "invalid_request"
+  | "rate_limited"
+  | "overloaded"
+  | "network"
+  | "timeout"
+  | "bad_response"
+  | "http";
+
+/**
+ * The live check of a pasted key (docs/spec/onboarding.md): the Server asks
+ * the provider's models endpoint and answers in plain words. The key itself
+ * never appears in the answer.
+ */
+export type KeyValidation =
+  | { ok: true; models: string[] }
+  | { ok: false; reason: string; code: JudgeErrorCode };

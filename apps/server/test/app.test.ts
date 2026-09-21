@@ -83,7 +83,8 @@ describe("app", () => {
         localRuntimes: false,
       },
     };
-    // No Settings saved and no shared key: the shipped Roles and an empty share list.
+    // No Settings saved and no shared key: the shipped Roles, an empty share list, and
+    // judgments on the language model's prompt path (auto with no TypeSafe key).
     const defaults = defaultSettings();
     const hosted: HostedState = {
       provider: "anthropic",
@@ -91,6 +92,7 @@ describe("app", () => {
         HOSTED_PROVIDERS.map((p) => [p, rolesFor(defaults, p)]),
       ) as HostedState["roles"],
       sharedKeys: [],
+      judge: { provider: "llm", model: "claude-haiku-4-5" },
     };
     for (const mode of Object.keys(expected) as DeploymentMode[]) {
       const res = await build(db, mode, peer).request("/capabilities");
