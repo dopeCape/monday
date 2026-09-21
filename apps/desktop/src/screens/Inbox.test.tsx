@@ -4,11 +4,14 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Message, PartialSettings, Thread } from "@monday/shared";
+import { defaultSettings } from "@monday/shared";
+import { NavSidebar } from "@monday/ui";
 import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { StaticShell } from "../shell/Shell.tsx";
+import { navModel } from "../shell/nav.ts";
+import { StaticShell, useShell } from "../shell/Shell.tsx";
 import { Inbox, type InboxProps } from "./Inbox.tsx";
 import { fixtureInbox, type InboxActions, type Inbox as InboxData } from "./inbox/actions.ts";
 
@@ -154,6 +157,135 @@ describe("Inbox rendering", () => {
     expect(document.querySelector(".col-head h2")?.textContent).toBe("Hiring");
     expect(rowIds()).toEqual(["e1", "e3"]);
     expect(document.querySelector(".col-head .count")?.textContent).toBe("2");
+  });
+
+  test("a Section created a moment ago renders in the nav and the stream, without a reload", async () => {
+    // Two Threads the new rule will hold, beside the fixture's; the seam sections them as the Store would.
+    const custom = fixtureInbox([
+      ...fixtureThreads.slice(0, 3),
+      { ...fixtureThreads[9], id: "r1", section: "reading", unread: true } as Thread,
+      { ...fixtureThreads[10], id: "r2", section: "reading", unread: false } as Thread,
+    ]);
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    let shellRef: ReturnType<typeof useShell> | null = null;
+    function Harness() {
+      const shell = useShell();
+      shellRef = shell;
+      const nav = navModel({
+        address: "sam@monday.test",
+        status: "online",
+        threads: custom.threads(),
+        groups: custom.groups(),
+        sections: shell.settings["sections.rules"],
+        sectionOrder: shell.settings["sections.order"],
+        strings: shell.settings,
+      });
+      return (
+        <>
+          <NavSidebar
+            workspace={nav.workspace}
+            labels={nav.labels}
+            folders={nav.folders}
+            groups={custom.groups()}
+            counts={nav.counts}
+            sections={nav.sections}
+            automation={nav.automation}
+            active="inbox"
+          />
+          <Inbox
+            now={new Date(2026, 8, 16, 10, 0)}
+            initialOpen={null}
+            timing={{ collapse: 0, toast: 60_000 }}
+            inbox={custom}
+          />
+        </>
+      );
+    }
+    await act(async () =>
+      r.render(
+        <StaticShell settings={{ "ai.level": "automate" }}>
+          <Harness />
+        </StaticShell>,
+      ),
+    );
+    const navText = () =>
+      [...document.querySelectorAll(".nav .nav-item span")].map((s) => s.textContent);
+    const headings = () => [...document.querySelectorAll(".sec")].map((s) => s.textContent);
+    expect(navText()).not.toContain("Reading");
+    expect(headings()).not.toContain("Reading");
+    expect(rowIds()).not.toContain("r1");
+
+    // The Agent's create_section writes the two Settings; the Shell's refresh hands them to the screens.
+    const shell = shellRef as unknown as ReturnType<typeof useShell>;
+    await act(async () => {
+      await shell.set("sections.rules", [
+        ...defaultSettings()["sections.rules"],
+        {
+          id: "reading",
+          name: "Reading",
+          when: { bulk: true },
+          placement: "both",
+          createdBy: "agent",
+        },
+      ]);
+      await shell.set("sections.order", [...defaultSettings()["sections.order"], "reading"]);
+    });
+    expect([...document.querySelectorAll(".nav .nav-sec")].map((s) => s.textContent)).toContain(
+      "Sections",
+    );
+    const item = [...document.querySelectorAll<HTMLElement>(".nav .nav-item")].find(
+      (b) => b.querySelector("span")?.textContent === "Reading",
+    );
+    expect(item).not.toBeUndefined();
+    expect(item?.querySelector(".n")?.textContent).toBe("1");
+    expect(headings()).toContain("Reading");
+    expect(rowIds()).toEqual(["e1", "e2", "e3", "r1", "r2"]);
+  });
+
+  test("a hidden Section keeps its Threads out of the other Sections, and so does one placed only in the nav", async () => {
+    const custom = fixtureInbox([
+      { ...fixtureThreads[0], id: "h1", section: "hidden-one" } as Thread,
+      { ...fixtureThreads[9], id: "n1", section: "reading" } as Thread,
+      { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
+    ]);
+    await mount(
+      { inbox: custom },
+      {
+        "sections.order": ["hidden-one", "reading", "waiting"],
+        "sections.rules": [
+          { id: "hidden-one", when: { unread: true }, hidden: true },
+          { id: "reading", name: "Reading", when: { bulk: true }, placement: "nav" },
+          { id: "waiting", when: { lastFrom: "others" } },
+        ],
+      },
+    );
+    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual([
+      "Waiting on you",
+    ]);
+    expect(rowIds()).toEqual(["w1"]);
+  });
+
+  test("a Section lens shows only that Section's Threads under its name", async () => {
+    const custom = fixtureInbox([
+      { ...fixtureThreads[9], id: "n1", section: "reading" } as Thread,
+      { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
+    ]);
+    await mount(
+      { inbox: custom, section: "reading" },
+      {
+        "sections.order": ["reading", "waiting"],
+        "sections.rules": [
+          { id: "reading", name: "Reading", when: { bulk: true }, placement: "nav" },
+          { id: "waiting", when: { lastFrom: "others" } },
+        ],
+      },
+    );
+    expect(document.querySelector(".col-head h2")?.textContent).toBe("Reading");
+    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual(["Reading"]);
+    expect(rowIds()).toEqual(["n1"]);
   });
 
   test("row labels and the move picker come from the seam's Tags and Groups, not the fixtures", async () => {
