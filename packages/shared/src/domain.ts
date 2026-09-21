@@ -351,11 +351,16 @@ export interface Usage {
 }
 
 /** One row of the Meter: one model call. Cost is an estimate in USD micro-units (1e-6 dollars). */
+/** What a Meter row is for: a Task on a language model, or a judgment (judge.ts). */
+export type MeterTask = Task | import("./judge.ts").JudgeTask;
+/** Who answered a Meter row: a language model provider, or the judge. */
+export type MeterProvider = HostedProvider | import("./judge.ts").JudgeProvider;
+
 export interface MeterEntry {
   id: Id;
   workspaceId: Id;
-  task: Task;
-  provider: HostedProvider;
+  task: MeterTask;
+  provider: MeterProvider;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -368,8 +373,8 @@ export interface MeterEntry {
 
 /** The Meter for one Task on one provider over a month. */
 export interface MeterLine {
-  task: Task;
-  provider: HostedProvider;
+  task: MeterTask;
+  provider: MeterProvider;
   calls: number;
   inputTokens: number;
   outputTokens: number;
@@ -389,8 +394,8 @@ export interface MeterMonth {
 export interface HostedState {
   provider: HostedProvider;
   roles: Record<HostedProvider, Roles>;
-  /** Providers whose key the user shared with the Server ("Let the server use this key"). */
-  sharedKeys: HostedProvider[];
+  /** Providers whose key the user shared with the Server ("Let the server use this key"); TypeSafe among them. */
+  sharedKeys: MeterProvider[];
 }
 
 export interface Session {

@@ -27,13 +27,15 @@ Behaviors a tester can check. The settings schema lives in `packages/shared` and
 
 ### Routing
 - Groups tree with each Group's sentence, confidence threshold, Sub-groups, and Example count; the Needs a decision queue with its cap.
-- Section rules in their order with rename, hide, reorder and "Ask monday to change".
+- Sections, user-defined: each with its sentence, its deterministic conditions, its Judgment, where it shows (stream heading, nav entry, both), rename, hide, reorder, and "Ask monday to change". The shipped four are rows like any other.
+- Custom actions per Group or Section: label, condition, the tool and its arguments, the Tier it renders with; add, edit, remove, and "Ask monday for an action".
 - Brief policy editor: the current rule sentence, per-Group and per-Section overrides, and an optional custom prompt.
 - Global thresholds, re-evaluation policy and lookback.
 
 ### AI and agent
 - The three level cards first (`ai.level`: just mail, mail with an assistant, mail that sorts and acts for me), exactly as onboarding shows them; the rest of this section is hidden under `off` and the automation parts under `assist`.
 - Runtime mode: Local CLI or Hosted, with the detected CLIs and their status, and the Hosted providers with key state.
+- TypeSafe: the key (add, replace, remove; never displayed; validated live), its share switch with the threat-model line, "Judgments" (auto, TypeSafe, language model) and the pinned model. The Meter shows `judge.*` lines beside the Tasks.
 - Per provider: main and fast Roles, the "Let the server use this key" switch with its one-line threat model, and the key itself (add, replace, remove; never displayed).
 - Task-to-Role map with an exact-model override per Task, and effort per Task.
 - Meter: this month by Task and provider, with cost estimates; no budgets.

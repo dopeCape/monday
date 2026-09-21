@@ -10,6 +10,12 @@ Behaviors a tester can check. Every default is a Setting (ADR 0004) unless marke
 - The header of the panel or column shows the Runtime in use (Claude Code, Codex, OpenCode, or the Hosted provider and model) and the Workspace address. Clicking it opens Settings › AI.
 - Voice input is not in v1 (fixed for v1).
 
+## Organizing mail by talking
+
+- "Put newsletters in a folder called Reading", "show me invoices I still owe at the top", "give invoice threads a forward-to-accounting button", "candidates go under Hiring" are one turn each. The Agent has tools that create, change and delete Groups, Sub-groups, Sections and custom actions from a sentence: `create_section` (sentence, conditions, Judgment, placement), `update_section`, `create_group` and `update_group` (already present), `create_action`, `update_action`, `delete_action`, and `move_threads` for the existing mail.
+- Every one is reversible and shows a card naming what will exist and how many existing Threads move; the Judgment's question text is shown on the card and saved as a Setting the user can reword.
+- A Section or Group the Agent creates shows in the nav and the stream at once, through the Changes feed, and the routing of existing Threads runs as a Job with a preview above the threshold.
+
 ## Sessions
 
 - Enter sends. Shift-Enter inserts a newline. The input clears and the message appears as the user turn.

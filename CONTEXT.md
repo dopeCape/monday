@@ -47,8 +47,19 @@ _Avoid_: label, smart label, AI label
 A heading in the stream that a Section rule fills. Shipped defaults are the kinds of attention a Thread needs: Needs your reply, Waiting on you, For your information, Newsletters. User-defined, independent of Group.
 _Avoid_: inbox type, category, bucket
 
+**Judgment**:
+A typed question (Choice, Noul or Score) a System One model answers with probabilities and a confidence, never text: which Group, which Section, whether a Brief is worth writing, what a typed sentence asks for. Decisions are Judgments; sentences are generation (ADR 0012).
+_Avoid_: classification call, scoring prompt
+
+**Judge**:
+The seam on the Runtime that answers Judgments: TypeSafe's Jev when its key is configured, the language model's prompt path otherwise, a header rule as the floor. Metered under `judge.*`.
+
+**Custom action**:
+A button the user defined for the Threads of a Group or Section ("forward invoices to accounting"): a label, a condition, and an ordinary tool call with its Tier. Rendered in the reader toolbar and as a chip; authored by the Agent from a sentence.
+_Avoid_: macro, shortcut
+
 **Section rule**:
-The rule, in the same shape as a Routing rule, that decides which Threads a Section holds. Deterministic signals first, the model for the rest.
+The rule, in the same shape as a Routing rule, that decides which Threads a Section holds. Deterministic signals first, a Judgment for the rest. A user-defined Section carries its own sentence and where it shows: as a heading in the stream, as an entry in the nav, or both.
 
 **Predicate**:
 The structured, model-free part of a rule (senders, domains, subject patterns, list ids, headers) that runs on every Thread at no cost.

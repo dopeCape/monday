@@ -4,6 +4,7 @@
 // Meter's cost estimate is one formula everywhere.
 
 import type { HostedProvider, Roles, Task, Usage } from "../domain.ts";
+import type { KeyProvider } from "../judge.ts";
 import type { Effort, ModelPrice, Pricing, SettingKey, Settings } from "./schema.ts";
 
 /** The Settings the Hosted runtime reads, so a Server can load exactly these. */
@@ -28,6 +29,9 @@ export const HOSTED_SETTING_KEYS = [
   "ai.pricing.openai",
   "ai.pricing.kimi",
   "ai.pricing.openrouter",
+  "ai.pricing.typesafe",
+  "ai.judge.provider",
+  "ai.judge.model",
   "ai.endpoint.kimi",
   "ai.endpoint.openrouter",
   "ai.max_output_tokens",
@@ -49,7 +53,7 @@ export function rolesFor(settings: HostedSettings, provider: HostedProvider): Ro
   return settings[`ai.roles.${provider}`];
 }
 
-export function pricingFor(settings: HostedSettings, provider: HostedProvider): Pricing {
+export function pricingFor(settings: HostedSettings, provider: KeyProvider): Pricing {
   return settings[`ai.pricing.${provider}`];
 }
 

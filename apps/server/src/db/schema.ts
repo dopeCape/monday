@@ -23,6 +23,9 @@ import type {
   HostedProvider,
   Integration,
   InviteMethod,
+  KeyProvider,
+  MeterProvider,
+  MeterTask,
   Person,
   Predicate,
   Provider,
@@ -690,7 +693,7 @@ export const scheduledSends = pgTable(
  * are not shared never reach this table; they stay in the Device keychain.
  */
 export const providerKeys = pgTable("provider_keys", {
-  provider: text("provider").$type<HostedProvider>().primaryKey(),
+  provider: text("provider").$type<KeyProvider>().primaryKey(),
   workspaceId: text("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
@@ -725,8 +728,8 @@ export const meter = pgTable(
     workspaceId: text("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
-    task: text("task").$type<Task>().notNull(),
-    provider: text("provider").$type<HostedProvider>().notNull(),
+    task: text("task").$type<MeterTask>().notNull(),
+    provider: text("provider").$type<MeterProvider>().notNull(),
     model: text("model").notNull(),
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),

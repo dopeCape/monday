@@ -50,6 +50,7 @@ import {
   type ConverseModel,
   createHostedRuntime,
   type HostedRuntime,
+  type JudgeModel,
   type KeysResolver,
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
@@ -107,12 +108,20 @@ export type {
   ConverseModel,
   ConverseResponse,
   HostedRuntime,
+  JudgeCall,
+  JudgeModel,
+  JudgeResult,
   KeysResolver,
   RunInput,
   RunOptions,
   RunResult,
 } from "./runtime/index.ts";
-export { AiOffError, createHostedRuntime, NoProviderKeyError } from "./runtime/index.ts";
+export {
+  AiOffError,
+  createHostedRuntime,
+  NoJudgeError,
+  NoProviderKeyError,
+} from "./runtime/index.ts";
 
 export interface IntelligenceOptions {
   db: Db;
@@ -121,6 +130,8 @@ export interface IntelligenceOptions {
   chat?: ChatModel;
   /** The agent loop's seam; defaults to LangChain with tools bound. Tests pass a script. */
   converse?: ConverseModel;
+  /** The judge's seam (ADR 0012); the entry wires TypeSafe, tests pass a fake. Absent: judge() throws NoJudgeError. */
+  judge?: JudgeModel;
   /** Where the runtime's keys come from; defaults to the shared-key store. */
   keys?: KeysResolver;
   /** The brief policy seam; defaults to the rule over Settings with the model behind it. */
@@ -255,6 +266,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const runtime = createHostedRuntime({
     chat: options.chat ?? createLangChainChat(),
     converse: options.converse ?? createLangChainConverse(),
+    ...(options.judge ? { judge: options.judge } : {}),
     keys: resolveKey,
     settings: hostedSettings,
     meter,

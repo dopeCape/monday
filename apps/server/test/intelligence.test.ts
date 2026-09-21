@@ -83,6 +83,74 @@ describe("Hosted runtime over the fake seam", () => {
     });
   });
 
+  test("judgments go to TypeSafe under the judge task, priced on input only, and fall back by Settings", async () => {
+    const { runtime, judge, meter } = createFakeRuntime({
+      judgments: { group: "finance", needs_reply: 0.8, worth: 2 },
+    });
+    expect(await runtime.judgeAvailable()).toBe(true);
+    const result = await runtime.judge(
+      "judge.route",
+      { thread: { subject: "Invoice" } },
+      {
+        group: {
+          type: "choice",
+          instructions: "Which Group?",
+          criteria: { hiring: null, finance: null },
+        },
+        needs_reply: { type: "noul", instructions: "A reply is expected." },
+        worth: {
+          type: "score",
+          instructions: "How useful is a Brief?",
+          criteria: ["none", "some", "useful"],
+        },
+        unasked: { type: "noul", instructions: "Something the script never scripted." },
+      },
+      { workspaceId: "ws-1", jobId: "job-9" },
+    );
+    expect(result.answers.group).toMatchObject({ choice: "finance", confidence: 1 });
+    expect(result.answers.group.probabilities).toEqual({ hiring: 0, finance: 1 });
+    expect(result.answers.needs_reply.noul).toBe(0.8);
+    expect(result.answers.worth.score).toBe(2);
+    // The neutral default keeps a test honest about what it scripted.
+    expect(result.answers.unasked.noul).toBe(0.5);
+    expect(result.model).toBe("jev-1.13.0");
+    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls[0]?.questions).toEqual(["group", "needs_reply", "worth", "unasked"]);
+    // Input only at $0.042 per million: tens of micro-dollars.
+    expect(result.usage.inputTokens).toBeGreaterThan(0);
+    expect(result.costMicros).toBe(Math.round(result.usage.inputTokens * 0.042));
+    expect(meter.rows[0]).toMatchObject({
+      task: "judge.route",
+      provider: "typesafe",
+      model: "jev-1.13.0",
+      outputTokens: 0,
+      jobId: "job-9",
+    });
+
+    // Settings send judgments to the language model: the caller keeps its prompt path.
+    const llm = createFakeRuntime({ settings: { "ai.judge.provider": "llm" } });
+    expect(await llm.runtime.judgeAvailable()).toBe(false);
+    await expect(
+      llm.runtime.judge(
+        "judge.section",
+        "x",
+        { q: { type: "noul", instructions: "?" } },
+        { workspaceId: "ws-1" },
+      ),
+    ).rejects.toMatchObject({ name: "NoJudgeError", reason: "llm" });
+    // No TypeSafe key: the same.
+    const noKey = createFakeRuntime({ keys: { anthropic: "sk-ant-fake" } });
+    expect(await noKey.runtime.judgeAvailable()).toBe(false);
+    await expect(
+      noKey.runtime.judge(
+        "judge.section",
+        "x",
+        { q: { type: "noul", instructions: "?" } },
+        { workspaceId: "ws-1" },
+      ),
+    ).rejects.toMatchObject({ name: "NoJudgeError", reason: "no_key" });
+  });
+
   test("the composer runs on the main Role, Sonnet 5, at high effort", async () => {
     const { runtime } = createFakeRuntime();
     expect(await runtime.resolve("composer")).toEqual({

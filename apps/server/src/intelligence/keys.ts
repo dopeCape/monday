@@ -5,7 +5,7 @@
 // one row per provider. list() never decrypts, so a locked Server can still
 // say which providers have a key; load() needs the root key.
 
-import type { HostedProvider } from "@monday/shared";
+import type { HostedProvider, KeyProvider } from "@monday/shared";
 import { HOSTED_PROVIDERS } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
@@ -14,12 +14,12 @@ import type { ContentStore } from "../mailstore/content.ts";
 
 export interface ProviderKeyStore {
   /** Seals and stores; replaces an earlier key for the provider. Throws LockedError. */
-  put(workspaceId: string, provider: HostedProvider, key: string): Promise<void>;
-  remove(provider: HostedProvider): Promise<void>;
+  put(workspaceId: string, provider: KeyProvider, key: string): Promise<void>;
+  remove(provider: KeyProvider): Promise<void>;
   /** Providers with a shared key, in the schema's provider order. Works locked. */
-  list(): Promise<HostedProvider[]>;
+  list(): Promise<KeyProvider[]>;
   /** The key in the clear, or null when none is shared. Throws LockedError. */
-  load(provider: HostedProvider): Promise<string | null>;
+  load(provider: KeyProvider): Promise<string | null>;
 }
 
 export function createProviderKeyStore(db: Db, content: ContentStore): ProviderKeyStore {

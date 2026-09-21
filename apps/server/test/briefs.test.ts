@@ -285,7 +285,7 @@ describe("the brief Job's decisions over Postgres", () => {
       db: db.handle.db,
       mailstore: store,
       chat: chat.chat,
-      keys: async (provider) => sharedKeys[provider] ?? null,
+      keys: async (provider) => (sharedKeys as Partial<Record<string, string>>)[provider] ?? null,
       now: () => clock,
     });
     intelligence.registerSteps(jobs);

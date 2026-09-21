@@ -6,7 +6,18 @@
 // Keys come through a resolver so the same runtime serves the Server (shared
 // keys under the envelope) and a client running a Task with a Device key.
 
-import type { AiLevel, HostedProvider, MeterEntry, Task, Usage } from "@monday/shared";
+import type {
+  AiLevel,
+  HostedProvider,
+  JsonValue,
+  JudgeQuestions,
+  JudgeResponse,
+  JudgeTask,
+  KeyProvider,
+  MeterEntry,
+  Task,
+  Usage,
+} from "@monday/shared";
 import {
   type Effort,
   estimateCostMicros,
@@ -81,7 +92,7 @@ export interface ConverseResponse {
 export type ConverseModel = (call: ConverseCall) => Promise<ConverseResponse>;
 
 /** Where a provider's key comes from: the shared-key store on the Server, the keychain on a Device. */
-export type KeysResolver = (provider: HostedProvider) => Promise<string | null>;
+export type KeysResolver = (provider: KeyProvider) => Promise<string | null>;
 
 export interface RunInput {
   system: string;
@@ -130,12 +141,62 @@ export interface HostedRuntime {
   converse(task: Task, input: ConverseInput, options: RunOptions): Promise<ConverseResult>;
   /** The model a Task would run on now, under the current Settings. */
   resolve(task: Task, provider?: HostedProvider): Promise<ModelChoice>;
+  /**
+   * Typed questions over one state, answered by the judge (ADR 0012) and
+   * metered under the JudgeTask. Throws NoJudgeError when Settings say the
+   * language model decides or no TypeSafe key is configured; callers keep
+   * their prompt path for that case. Throws AiOffError at level off.
+   */
+  judge<Q extends JudgeQuestions>(
+    task: JudgeTask,
+    state: JsonValue,
+    questions: Q,
+    options: RunOptions,
+  ): Promise<JudgeResult<Q>>;
+  /** Whether judge() would answer right now, without asking anything. */
+  judgeAvailable(): Promise<boolean>;
+}
+
+/** One request to the judge provider, with the key already resolved. */
+export interface JudgeCall<Q extends JudgeQuestions = JudgeQuestions> {
+  model: string;
+  key: string;
+  state: JsonValue;
+  questions: Q;
+}
+
+export type JudgeModel = <Q extends JudgeQuestions>(
+  call: JudgeCall<Q>,
+) => Promise<JudgeResponse<Q>>;
+
+export interface JudgeResult<Q extends JudgeQuestions> extends JudgeResponse<Q> {
+  costMicros: number;
+  durationMs: number;
+  meter: MeterEntry;
+}
+
+/** Settings send judgments to the language model, or no TypeSafe key is configured. */
+export class NoJudgeError extends Error {
+  readonly status = 409;
+  readonly code = "no_judge";
+  constructor(readonly reason: "llm" | "no_key" | "no_model") {
+    super(
+      reason === "llm"
+        ? "judgments go to the language model under Settings"
+        : reason === "no_key"
+          ? "no TypeSafe key is configured"
+          : "this runtime has no judge model",
+    );
+    this.name = "NoJudgeError";
+  }
 }
 
 export interface HostedRuntimeOptions {
   chat: ChatModel;
   /** Absent means converse() throws; the Server wires LangChain, tests a script. */
   converse?: ConverseModel;
+  /** Absent means judge() throws NoJudgeError("no_model"); the Server wires TypeSafe, tests a script. */
+  judge?: JudgeModel;
   keys: KeysResolver;
   settings: () => Promise<HostedSettings>;
   meter: { record(entry: MeterInput): Promise<MeterEntry> };
@@ -189,6 +250,47 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
       const response = await options.chat({ ...call, system: input.system, prompt: input.prompt });
       const metered = await finish(response);
       return { output: response.text, ...metered };
+    },
+
+    async judgeAvailable() {
+      if (!options.judge) return false;
+      if (options.level && (await options.level()) === "off") return false;
+      const settings = await options.settings();
+      if (settings["ai.judge.provider"] === "llm") return false;
+      return (await options.keys("typesafe")) !== null;
+    },
+
+    async judge(task, state, questions, opts) {
+      if (options.level && (await options.level()) === "off") throw new AiOffError("classify");
+      const judge = options.judge;
+      if (!judge) throw new NoJudgeError("no_model");
+      const settings = await options.settings();
+      if (settings["ai.judge.provider"] === "llm") throw new NoJudgeError("llm");
+      const key = await options.keys("typesafe");
+      if (!key) throw new NoJudgeError("no_key");
+      const started = now();
+      const response = await judge({ model: settings["ai.judge.model"], key, state, questions });
+      const durationMs = Math.max(0, now() - started);
+      const usage: Usage = {
+        inputTokens: Math.max(0, Math.round(response.usage.inputTokens)),
+        outputTokens: 0,
+        cachedTokens: 0,
+      };
+      const costMicros = estimateCostMicros(
+        priceFor(pricingFor(settings, "typesafe"), response.model),
+        usage,
+      );
+      const meter = await options.meter.record({
+        workspaceId: opts.workspaceId,
+        task,
+        provider: "typesafe",
+        model: response.model,
+        ...usage,
+        costMicros,
+        durationMs,
+        jobId: opts.jobId ?? null,
+      });
+      return { ...response, costMicros, durationMs, meter };
     },
 
     async converse(task, input, opts) {

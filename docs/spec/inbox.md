@@ -4,7 +4,8 @@ Behaviors a tester can check. Every default below is a Setting (ADR 0004) unless
 
 ## Stream
 
-- Sections appear in the user's order. Default: Needs your reply, Waiting on you, For your information, Newsletters.
+- Sections appear in the user's order. Default: Needs your reply, Waiting on you, For your information, Newsletters. A Section the user defined ("Invoices I still owe", "Things Aoife needs") is a heading like the shipped ones; the same Section may also show as an entry in the nav, or only there, by its placement.
+- The nav lists every Group and Sub-group the user has, in the user's order, with unread counts, and every Section placed in the nav; a Group or Section created a moment ago by the Agent appears without a reload.
 - Inside a Section, Threads are ordered by newest activity first.
 - An empty Section is not rendered. An empty Inbox shows one line, "Nothing needs you", and nothing else.
 - A Thread is in exactly one Section and at most one Group plus one Sub-group.
@@ -41,6 +42,7 @@ Each action maps to the provider's native concept where one exists and is emulat
 - Snooze removes the Thread from Inbox with archive semantics and stores a wake time on the Server. A Job returns it to Inbox as unread at the top of its Section. Snooze picker offers later today, tomorrow morning, next week, pick a time; the presets are Settings.
 - Read state syncs both ways with the provider; reading elsewhere clears it here within one poll.
 - Every action shows an undo toast; Z undoes the last one. Mark-all-read is undoable.
+- Custom actions: a Thread whose Group or Section carries custom actions shows them in the reader toolbar after the built-in ones and as chips under the Brief; each is a tool call with its Tier, so a "forward to accounting" asks and an "archive and tag" just runs with Undo.
 - Batch actions above 10 Threads preview first (ADR 0002).
 
 ## Briefs

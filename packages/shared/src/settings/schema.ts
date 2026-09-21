@@ -21,6 +21,7 @@ import type {
   Task,
   ThemeMode,
 } from "../domain.ts";
+import type { KeyProvider } from "../judge.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
 
@@ -160,12 +161,13 @@ const hostedProvider = z.enum([
 ]) satisfies z.ZodType<HostedProvider>;
 export const HOSTED_PROVIDERS = hostedProvider.options;
 /** How each Hosted provider is named on screen. */
-export const PROVIDER_LABELS: Readonly<Record<HostedProvider, string>> = {
+export const PROVIDER_LABELS: Readonly<Record<KeyProvider, string>> = {
   anthropic: "Anthropic",
   gemini: "Gemini",
   openai: "OpenAI",
   kimi: "Kimi",
   openrouter: "OpenRouter",
+  typesafe: "TypeSafe",
 };
 const meetingLink = z.enum(["provider", "none", "google-meet", "teams", "jitsi", "custom"]);
 export type MeetingLink = z.output<typeof meetingLink>;
@@ -280,7 +282,7 @@ function aiTask(task: Task, r: Role, e: Effort) {
   });
 }
 
-function aiShareKey(provider: HostedProvider) {
+function aiShareKey(provider: KeyProvider) {
   return setting({
     type: z.boolean(),
     default: false,
@@ -298,7 +300,7 @@ function aiShareKey(provider: HostedProvider) {
  * reference; the others from their published price pages. The Meter is an
  * estimate: cache writes are counted as uncached input.
  */
-function aiPricing(provider: HostedProvider, table: Pricing) {
+function aiPricing(provider: KeyProvider, table: Pricing) {
   return setting({
     type: pricing,
     default: table,
@@ -1348,6 +1350,26 @@ export const settingsSchema = {
   "ai.share_key.openai": aiShareKey("openai"),
   "ai.share_key.kimi": aiShareKey("kimi"),
   "ai.share_key.openrouter": aiShareKey("openrouter"),
+  "ai.share_key.typesafe": aiShareKey("typesafe"),
+  "ai.judge.provider": setting({
+    type: z.enum(["auto", "typesafe", "llm"]),
+    default: "auto",
+    scope: "global",
+    section: "ai",
+    group: "TypeSafe",
+    label: "Judgments",
+    help: "Who decides the judgments: which Group a Thread belongs to, which Section, whether a Brief is worth writing, what a typed sentence asks for. Auto uses TypeSafe when its key is configured and the language model otherwise. TypeSafe answers in milliseconds for a fraction of a cent; the language model writes the same answers as text and costs more.",
+  }),
+  "ai.judge.model": setting({
+    type: z.string().min(1),
+    default: "jev-1.13.0",
+    scope: "global",
+    section: "ai",
+    group: "TypeSafe",
+    advanced: true,
+    label: "TypeSafe model",
+    help: "The System One model that answers judgments. Pinned to a version because the thresholds in Settings were tuned against it; jev-latest moves on its own.",
+  }),
   "ai.pricing.anthropic": aiPricing("anthropic", {
     "claude-opus-5": { input: 5, output: 25, cached: 0.5 },
     "claude-sonnet-5": { input: 2, output: 10, cached: 0.2 },
@@ -1368,6 +1390,9 @@ export const settingsSchema = {
   "ai.pricing.openrouter": aiPricing("openrouter", {
     "anthropic/claude-sonnet-5": { input: 2, output: 10, cached: 0.2 },
     "anthropic/claude-haiku-4.5": { input: 1, output: 5, cached: 0.1 },
+  }),
+  "ai.pricing.typesafe": aiPricing("typesafe", {
+    "jev-1.13.0": { input: 0.042, output: 0, cached: 0 },
   }),
   "ai.endpoint.kimi": aiEndpoint("kimi", "https://api.moonshot.ai/v1"),
   "ai.endpoint.openrouter": aiEndpoint("openrouter", "https://openrouter.ai/api/v1"),
