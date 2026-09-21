@@ -103,6 +103,17 @@ export interface JudgeResponse<Q extends JudgeQuestions = JudgeQuestions> {
   usage: JudgeUsage;
 }
 
+/** The action chips the arrival request asks one Noul each about (slice 25); the keys of `ThreadJudgments.chips`. */
+export const CHIP_NAMES = [
+  "reply",
+  "call",
+  "review_link",
+  "open_attachment",
+  "pay_or_file",
+  "snooze",
+] as const;
+export type ChipName = (typeof CHIP_NAMES)[number];
+
 /** The judgments monday keeps per Thread once the arrival request has run (slice 25). */
 export interface ThreadJudgments {
   threadId: string;

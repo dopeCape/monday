@@ -129,7 +129,7 @@ const confidence = z.number().min(0).max(1);
 const briefPolicyDefault =
   "Needs your reply and Waiting on you always; For your information only with two or more messages, an attachment, or more than 800 words; Newsletters and automated senders never. Anything else is computed on open.";
 const briefPolicy = z.enum(["always", "on_open", "never"]) satisfies z.ZodType<BriefPolicy>;
-const briefPolicyMode = z.enum(["rule", "model"]) satisfies z.ZodType<BriefPolicyMode>;
+const briefPolicyMode = z.enum(["rule", "model", "judge"]) satisfies z.ZodType<BriefPolicyMode>;
 /** Per Group id, the policy that beats the rule for its Threads. */
 const briefPolicyGroups = z.record(z.string().min(1), briefPolicy);
 const briefPromptDefault = [
@@ -208,8 +208,23 @@ export const TASKS: readonly Task[] = [
 ];
 
 const reevaluatePolicy = z.enum(["manual", "on-rule-change", "on-correction", "always"]);
-/** One Section rule: an id, deterministic conditions, an optional sentence for the section Task. */
+/** A bound on a Noul Judgment (0 to 1) or on the urgency Score (0 to 3). */
+const judgedBound = z.number().min(0).max(3).optional();
+/**
+ * One Section rule: an id, header conditions, judged conditions over the
+ * Thread's Judgments (slice 25), an optional sentence for the section Task.
+ */
 const sectionWhen = z.object({
+  needs_reply_at_least: judgedBound,
+  needs_reply_at_most: judgedBound,
+  waiting_at_least: judgedBound,
+  waiting_at_most: judgedBound,
+  newsletter_at_least: judgedBound,
+  newsletter_at_most: judgedBound,
+  automated_at_least: judgedBound,
+  automated_at_most: judgedBound,
+  urgency_at_least: judgedBound,
+  urgency_at_most: judgedBound,
   unread: z.boolean().optional(),
   starred: z.boolean().optional(),
   hasAttachments: z.boolean().optional(),
@@ -827,7 +842,208 @@ export const settingsSchema = {
     group: "Sections",
     control: "section-rules",
     label: "Section rules",
-    help: "Which Threads each Section holds: conditions over Thread state and Group, checked in Section order on this device. A rule with a sentence and no conditions asks the section Task.",
+    help: "Which Threads each Section holds: conditions over Thread state and Group, checked in Section order on this device. A rule may also bound a Judgment (needs a reply, waiting, newsletter, automated, urgency); once a Thread has been judged those bounds decide in place of the unread, bulk, message count and last sender conditions. A rule with a sentence and no conditions asks the section Task.",
+  }),
+
+  /* Judgments (ADR 0012, slice 25): the questions the arrival request asks, in the user's words. */
+  "judgments.on_arrival": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    label: "Judge on arrival",
+    help: "Ask the judge about every Thread as it arrives (needs a reply, waiting, newsletter, automated, Brief worth, urgency, the action chips) and keep the answers for the Sections, the brief policy and the reader. Needs the automate level and a TypeSafe key; without them the header rules decide.",
+  }),
+  "judgments.questions.needs_reply": setting({
+    type: z.string().min(1),
+    default:
+      "A person wrote the newest message to the mailbox owner and expects the owner to write back.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Needs a reply",
+    help: "A yes or no statement about the Thread; the judge answers with the probability that it holds. Phrase it so that yes is the interesting case.",
+  }),
+  "judgments.questions.waiting_on_others": setting({
+    type: z.string().min(1),
+    default:
+      "The mailbox owner wrote the newest message and is waiting for someone else on the thread to answer.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Waiting on others",
+    help: "A yes or no statement; the judge answers with the probability that it holds.",
+  }),
+  "judgments.questions.newsletter": setting({
+    type: z.string().min(1),
+    default:
+      "The thread is a newsletter, digest or mailing list issue sent to many subscribers, not a message written to the owner personally.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Newsletter",
+    help: "A yes or no statement; the judge answers with the probability that it holds.",
+  }),
+  "judgments.questions.automated": setting({
+    type: z.string().min(1),
+    default:
+      "The newest message was sent by a system rather than typed by a person: a notification, receipt, alert, confirmation, invoice run or bounce.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Automated",
+    help: "A yes or no statement; the judge answers with the probability that it holds.",
+  }),
+  "judgments.questions.brief_worth": setting({
+    type: z.string().min(1),
+    default:
+      "How much would a three-bullet summary of this thread help the mailbox owner before they open it?",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Brief worth",
+    help: "The question behind the brief policy in judge mode. The judge answers with a position on the four levels below, 0 to 3.",
+  }),
+  "judgments.questions.brief_worth_levels": setting({
+    type: z.array(z.string().min(1)).min(2).max(10),
+    default: [
+      "Nothing to summarize: a notification, receipt, digest or one short note that asks nothing of the owner.",
+      "A little: a short exchange the owner would read in about the time the summary takes.",
+      "Useful: several messages, a request or a decision the owner has to answer, or an attachment worth knowing about before opening.",
+      "Essential: a long or high-stakes thread with a deadline, money, a contract or many people, where a missed detail costs something.",
+    ],
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Brief worth levels",
+    help: "The levels of the Brief worth question, lowest first. Describe situations, not degrees; the judge reads them literally.",
+  }),
+  "judgments.questions.urgency": setting({
+    type: z.string().min(1),
+    default: "How soon does the mailbox owner have to act on this thread?",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Urgency",
+    help: "The judge answers with a position on the four levels below, 0 to 3. A Section rule may bound it.",
+  }),
+  "judgments.questions.urgency_levels": setting({
+    type: z.array(z.string().min(1)).min(2).max(10),
+    default: [
+      "No deadline: nothing is asked of the owner, or it can wait indefinitely.",
+      "This week: something is asked with no date, or with a date more than two days away.",
+      "Today or tomorrow: a deadline within two days, or a person visibly waiting for an answer.",
+      "Right now: the sender says it is urgent, something is blocked on the owner, or the deadline is today.",
+    ],
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Urgency levels",
+    help: "The levels of the urgency question, lowest first. Describe situations, not degrees.",
+  }),
+  "judgments.questions.chip.reply": setting({
+    type: z.string().min(1),
+    default: "The first thing the mailbox owner would do with this thread is write a reply.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: reply",
+    help: "A yes or no statement about the first action; the chip shows when its probability clears the chip threshold.",
+  }),
+  "judgments.questions.chip.call": setting({
+    type: z.string().min(1),
+    default:
+      "The first thing the mailbox owner would do with this thread is set up or join a call or meeting with the sender.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: call",
+    help: "A yes or no statement about the first action.",
+  }),
+  "judgments.questions.chip.review_link": setting({
+    type: z.string().min(1),
+    default:
+      "The first thing the mailbox owner would do with this thread is open a link in the newest message and review what is behind it, such as a pull request, a document or a form.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: review the link",
+    help: "A yes or no statement about the first action.",
+  }),
+  "judgments.questions.chip.open_attachment": setting({
+    type: z.string().min(1),
+    default:
+      "The first thing the mailbox owner would do with this thread is open an attachment on it.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: open the attachment",
+    help: "A yes or no statement about the first action.",
+  }),
+  "judgments.questions.chip.pay_or_file": setting({
+    type: z.string().min(1),
+    default:
+      "The first thing the mailbox owner would do with this thread is pay an invoice or file a receipt, bill or statement.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: pay or file",
+    help: "A yes or no statement about the first action.",
+  }),
+  "judgments.questions.chip.snooze": setting({
+    type: z.string().min(1),
+    default:
+      "The thread asks nothing of the mailbox owner today and they would put it aside until later.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "Chip: snooze",
+    help: "A yes or no statement about the first action.",
+  }),
+  "chips.threshold": setting({
+    type: confidence,
+    default: 0.6,
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    label: "Chip threshold",
+    help: "A judged action chip shows in the reader, before any Brief, when its probability is at or above this. The Brief's own chips replace them once it arrives; the cap is the Briefs' action chips setting.",
+  }),
+  "routing.judge.instructions": setting({
+    type: z.string().min(1),
+    default:
+      "Which of the mailbox owner's Groups does this email thread belong to? Each option is a Group the owner described in their own words, sometimes with header facts that always place a thread there. Read the descriptions literally and pick the one whose description the thread matches; pick none when no description fits. The examples are the owner's own past decisions about similar threads; they outrank the descriptions.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    control: "sentence",
+    label: "Routing question",
+    help: "What the judge is asked when it sorts a Thread into a Group (one Choice per stage, the Groups as options). The language model path keeps its own prompt.",
+  }),
+  "routing.judge.none_option": setting({
+    type: z.string().min(1),
+    default: "None of these Groups describes the thread; it stays in the Inbox without a Group.",
+    scope: "global",
+    section: "routing",
+    group: "Judgments",
+    advanced: true,
+    label: "The none option",
+    help: "How the option that places a Thread in no Group is described to the judge.",
   }),
 
   /* Briefs */
@@ -843,12 +1059,40 @@ export const settingsSchema = {
   }),
   "briefs.policy_mode": setting({
     type: briefPolicyMode,
-    default: "rule",
+    default: "judge",
     scope: "global",
     section: "routing",
     group: "Briefs",
     label: "Who decides",
-    help: "rule: the policy over Thread state and headers, with the per-Group overrides. model: a cheap call on the fast Role reads the Thread and decides with the prompt below.",
+    help: "judge: the Brief worth Judgment stored on arrival decides by the two thresholds below, and the rule stands in until a Thread has been judged. rule: the policy over Thread state and headers, with the per-Group overrides. model: a cheap call on the fast Role reads the Thread and decides with the prompt below.",
+  }),
+  "briefs.judge.always_at_least": setting({
+    type: z.number().min(0).max(3),
+    default: 1.5,
+    scope: "global",
+    section: "routing",
+    group: "Briefs",
+    label: "Background from",
+    help: "In judge mode, a Thread whose Brief worth is at or above this (0 to 3) gets its Brief in the background before it is opened.",
+  }),
+  "briefs.judge.never_below": setting({
+    type: z.number().min(0).max(3),
+    default: 0.5,
+    scope: "global",
+    section: "routing",
+    group: "Briefs",
+    label: "Never below",
+    help: "In judge mode, a Thread whose Brief worth is below this (0 to 3) gets no Brief at all; between the two thresholds it is computed on open.",
+  }),
+  "briefs.judge.newsletter_at_least": setting({
+    type: confidence,
+    default: 0.6,
+    scope: "global",
+    section: "routing",
+    group: "Briefs",
+    advanced: true,
+    label: "Newsletters wait for open",
+    help: "In judge mode, a Thread judged a newsletter or automated at or above this probability is never briefed in the background, whatever its Brief worth; it is computed on open.",
   }),
   "briefs.policy_default": setting({
     type: briefPolicy,
@@ -2258,6 +2502,16 @@ export const settingsSchema = {
   "strings.inbox.action.move": str("routing", "Action: move", "Move"),
   "strings.inbox.action.label": str("routing", "Action: label", "Label"),
   "strings.inbox.action.delete": str("routing", "Action: delete", "Delete"),
+  "strings.chips.reply": str("routing", "Judged chip: reply", "Reply"),
+  "strings.chips.call": str("routing", "Judged chip: call", "Set up a call"),
+  "strings.chips.review_link": str("routing", "Judged chip: review the link", "Review the link"),
+  "strings.chips.open_attachment": str(
+    "routing",
+    "Judged chip: open the attachment",
+    "Open the attachment",
+  ),
+  "strings.chips.pay_or_file": str("routing", "Judged chip: pay or file", "Pay or file"),
+  "strings.chips.snooze": str("routing", "Judged chip: snooze", "Snooze"),
   "strings.inbox.action.star": str("routing", "Action: star", "Star"),
   "strings.inbox.action.unstar": str("routing", "Action: unstar", "Unstar"),
   "strings.inbox.action.read": str("routing", "Action: mark read", "Mark read"),
@@ -4210,7 +4464,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Search",
     "Settings page",
   ],
-  routing: ["Groups", "Sections", "Briefs", "Thresholds", "Re-evaluation", "Reader"],
+  routing: ["Groups", "Sections", "Judgments", "Briefs", "Thresholds", "Re-evaluation", "Reader"],
   ai: [
     "Level",
     "Runtime",
@@ -4299,6 +4553,9 @@ const AUTOMATE_KEYS = new Set<string>([
   "routing.threshold.tie_margin",
   "routing.decisions.cap",
   "routing.brief_policy.default",
+  "routing.judge.instructions",
+  "routing.judge.none_option",
+  "judgments.on_arrival",
 ]);
 
 /**
@@ -4316,7 +4573,10 @@ export function settingLevel(key: SettingKey): AiLevel {
     (settingsSchema[key] as SettingEntry).section === "ai" ||
     key.startsWith("ai.") ||
     key.startsWith("agent.") ||
-    key.startsWith("external.")
+    key.startsWith("external.") ||
+    // The judge answers on open at `assist` (like Briefs) and on arrival at `automate`.
+    key.startsWith("judgments.") ||
+    key.startsWith("chips.")
   ) {
     return "assist";
   }

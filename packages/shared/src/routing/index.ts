@@ -23,8 +23,22 @@ export {
   predicateIsEmpty,
   subjectMatches,
 } from "./predicate.ts";
-export type { SectionFacts, SectionRuleSetting, SectionWhen } from "./sections.ts";
-export { DEFAULT_SECTION_RULES, sectionMatches, sectionOf } from "./sections.ts";
+export type {
+  JudgedWhen,
+  SectionFacts,
+  SectionJudgments,
+  SectionRuleSetting,
+  SectionWhen,
+} from "./sections.ts";
+export {
+  DEFAULT_JUDGED_THRESHOLD,
+  DEFAULT_SECTION_RULES,
+  hasJudgedWhen,
+  JUDGED_WHEN_KEYS,
+  judgedMatches,
+  sectionMatches,
+  sectionOf,
+} from "./sections.ts";
 export type { RoutePlacement, Score, Thresholds } from "./thresholds.ts";
 export { clampConfidence, place } from "./thresholds.ts";
 
