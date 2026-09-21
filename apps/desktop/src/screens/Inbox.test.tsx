@@ -792,6 +792,66 @@ describe("the reader", () => {
     expect(focusRow()).toBe("e11");
   });
 
+  test("a custom action on the open Thread's Group runs with its Tier: archive with Undo, trash asks first", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    // e1 sits in Hiring; the actions are defined for Hiring and for Finance.
+    await mount(
+      { inbox, initialOpen: "e1" },
+      {
+        "actions.custom": [
+          {
+            id: "file-it",
+            label: "File it",
+            on: { group: "hiring" },
+            tool: "archive_threads",
+            args: {},
+          },
+          {
+            id: "bin-it",
+            label: "Bin it",
+            on: { group: "hiring" },
+            tool: "trash_threads",
+            args: {},
+          },
+          {
+            id: "pay",
+            label: "Pay",
+            on: { group: "finance" },
+            tool: "archive_threads",
+            args: {},
+          },
+        ],
+      },
+    );
+    const buttons = () =>
+      [...document.querySelectorAll<HTMLElement>(".reader .col-head [data-action]")].map((b) => [
+        b.dataset.action,
+        b.dataset.tier,
+      ]);
+    expect(buttons()).toEqual([
+      ["file-it", "reversible"],
+      ["bin-it", "always-ask"],
+    ]);
+    // The chip row under the Brief carries the same two.
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".reader .custom-actions .chip")].map(
+        (c) => c.textContent,
+      ),
+    ).toEqual(["File it", "Bin it"]);
+    // Trash asks first: the first click only confirms, nothing ran.
+    const bin = document.querySelector<HTMLButtonElement>('.reader [data-action="bin-it"]');
+    await act(async () => bin?.click());
+    // Opening marked the Thread read; nothing else ran.
+    expect(calls.filter((c) => !c.startsWith("markRead:"))).toEqual([]);
+    expect(toast()).toContain("Bin it asks first");
+    // Archive runs with Undo and the reader moves on.
+    const file = document.querySelector<HTMLButtonElement>('.reader [data-action="file-it"]');
+    await act(async () => file?.click());
+    expect(calls).toContain('archive:["e1"]');
+    expect(toast()).toBe("File it: doneUndo Z");
+    expect(reader()).toBe("e2");
+  });
+
   test("the reader's More menu stars and marks unread", async () => {
     const { inbox, calls } = spy(fixtureInbox());
     await mount({ inbox, initialOpen: "e3" });
