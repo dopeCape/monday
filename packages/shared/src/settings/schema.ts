@@ -2512,6 +2512,16 @@ export const settingsSchema = {
   ),
   "strings.chips.pay_or_file": str("routing", "Judged chip: pay or file", "Pay or file"),
   "strings.chips.snooze": str("routing", "Judged chip: snooze", "Snooze"),
+  "strings.chips.call_prompt": str(
+    "routing",
+    "Judged chip: the sentence the call chip hands the agent bar",
+    "Set up a call with the sender of this thread",
+  ),
+  "strings.chips.pay_or_file_prompt": str(
+    "routing",
+    "Judged chip: the sentence the pay or file chip hands the agent bar",
+    "Pay or file this thread",
+  ),
   "strings.inbox.action.star": str("routing", "Action: star", "Star"),
   "strings.inbox.action.unstar": str("routing", "Action: unstar", "Unstar"),
   "strings.inbox.action.read": str("routing", "Action: mark read", "Mark read"),

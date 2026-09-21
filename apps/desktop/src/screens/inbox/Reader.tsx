@@ -11,7 +11,16 @@ import type {
   Tag,
   Thread,
 } from "@monday/shared";
-import { Brief, Btn, ColHead, Mark, Message, type MessageStrings, ReplyBox } from "@monday/ui";
+import {
+  ActionChips,
+  Brief,
+  Btn,
+  ColHead,
+  Mark,
+  Message,
+  type MessageStrings,
+  ReplyBox,
+} from "@monday/ui";
 import {
   ArchiveIcon,
   ClockIcon,
@@ -55,6 +64,8 @@ export interface ReaderProps {
   thread: Thread;
   messages: readonly MessageData[];
   brief: BriefData | undefined;
+  /** Action chips from the Thread's Judgments, shown until a Brief exists; the Brief's own chips then win (slice 25). */
+  chips?: readonly BriefAction[] | undefined;
   tags: readonly Tag[];
   sheet: boolean;
   now: Date;
@@ -92,6 +103,7 @@ export function Reader({
   thread,
   messages,
   brief,
+  chips,
   tags,
   sheet,
   now,
@@ -210,6 +222,8 @@ export function Reader({
               updating={strings.briefUpdating}
               onAction={onBriefAction}
             />
+          ) : chips?.length ? (
+            <ActionChips actions={chips} onAction={onBriefAction} />
           ) : null}
           {banner}
           {messages.map((m, i) => (

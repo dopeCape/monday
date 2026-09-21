@@ -899,6 +899,13 @@ i.ph-bold > svg {
 .brief.stale .brief-actions {
   opacity: 0.55;
 }
+/* Judged action chips before a Brief exists: the same row, no bullets above it. */
+.brief.chips {
+  padding: 12px 0;
+}
+.brief.chips .brief-actions {
+  margin-top: 0;
+}
 .msg {
   padding: 22px 0;
   border-bottom: 1px solid var(--border);

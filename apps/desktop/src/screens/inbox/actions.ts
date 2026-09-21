@@ -5,7 +5,7 @@
 // fixtureInbox() is the in-memory implementation over packages/ui fixtures,
 // for tests; store-inbox.ts is the Store's, with the same interface.
 
-import type { Brief, Group, Message, Tag, Thread } from "@monday/shared";
+import type { Brief, Group, Message, Tag, Thread, ThreadJudgments } from "@monday/shared";
 import {
   briefOf,
   groups as fixtureGroups,
@@ -57,6 +57,12 @@ export interface ThreadReader {
   openThread(threadId: string): Promise<void>;
   /** The Brief the Cache holds for a Thread, computed before or after open; undefined when none. */
   brief(threadId: string): Brief | undefined;
+  /**
+   * The Thread's Judgments from the Cache (slice 25), for the action chips
+   * the reader shows before a Brief exists; undefined when not judged yet.
+   * Changes reach the stream's subscribers, not watchMessages.
+   */
+  judgments?(threadId: string): ThreadJudgments | undefined;
   /**
    * Why the last open left bodies missing: the Server did not answer
    * (offline), it is locked, or the read failed; null when nothing went
@@ -139,6 +145,7 @@ export function fixtureInbox(
     },
     openThread: async () => {},
     brief: (threadId) => briefOf(threadId),
+    judgments: () => undefined,
     unavailable: () => null,
     requestBrief: async () => {},
     attachmentBytes: async (attachmentId) => ({

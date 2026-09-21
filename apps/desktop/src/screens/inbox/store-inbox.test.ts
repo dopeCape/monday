@@ -286,6 +286,59 @@ describe("Section rules in the Store", () => {
     inbox.close();
   });
 
+  test("a judgments row on the feed lands in the Cache, moves the Thread by the judged rule, and reaches the reader seam; a deleted row takes it back", async () => {
+    const seed = fixtureSeed();
+    // e7: read, one Message, someone else wrote last: For your information by the headers.
+    seed.threads = seed.threads.map((t) => (t.id === "e7" ? { ...t, section: null } : t));
+    const fake = await createFakeStore({ driver: bunDriver(), seed });
+    const { inbox, server, store } = {
+      ...fake,
+      inbox: await createStoreInbox(fake.store, { sections: { rules, order, owner } }),
+    };
+    expect(inbox.thread("e7")?.section).toBe("fyi");
+    expect(inbox.judgments?.("e7")).toBeUndefined();
+    const judged = {
+      threadId: "e7",
+      needsReply: 0.82,
+      waitingOnOthers: 0.1,
+      newsletter: 0.05,
+      automated: 0.03,
+      briefWorth: 1.2,
+      urgency: 1.5,
+      chips: {
+        reply: 0.9,
+        call: 0.2,
+        review_link: 0.1,
+        open_attachment: 0.1,
+        pay_or_file: 0.05,
+        snooze: 0.3,
+      },
+      model: "jev-1.13.0",
+      judgedAt: "2026-09-16T10:00:00.000Z",
+    };
+    server.record({ kind: "judgments", entityId: "e7", payload: judged });
+    await store.sync();
+    await settled(inbox, () => inbox.thread("e7")?.section === "needs-reply");
+    expect(inbox.judgments?.("e7")).toEqual(judged);
+    expect(await store.query("select thread_id, needs_reply from thread_judgments")).toEqual([
+      { thread_id: "e7", needs_reply: 0.82 },
+    ]);
+    // A re-judge replaces the row; a removal takes the Thread back to the header rules.
+    server.record({
+      kind: "judgments",
+      entityId: "e7",
+      payload: { ...judged, needsReply: 0.3, judgedAt: "2026-09-16T11:00:00.000Z" },
+    });
+    await store.sync();
+    await settled(inbox, () => inbox.thread("e7")?.section === "fyi");
+    expect(inbox.judgments?.("e7")?.needsReply).toBe(0.3);
+    server.record({ kind: "judgments", entityId: "e7", payload: { ...judged, deleted: true } });
+    await store.sync();
+    await settled(inbox, () => inbox.judgments?.("e7") === undefined);
+    expect(await store.query("select thread_id from thread_judgments")).toEqual([]);
+    inbox.close();
+  });
+
   test("resection applies changed rules without waiting for the Cache", async () => {
     const seed = fixtureSeed();
     seed.threads = seed.threads.map((t) => (t.id === "e1" ? { ...t, section: null } : t));

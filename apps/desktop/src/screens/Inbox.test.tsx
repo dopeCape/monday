@@ -660,6 +660,66 @@ describe("the reader", () => {
     expect(focusRow()).toBe("e11");
   });
 
+  test("judged chips show before a Brief exists, likeliest first; a call chip hands the agent bar its sentence; the Brief's own chips win once it arrives", async () => {
+    const base = fixtureInbox();
+    let brief = base.brief;
+    // One object, so the seam hands out a stable snapshot like the Store does.
+    const judged = {
+      threadId: "e1",
+      needsReply: 0.64,
+      waitingOnOthers: 0.2,
+      newsletter: 0.07,
+      automated: 0.05,
+      briefWorth: 1,
+      urgency: 1.2,
+      chips: {
+        reply: 0.84,
+        call: 0.86,
+        review_link: 0.1,
+        open_attachment: 0.2,
+        pay_or_file: 0.05,
+        snooze: 0.3,
+      },
+      model: "jev-1.13.0",
+      judgedAt: "2026-09-16T09:00:00.000Z",
+    };
+    const inbox: InboxData = {
+      ...base,
+      brief: (id) => brief(id),
+      judgments: (id) => (id === "e1" ? judged : undefined),
+    };
+    const has = (selector: string) => document.querySelector(selector) !== null;
+    const remount = async (open: string) => {
+      if (root) await act(async () => root?.unmount());
+      host?.remove();
+      await mount({ inbox, initialOpen: open });
+    };
+    // No Brief yet: the judged chips sit where the Brief will, above the threshold, likeliest first.
+    brief = () => undefined;
+    await remount("e1");
+    expect(has(".reader .brief ul")).toBe(false);
+    const chips = () =>
+      [...document.querySelectorAll<HTMLButtonElement>(".reader .brief.chips .chip")].map(
+        (b) => b.textContent,
+      );
+    expect(chips()).toEqual(["Set up a call", "Reply"]);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".reader .brief.chips .chip")?.click(),
+    );
+    expect(document.querySelector<HTMLInputElement>(".agent-bar input")?.value).toBe(
+      "Set up a call with the sender of this thread",
+    );
+    // The Brief arrives: its own chips replace the judged ones.
+    brief = base.brief;
+    await remount("e1");
+    expect(has(".reader .brief ul")).toBe(true);
+    expect(has(".reader .brief.chips")).toBe(false);
+    // A Thread with no Judgments and no Brief shows nothing there.
+    brief = () => undefined;
+    await remount("e2");
+    expect(has(".reader .brief")).toBe(false);
+  });
+
   test("the reader's More menu stars and marks unread", async () => {
     const { inbox, calls } = spy(fixtureInbox());
     await mount({ inbox, initialOpen: "e3" });

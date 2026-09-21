@@ -3,9 +3,9 @@
 // opens compose and never sends; snooze and archive come back with Undo).
 
 import { describe, expect, test } from "bun:test";
-import type { BriefAction } from "@monday/shared";
+import type { BriefAction, ThreadJudgments } from "@monday/shared";
 import { fixtureInbox } from "./actions.ts";
-import { createActionRunner, tierOf, toolCallOf } from "./brief-actions.ts";
+import { createActionRunner, judgedChips, tierOf, toolCallOf } from "./brief-actions.ts";
 
 const priya = { name: "Priya Raman", email: "priya@raman.test" };
 const actions: Record<BriefAction["kind"], BriefAction> = {
@@ -20,6 +20,9 @@ const actions: Record<BriefAction["kind"], BriefAction> = {
   snooze: { kind: "snooze", label: "Friday", until: "2026-09-18T09:00:00.000Z" },
   archive: { kind: "archive", label: "Archive" },
   "open-link": { kind: "open-link", label: "Open PR", url: "https://github.test/pr/142" },
+  call: { kind: "call", label: "Set up a call" },
+  "open-attachment": { kind: "open-attachment", label: "Open the attachment", attachmentId: "a1" },
+  "pay-or-file": { kind: "pay-or-file", label: "Pay or file" },
 };
 
 describe("toolCallOf", () => {
@@ -54,12 +57,96 @@ describe("toolCallOf", () => {
       tier: "read-only",
       args: { url: "https://github.test/pr/142" },
     });
+    // The judged chips (slice 25): a call or pay-or-file is a sentence for the agent bar, an attachment opens.
+    expect(toolCallOf(actions.call, "t1")).toEqual({
+      tool: "agent.ask",
+      tier: "read-only",
+      args: { threadId: "t1", intent: "call" },
+    });
+    expect(toolCallOf(actions["pay-or-file"], "t1")).toEqual({
+      tool: "agent.ask",
+      tier: "read-only",
+      args: { threadId: "t1", intent: "pay-or-file" },
+    });
+    expect(toolCallOf(actions["open-attachment"], "t1")).toEqual({
+      tool: "open.attachment",
+      tier: "read-only",
+      args: { attachmentId: "a1" },
+    });
     // Leaving the mailbox always asks; nothing is ever demoted (ADR 0002).
     expect(["reply", "forward", "calendar"].map((k) => tierOf(actions[k as "reply"]))).toEqual([
       "always-ask",
       "always-ask",
       "always-ask",
     ]);
+  });
+});
+
+describe("judgedChips", () => {
+  const judgments: ThreadJudgments = {
+    threadId: "t1",
+    needsReply: 0.64,
+    waitingOnOthers: 0.2,
+    newsletter: 0.07,
+    automated: 0.05,
+    briefWorth: 1,
+    urgency: 1.2,
+    chips: {
+      reply: 0.84,
+      call: 0.86,
+      review_link: 0.7,
+      open_attachment: 0.74,
+      pay_or_file: 0.1,
+      snooze: 0.61,
+    },
+    model: "jev-1.13.0",
+    judgedAt: "2026-09-21T09:00:00.000Z",
+  };
+  const labels = {
+    reply: "Reply",
+    call: "Set up a call",
+    review_link: "Review the link",
+    open_attachment: "Open the attachment",
+    pay_or_file: "Pay or file",
+    snooze: "Snooze",
+  };
+
+  test("chips above the threshold, likeliest first, at most the cap; a chip missing its link or attachment is skipped", () => {
+    const chips = judgedChips(judgments, {
+      threshold: 0.6,
+      max: 3,
+      labels,
+      link: "https://github.test/pr/142",
+      attachmentId: "a1",
+      snoozeUntil: "2026-09-22T08:00:00.000Z",
+    });
+    expect(chips).toEqual([
+      { kind: "call", label: "Set up a call" },
+      { kind: "reply", label: "Reply", proposedLine: "" },
+      { kind: "open-attachment", label: "Open the attachment", attachmentId: "a1" },
+    ]);
+    // No link and no attachment on the Thread: those chips give way to the next.
+    expect(
+      judgedChips(judgments, {
+        threshold: 0.6,
+        max: 5,
+        labels,
+        link: null,
+        attachmentId: null,
+        snoozeUntil: "2026-09-22T08:00:00.000Z",
+      }).map((c) => c.kind),
+    ).toEqual(["call", "reply", "snooze"]);
+    // A higher threshold shows fewer; every chip is a BriefAction the runner already knows.
+    expect(
+      judgedChips(judgments, {
+        threshold: 0.85,
+        max: 3,
+        labels,
+        link: null,
+        attachmentId: null,
+        snoozeUntil: null,
+      }),
+    ).toEqual([{ kind: "call", label: "Set up a call" }]);
   });
 });
 
@@ -105,6 +192,34 @@ describe("the runner over InboxActions and compose", () => {
 
     const bad = await runner.run({ ...actions.snooze, until: "not a date" } as BriefAction, "e1");
     expect(bad).toMatchObject({ ok: false, reason: "unavailable" });
+  });
+
+  test("a call or pay-or-file chip hands the agent bar a sentence; an attachment chip opens it; without those seams they report unavailable", async () => {
+    const { runner } = setup();
+    expect(await runner.run(actions.call, "e1")).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(await runner.run(actions["open-attachment"], "e1")).toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    const asked: string[] = [];
+    const openedAttachments: string[] = [];
+    const full = createActionRunner({
+      inbox: fixtureInbox(),
+      compose: () => {},
+      openLink: () => {},
+      ask: (threadId, intent) => asked.push(`${threadId}:${intent}`),
+      openAttachment: (id) => {
+        openedAttachments.push(id);
+      },
+    });
+    expect((await full.run(actions.call, "e1")).ok).toBe(true);
+    expect((await full.run(actions["pay-or-file"], "e2")).ok).toBe(true);
+    expect((await full.run(actions["open-attachment"], "e1")).ok).toBe(true);
+    expect(asked).toEqual(["e1:call", "e2:pay-or-file"]);
+    expect(openedAttachments).toEqual(["a1"]);
   });
 
   test("a link opens outside; a calendar chip reports the calendar is not connected until slice 18", async () => {
