@@ -10,7 +10,7 @@
 // extension slot after both exist.
 
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
-import type { AiLevel, HostedState } from "@monday/shared";
+import type { AiLevel, HostedState, IntentReading, IntentRequest } from "@monday/shared";
 import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
@@ -40,6 +40,8 @@ import {
   type ToolExtensions,
 } from "./agent/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
+import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts";
+import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
@@ -54,6 +56,7 @@ import {
   type KeysResolver,
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
+import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
 export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
@@ -77,6 +80,10 @@ export {
   parseBriefOutput,
   richTextOf,
 } from "./brief.ts";
+export type { GuardSeam, GuardSettings, GuardVerdict } from "./guard.ts";
+export { createBodyGuard } from "./guard.ts";
+export type { IntentSettings } from "./intent.ts";
+export { intentQuestions, intentState, judgeIntent } from "./intent.ts";
 export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
 export type { Meter } from "./meter.ts";
@@ -122,6 +129,8 @@ export {
   NoJudgeError,
   NoProviderKeyError,
 } from "./runtime/index.ts";
+export type { BriefVerifier, VerifySettings } from "./verify.ts";
+export { createBriefVerifier, plainText } from "./verify.ts";
 
 export interface IntelligenceOptions {
   db: Db;
@@ -168,6 +177,12 @@ export interface Intelligence {
   integrationSecrets: IntegrationSecretStore;
   /** The Voice profile builder the build_voice_profile tool acts through. */
   voice: VoiceSeam;
+  /** The guardrail on Thread text entering a turn (slice 27). */
+  guard: GuardSeam;
+  /** The Brief verifier (slice 27). */
+  verify: BriefVerifier;
+  /** The palette's typed sentence as one Judgment (slice 27). Throws NoJudgeError without a judge. */
+  intent(request: IntentRequest): Promise<IntentReading>;
   /**
    * Seals what earlier versions wrote in the clear (transcripts, Voice
    * profiles, integration secrets in the Setting). Needs the root key; the
@@ -202,6 +217,36 @@ const BRIEF_SETTING_KEYS = [
   "briefs.input_chars_max",
 ] as const;
 
+const VERIFY_SETTING_KEYS = [
+  "briefs.verify",
+  "briefs.verify.question",
+  "briefs.verify.criteria",
+  "briefs.verify.confidence",
+] as const;
+
+const GUARD_SETTING_KEYS = [
+  "guard.enabled",
+  "guard.threshold",
+  "guard.question",
+  "guard.input_chars_max",
+  "guard.notice",
+  "guard.prompt",
+] as const;
+
+const INTENT_SETTING_KEYS = [
+  "intent.contacts_max",
+  "intent.question.intent",
+  "intent.criteria.intent",
+  "intent.question.person",
+  "intent.question.group",
+  "intent.question.section",
+  "intent.question.weekday",
+  "intent.question.hour",
+  "intent.question.scope",
+  "intent.question.age",
+  "intent.question.kind",
+] as const;
+
 const POLICY_SETTING_KEYS = [
   "briefs.policy_mode",
   "briefs.policy_default",
@@ -229,6 +274,9 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.dry_run.recent",
   "workflows.silence.check_cron",
   "strings.workflows.failed_notice",
+  "workflows.judged.threshold",
+  "workflows.judged.question",
+  "workflows.judged.input_chars_max",
 ] as const;
 
 const VOICE_SETTING_KEYS = [
@@ -290,6 +338,49 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   };
   const policy =
     options.policy ?? createBriefPolicyRule({ settings: policySettings, runtime, log });
+  const verify = createBriefVerifier({
+    runtime,
+    log,
+    settings: async (): Promise<VerifySettings> => {
+      const s = await readGlobalSettings(db, VERIFY_SETTING_KEYS);
+      return {
+        enabled: s["briefs.verify"],
+        question: s["briefs.verify.question"],
+        criteria: s["briefs.verify.criteria"],
+        confidence: s["briefs.verify.confidence"],
+      };
+    },
+  });
+  const guardSettings = async (): Promise<GuardSettings & { prompt: string }> => {
+    const s = await readGlobalSettings(db, GUARD_SETTING_KEYS);
+    return {
+      enabled: s["guard.enabled"],
+      threshold: s["guard.threshold"],
+      question: s["guard.question"],
+      inputCharsMax: s["guard.input_chars_max"],
+      notice: s["guard.notice"],
+      prompt: s["guard.prompt"],
+    };
+  };
+  const guard = createBodyGuard({ runtime, log, settings: guardSettings });
+  const intentSettings = async (): Promise<IntentSettings> => {
+    const s = await readGlobalSettings(db, INTENT_SETTING_KEYS);
+    return {
+      contactsMax: s["intent.contacts_max"],
+      questions: {
+        intent: s["intent.question.intent"],
+        person: s["intent.question.person"],
+        group: s["intent.question.group"],
+        section: s["intent.question.section"],
+        weekday: s["intent.question.weekday"],
+        hour: s["intent.question.hour"],
+        scope: s["intent.question.scope"],
+        age: s["intent.question.age"],
+        kind: s["intent.question.kind"],
+      },
+      intentCriteria: s["intent.criteria.intent"],
+    };
+  };
   const briefs = createBriefs({
     db,
     mailstore,
@@ -298,6 +389,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     now,
     log,
     level,
+    verify,
     settings: async (): Promise<BriefSettings> => {
       const s = await readGlobalSettings(db, BRIEF_SETTING_KEYS);
       return {
@@ -381,7 +473,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
   // Filled once the Workflows module exists; the tool server reads it per call.
-  const extensions: ToolExtensions = { integrations, mcp, voice };
+  const extensions: ToolExtensions = { integrations, mcp, voice, guard };
   const agent = createAgentHost({
     runtime,
     activity,
@@ -393,8 +485,11 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     settings: async () => {
       const s = await readGlobalSettings(db, AGENT_SETTING_KEYS);
       const current = await level();
+      // While screening is on, the Agent is told what the notice line means (slice 27).
+      const g = await guardSettings();
+      const guardLine = g.enabled && g.prompt.trim() !== "" ? `\n${g.prompt}` : "";
       return {
-        systemPrompt: s["agent.system_prompt"],
+        systemPrompt: `${s["agent.system_prompt"]}${guardLine}`,
         level: current,
         onboardingPrompt: s["agent.onboarding_prompt"]
           .replaceAll("{level}", current)
@@ -447,6 +542,11 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         dryRunRecent: s["workflows.dry_run.recent"],
         silenceCheckCron: s["workflows.silence.check_cron"],
         failedNotice: s["strings.workflows.failed_notice"],
+        judged: {
+          threshold: s["workflows.judged.threshold"],
+          question: s["workflows.judged.question"],
+          inputCharsMax: s["workflows.judged.input_chars_max"],
+        },
       };
     },
   });
@@ -471,6 +571,9 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     onboarding,
     integrationSecrets,
     voice,
+    guard,
+    verify,
+    intent: async (request) => judgeIntent(runtime, request, await intentSettings()),
     level,
     async sealLegacy() {
       let transcripts = 0;

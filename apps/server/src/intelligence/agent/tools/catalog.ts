@@ -248,14 +248,26 @@ const readThread: ToolDefinition<{ thread_id: string }> = {
   async run(input, ctx) {
     const thread = await ctx.host.readThread(input.thread_id);
     if (!thread) return { kind: "result", text: "No such Thread.", data: null };
+    // The guardrail (slice 27): a Message that reads as instructions aimed at
+    // an assistant gets the notice line above it, and the result carries the hits.
+    const verdicts = ctx.extensions?.guard
+      ? await ctx.extensions.guard.screen(ctx.host.workspaceId, thread.messages)
+      : null;
+    const hits = (verdicts ?? []).filter((v) => v.hit);
+    const notice = hits.length > 0 ? await ctx.extensions?.guard?.notice() : undefined;
+    const marked = new Set(hits.map((v) => v.messageId));
     const text = [
       `Subject: ${thread.subject}`,
       ...thread.messages.map(
         (m) =>
-          `--- ${m.id}\nFrom: ${personLine(m.from)}\nTo: ${m.to.map(personLine).join(", ")}\nDate: ${m.date}\n\n${m.text ?? "[text not available]"}`,
+          `--- ${m.id}\n${marked.has(m.id) && notice ? `${notice}\n` : ""}From: ${personLine(m.from)}\nTo: ${m.to.map(personLine).join(", ")}\nDate: ${m.date}\n\n${m.text ?? "[text not available]"}`,
       ),
     ].join("\n\n");
-    return { kind: "result", text, data: thread };
+    return {
+      kind: "result",
+      text,
+      data: hits.length > 0 ? { ...thread, guard: { hits } } : thread,
+    };
   },
 };
 

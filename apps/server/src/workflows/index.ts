@@ -15,6 +15,7 @@ import type {
   ActivityRecord,
   AiLevel,
   ApprovalDecision,
+  DryRunJudgment,
   DryRunPreview,
   DryRunStep,
   DryRunThread,
@@ -67,7 +68,7 @@ import {
   publicActivity,
 } from "../intelligence/agent/index.ts";
 import { ROUTE_STEP } from "../intelligence/routing/index.ts";
-import type { HostedRuntime } from "../intelligence/runtime/index.ts";
+import { type HostedRuntime, NoJudgeError } from "../intelligence/runtime/index.ts";
 import type { Job, StepContext as JobContext, Jobs, StepResult } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import type { Integrations } from "./integrations.ts";
@@ -110,6 +111,14 @@ export interface WorkflowSettings {
   /** When the silence triggers look for Threads gone quiet (a cron). */
   silenceCheckCron: string;
   failedNotice: string;
+  /** Judged conditions and triggers (ADR 0012, slice 27). */
+  judged: {
+    /** The probability at or above which a statement holds when the document names none. */
+    threshold: number;
+    /** The judge's instructions, with {statement}. */
+    question: string;
+    inputCharsMax: number;
+  };
 }
 
 export interface WorkflowsOptions {
@@ -210,6 +219,8 @@ interface StepEnv {
   existing: StepRow | null;
   /** The Job's lease renewal, for a Step that outlives one lease (an agentic Step). */
   heartbeat?: (() => Promise<void>) | undefined;
+  /** A Dry run collects what the judge said here (slice 27). */
+  judged?: DryRunJudgment[] | undefined;
 }
 
 const personLine = (p: { name: string; email: string }) =>
@@ -235,7 +246,7 @@ function lastJsonObject(text: string): Record<string, unknown> | null {
 }
 
 export function createWorkflows(options: WorkflowsOptions): Workflows {
-  const { db, mailstore, activity, agent } = options;
+  const { db, mailstore, activity, agent, runtime } = options;
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
   const level = options.level ?? (async (): Promise<AiLevel> => "automate");
@@ -413,10 +424,116 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     };
   };
 
+  /* ------------------------------ Judged statements (slice 27) ------------------------------ */
+
+  /**
+   * The Thread as the judge reads it: the subject, then the Messages newest
+   * first within the Setting's cap, each with who wrote it. Bodies the
+   * Server cannot read (locked) are left out.
+   */
+  const judgeText = async (t: ThreadRow, inputCharsMax: number): Promise<string> => {
+    const subject = await subjectOf(t);
+    const headers = await mailstore.listMessages(t.id);
+    const parts: string[] = [];
+    let budget = inputCharsMax - subject.length - 16;
+    for (let i = headers.length - 1; i >= 0 && budget > 0; i--) {
+      const m = headers[i];
+      if (!m) continue;
+      let text = "";
+      try {
+        text = (await mailstore.readMessageBody(m.id)).text;
+      } catch (error) {
+        if (!(error instanceof LockedError) && !(error instanceof NotFoundError)) throw error;
+      }
+      const block = `From: ${personLine(m.from)}\n${text.trim()}`.slice(0, budget);
+      parts.push(block);
+      budget -= block.length + 2;
+    }
+    return `Subject: ${subject}\n\n${parts.join("\n\n")}`;
+  };
+
+  /** One request per Thread and statement, cached per Thread version: a Run and its Dry run never ask twice. */
+  const judgeCache = new Map<string, Promise<number | null>>();
+
+  const judgeStatement = async (
+    workspaceId: Id,
+    t: ThreadRow,
+    statement: string,
+    settings: WorkflowSettings,
+    jobId: string | null,
+  ): Promise<{ probability: number | null; reason?: string }> => {
+    if (!(await runtime.judgeAvailable())) return { probability: null, reason: "no judge" };
+    const headers = await mailstore.listMessages(t.id);
+    const version = `${headers.length}:${headers[headers.length - 1]?.id ?? ""}`;
+    const key = `${t.id}:${version}:${statement}`;
+    let pending = judgeCache.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const state = { thread: await judgeText(t, settings.judged.inputCharsMax) };
+        const result = await runtime.judge(
+          "judge.condition",
+          state,
+          {
+            holds: {
+              type: "noul",
+              instructions: settings.judged.question.replaceAll("{statement}", statement),
+            },
+          },
+          { workspaceId, jobId },
+        );
+        return result.answers.holds.noul;
+      })();
+      judgeCache.set(key, pending);
+      if (judgeCache.size > 2000) {
+        const first = judgeCache.keys().next().value;
+        if (first !== undefined) judgeCache.delete(first);
+      }
+    }
+    try {
+      return { probability: await pending };
+    } catch (error) {
+      judgeCache.delete(key);
+      if (error instanceof NoJudgeError) return { probability: null, reason: error.message };
+      log(`judge: ${statement}: ${error instanceof Error ? error.message : String(error)}`);
+      return {
+        probability: null,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+
+  /** Whether a judged statement holds for a Thread, with what a Dry run reports. */
+  const judged = async (
+    where: string,
+    workspaceId: Id,
+    t: ThreadRow,
+    test: { statement: string; threshold?: number | undefined },
+    settings: WorkflowSettings,
+    jobId: string | null,
+  ): Promise<DryRunJudgment> => {
+    const threshold = test.threshold ?? settings.judged.threshold;
+    const { probability, reason } = await judgeStatement(
+      workspaceId,
+      t,
+      test.statement,
+      settings,
+      jobId,
+    );
+    return {
+      where,
+      statement: test.statement,
+      probability,
+      threshold,
+      held: probability !== null && probability >= threshold,
+      ...(reason ? { reason } : {}),
+    };
+  };
+
   const triggerMatches = async (
     trigger: Trigger,
     t: ThreadRow,
     event: { event: ThreadEvent; value: string | null } | null,
+    judgedOut?: (j: DryRunJudgment) => void,
   ): Promise<boolean> => {
     if (trigger.kind === "arrival") {
       if (event) return false;
@@ -427,7 +544,14 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         const facts = await factsOf(t);
         if (!matchesPredicate(trigger.predicate as Predicate, facts)) return false;
       }
-      return Boolean(trigger.group || trigger.predicate);
+      if (trigger.judge) {
+        // The semantic filter runs last, after the free Predicate and Group tests (one request per Thread).
+        const settings = await options.settings();
+        const verdict = await judged("trigger", t.workspaceId, t, trigger.judge, settings, null);
+        judgedOut?.(verdict);
+        if (!verdict.held) return false;
+      }
+      return Boolean(trigger.group || trigger.predicate || trigger.judge);
     }
     if (trigger.kind === "thread_event") {
       if (!event || event.event !== trigger.event) return false;
@@ -638,6 +762,30 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         return { kind: "wait", until, detail: `Waiting until ${until}` };
       }
       case "condition": {
+        if (step.when.op === "judged") {
+          // A semantic test (ADR 0012): the judge reads the Thread; without one the condition is false and says why.
+          const statement = step.when.statement ?? "";
+          const missing = needThread(env);
+          if (missing || !thread) return missing ?? { kind: "failed", detail: "no thread" };
+          const verdict = await judged(
+            step.id,
+            env.workspaceId,
+            thread,
+            { statement, threshold: step.when.threshold },
+            env.settings,
+            env.dry ? null : env.runId,
+          );
+          env.judged?.push(verdict);
+          const pct =
+            verdict.probability === null
+              ? `no judge${verdict.reason ? `: ${verdict.reason}` : ""}`
+              : `${Math.round(verdict.probability * 100)}%`;
+          if (verdict.held) return { kind: "done", detail: `Yes (${pct}): ${statement}` };
+          const detail = `No (${pct}): ${statement}`;
+          return step.otherwise === "skip_next"
+            ? { kind: "skip_next", detail }
+            : { kind: "stop", detail };
+        }
         const ok = evaluateCondition(step.when, env.ctx);
         const shown = renderTemplate(step.when.left, env.ctx).slice(0, 80);
         if (ok) return { kind: "done", detail: `Yes: ${shown || "(empty)"}` };
@@ -1159,17 +1307,32 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
 
   /* ------------------------------ Dry run ------------------------------ */
 
+  /** What a Dry run sampled: the Threads, and per Thread what the trigger's judge said (slice 27). */
+  interface DrySample {
+    considered: number;
+    threads: ThreadRow[];
+    judged: Map<Id, DryRunJudgment>;
+    /** Threads the judged trigger looked at and turned down; reported so the user sees why. */
+    rejected: ThreadRow[];
+  }
+
   const dryRunThreads = async (
     w: WorkflowRow,
     doc: WorkflowInput,
     recent: number,
-  ): Promise<{ considered: number; threads: ThreadRow[] }> => {
+  ): Promise<DrySample> => {
+    const judgedMap = new Map<Id, DryRunJudgment>();
     if (doc.trigger.kind === "schedule" || doc.trigger.kind === "manual") {
-      return { considered: 0, threads: [] };
+      return { considered: 0, threads: [], judged: judgedMap, rejected: [] };
     }
     if (doc.trigger.kind === "silence") {
       const silent = await silentThreads(w, doc.trigger, 500);
-      return { considered: silent.length, threads: silent.slice(0, recent) };
+      return {
+        considered: silent.length,
+        threads: silent.slice(0, recent),
+        judged: judgedMap,
+        rejected: [],
+      };
     }
     const rows = await db
       .select()
@@ -1178,7 +1341,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       .orderBy(desc(threads.lastActivity))
       .limit(500);
     const matched: ThreadRow[] = [];
+    const rejected: ThreadRow[] = [];
+    // A judged trigger costs one request per Thread: the sample stops once it has enough.
+    const judgedTrigger = doc.trigger.kind === "arrival" && doc.trigger.judge !== undefined;
     for (const t of rows) {
+      if (judgedTrigger && matched.length + rejected.length >= recent) break;
       const trigger = doc.trigger;
       const event =
         trigger.kind === "thread_event"
@@ -1205,10 +1372,28 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
             ok = false;
             break;
         }
-      } else ok = await triggerMatches(trigger, t, null);
+      } else ok = await triggerMatches(trigger, t, null, (j) => judgedMap.set(t.id, j));
       if (ok) matched.push(t);
+      else if (judgedMap.has(t.id)) rejected.push(t);
     }
-    return { considered: matched.length, threads: matched.slice(0, recent) };
+    return {
+      considered: matched.length + rejected.length,
+      threads: matched.slice(0, recent),
+      judged: judgedMap,
+      rejected,
+    };
+  };
+
+  /** A Thread the judged trigger turned down, as the Dry run lists it: no Steps, the probability. */
+  const dryRunRejected = async (t: ThreadRow, verdict: DryRunJudgment): Promise<DryRunThread> => {
+    const facts = await factsOf(t);
+    return {
+      threadId: t.id,
+      subject: facts.subject,
+      from: facts.from ? personLine(facts.from) : "",
+      steps: [],
+      judged: [verdict],
+    };
   };
 
   const dryRunOne = async (
@@ -1216,10 +1401,12 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     doc: WorkflowInput,
     t: ThreadRow | null,
     settings: WorkflowSettings,
+    triggerJudgment?: DryRunJudgment,
   ): Promise<DryRunThread> => {
     const runId = `dry:${crypto.randomUUID()}`;
     const context: Record<string, StepContext> = {};
     const steps: DryRunStep[] = [];
+    const judgments: DryRunJudgment[] = triggerJudgment ? [triggerJudgment] : [];
     let skipNext = false;
     let stopped = false;
     const facts = t ? await factsOf(t) : null;
@@ -1253,6 +1440,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         deadline: now().getTime() + 60_000,
         settings,
         existing: null,
+        judged: judgments,
       };
       let outcome: StepOutcome;
       try {
@@ -1296,7 +1484,31 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       subject: facts?.subject ?? "",
       from: facts?.from ? personLine(facts.from) : "",
       steps,
+      ...(judgments.length > 0 ? { judged: judgments } : {}),
     };
+  };
+
+  /** The Dry run over the sample: every matched Thread's Steps, then the Threads a judged trigger turned down. */
+  const dryRunOver = async (
+    w: WorkflowRow,
+    doc: WorkflowInput,
+    recent: number,
+    settings: WorkflowSettings,
+  ): Promise<{ considered: number; threads: DryRunThread[] }> => {
+    const sample = await dryRunThreads(w, doc, recent);
+    const out: DryRunThread[] = [];
+    if (doc.trigger.kind === "schedule" || doc.trigger.kind === "manual") {
+      out.push(await dryRunOne(w, doc, null, settings));
+    } else {
+      for (const t of sample.threads) {
+        out.push(await dryRunOne(w, doc, t, settings, sample.judged.get(t.id)));
+      }
+      for (const t of sample.rejected) {
+        const verdict = sample.judged.get(t.id);
+        if (verdict) out.push(await dryRunRejected(t, verdict));
+      }
+    }
+    return { considered: sample.considered, threads: out };
   };
 
   /* ------------------------------ Thread events off the feed ------------------------------ */
@@ -1445,18 +1657,10 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       const doc = await document(workflowId, w.currentVersion);
       if (!doc) throw new WorkflowNotFoundError(workflowId);
       const settings = await options.settings();
-      const sample = await dryRunThreads(w, doc, recent ?? settings.dryRunRecent);
-      const out: DryRunThread[] = [];
-      if (doc.trigger.kind === "schedule" || doc.trigger.kind === "manual") {
-        out.push(await dryRunOne(w, doc, null, settings));
-      } else {
-        for (const t of sample.threads) out.push(await dryRunOne(w, doc, t, settings));
-      }
       const preview: DryRunPreview = {
         workflowId,
         version: w.currentVersion,
-        considered: sample.considered,
-        threads: out,
+        ...(await dryRunOver(w, doc, recent ?? settings.dryRunRecent, settings)),
       };
       return preview;
     },
@@ -1474,14 +1678,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         createdAt: at,
         updatedAt: at,
       };
-      const sample = await dryRunThreads(w, input, recent ?? settings.dryRunRecent);
-      const out: DryRunThread[] = [];
-      if (input.trigger.kind === "schedule" || input.trigger.kind === "manual") {
-        out.push(await dryRunOne(w, input, null, settings));
-      } else {
-        for (const t of sample.threads) out.push(await dryRunOne(w, input, t, settings));
-      }
-      return { workflowId: w.id, version: 0, considered: sample.considered, threads: out };
+      return {
+        workflowId: w.id,
+        version: 0,
+        ...(await dryRunOver(w, input, recent ?? settings.dryRunRecent, settings)),
+      };
     },
 
     async runs(workspaceId, opts = {}) {
