@@ -49,6 +49,7 @@ import {
   createIntelligence,
   GroupNestingError,
   type Intelligence,
+  type JudgeModel,
   NoProviderKeyError,
   RunNotWaitingError,
   SessionNotFoundError,
@@ -143,6 +144,8 @@ export interface AppOptions {
   intelligence?: Intelligence;
   /** LangGraph's checkpointer for the Agent host's paused turns; the entry passes PostgresSaver. */
   checkpointer?: BaseCheckpointSaver;
+  /** The judge under the default intelligence module (ADR 0012); the entries pass TypeSafe. Ignored when `intelligence` is given. */
+  judge?: JudgeModel;
   /**
    * The in-process wake bus for the Changes feed. The entry feeds it from a
    * LISTEN connection and shares it with the WebSocket transport; defaults to a
@@ -229,6 +232,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         mailstore,
         drafts,
         ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
+        ...(options.judge ? { judge: options.judge } : {}),
       });
       if (options.jobs) created.registerSteps(options.jobs);
       return created;

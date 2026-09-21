@@ -34,6 +34,7 @@ export const HOSTED_SETTING_KEYS = [
   "ai.judge.model",
   "ai.endpoint.kimi",
   "ai.endpoint.openrouter",
+  "ai.endpoint.typesafe",
   "ai.max_output_tokens",
 ] as const satisfies readonly SettingKey[];
 

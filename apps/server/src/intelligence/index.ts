@@ -10,8 +10,14 @@
 // extension slot after both exist.
 
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
-import type { AiLevel, HostedState } from "@monday/shared";
-import { HOSTED_PROVIDERS, HOSTED_SETTING_KEYS, rolesFor } from "@monday/shared";
+import type { AiLevel, HostedState, JudgeState, KeyProvider } from "@monday/shared";
+import {
+  HOSTED_PROVIDERS,
+  HOSTED_SETTING_KEYS,
+  type HostedSettings,
+  resolveTaskModel,
+  rolesFor,
+} from "@monday/shared";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accounts, workspaces } from "../db/schema.ts";
@@ -54,6 +60,7 @@ import {
   type KeysResolver,
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
+import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
 export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
@@ -122,6 +129,11 @@ export {
   NoJudgeError,
   NoProviderKeyError,
 } from "./runtime/index.ts";
+export type { KeyValidation, TypeSafeErrorCode } from "./runtime/typesafe.ts";
+export { createTypeSafeJudge, TypeSafeError, validateTypeSafeKey } from "./runtime/typesafe.ts";
+
+/** The live check a pasted provider key gets before it is saved; TypeSafe has one, the others none yet. */
+export type KeyValidator = (provider: KeyProvider, key: string) => Promise<KeyValidation | null>;
 
 export interface IntelligenceOptions {
   db: Db;
@@ -132,6 +144,8 @@ export interface IntelligenceOptions {
   converse?: ConverseModel;
   /** The judge's seam (ADR 0012); the entry wires TypeSafe, tests pass a fake. Absent: judge() throws NoJudgeError. */
   judge?: JudgeModel;
+  /** Validates a pasted key live; defaults to TypeSafe's models endpoint for typesafe, null for the rest. Tests pass a fake. */
+  validateKey?: KeyValidator;
   /** Where the runtime's keys come from; defaults to the shared-key store. */
   keys?: KeysResolver;
   /** The brief policy seam; defaults to the rule over Settings with the model behind it. */
@@ -178,6 +192,10 @@ export interface Intelligence {
   level(): Promise<AiLevel>;
   /** The runtime as /capabilities reports it. Works locked. */
   hostedState(): Promise<HostedState>;
+  /** Who answers judgments on this Server now (ADR 0012). Works locked. */
+  judgeState(): Promise<JudgeState>;
+  /** The live check for a pasted key, run here so a client never talks to the provider; null when the provider has none. */
+  validateKey(provider: KeyProvider, key: string): Promise<KeyValidation | null>;
   registerSteps(jobs: Jobs): void;
   /** Hands the calendar tools their seam (slice 18); the app calls it once the calendar module exists. */
   attachCalendar(seam: CalendarSeam): void;
@@ -254,6 +272,29 @@ const ROUTING_SETTING_KEYS = [
   "routing.brief_policy.default",
 ] as const;
 
+/**
+ * Who answers judgments under these Settings with these shared keys: TypeSafe
+ * when a judge model is wired, Settings allow it and its key is shared; the
+ * language model's prompt path (the classify Task's model) when Settings say
+ * so or auto finds no key; none when Settings pin TypeSafe and no key is shared.
+ */
+export function judgeStateFor(
+  settings: HostedSettings,
+  sharedKeys: readonly string[],
+  hasJudge: boolean,
+): JudgeState {
+  const choice = settings["ai.judge.provider"];
+  const llm = (): JudgeState => ({
+    provider: "llm",
+    model: resolveTaskModel(settings, "classify").model,
+  });
+  if (choice === "llm") return llm();
+  if (hasJudge && sharedKeys.includes("typesafe")) {
+    return { provider: "typesafe", model: settings["ai.judge.model"] };
+  }
+  return choice === "auto" ? llm() : { provider: "none", model: "" };
+}
+
 export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const { db, mailstore } = options;
   const now = options.now ?? (() => new Date());
@@ -263,6 +304,13 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const level = options.level ?? (() => readGlobalSetting(db, "ai.level"));
   const hostedSettings = () => readGlobalSettings(db, HOSTED_SETTING_KEYS);
   const resolveKey: KeysResolver = options.keys ?? ((provider) => keys.load(provider));
+  const validateKey: KeyValidator =
+    options.validateKey ??
+    (async (provider, key) => {
+      if (provider !== "typesafe") return null;
+      const s = await hostedSettings();
+      return validateTypeSafeKey(key, { baseUrl: s["ai.endpoint.typesafe"] });
+    });
   const runtime = createHostedRuntime({
     chat: options.chat ?? createLangChainChat(),
     converse: options.converse ?? createLangChainConverse(),
@@ -490,12 +538,18 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       const roles = Object.fromEntries(
         HOSTED_PROVIDERS.map((p) => [p, rolesFor(settings, p)]),
       ) as HostedState["roles"];
+      const shared = await keys.list();
       return {
         provider: settings["ai.hosted.provider"],
         roles,
-        sharedKeys: await keys.list(),
+        sharedKeys: shared,
+        judge: judgeStateFor(settings, shared, options.judge !== undefined),
       };
     },
+    async judgeState() {
+      return judgeStateFor(await hostedSettings(), await keys.list(), options.judge !== undefined);
+    },
+    validateKey,
     registerSteps(jobs) {
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);

@@ -5,8 +5,8 @@
 // one row per provider. list() never decrypts, so a locked Server can still
 // say which providers have a key; load() needs the root key.
 
-import type { HostedProvider, KeyProvider } from "@monday/shared";
-import { HOSTED_PROVIDERS } from "@monday/shared";
+import type { KeyProvider } from "@monday/shared";
+import { KEY_PROVIDERS } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { providerKeys } from "../db/schema.ts";
@@ -44,7 +44,7 @@ export function createProviderKeyStore(db: Db, content: ContentStore): ProviderK
     async list() {
       const rows = await db.select({ provider: providerKeys.provider }).from(providerKeys);
       const present = new Set(rows.map((r) => r.provider));
-      return HOSTED_PROVIDERS.filter((p) => present.has(p));
+      return KEY_PROVIDERS.filter((p) => present.has(p));
     },
 
     async load(provider) {

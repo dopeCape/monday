@@ -21,7 +21,7 @@ import type {
   Task,
   ThemeMode,
 } from "../domain.ts";
-import type { KeyProvider } from "../judge.ts";
+import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
 
@@ -160,6 +160,11 @@ const hostedProvider = z.enum([
   "openrouter",
 ]) satisfies z.ZodType<HostedProvider>;
 export const HOSTED_PROVIDERS = hostedProvider.options;
+const judgeProvider = z.enum(["typesafe"]) satisfies z.ZodType<JudgeProvider>;
+/** The providers that answer judgments (ADR 0012). */
+export const JUDGE_PROVIDERS = judgeProvider.options;
+/** Every provider a key can be stored for: the language models, then the judge. */
+export const KEY_PROVIDERS = [...HOSTED_PROVIDERS, ...JUDGE_PROVIDERS] as const;
 /** How each Hosted provider is named on screen. */
 export const PROVIDER_LABELS: Readonly<Record<KeyProvider, string>> = {
   anthropic: "Anthropic",
@@ -347,7 +352,7 @@ function aiLocalModel(cli: LocalCli) {
   });
 }
 
-function aiEndpoint(provider: HostedProvider, url: string) {
+function aiEndpoint(provider: KeyProvider, url: string) {
   return setting({
     type: z.url(),
     default: url,
@@ -356,7 +361,10 @@ function aiEndpoint(provider: HostedProvider, url: string) {
     group: PROVIDER_LABELS[provider],
     advanced: true,
     label: `${provider} endpoint`,
-    help: `The OpenAI-compatible base URL the Hosted runtime calls for ${provider}.`,
+    help:
+      provider === "typesafe"
+        ? "The base URL of the TypeSafe API the judge calls: POST /v1/systemone for judgments, GET /v1/models to validate a key."
+        : `The OpenAI-compatible base URL the Hosted runtime calls for ${provider}.`,
   });
 }
 
@@ -1396,6 +1404,17 @@ export const settingsSchema = {
   }),
   "ai.endpoint.kimi": aiEndpoint("kimi", "https://api.moonshot.ai/v1"),
   "ai.endpoint.openrouter": aiEndpoint("openrouter", "https://openrouter.ai/api/v1"),
+  "ai.endpoint.typesafe": aiEndpoint("typesafe", "https://api.typesafe.ai"),
+  "ai.judge.share_by_default": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "ai",
+    group: "TypeSafe",
+    advanced: true,
+    label: "Share a new TypeSafe key with the server",
+    help: "On onboarding's TypeSafe card the share switch starts on, so a pasted key also reaches the Server and sorting runs on arrival while every device is off. Off starts the switch off; the key then stays on this device until you share it.",
+  }),
   "ai.max_output_tokens": setting({
     type: z.int().min(256).max(128_000),
     default: 4096,
@@ -4214,6 +4233,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
   ai: [
     "Level",
     "Runtime",
+    "TypeSafe",
     "Anthropic",
     "Gemini",
     "OpenAI",

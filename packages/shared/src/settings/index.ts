@@ -37,6 +37,8 @@ export {
   HOSTED_PROVIDERS,
   isSettingKey,
   isStringKey,
+  JUDGE_PROVIDERS,
+  KEY_PROVIDERS,
   keysInSection,
   levelAtLeast,
   mcpServerShape,
