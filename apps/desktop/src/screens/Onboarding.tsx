@@ -49,8 +49,11 @@ export interface OnboardingProps {
   rerun?: boolean | undefined;
   /** The window width, for density; defaults to the browser's. */
   screenWidth?: number | undefined;
-  /** Opens on the conversation at once (the dev server's fixture state); the level is not touched. */
-  initialStep?: "chat" | undefined;
+  /**
+   * Opens on the conversation at once (the dev server's fixture state), or on
+   * the runtime step with "sorts and acts" chosen; the level is not touched.
+   */
+  initialStep?: "chat" | "runtime" | undefined;
   /**
    * `welcome` is the first run before any Account exists: level, runtime, keymap,
    * then connecting the first Account. `account` (default) is the offer each new
@@ -161,7 +164,7 @@ function OnboardingBody({
   const current = s["ai.level"];
   const [step, setStep] = useState<Step>(initialStep ?? "level");
   const [chosen, setChosen] = useState<AiLevel | null>(
-    rerun || initialStep === "chat" ? current : null,
+    initialStep === "runtime" ? "automate" : rerun || initialStep === "chat" ? current : null,
   );
   const [finished, setFinished] = useState(false);
   const seeded = useRef(false);
