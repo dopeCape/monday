@@ -8,7 +8,8 @@
 // rest; the Agent's onboarding tools propose Groups (with move counts) and
 // catalog Workflows (with Dry runs) and nothing applies until approved.
 // Moving up from `off` with no runtime configured shows the runtime step
-// before the level is saved. Every string and knob is a Setting (ADR 0004).
+// (TypeSafe, a language model, or both) before the level is saved. Every
+// string and knob is a Setting (ADR 0004).
 
 import type { AiLevel, Density, OnboardingState, SettingKey, Settings } from "@monday/shared";
 import { Btn, Chip, type ChoiceCard, ChoiceCards } from "@monday/ui";
@@ -22,6 +23,7 @@ import { type SetResult, useShell } from "../shell/Shell.tsx";
 import { AddAccount } from "./settings/AddAccount.tsx";
 import { levelCards, RuntimeStep, useRuntimeConfigured } from "./settings/controls.tsx";
 import {
+  KeyStateProvider,
   type RuntimeDetection,
   type SettingsScreen,
   SettingsScreenProvider,
@@ -129,9 +131,12 @@ export function Onboarding(props: OnboardingProps) {
     }),
     [workspaceId, changeMany, runtimes, keys, now],
   );
+  // The key-state version: a key saved on the runtime step re-runs the runtime check at once.
   return (
     <SettingsScreenProvider value={screen}>
-      <OnboardingBody {...props} now={now} />
+      <KeyStateProvider>
+        <OnboardingBody {...props} now={now} />
+      </KeyStateProvider>
     </SettingsScreenProvider>
   );
 }
@@ -232,7 +237,8 @@ function OnboardingBody({
 
   /* ------------------------------ Steps ------------------------------ */
 
-  const configured = useRuntimeConfigured();
+  // Level-aware (docs/spec/onboarding.md): an assistant needs a language model; sorting runs on TypeSafe alone.
+  const configured = useRuntimeConfigured(chosen ?? "assist");
   const pickLevel = (level: AiLevel) => setChosen(level);
   /** Moving up from off needs to know whether a runtime exists; Continue waits for detection. */
   const needsRuntimeAnswer = chosen !== null && chosen !== "off" && current === "off";
@@ -303,7 +309,7 @@ function OnboardingBody({
             <>
               <h1>{s["strings.ai.level.runtime_title"]}</h1>
               <RuntimeStep
-                configured={configured}
+                level={chosen ?? "assist"}
                 onContinue={() => void applyLevel(chosen ?? "assist")}
                 onBack={() => setStep("level")}
               />

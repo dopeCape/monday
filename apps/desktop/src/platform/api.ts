@@ -31,12 +31,13 @@ import type {
   GroupInput,
   GroupView,
   HeaderSearchPage,
-  HostedProvider,
   Id,
   Intent,
   IntentResult,
   Invite,
   InviteIntent,
+  KeyProvider,
+  KeyValidation,
   MessageBodiesPage,
   MeterMonth,
   ProposedMove,
@@ -171,15 +172,18 @@ export async function readEvents(
 export interface ApiOptions {
   /** A request to this target got no answer at all; the Shell's picker moves to the other one. */
   onUnreachable?: ((target: ServerTarget) => void) | undefined;
+  /** The fetch underneath; the browser's by default, a Server's handler in a test. */
+  fetch?: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
 }
 
 export function createApi(target: () => ServerTarget | null, options: ApiOptions = {}) {
+  const fetchImpl = options.fetch ?? ((url: string, init?: RequestInit) => fetch(url, init));
   async function raw(path: string, init: RequestInit = {}): Promise<Response> {
     const t = target();
     if (!t) throw new ApiError(0, "No server configured");
     let res: Response;
     try {
-      res = await fetch(t.baseUrl + path, {
+      res = await fetchImpl(t.baseUrl + path, {
         ...init,
         headers: {
           authorization: `Bearer ${t.token}`,
@@ -346,17 +350,24 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
     },
     /** Shared provider keys (ADR 0007): "Let the server use this key". The Server never returns a key. */
     keys: {
-      /** Which providers hold a shared key. */
-      shared: () => request<{ shared: HostedProvider[] }>("/keys"),
+      /** Which providers hold a shared key; TypeSafe among them (ADR 0012). */
+      shared: () => request<{ shared: KeyProvider[] }>("/keys"),
       /** Sends a key to the Server, stored under the envelope of `workspaceId`. 423 when locked. */
-      share: (workspaceId: Id, provider: HostedProvider, key: string) =>
-        request<{ provider: HostedProvider; shared: boolean }>(
+      share: (workspaceId: Id, provider: KeyProvider, key: string) =>
+        request<{ provider: KeyProvider; shared: boolean }>(
           `/keys/${provider}`,
           json("PUT", { workspace: workspaceId, key }),
         ),
       /** Forgets the shared key; the Device copy in the keychain is untouched. */
-      unshare: (provider: HostedProvider) =>
+      unshare: (provider: KeyProvider) =>
         raw(`/keys/${provider}`, { method: "DELETE" }).then(() => undefined),
+      /**
+       * The live check of a pasted key, run by the Server so this Device never
+       * talks to the provider (slice 24). Answers in plain words; stores nothing.
+       * 404 when the provider has no check.
+       */
+      validate: (provider: KeyProvider, key: string) =>
+        request<KeyValidation>(`/keys/${provider}/validate`, json("POST", { key })),
     },
     meter: {
       /** This month by Task and provider with cost; `month` is "YYYY-MM", default now. */

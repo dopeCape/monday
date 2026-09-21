@@ -13,6 +13,9 @@ import {
   HOSTED_PROVIDERS,
   type HostedProvider,
   isSettingKey,
+  JUDGE_PROVIDERS,
+  KEY_PROVIDERS,
+  type KeyProvider,
   type Layout,
   type McpServerSetting,
   PRESETS,
@@ -60,7 +63,7 @@ import {
   normalizeChord,
   resolveKeymap,
 } from "../../keyboard/keymaps.ts";
-import type { AccountView } from "../../platform/api.ts";
+import { type AccountView, ApiError } from "../../platform/api.ts";
 import { useShell } from "../../shell/Shell.tsx";
 import {
   AskInput,
@@ -71,8 +74,10 @@ import {
   EnumPicker,
   messageOf,
   optionLabel,
+  type PanelProps,
   RecordEditor,
   Row,
+  registerPanel,
   SettingControl,
   useDraft,
   useKeyStateVersion,
@@ -618,40 +623,74 @@ function PerAccountText({
 
 /* ------------------------------ AI and agent ------------------------------ */
 
+/** What this Device can run on: a detected CLI, a language model key, a TypeSafe key (here or shared). */
+export interface RuntimeState {
+  cli: boolean;
+  /** A language model's key on this Device or shared with the Server. */
+  language: boolean;
+  /** A TypeSafe key on this Device or shared with the Server (ADR 0012). */
+  judge: boolean;
+}
+
 /**
- * Whether a runtime is configured on this Device: a detected CLI, a Device
- * key, or a key shared with the Server. Null while the seams are still
- * answering. Moving up from `off` asks for one only when this is false
- * (docs/spec/onboarding.md, "First screen").
+ * The runtimes reachable from this Device: a detected CLI, Device keys, and
+ * keys shared with the Server. Null while the seams are still answering; a key
+ * write bumps the key-state version and re-reads.
  */
-export function useRuntimeConfigured(): boolean | null {
+export function useRuntimeState(): RuntimeState | null {
   const shell = useShell();
   const screen = useSettingsScreen();
   const { version } = useKeyStateVersion();
-  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [state, setState] = useState<RuntimeState | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a key write bumps the version, which re-runs the check
   useEffect(() => {
     let live = true;
-    const run = async () => {
+    const run = async (): Promise<RuntimeState> => {
       const detected = await (screen.runtimes?.detect() ?? Promise.resolve([])).catch(() => []);
-      if (detected.some((d) => d.status !== "missing")) return true;
+      const cli = detected.some((d) => d.status !== "missing");
+      const have = new Set<KeyProvider>();
       if (screen.keys) {
-        for (const p of HOSTED_PROVIDERS) if (await screen.keys.get(p)) return true;
+        for (const p of KEY_PROVIDERS) if (await screen.keys.get(p)) have.add(p);
       }
       try {
-        return (await shell.api.keys.shared()).shared.length > 0;
-      } catch {
-        return false;
-      }
+        for (const p of (await shell.api.keys.shared()).shared) have.add(p);
+      } catch {}
+      return {
+        cli,
+        language: HOSTED_PROVIDERS.some((p) => have.has(p)),
+        judge: JUDGE_PROVIDERS.some((p) => have.has(p)),
+      };
     };
-    void run().then((ok) => {
-      if (live) setConfigured(ok);
+    void run().then((next) => {
+      if (live) setState(next);
     });
     return () => {
       live = false;
     };
   }, [screen.runtimes, screen.keys, shell.api, version]);
-  return configured;
+  return state;
+}
+
+/**
+ * Whether the runtimes at hand satisfy an AI level (docs/spec/onboarding.md,
+ * the runtime step): `assist` needs a language model (a CLI or a key), since
+ * the assistant writes; `automate` is satisfied by TypeSafe alone, which
+ * sorts, or by a language model; `off` needs nothing.
+ */
+export function runtimeSatisfies(state: RuntimeState, level: AiLevel): boolean {
+  if (level === "off") return true;
+  const language = state.cli || state.language;
+  return level === "automate" ? language || state.judge : language;
+}
+
+/**
+ * Whether a runtime for `level` is configured on this Device. Null while the
+ * seams are still answering. Moving up from `off` asks for one only when this
+ * is false (docs/spec/onboarding.md, "First screen").
+ */
+export function useRuntimeConfigured(level: AiLevel = "assist"): boolean | null {
+  const state = useRuntimeState();
+  return state === null ? null : runtimeSatisfies(state, level);
 }
 
 /** The three AI level cards' copy, from the strings Settings. */
@@ -671,37 +710,95 @@ export function levelCards(s: Settings): ChoiceCard<AiLevel>[] {
   ];
 }
 
+/** The three ways in on the runtime step (docs/spec/onboarding.md). */
+export type RuntimeWay = "typesafe" | "llm" | "both";
+
+/** The three runtime cards' copy; "both" is recommended when the level sorts and acts. */
+export function runtimeCards(s: Settings, level: AiLevel): ChoiceCard<RuntimeWay>[] {
+  const recommended = level === "automate" ? s["strings.ai.level.runtime.recommended"] : undefined;
+  return [
+    {
+      value: "typesafe",
+      title: s["strings.ai.level.runtime.typesafe"],
+      body: s["strings.ai.level.runtime.typesafe_sub"],
+    },
+    {
+      value: "llm",
+      title: s["strings.ai.level.runtime.llm"],
+      body: s["strings.ai.level.runtime.llm_sub"],
+    },
+    {
+      value: "both",
+      title: s["strings.ai.level.runtime.both"],
+      body: s["strings.ai.level.runtime.both_sub"],
+      adds: recommended,
+    },
+  ];
+}
+
 /**
- * The runtime step: a Local CLI from the detected list or a Hosted provider
- * with its key, through the same controls the Runtime group renders. Shown
- * under the level cards when moving up from `off` with nothing configured.
+ * The runtime step: three cards, TypeSafe (a key, validated live, kept in the
+ * keychain and shared with the Server when the switch is on), a language
+ * model (a Local CLI from the detected list or a Hosted provider with its
+ * key, through the same controls the Runtime group renders), or both, the
+ * recommended card when the level sorts and acts. Continue follows the level:
+ * `assist` needs a language model; `automate` runs sorting on TypeSafe alone,
+ * and the step says the composer still needs a language model. Shown under
+ * the level cards when moving up from `off` with nothing configured.
  */
 export function RuntimeStep({
-  configured,
+  level,
   onContinue,
   onBack,
 }: {
-  configured: boolean | null;
+  level: AiLevel;
   onContinue: () => void;
   onBack?: (() => void) | undefined;
 }) {
   const s = useShell().settings;
+  const state = useRuntimeState();
+  const configured = state === null ? null : runtimeSatisfies(state, level);
+  const [way, setWay] = useState<RuntimeWay>(level === "automate" ? "both" : "llm");
   const mode = s["ai.mode"];
   const provider = s["ai.hosted.provider"];
+  const judgeOnly = state?.judge === true && !state.cli && !state.language;
+  const note =
+    judgeOnly && level === "automate"
+      ? s["strings.ai.level.runtime.composer_needs_llm"]
+      : judgeOnly && level === "assist"
+        ? s["strings.ai.level.runtime.assist_needs_llm"]
+        : configured === false
+          ? s["strings.ai.level.runtime_missing"]
+          : null;
   return (
-    <div className="level-runtime" data-panel="runtime-step">
+    <div className="level-runtime" data-panel="runtime-step" data-way={way}>
       <h4>{s["strings.ai.level.runtime_title"]}</h4>
       <p>{s["strings.ai.level.runtime_intro"]}</p>
-      <SettingControl k="ai.mode" />
-      {mode === "local" ? (
-        <SettingControl k="ai.local.cli" />
-      ) : (
-        <>
-          <SettingControl k="ai.hosted.provider" />
-          <SettingControl k={`ai.share_key.${provider}`} />
-        </>
-      )}
-      {configured === false ? <p className="err">{s["strings.ai.level.runtime_missing"]}</p> : null}
+      <ChoiceCards cards={runtimeCards(s, level)} value={way} onChange={setWay} />
+      {way !== "llm" ? (
+        <div className="runtime-way" data-way="typesafe">
+          <p className="choice-note">{s["strings.ai.level.runtime.typesafe_intro"]}</p>
+          <ProviderKeyRow k="ai.share_key.typesafe" shareOnSave={s["ai.judge.share_by_default"]} />
+        </div>
+      ) : null}
+      {way !== "typesafe" ? (
+        <div className="runtime-way" data-way="llm">
+          <SettingControl k="ai.mode" />
+          {mode === "local" ? (
+            <SettingControl k="ai.local.cli" />
+          ) : (
+            <>
+              <SettingControl k="ai.hosted.provider" />
+              <SettingControl k={`ai.share_key.${provider}`} />
+            </>
+          )}
+        </div>
+      ) : null}
+      {note ? (
+        <p className={configured ? "choice-note" : "err"} data-note>
+          {note}
+        </p>
+      ) : null}
       <div className="actions">
         <Btn primary disabled={!configured} onClick={onContinue}>
           {s["strings.ai.level.runtime_continue"]}
@@ -721,14 +818,14 @@ function AiLevelControl({ k }: ControlProps) {
   const { value, change, error, shell } = useSetting(k);
   const s = shell.settings;
   const current = value as AiLevel;
-  const configured = useRuntimeConfigured();
+  const state = useRuntimeState();
   const [pending, setPending] = useState<AiLevel | null>(null);
   const pick = (level: AiLevel) => {
     if (level === current) {
       setPending(null);
       return;
     }
-    if (current === "off" && configured === false) {
+    if (current === "off" && state !== null && !runtimeSatisfies(state, level)) {
       setPending(level);
       return;
     }
@@ -741,7 +838,7 @@ function AiLevelControl({ k }: ControlProps) {
       <p className="choice-note">{s["strings.ai.level.change_note"]}</p>
       {pending ? (
         <RuntimeStep
-          configured={configured}
+          level={pending}
           onContinue={() => {
             void change(pending);
             setPending(null);
@@ -881,18 +978,18 @@ const PROVIDER_LG: Record<HostedProvider, string> = {
   openrouter: "OR",
 };
 
-/** Which Hosted providers hold a key on this Device and which are shared with the Server. */
-function useKeyState() {
+/** Which providers hold a key on this Device and which are shared with the Server; TypeSafe among them. */
+export function useKeyState() {
   const shell = useShell();
   const screen = useSettingsScreen();
   const { version, bump } = useKeyStateVersion();
-  const [onDevice, setOnDevice] = useState<Set<HostedProvider>>(new Set());
-  const [shared, setShared] = useState<Set<HostedProvider>>(new Set());
+  const [onDevice, setOnDevice] = useState<Set<KeyProvider>>(new Set());
+  const [shared, setShared] = useState<Set<KeyProvider>>(new Set());
   const read = useCallback(async () => {
     const keys = screen.keys;
     if (keys) {
       const have = await Promise.all(
-        HOSTED_PROVIDERS.map(async (p) => [p, await keys.get(p)] as const),
+        KEY_PROVIDERS.map(async (p) => [p, await keys.get(p)] as const),
       );
       setOnDevice(new Set(have.filter(([, v]) => v).map(([p]) => p)));
     }
@@ -944,9 +1041,12 @@ function HostedProviderControl({ k }: ControlProps) {
 }
 controlKinds["hosted-provider"] = HostedProviderControl;
 
-function providerOf(k: SettingKey): HostedProvider {
-  return k.split(".").at(-1) as HostedProvider;
+function providerOf(k: SettingKey): KeyProvider {
+  return k.split(".").at(-1) as KeyProvider;
 }
+
+/** The providers whose key the Server checks live before it is saved (slice 24). */
+const VALIDATED: ReadonlySet<KeyProvider> = new Set<KeyProvider>(JUDGE_PROVIDERS);
 
 /** The main and fast Roles of one provider: two model ids. */
 function RolesControl({ k }: ControlProps) {
@@ -984,9 +1084,18 @@ controlKinds.roles = RolesControl;
 /**
  * The key itself (add, replace, remove; never displayed) and the "Let the
  * server use this key" switch with its threat model, which is the Setting.
- * Sharing sends the Device key to the Server; unsharing forgets the copy.
+ * Sharing sends the Device key to the Server; unsharing forgets the copy. A
+ * TypeSafe key is checked live through the Server before it is saved. With
+ * `shareOnSave` (onboarding's TypeSafe card) the switch starts on and a saved
+ * key is shared at once.
  */
-function ProviderKeyControl({ k }: ControlProps) {
+export function ProviderKeyRow({
+  k,
+  shareOnSave = false,
+}: {
+  k: SettingKey;
+  shareOnSave?: boolean | undefined;
+}) {
   const { value, change, error, shell } = useSetting(k);
   const screen = useSettingsScreen();
   const s = shell.settings;
@@ -995,11 +1104,46 @@ function ProviderKeyControl({ k }: ControlProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [accepted, setAccepted] = useState(false);
+  // Before a key exists the switch is a wish; once one is saved it is the Setting.
+  const [wantShare, setWantShare] = useState(shareOnSave);
   const has = onDevice.has(provider);
+  const switchOn = has ? Boolean(value) : wantShare;
+  const shareNow = async (): Promise<boolean> => {
+    if (!screen.keys) return false;
+    const ok = await screen.keys.share(shell.api, screen.workspaceId, provider);
+    if (!ok) {
+      setProblem(s["strings.settings.keys.none"]);
+      return false;
+    }
+    await change(true);
+    return true;
+  };
   const save = async () => {
     const key = draft.trim();
     if (!key || !screen.keys) return;
     setProblem(null);
+    setAccepted(false);
+    if (VALIDATED.has(provider)) {
+      setChecking(true);
+      try {
+        const result = await shell.api.keys.validate(provider, key);
+        if (!result.ok) {
+          setProblem(result.reason);
+          return;
+        }
+      } catch (e) {
+        // A Server without the check saves as the others do; anything else is reported.
+        if (!(e instanceof ApiError && e.status === 404)) {
+          setProblem(fill(s["strings.settings.keys.failed"], { message: messageOf(e) }));
+          return;
+        }
+      } finally {
+        setChecking(false);
+      }
+      setAccepted(true);
+    }
     try {
       await screen.keys.set(provider, key);
     } catch (e) {
@@ -1008,6 +1152,13 @@ function ProviderKeyControl({ k }: ControlProps) {
     }
     setDraft("");
     setEditing(false);
+    if (wantShare && !value) {
+      try {
+        await shareNow();
+      } catch (e) {
+        setProblem(e instanceof Error ? e.message : String(e));
+      }
+    }
     refresh();
   };
   const remove = async () => {
@@ -1026,22 +1177,22 @@ function ProviderKeyControl({ k }: ControlProps) {
   };
   const share = async (on: boolean) => {
     setProblem(null);
+    if (!has) {
+      // No key yet: the switch records what to do once one is saved.
+      setWantShare(on);
+      return;
+    }
     if (on) {
-      if (!screen.keys) return;
       try {
-        const ok = await screen.keys.share(shell.api, screen.workspaceId, provider);
-        if (!ok) {
-          setProblem(s["strings.settings.keys.none"]);
-          return;
-        }
+        if (!(await shareNow())) return;
       } catch (e) {
         setProblem(e instanceof Error ? e.message : String(e));
         return;
       }
     } else {
       await screen.keys?.unshare(shell.api, provider).catch(() => {});
+      await change(false);
     }
-    await change(on);
     refresh();
   };
   return (
@@ -1062,10 +1213,10 @@ function ProviderKeyControl({ k }: ControlProps) {
                 if (e.key === "Escape") setEditing(false);
               }}
             />
-            <Btn sm primary disabled={!draft.trim()} onClick={() => void save()}>
-              {s["strings.settings.keys.save"]}
+            <Btn sm primary disabled={!draft.trim() || checking} onClick={() => void save()}>
+              {checking ? s["strings.settings.keys.checking"] : s["strings.settings.keys.save"]}
             </Btn>
-            <Btn sm onClick={() => setEditing(false)}>
+            <Btn sm disabled={checking} onClick={() => setEditing(false)}>
               {s["strings.settings.keys.cancel"]}
             </Btn>
           </>
@@ -1075,7 +1226,9 @@ function ProviderKeyControl({ k }: ControlProps) {
               {has
                 ? shared.has(provider)
                   ? s["strings.settings.keys.shared"]
-                  : s["strings.settings.keys.set"]
+                  : accepted
+                    ? s["strings.settings.keys.validated"]
+                    : s["strings.settings.keys.set"]
                 : s["strings.settings.keys.none"]}
             </Tag>
             <Btn sm disabled={!screen.keys} onClick={() => setEditing(true)}>
@@ -1092,12 +1245,66 @@ function ProviderKeyControl({ k }: ControlProps) {
             ) : null}
           </>
         )}
-        <Switch on={Boolean(value)} onChange={(on) => void share(on)} />
+        <Switch on={switchOn} onChange={(on) => void share(on)} />
       </span>
     </Row>
   );
 }
-controlKinds["provider-key"] = ProviderKeyControl;
+controlKinds["provider-key"] = ({ k }: ControlProps) => <ProviderKeyRow k={k} />;
+
+/** Who answers judgments (ADR 0012): auto, TypeSafe, or the language model, as a segmented choice. */
+function JudgeProviderControl({ k, shape }: ControlProps) {
+  const { value, change, error, shell } = useSetting(k);
+  const s = shell.settings;
+  if (shape.kind !== "enum") return null;
+  const label = (option: string) => {
+    const key = `strings.settings.judge.option.${option}`;
+    return isSettingKey(key) ? String(s[key]) : optionLabel(option);
+  };
+  return (
+    <Row k={k} error={error}>
+      <Seg
+        options={shape.options.map((o) => ({ value: o, label: label(o) }))}
+        value={String(value)}
+        onChange={(v) => void change(v)}
+      />
+    </Row>
+  );
+}
+controlKinds["judge-provider"] = JudgeProviderControl;
+
+/**
+ * One line above the TypeSafe group saying who answers judgments (ADR 0012):
+ * TypeSafe on its pinned model when a key exists and Settings allow it, the
+ * language model otherwise, or no key when Settings pin TypeSafe without one.
+ */
+export function JudgeStatusPanel(_: PanelProps) {
+  const s = useShell().settings;
+  const { onDevice, shared } = useKeyState();
+  const choice = s["ai.judge.provider"];
+  const here = onDevice.has("typesafe");
+  const there = shared.has("typesafe");
+  const status =
+    choice === "llm" ? "llm" : here || there ? "typesafe" : choice === "auto" ? "llm" : "none";
+  const line =
+    status === "typesafe"
+      ? fill(s["strings.settings.judge.status.typesafe"], { model: s["ai.judge.model"] })
+      : status === "llm"
+        ? s["strings.settings.judge.status.llm"]
+        : s["strings.settings.judge.status.none"];
+  const deviceOnly = status === "typesafe" && !there && s["ai.level"] === "automate";
+  return (
+    <div className="note" data-panel="judge-status" data-judge={status}>
+      {line}
+      {deviceOnly ? ` ${s["strings.settings.judge.status.device_only"]}` : null}
+    </div>
+  );
+}
+registerPanel("ai", "TypeSafe", JudgeStatusPanel, {
+  title: "strings.ai.level.runtime.typesafe",
+  description: "strings.settings.intro.ai.typesafe",
+  searchTerms: ["typesafe", "judge", "judgment", "jev", "system one", "sorting", "key"],
+});
 
 const EFFORTS: readonly Effort[] = ["low", "medium", "high"];
 const ROLES: readonly Role[] = ["main", "fast"];

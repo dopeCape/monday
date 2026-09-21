@@ -13,9 +13,11 @@ import type {
   JsonValue,
   JudgeAnswer,
   JudgeAnswers,
+  JudgeErrorCode,
   JudgeQuestion,
   JudgeQuestions,
   JudgeResponse,
+  KeyValidation,
 } from "@monday/shared";
 import type { JudgeCall, JudgeModel } from "./index.ts";
 
@@ -36,15 +38,7 @@ export interface TypeSafeOptions {
   timeoutMs?: number;
 }
 
-export type TypeSafeErrorCode =
-  | "unauthorized"
-  | "invalid_request"
-  | "rate_limited"
-  | "overloaded"
-  | "network"
-  | "timeout"
-  | "bad_response"
-  | "http";
+export type TypeSafeErrorCode = JudgeErrorCode;
 
 /** What TypeSafe answered when it did not answer the questions. */
 export class TypeSafeError extends Error {
@@ -284,9 +278,7 @@ export function createTypeSafeJudge(options: TypeSafeOptions = {}): JudgeModel {
 
 /* ------------------------------ Key validation ------------------------------ */
 
-export type KeyValidation =
-  | { ok: true; models: string[] }
-  | { ok: false; reason: string; code: TypeSafeErrorCode };
+export type { KeyValidation };
 
 /**
  * The live check for a pasted key: GET /v1/models with it. A 401 is a wrong

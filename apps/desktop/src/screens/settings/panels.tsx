@@ -18,7 +18,10 @@ import {
   type ExternalScope,
   formatMicros,
   type GroupView,
+  isSettingKey,
   type MeterMonth,
+  type MeterTask,
+  type Settings,
   type VoiceProfile,
 } from "@monday/shared";
 import { Btn, formatWhen, Input, Note, Seg, Switch, Tag } from "@monday/ui";
@@ -443,6 +446,12 @@ function monthLabel(month: string): string {
   });
 }
 
+/** A judgment line (judge.*, ADR 0012) reads by its strings Setting; a Task by its name. */
+export function meterTaskLabel(s: Settings, task: MeterTask): string {
+  const key = `strings.meter.${task}`;
+  return task.startsWith("judge.") && isSettingKey(key) ? String(s[key]) : task;
+}
+
 /** A month by Task and provider, with cost estimates; no budgets. Previous months a click away. */
 export function MeterPanel(_: PanelProps) {
   const shell = useShell();
@@ -520,8 +529,8 @@ export function MeterPanel(_: PanelProps) {
             <div>{s["strings.settings.meter.cost"]}</div>
           </div>
           {meter.lines.map((l) => (
-            <div className="mr" key={`${l.task}-${l.provider}`}>
-              <div>{l.task}</div>
+            <div className="mr" key={`${l.task}-${l.provider}`} data-task={l.task}>
+              <div>{meterTaskLabel(s, l.task)}</div>
               <div>{l.provider}</div>
               <div>{l.calls}</div>
               <div>{(l.inputTokens + l.outputTokens).toLocaleString()}</div>
