@@ -23,6 +23,7 @@ import type {
 import {
   CUSTOM_ACTION_TOOLS,
   customActionIdFor,
+  normalizeActionArgs,
   sectionIdFor,
   sectionLabel,
   TOOL_TIERS,
@@ -445,7 +446,7 @@ const createAction: ToolDefinition<{
         ...(input.on?.judge?.trim() ? { judge: input.on.judge.trim() } : {}),
       },
       tool: input.tool,
-      args: input.args ?? {},
+      args: normalizeActionArgs(input.tool, input.args ?? {}),
       ...(input.always_ask ? { tier: "always-ask" as const } : {}),
       createdBy: "agent",
     };
@@ -508,7 +509,9 @@ const updateAction: ToolDefinition<{
           }
         : {}),
       ...(input.tool !== undefined ? { tool: input.tool } : {}),
-      ...(input.args !== undefined ? { args: input.args } : {}),
+      ...(input.args !== undefined
+        ? { args: normalizeActionArgs(input.tool ?? current.tool, input.args) }
+        : {}),
     };
     if (input.always_ask === true) next.tier = "always-ask";
     else if (input.always_ask === false) delete next.tier;

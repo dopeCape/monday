@@ -11,7 +11,7 @@
 // {{thread.id}}), rendered here with renderTemplate before the tool runs.
 
 import type { CustomActionSetting, Group, Person, Tag, Thread, Tier } from "@monday/shared";
-import { renderTemplate, TOOL_TIERS, tierOf } from "@monday/shared";
+import { normalizeActionArgs, renderTemplate, TOOL_TIERS, tierOf } from "@monday/shared";
 import type { InboxActions, UndoToken } from "./actions.ts";
 import type { ComposeSeed } from "./brief-actions.ts";
 
@@ -116,7 +116,7 @@ export function createCustomActionRunner(deps: CustomActionRunnerDeps): CustomAc
       const groupName = thread.group
         ? (deps.groups().find((g) => g.id === thread.group)?.name ?? null)
         : null;
-      const args = renderActionArgs(action, thread, groupName);
+      const args = normalizeActionArgs(action.tool, renderActionArgs(action, thread, groupName));
       const id = thread.id;
       switch (action.tool) {
         case "forward_thread": {

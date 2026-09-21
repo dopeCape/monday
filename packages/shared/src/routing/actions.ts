@@ -106,3 +106,22 @@ export function customActionIdFor(label: string, taken: readonly string[] = []):
   for (let n = 2; taken.includes(id); n++) id = `${base}-${n}`;
   return id;
 }
+
+/**
+ * The arguments as the tool server accepts them: `to` and `cc` on a forward
+ * or a draft are arrays of recipients, so a single address the user gave in
+ * a sentence becomes a list. Everything else passes through.
+ */
+export function normalizeActionArgs(
+  tool: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (tool !== "forward_thread" && tool !== "draft_message") return args;
+  const out = { ...args };
+  for (const key of ["to", "cc"] as const) {
+    const value = out[key];
+    if (typeof value === "string") out[key] = [value];
+    else if (value && typeof value === "object" && !Array.isArray(value)) out[key] = [value];
+  }
+  return out;
+}

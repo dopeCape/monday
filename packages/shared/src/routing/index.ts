@@ -24,6 +24,7 @@ export {
   customActionApplies,
   customActionIdFor,
   customActionsFor,
+  normalizeActionArgs,
 } from "./actions.ts";
 export type { PredicateFacts } from "./predicate.ts";
 export {
