@@ -43,6 +43,11 @@ function policySettings(overrides: Partial<BriefPolicySettings> = {}): BriefPoli
   const d = defaultSettings();
   return {
     mode: d["briefs.policy_mode"],
+    judge: {
+      alwaysAtLeast: d["briefs.judge.always_at_least"],
+      neverBelow: d["briefs.judge.never_below"],
+      newsletterAtLeast: d["briefs.judge.newsletter_at_least"],
+    },
     defaultPolicy: d["briefs.policy_default"],
     groups: d["briefs.policy_groups"],
     prompt: d["briefs.prompt"],

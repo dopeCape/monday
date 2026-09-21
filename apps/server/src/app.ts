@@ -241,10 +241,12 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       (options.calendar as CalendarModule).observeBody(account, messageId, threadId, raw),
     );
   }
-  // Threads whose bodies landed go to the brief policy through the Jobs table (slice 13).
-  options.sync?.setThreadObserver((workspaceId, threadId) =>
-    intelligence.briefs.threadReady(workspaceId, threadId),
-  );
+  // Threads whose bodies landed are judged (slice 25, a judge Job) and go to
+  // the brief policy (slice 13, a brief Job), both through the Jobs table.
+  options.sync?.setThreadObserver(async (workspaceId, threadId) => {
+    await intelligence.judgments.threadReady(workspaceId, threadId);
+    await intelligence.briefs.threadReady(workspaceId, threadId);
+  });
   // New Threads are routed on arrival, as route Jobs (slice 12), and start
   // the Workflows that listen for arrivals, as trigger Jobs (slice 16).
   if (options.sync) {
