@@ -126,6 +126,29 @@ describe("briefs in the Cache", () => {
     expect(await cached(store, "gone")).toBeNull();
   });
 
+  test("a Brief with verdicts keeps them through the Cache: stored beside the bullets, read back per bullet (slice 27)", async () => {
+    const seed = briefOf("e1");
+    if (!seed) throw new Error("no fixture Brief");
+    const brief: Brief = {
+      ...seed,
+      bullets: seed.bullets.slice(0, 2),
+      verified: ["supported", "partly"],
+    };
+    const [statement] = cachedBriefStatements(brief);
+    expect(statement?.params[1]).toEqual({
+      bullets: brief.bullets,
+      verified: ["supported", "partly"],
+    });
+    const { store } = await open();
+    await store.write(cachedBriefStatements(brief));
+    const read = await cached(store, "e1");
+    expect(read?.brief?.bullets).toEqual(brief.bullets);
+    expect(read?.brief?.verified).toEqual(["supported", "partly"]);
+    // A Brief without verdicts is stored as the bullets alone, as before.
+    const [plain] = cachedBriefStatements(seed);
+    expect(plain?.params[1]).toEqual(seed.bullets);
+  });
+
   test("the brief Change statements: insert with headers only, keep content on a stale flip, delete", () => {
     const payload = {
       threadId: "t",

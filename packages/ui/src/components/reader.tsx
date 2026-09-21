@@ -90,7 +90,7 @@ export function Brief({
       </div>
       <ul>
         {brief.bullets.map((b, i) => (
-          <li key={i}>
+          <li key={i} className={brief.verified?.[i] === "partly" ? "partly" : undefined}>
             <Rich runs={b} />
           </li>
         ))}

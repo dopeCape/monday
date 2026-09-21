@@ -321,6 +321,8 @@ export interface DryRunThreadItem {
   subject: string;
   from: string;
   steps: Array<{ name: string; status: string; detail: string }>;
+  /** What the judge said about this Thread, worded by the screen (slice 27): "the message is a complaint: 92%". */
+  judged?: readonly string[] | undefined;
 }
 
 export interface DryRunCardProps {
@@ -329,6 +331,8 @@ export interface DryRunCardProps {
   threads: readonly DryRunThreadItem[];
   emptyLabel: string;
   closeLabel: string;
+  /** Under a Thread with no Steps: the judged trigger turned it down. */
+  notStartedLabel?: string | undefined;
   onClose: () => void;
   className?: string | undefined;
 }
@@ -342,6 +346,7 @@ export function DryRunCard({
   threads,
   emptyLabel,
   closeLabel,
+  notStartedLabel,
   onClose,
   className,
 }: DryRunCardProps) {
@@ -363,6 +368,16 @@ export function DryRunCard({
           <div key={t.threadId || t.subject} className="r" data-thread={t.threadId}>
             <div>
               {t.subject || t.from || "(no thread)"}
+              {t.judged?.map((line) => (
+                <span key={line} style={DRY_STEP_STYLE} data-judged="true">
+                  {line}
+                </span>
+              ))}
+              {t.steps.length === 0 && t.judged?.length && notStartedLabel ? (
+                <span style={DRY_STEP_STYLE} data-status="not_started">
+                  {notStartedLabel}
+                </span>
+              ) : null}
               {t.steps.map((s) => (
                 <span key={s.name} style={DRY_STEP_STYLE} data-status={s.status}>
                   {s.name}: {s.detail || s.status.replaceAll("_", " ")}

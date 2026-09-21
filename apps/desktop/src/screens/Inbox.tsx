@@ -812,7 +812,7 @@ export function Inbox({
 
   const approveIntentCard = useCallback(async () => {
     const card = intentCard;
-    if (!card || card.status !== "waiting") return;
+    if (card?.status !== "waiting") return;
     if (!calendar) {
       // No calendar seam on this Device: the Agent has the tool and asks the same way.
       setIntentCard(null);

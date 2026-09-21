@@ -662,7 +662,13 @@ export function cachedBriefStatements(brief: Brief): Statement[] {
               bullets = excluded.bullets, actions = excluded.actions,
               computed_at = excluded.computed_at, stale = excluded.stale,
               content_stale = 0`,
-      params: [brief.threadId, brief.bullets, brief.actions, brief.computedAt, brief.stale],
+      params: [
+        brief.threadId,
+        brief.verified ? { bullets: brief.bullets, verified: brief.verified } : brief.bullets,
+        brief.actions,
+        brief.computedAt,
+        brief.stale,
+      ],
     },
   ];
 }

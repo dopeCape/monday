@@ -899,6 +899,10 @@ i.ph-bold > svg {
 .brief.stale .brief-actions {
   opacity: 0.55;
 }
+/* A bullet the judge found only partly supported by the thread's text (ADR 0012). */
+.brief li.partly {
+  color: var(--fg-faint);
+}
 .msg {
   padding: 22px 0;
   border-bottom: 1px solid var(--border);

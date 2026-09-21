@@ -399,7 +399,21 @@ export function Workflows({
                         n: dry.threads.length,
                       })}
                       note={s.dry_run_note ?? ""}
-                      threads={dry.threads}
+                      threads={dry.threads.map((t) => ({
+                        ...t,
+                        judged: t.judged?.map((j) =>
+                          j.probability === null
+                            ? fill(s.dry_run_judged_none ?? "{statement}: no judge ({reason})", {
+                                statement: j.statement,
+                                reason: j.reason ?? "",
+                              })
+                            : fill(s.dry_run_judged ?? "{statement}: {pct}%", {
+                                statement: j.statement,
+                                pct: Math.round(j.probability * 100),
+                              }),
+                        ),
+                      }))}
+                      notStartedLabel={s.dry_run_not_started ?? ""}
                       emptyLabel={s.dry_run_empty ?? ""}
                       closeLabel={s.decline ?? "Close"}
                       onClose={() => setDry(null)}
