@@ -285,13 +285,22 @@ export interface Brief {
   verified?: BulletVerdict[] | undefined;
 }
 
-/** Who decides the brief policy: the rule over Thread state and headers, or the model with the user's prompt. */
-export type BriefPolicyMode = "rule" | "model";
+/**
+ * Who decides the brief policy: the rule over Thread state and headers, the
+ * model with the user's prompt, or the judge's "Brief worth" Score (ADR
+ * 0012), which falls back to the rule until the Thread has been judged.
+ */
+export type BriefPolicyMode = "rule" | "model" | "judge";
 
 /** What asked for a Brief: the sync engine on arrival, the reader on open, or the user by hand. */
 export type BriefTrigger = "sync" | "open" | "user";
 
-/** An action chip: the label is the Agent's wording; the payload is what runs. */
+/**
+ * An action chip: the label is the Agent's wording; the payload is what
+ * runs. The first six come from a Brief; `call`, `open-attachment` and
+ * `pay-or-file` are judged chips the reader shows before a Brief exists
+ * (slice 25), each an ordinary tool call with its Tier.
+ */
 export type BriefAction = { label: string } & (
   | { kind: "reply"; proposedLine: string }
   | { kind: "forward"; to: Person }
@@ -299,6 +308,9 @@ export type BriefAction = { label: string } & (
   | { kind: "snooze"; until: IsoDate }
   | { kind: "archive" }
   | { kind: "open-link"; url: string }
+  | { kind: "call" }
+  | { kind: "open-attachment"; attachmentId: Id }
+  | { kind: "pay-or-file" }
 );
 
 /* ------------------------------ The agent ------------------------------ */

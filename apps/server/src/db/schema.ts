@@ -871,6 +871,37 @@ export const threadRoutes = pgTable(
   (t) => [index("thread_routes_group_idx").on(t.workspaceId, t.groupId)],
 );
 
+/**
+ * A Thread's Judgments (CONTEXT.md, ADR 0012; slice 25): what the arrival
+ * request answered, keyed by Thread and stamped with the Thread version
+ * (message count, newest Message id) it saw, so a new Message re-judges and
+ * the same version is never asked twice. Probabilities only, never text:
+ * nothing here is mail content, so the row is in the clear like a route.
+ */
+export const threadJudgments = pgTable(
+  "thread_judgments",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    needsReply: real("needs_reply").notNull(),
+    waitingOnOthers: real("waiting_on_others").notNull(),
+    newsletter: real("newsletter").notNull(),
+    automated: real("automated").notNull(),
+    briefWorth: real("brief_worth").notNull(),
+    urgency: real("urgency").notNull(),
+    chips: jsonb("chips").$type<Record<string, number>>().notNull().default({}),
+    model: text("model").notNull(),
+    judgedAt: timestamp("judged_at", { withTimezone: true, mode: "date" }).notNull(),
+    messageCount: integer("message_count").notNull().default(0),
+    latestMessageId: text("latest_message_id").notNull().default(""),
+  },
+  (t) => [index("thread_judgments_workspace_idx").on(t.workspaceId, t.judgedAt)],
+);
+
 /** Needs a decision (CONTEXT.md): a Thread whose best rule was not sure enough, with its candidates. */
 export const routingDecisions = pgTable(
   "routing_decisions",

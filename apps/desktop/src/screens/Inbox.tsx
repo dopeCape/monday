@@ -49,7 +49,7 @@ import { UndoBar } from "./compose/UndoBar.tsx";
 import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
-import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
+import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import {
   contactsOf,
@@ -62,7 +62,7 @@ import {
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
-import { formatWake } from "./inbox/snooze.ts";
+import { formatWake, snoozeKnobs, snoozeUntil } from "./inbox/snooze.ts";
 import { Toast } from "./inbox/Toast.tsx";
 import {
   extendSelection,
@@ -182,6 +182,15 @@ function useThreadBrief(inbox: InboxData, threadId: string | null) {
   );
   const get = useCallback(() => (threadId ? inbox.brief(threadId) : undefined), [inbox, threadId]);
   return useSyncExternalStore(subscribe, get, get);
+}
+
+/** The open Thread's Judgments from the Cache (slice 25); they change with the stream, not the reader. */
+function useThreadJudgments(inbox: InboxData, threadId: string | null) {
+  const get = useCallback(
+    () => (threadId ? inbox.judgments?.(threadId) : undefined),
+    [inbox, threadId],
+  );
+  return useSyncExternalStore(inbox.subscribe, get, get);
 }
 
 /** Why the open Thread's bodies are missing, from the reader seam; null when they are not. */
@@ -556,15 +565,53 @@ export function Inbox({
     [thread, inbox, compose],
   );
 
+  const openAttachment = useCallback(
+    async (attachmentId: string) => {
+      const all = messages.flatMap((m) => m.attachments);
+      const meta = all.find((a) => a.id === attachmentId);
+      try {
+        const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
+        await saveDownload(meta?.name ?? attachmentId, bytes, mediaType);
+      } catch {
+        // Plain words, not the transport's: the toast names the file.
+        compose.onError(
+          fill(t("strings.reader.download_failed"), { name: meta?.name ?? attachmentId }),
+        );
+      }
+    },
+    [messages, inbox, compose, t],
+  );
+
+  const attachmentSrc = useCallback(
+    async (attachmentId: string) => {
+      const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
+      return URL.createObjectURL(new Blob([bytes as BlobPart], { type: mediaType }));
+    },
+    [inbox],
+  );
+
+  /** The `agent.ask` action: the bar opens prefilled; Enter sends it as the turn. */
+  const askAgent = useCallback(
+    (text: string) => {
+      setAgentText(text);
+      focusAgent();
+    },
+    [focusAgent],
+  );
   // Action chips are tool calls (ADR 0002): reply and forward open compose and
-  // never send, snooze and archive apply with Undo, a link opens outside.
+  // never send, snooze and archive apply with Undo, a link opens outside; the
+  // judged chips (slice 25) hand the agent bar a sentence or open an attachment.
   const defaultDuration = s["calendar.default_duration_minutes"];
+  const callPrompt = t("strings.chips.call_prompt");
+  const payOrFilePrompt = t("strings.chips.pay_or_file_prompt");
   const actionRunner = useMemo(
     () =>
       createActionRunner({
         inbox,
         compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
         openLink: (url) => openExternal(url),
+        openAttachment: (attachmentId) => openAttachment(attachmentId),
+        ask: (_threadId, intent) => askAgent(intent === "call" ? callPrompt : payOrFilePrompt),
         // The chip is the user's own click, so the Event goes straight on the calendar.
         ...(calendar
           ? {
@@ -580,8 +627,48 @@ export function Inbox({
             }
           : {}),
       }),
-    [inbox, startReply, calendar, defaultDuration],
+    [
+      inbox,
+      startReply,
+      calendar,
+      defaultDuration,
+      openAttachment,
+      askAgent,
+      callPrompt,
+      payOrFilePrompt,
+    ],
   );
+  // The chips the Thread's Judgments earn before its Brief exists (slice 25):
+  // above the threshold, likeliest first, capped like a Brief's own chips.
+  const judgments = useThreadJudgments(inbox, shownThreadId);
+  const chipLabels = useMemo(
+    () => ({
+      reply: t("strings.chips.reply"),
+      call: t("strings.chips.call"),
+      review_link: t("strings.chips.review_link"),
+      open_attachment: t("strings.chips.open_attachment"),
+      pay_or_file: t("strings.chips.pay_or_file"),
+      snooze: t("strings.chips.snooze"),
+    }),
+    [t],
+  );
+  const chipThreshold = s["chips.threshold"];
+  const chipsMax = s["briefs.actions_max"];
+  const judgedChipList = useMemo(() => {
+    if (!judgments) return [];
+    const newest = messages[messages.length - 1];
+    const link = newest?.bodyText?.match(/https?:\/\/[^\s<>"')\]]+/)?.[0] ?? null;
+    const attachmentId = messages.flatMap((m) => m.attachments).find((a) => !a.inline)?.id ?? null;
+    const snoozeAt = snoozeUntil("tomorrow-morning", now, snoozeKnobs(s));
+    return judgedChips(judgments, {
+      threshold: chipThreshold,
+      max: chipsMax,
+      labels: chipLabels,
+      link,
+      attachmentId,
+      snoozeUntil: snoozeAt ? snoozeAt.toISOString() : null,
+    });
+  }, [judgments, messages, now, s, chipThreshold, chipsMax, chipLabels]);
   const runBriefAction = useCallback(
     async (action: BriefAction) => {
       if (!thread) return;
@@ -616,40 +703,6 @@ export function Inbox({
       }
     },
     [thread, actionRunner, advanceAfter, showToast, t, now],
-  );
-
-  const openAttachment = useCallback(
-    async (attachmentId: string) => {
-      const all = messages.flatMap((m) => m.attachments);
-      const meta = all.find((a) => a.id === attachmentId);
-      try {
-        const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
-        await saveDownload(meta?.name ?? attachmentId, bytes, mediaType);
-      } catch {
-        // Plain words, not the transport's: the toast names the file.
-        compose.onError(
-          fill(t("strings.reader.download_failed"), { name: meta?.name ?? attachmentId }),
-        );
-      }
-    },
-    [messages, inbox, compose, t],
-  );
-
-  const attachmentSrc = useCallback(
-    async (attachmentId: string) => {
-      const { bytes, mediaType } = await inbox.attachmentBytes(attachmentId);
-      return URL.createObjectURL(new Blob([bytes as BlobPart], { type: mediaType }));
-    },
-    [inbox],
-  );
-
-  /** The `agent.ask` action: the bar opens prefilled; Enter sends it as the turn. */
-  const askAgent = useCallback(
-    (text: string) => {
-      setAgentText(text);
-      focusAgent();
-    },
-    [focusAgent],
   );
 
   const applyView = useCallback(
@@ -1150,6 +1203,7 @@ export function Inbox({
           thread={shownThread}
           messages={messages}
           brief={brief}
+          chips={judgedChipList}
           tags={tagsOf(shownThread)}
           sheet={stream}
           leaving={readerExit.leaving}

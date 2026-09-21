@@ -111,6 +111,36 @@ export function Brief({
   );
 }
 
+export interface ActionChipsProps {
+  /** The chips, likeliest first; the caller has already applied the threshold and the cap. */
+  actions: readonly BriefAction[];
+  onAction?: ((action: BriefAction) => void) | undefined;
+  className?: string | undefined;
+}
+
+/**
+ * Action chips without a Brief (slice 25): what the Thread's Judgments say
+ * the reader would do first, shown where the Brief will sit until one
+ * arrives. Renders nothing for an empty list.
+ */
+export function ActionChips({ actions, onAction, className }: ActionChipsProps) {
+  if (actions.length === 0) return null;
+  return (
+    <div className={cx("brief chips", className)} data-testid="action-chips">
+      <div className="brief-actions">
+        {actions.map((a) => {
+          const label = briefActionLabel(a);
+          return (
+            <Chip key={`${a.kind}:${label}`} onClick={() => onAction?.(a)}>
+              {label}
+            </Chip>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ Attachment ------------------------------ */
 
 export function attachmentIcon(mediaType: string): IconComponent {

@@ -18,6 +18,7 @@ import type {
   SendError,
   Tag,
   Thread,
+  ThreadJudgments,
 } from "@monday/shared";
 import type { Row } from "./driver.ts";
 
@@ -44,15 +45,38 @@ export const INBOX_THREADS_SQL = `
 
 /**
  * Every Thread the Cache holds, trash included, newest first, with the
- * newest Message's sender for the Section rules ("lastFrom").
+ * newest Message's sender for the Section rules ("lastFrom") and the
+ * Thread's Judgments (slice 25) for the judged conditions and the chips.
  */
 export const ALL_THREADS_SQL = `
   select t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
     (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids,
-    (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender
+    (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender,
+    j.needs_reply as j_needs_reply, j.waiting_on_others as j_waiting_on_others, j.newsletter as j_newsletter,
+    j.automated as j_automated, j.brief_worth as j_brief_worth, j.urgency as j_urgency,
+    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at
   from threads t
+  left join thread_judgments j on j.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
+
+/** The Judgments joined onto a Thread row as `j_*` columns, or null when the Thread is not judged yet. */
+export function rowToJudgments(r: Row): ThreadJudgments | null {
+  if (typeof r.j_judged_at !== "string" || r.j_judged_at === "") return null;
+  const num = (value: unknown) => (typeof value === "number" ? value : Number(value ?? 0) || 0);
+  return {
+    threadId: text(r.id),
+    needsReply: num(r.j_needs_reply),
+    waitingOnOthers: num(r.j_waiting_on_others),
+    newsletter: num(r.j_newsletter),
+    automated: num(r.j_automated),
+    briefWorth: num(r.j_brief_worth),
+    urgency: num(r.j_urgency),
+    chips: json<Record<string, number>>(r.j_chips, {}),
+    model: text(r.j_model),
+    judgedAt: r.j_judged_at,
+  };
+}
 
 export const THREAD_BY_ID_SQL = `
   select t.*,
@@ -87,11 +111,17 @@ export function rowToThread(r: Row, workspaceId: string): Thread {
 export function rowToCachedThread(
   r: Row,
   workspaceId: string,
-): { thread: Thread; deleted: boolean; lastSender: string | null } {
+): {
+  thread: Thread;
+  deleted: boolean;
+  lastSender: string | null;
+  judgments: ThreadJudgments | null;
+} {
   return {
     thread: rowToThread(r, workspaceId),
     deleted: bool(r.deleted),
     lastSender: nullable(r.last_sender),
+    judgments: rowToJudgments(r),
   };
 }
 

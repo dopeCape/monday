@@ -4,7 +4,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Thread } from "../domain.ts";
 import { isBulk, matchesPredicate, mergePredicates, type PredicateFacts } from "./predicate.ts";
-import { DEFAULT_SECTION_RULES, sectionOf } from "./sections.ts";
+import {
+  DEFAULT_SECTION_RULES,
+  hasJudgedWhen,
+  judgedMatches,
+  type SectionJudgments,
+  sectionOf,
+} from "./sections.ts";
 import { clampConfidence, place } from "./thresholds.ts";
 
 const facts = (over: Partial<PredicateFacts> = {}): PredicateFacts => ({
@@ -154,6 +160,49 @@ describe("Section rules", () => {
     expect(at(thread({ unread: true }), me)).toBe("fyi");
     expect(at(thread({ bulk: true }), "digest@theweekly.test")).toBe("newsletters");
     expect(at(thread({ unread: true }), null)).toBe("fyi");
+  });
+
+  test("a judged Thread lands by its Judgments, an unjudged one by the header rules, and Group conditions always apply", () => {
+    const judged = (over: Partial<SectionJudgments> = {}): SectionJudgments => ({
+      needsReply: 0.1,
+      waitingOnOthers: 0.1,
+      newsletter: 0.1,
+      automated: 0.1,
+      urgency: 0,
+      ...over,
+    });
+    const at = (t: Thread, lastSender: string | null, judgments: SectionJudgments | null) =>
+      sectionOf(t, { lastSender, owner: me, judgments }, DEFAULT_SECTION_RULES, order);
+    // Read, one message, someone else wrote last: fyi by the headers, Needs your reply once judged.
+    const read = thread({ unread: false });
+    expect(at(read, "aoife@northwind.test", null)).toBe("fyi");
+    expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.64 }))).toBe("needs-reply");
+    expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.58 }))).toBe("fyi");
+    // The owner wrote last and waits: the headers say fyi, the judge says waiting.
+    expect(at(thread({ messageCount: 3 }), me, judged({ waitingOnOthers: 0.8 }))).toBe("waiting");
+    // List headers put a Thread in Newsletters; so does the judge without them, and a
+    // judged non-newsletter with list headers is For your information.
+    expect(at(thread({ bulk: true }), "digest@theweekly.test", null)).toBe("newsletters");
+    expect(at(thread(), "bytes@ui.dev", judged({ newsletter: 0.92 }))).toBe("newsletters");
+    expect(at(thread({ bulk: true }), "digest@x.test", judged({ newsletter: 0.2 }))).toBe("fyi");
+    // A rule with Group and judged conditions needs both.
+    const rules = [{ id: "urgent-money", when: { groups: ["Finance"], urgency_at_least: 2 } }];
+    const facts = { lastSender: null, owner: me, groupNames: { g1: "Finance" } };
+    expect(
+      sectionOf(thread({ group: "g1" }), { ...facts, judgments: judged({ urgency: 2.2 }) }, rules),
+    ).toBe("urgent-money");
+    expect(
+      sectionOf(thread({ group: "g1" }), { ...facts, judgments: judged({ urgency: 1.8 }) }, rules),
+    ).toBeNull();
+    expect(
+      sectionOf(thread({ group: "g2" }), { ...facts, judgments: judged({ urgency: 2.5 }) }, rules),
+    ).toBeNull();
+    // Unjudged, the rule falls back to its header conditions: here only the Group.
+    expect(sectionOf(thread({ group: "g1" }), facts, rules)).toBe("urgent-money");
+    expect(hasJudgedWhen({ bulk: true })).toBe(false);
+    expect(hasJudgedWhen({ automated_at_most: 0.3 })).toBe(true);
+    expect(judgedMatches({ automated_at_most: 0.3 }, judged({ automated: 0.3 }))).toBe(true);
+    expect(judgedMatches({ automated_at_most: 0.3 }, judged({ automated: 0.31 }))).toBe(false);
   });
 
   test("rules may name Groups by id or name; order decides; nothing matching is null", () => {

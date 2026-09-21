@@ -19,6 +19,7 @@ import type {
   SendError,
   Thread,
 } from "./domain.ts";
+import type { ThreadJudgments } from "./judge.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
 
 /* ------------------------------ Intents ------------------------------ */
@@ -223,6 +224,7 @@ export type ChangeKind =
   | "brief"
   | "group"
   | "decision"
+  | "judgments"
   | "calendar"
   | "event"
   | "invite";
@@ -388,6 +390,16 @@ export interface DecisionChange {
   at: IsoDate;
 }
 
+/**
+ * A Thread's Judgments as the arrival request stored them (slice 25, ADR
+ * 0012): probabilities only, so the client's Section rules and the reader's
+ * chips have them before any Brief. A new Message re-judges and the feed
+ * carries the fresh row; `deleted` when the Thread is gone.
+ */
+export interface JudgmentsChange extends ThreadJudgments {
+  deleted?: boolean;
+}
+
 export type ChangePayload =
   | { kind: "thread"; payload: ThreadChange }
   | { kind: "message"; payload: MessageChange }
@@ -400,6 +412,7 @@ export type ChangePayload =
   | { kind: "brief"; payload: BriefChange }
   | { kind: "group"; payload: GroupChange }
   | { kind: "decision"; payload: DecisionChange }
+  | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange };

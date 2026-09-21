@@ -5,9 +5,12 @@
 // The seam is BriefPolicyRule.for(facts): the Briefs module hands it the
 // facts about a Thread and gets always, on_open or never back. Behind it,
 // mode "rule" evaluates the shipped rule over Thread state and headers with
-// the per-Group overrides, and mode "model" asks the classify Task on the
-// fast Role with the user's prompt. Slice 12 plugs Groups and Sections in
-// through the same facts without touching the callers.
+// the per-Group overrides, mode "model" asks the classify Task on the fast
+// Role with the user's prompt, and mode "judge" (slice 25, ADR 0012) reads
+// the "Brief worth" Score the arrival request stored, asking the judge once
+// when the Thread has not been judged yet, and falls back to the rule when
+// there is no judge. Slice 12 plugs Groups and Sections in through the same
+// facts without touching the callers.
 
 import type {
   BriefPolicy,
@@ -17,8 +20,10 @@ import type {
   IsoDate,
   Person,
   Section,
+  ThreadJudgments,
 } from "@monday/shared";
-import type { HostedRuntime } from "./runtime/index.ts";
+import type { Judgments } from "./judgments.ts";
+import { AiOffError, type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
 
 /** The newest Message of a Thread as the policy sees it: headers and a little text. */
 export interface BriefLatestMessage {
@@ -47,10 +52,23 @@ export interface BriefThreadFacts {
   latest: BriefLatestMessage;
   /** Words across every Message body the Server holds. */
   words: number;
+  /** The Thread's stored Judgments when the caller already has them; the rule reads the store otherwise. */
+  judgments?: ThreadJudgments | null | undefined;
+}
+
+/** The thresholds of mode "judge" over the Brief worth Score (0 to 3) and the newsletter Noul. */
+export interface JudgePolicySettings {
+  /** At or above: always (in the background). */
+  alwaysAtLeast: number;
+  /** Below: never. Between the two: on open. */
+  neverBelow: number;
+  /** A Thread judged a newsletter or automated at or above this is never briefed in the background. */
+  newsletterAtLeast: number;
 }
 
 export interface BriefPolicySettings {
   mode: BriefPolicyMode;
+  judge: JudgePolicySettings;
   /** The policy for a Thread the rule does not place. */
   defaultPolicy: BriefPolicy;
   /** Per Group id; a Sub-group's entry beats its parent's. */
@@ -146,6 +164,29 @@ export function rulePolicy(facts: BriefThreadFacts, settings: BriefPolicySetting
   return settings.defaultPolicy;
 }
 
+/* ------------------------------ The judge ------------------------------ */
+
+/**
+ * Mode "judge": the Brief worth Score decides. Below `neverBelow` nothing
+ * deserves a Brief; a newsletter or automated mail is never briefed in the
+ * background whatever its score; at or above `alwaysAtLeast` the Brief is
+ * computed before open; between, on open.
+ */
+export function judgedPolicy(
+  judgments: Pick<ThreadJudgments, "briefWorth" | "newsletter" | "automated">,
+  settings: JudgePolicySettings,
+): BriefPolicy {
+  if (judgments.briefWorth < settings.neverBelow) return "never";
+  if (
+    judgments.newsletter >= settings.newsletterAtLeast ||
+    judgments.automated >= settings.newsletterAtLeast
+  ) {
+    return "on_open";
+  }
+  if (judgments.briefWorth >= settings.alwaysAtLeast) return "always";
+  return "on_open";
+}
+
 /* ------------------------------ The model ------------------------------ */
 
 const EXCERPT_CHARS = 600;
@@ -225,11 +266,32 @@ export interface BriefPolicyRuleOptions {
   settings: () => Promise<BriefPolicySettings>;
   /** The Hosted runtime, for mode "model". */
   runtime: HostedRuntime;
+  /** The stored Judgments and the arrival request, for mode "judge"; absent means that mode uses the rule. */
+  judgments?: Pick<Judgments, "fresh" | "judgeThread"> | undefined;
   log?: (message: string) => void;
 }
 
 export function createBriefPolicyRule(options: BriefPolicyRuleOptions): BriefPolicyRule {
   const log = options.log ?? (() => {});
+
+  /** The Thread's Judgments: the caller's, the stored ones for this version, or one request; null without a judge. */
+  const judgmentsOf = async (facts: BriefThreadFacts): Promise<ThreadJudgments | null> => {
+    if (facts.judgments) return facts.judgments;
+    const seam = options.judgments;
+    if (!seam) return null;
+    const stored = await seam.fresh(facts.threadId);
+    if (stored) return stored;
+    try {
+      return await seam.judgeThread(facts.workspaceId, facts.threadId);
+    } catch (error) {
+      if (error instanceof NoJudgeError || error instanceof AiOffError) return null;
+      log(
+        `brief policy: judge failed (${error instanceof Error ? error.message : error}); using the rule`,
+      );
+      return null;
+    }
+  };
+
   return {
     async for(facts) {
       const settings = await options.settings();
@@ -238,6 +300,10 @@ export function createBriefPolicyRule(options: BriefPolicyRuleOptions): BriefPol
         (facts.groupId ? settings.groups[facts.groupId] : undefined);
       if (override) return override;
       if (settings.mode === "rule") return rulePolicy(facts, settings);
+      if (settings.mode === "judge") {
+        const judged = await judgmentsOf(facts);
+        return judged ? judgedPolicy(judged, settings.judge) : rulePolicy(facts, settings);
+      }
       try {
         const result = await options.runtime.run(
           "classify",

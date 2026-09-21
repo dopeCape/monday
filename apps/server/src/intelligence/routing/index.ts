@@ -6,10 +6,16 @@
 // automation `move` intent through the Mailstore, so a user's move always
 // beats it (ADR 0005); every Group and decision reaches the client through
 // the Changes feed. The `route` Job kind runs one Thread on the Server.
+//
+// Each stage is a Judgment when the judge is available (ADR 0012, slice 25):
+// one Choice over the candidate Groups plus none, placed by its probabilities
+// and its confidence (judge.ts). Without a judge the classify prompt runs as
+// before, so both paths place the fixture mailbox the same way.
 
 import type {
   AiLevel,
   BriefPolicy,
+  ChoiceQuestion,
   Confidence,
   CorrectionResult,
   DecisionCandidate,
@@ -47,7 +53,7 @@ import {
 } from "../../db/schema.ts";
 import type { Job, Jobs } from "../../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../../mailstore/index.ts";
-import type { HostedRuntime } from "../runtime/index.ts";
+import { type HostedRuntime, type JudgeResult, NoJudgeError } from "../runtime/index.ts";
 import {
   classifyPrompt,
   classifySystemPrompt,
@@ -58,6 +64,7 @@ import {
   reviseSystemPrompt,
   type ThreadFacts,
 } from "./classify.ts";
+import { type JudgedStage, judgedPlacement, routeQuestion } from "./judge.ts";
 
 export type { GroupText, ThreadFacts } from "./classify.ts";
 export {
@@ -70,6 +77,8 @@ export {
   reviseSystemPrompt,
   threadFactsText,
 } from "./classify.ts";
+export type { JudgedStage, RouteJudgeSettings, RouteQuestion } from "./judge.ts";
+export { judgedPlacement, NONE_OPTION, optionName, routeQuestion } from "./judge.ts";
 
 export const ROUTE_STEP = "route";
 
@@ -92,6 +101,8 @@ export interface RoutingSettings {
   rerunRecent: number;
   lookbackDays: number;
   briefPolicyDefault: BriefPolicy;
+  /** The routing Choice's wording (routing.judge.*), for the judge path. */
+  judge: { instructions: string; noneOption: string };
 }
 
 export interface RoutingOptions {
@@ -478,7 +489,54 @@ export function createRouting(options: RoutingOptions): Routing {
       hasAttachments: facts.hasAttachments,
       headers: facts.headers,
     };
-    const stage = async (candidates: GroupText[]): Promise<{ scores: Score[]; by: RouteBy }> => {
+    interface Staged {
+      scores: Score[];
+      by: RouteBy;
+      /** Set when the judge answered: its placement reads the confidence too. */
+      judged?: JudgedStage;
+    }
+    // Whether the judge answers, asked once per Thread, so both stages take the same path.
+    let judgeOpen: Promise<boolean> | null = null;
+    const judgeAvailable = () => {
+      judgeOpen ??= runtime.judgeAvailable();
+      return judgeOpen;
+    };
+    let owner: string | null = null;
+
+    /** One Choice over the candidates through the judge, or null when the judge is unavailable. */
+    const judgeStage = async (candidates: GroupText[]): Promise<Staged | null> => {
+      if (!(await judgeAvailable())) return null;
+      owner ??= await ownerOf(row.workspaceId);
+      const asked = routeQuestion(facts, candidates, owner, {
+        instructions: settings.judge.instructions,
+        noneOption: settings.judge.noneOption,
+        snippetChars: settings.snippetChars,
+        examplesInPrompt: settings.examplesInPrompt,
+      });
+      let answer: JudgeResult<{ group: ChoiceQuestion }>;
+      try {
+        answer = await runtime.judge(
+          "judge.route",
+          asked.state,
+          { group: asked.question },
+          { workspaceId: row.workspaceId, jobId },
+        );
+      } catch (error) {
+        // The judge went away between the check and the ask: the prompt path decides.
+        if (error instanceof NoJudgeError) return null;
+        throw error;
+      }
+      calls += 1;
+      const judged = judgedPlacement(
+        answer.answers.group,
+        asked.options,
+        settings.thresholds,
+        thresholdOf,
+      );
+      return { scores: judged.scores, by: "model", judged };
+    };
+
+    const stage = async (candidates: GroupText[]): Promise<Staged> => {
       if (candidates.length === 0) return { scores: [], by: "model" };
       if (settings.predicateFirst) {
         const hits = candidates.filter((g) => matchesPredicate(g.predicate, predicateFacts));
@@ -490,6 +548,8 @@ export function createRouting(options: RoutingOptions): Routing {
           };
         }
       }
+      const judged = await judgeStage(candidates);
+      if (judged) return judged;
       const { prompt, labels } = classifyPrompt(facts, candidates, settings);
       const result = await runtime.run(
         "classify",
@@ -499,16 +559,18 @@ export function createRouting(options: RoutingOptions): Routing {
       calls += 1;
       return { scores: parseClassifyOutput(result.output, labels), by: "model" };
     };
+    const placeStage = (staged: Staged): RoutePlacement =>
+      staged.judged?.placement ?? place(staged.scores, settings.thresholds, thresholdOf);
 
     const top = all.filter((g) => g.row.parentId === null);
     const first = await stage(top);
-    const placement = place(first.scores, settings.thresholds, thresholdOf);
+    const placement = placeStage(first);
     let subgroup: Scored["subgroup"] = null;
     if (placement.kind === "route") {
       const children = all.filter((g) => g.row.parentId === placement.groupId);
       if (children.length > 0) {
         const second = await stage(children);
-        const inner = place(second.scores, settings.thresholds, thresholdOf);
+        const inner = placeStage(second);
         if (inner.kind === "route") {
           subgroup = { groupId: inner.groupId, confidence: inner.confidence };
         }

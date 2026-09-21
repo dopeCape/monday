@@ -4,9 +4,12 @@
 // it over the InboxActions seam and the compose surface, the same seams the
 // Device's ToolHost (agent/clientToolHost.ts) acts through, which keeps
 // ADR 0002: a reply or forward chip opens compose and never sends, snooze and
-// archive apply with Undo, a link opens outside.
+// archive apply with Undo, a link opens outside. The judged chips (slice 25:
+// call, open the attachment, pay or file) map the same way: a call or a
+// pay-or-file hands the agent bar a sentence and sends nothing; an
+// attachment opens through the opener.
 
-import type { BriefAction, Person, Tier } from "@monday/shared";
+import type { BriefAction, ChipName, Person, ThreadJudgments, Tier } from "@monday/shared";
 import type { InboxActions, UndoToken } from "./actions.ts";
 
 /** The tool call a chip stands for. Names are the tool server's. */
@@ -20,7 +23,67 @@ export type BriefToolCall =
     }
   | { tool: "thread.snooze"; tier: "reversible"; args: { threadId: string; until: string } }
   | { tool: "thread.archive"; tier: "reversible"; args: { threadId: string } }
-  | { tool: "open.link"; tier: "read-only"; args: { url: string } };
+  | { tool: "open.link"; tier: "read-only"; args: { url: string } }
+  | { tool: "open.attachment"; tier: "read-only"; args: { attachmentId: string } }
+  | {
+      tool: "agent.ask";
+      tier: "read-only";
+      args: { threadId: string; intent: "call" | "pay-or-file" };
+    };
+
+/**
+ * The chips a Thread's Judgments earn before its Brief exists: every chip at
+ * or above the threshold, likeliest first, at most `max`. A chip that needs
+ * something the Thread lacks (a link, an attachment, a snooze time) is
+ * skipped; the labels are the strings Settings.
+ */
+export function judgedChips(
+  judgments: ThreadJudgments,
+  facts: {
+    threshold: number;
+    max: number;
+    labels: Record<ChipName, string>;
+    /** The first link in the newest Message, for review_link. */
+    link: string | null;
+    /** The first attachment on the Thread, for open_attachment. */
+    attachmentId: string | null;
+    /** When a snooze chip would put the Thread aside until. */
+    snoozeUntil: string | null;
+  },
+): BriefAction[] {
+  const ranked = (Object.entries(judgments.chips) as [ChipName, number][])
+    .filter(([, p]) => p >= facts.threshold)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const out: BriefAction[] = [];
+  for (const [chip] of ranked) {
+    if (out.length >= facts.max) break;
+    const label = facts.labels[chip];
+    if (!label) continue;
+    switch (chip) {
+      case "reply":
+        out.push({ kind: "reply", label, proposedLine: "" });
+        break;
+      case "call":
+        out.push({ kind: "call", label });
+        break;
+      case "review_link":
+        if (facts.link) out.push({ kind: "open-link", label, url: facts.link });
+        break;
+      case "open_attachment":
+        if (facts.attachmentId) {
+          out.push({ kind: "open-attachment", label, attachmentId: facts.attachmentId });
+        }
+        break;
+      case "pay_or_file":
+        out.push({ kind: "pay-or-file", label });
+        break;
+      case "snooze":
+        if (facts.snoozeUntil) out.push({ kind: "snooze", label, until: facts.snoozeUntil });
+        break;
+    }
+  }
+  return out;
+}
 
 export function toolCallOf(action: BriefAction, threadId: string): BriefToolCall {
   switch (action.kind) {
@@ -44,6 +107,16 @@ export function toolCallOf(action: BriefAction, threadId: string): BriefToolCall
       return { tool: "thread.archive", tier: "reversible", args: { threadId } };
     case "open-link":
       return { tool: "open.link", tier: "read-only", args: { url: action.url } };
+    case "open-attachment":
+      return {
+        tool: "open.attachment",
+        tier: "read-only",
+        args: { attachmentId: action.attachmentId },
+      };
+    case "call":
+      return { tool: "agent.ask", tier: "read-only", args: { threadId, intent: "call" } };
+    case "pay-or-file":
+      return { tool: "agent.ask", tier: "read-only", args: { threadId, intent: "pay-or-file" } };
   }
 }
 
@@ -77,6 +150,10 @@ export interface ActionRunnerDeps {
   calendar?:
     | ((event: { threadId: string; title: string; start: string }) => Promise<void>)
     | undefined;
+  /** Opens an attachment through the opener; absent means the chip reports unavailable. */
+  openAttachment?: ((attachmentId: string) => void | Promise<void>) | undefined;
+  /** Hands the agent bar a sentence about the Thread (a call, paying or filing); nothing is sent. */
+  ask?: ((threadId: string, intent: "call" | "pay-or-file") => void) | undefined;
 }
 
 export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
@@ -103,6 +180,14 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
           return { ok: true, call, undo: await deps.inbox.archive([threadId]) };
         case "open.link":
           await deps.openLink(call.args.url);
+          return { ok: true, call, undo: null };
+        case "open.attachment":
+          if (!deps.openAttachment) return { ok: false, call, reason: "unavailable" };
+          await deps.openAttachment(call.args.attachmentId);
+          return { ok: true, call, undo: null };
+        case "agent.ask":
+          if (!deps.ask) return { ok: false, call, reason: "unavailable" };
+          deps.ask(call.args.threadId, call.args.intent);
           return { ok: true, call, undo: null };
       }
     },

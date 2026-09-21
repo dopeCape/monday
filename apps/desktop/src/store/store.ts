@@ -30,6 +30,7 @@ import type {
   InviteIntent,
   InviteIntentArgs,
   IsoDate,
+  JudgmentsChange,
   Message,
   MessageBodyRow,
   SendChange,
@@ -166,10 +167,11 @@ const SCHEMA_VERSION_KEY = "schema_version";
  * Bumped when a table changes shape. Version 2 gave `messages` its rowid alias
  * and the body index (slice 10); version 3 gave `threads` the bulk flag,
  * `groups` the feed's columns (slice 12) and `briefs` its Thread version and
- * content flag (slice 13). An older Cache is a copy, so it is rebuilt from the
- * feed: content tables dropped, cursor reset, Outbox and settings kept.
+ * content flag (slice 13); version 4 added `thread_judgments` (slice 25). An
+ * older Cache is a copy, so it is rebuilt from the feed: content tables
+ * dropped, cursor reset, Outbox and settings kept.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const REBUILD_SQL = `
   drop trigger if exists threads_fts_ai;
@@ -192,6 +194,7 @@ const REBUILD_SQL = `
   drop table if exists briefs;
   drop table if exists groups;
   drop table if exists decisions;
+  drop table if exists thread_judgments;
   delete from meta where key = 'cursor';
 `;
 
@@ -504,6 +507,8 @@ export function changeStatements(change: Change): Statement[] {
       return [groupUpsert(change.payload)];
     case "decision":
       return [decisionUpsert(change.payload)];
+    case "judgments":
+      return [judgmentsUpsert(change.payload)];
     case "calendar":
       return [calendarUpsert(change.payload)];
     case "event":
@@ -625,6 +630,34 @@ function decisionUpsert(d: DecisionChange): Statement {
     sql: `insert into decisions (thread_id, candidates, at) values (?, ?, ?)
           on conflict (thread_id) do update set candidates = excluded.candidates, at = excluded.at`,
     params: [d.threadId, d.candidates, d.at],
+  };
+}
+
+/** A Thread's Judgments from the feed (slice 25): the whole row, replaced on every re-judge; removed when deleted. */
+function judgmentsUpsert(j: JudgmentsChange): Statement {
+  if (j.deleted) {
+    return { sql: "delete from thread_judgments where thread_id = ?", params: [j.threadId] };
+  }
+  return {
+    sql: `insert into thread_judgments (thread_id, needs_reply, waiting_on_others, newsletter, automated, brief_worth, urgency, chips, model, judged_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict (thread_id) do update set
+            needs_reply = excluded.needs_reply, waiting_on_others = excluded.waiting_on_others,
+            newsletter = excluded.newsletter, automated = excluded.automated,
+            brief_worth = excluded.brief_worth, urgency = excluded.urgency,
+            chips = excluded.chips, model = excluded.model, judged_at = excluded.judged_at`,
+    params: [
+      j.threadId,
+      j.needsReply,
+      j.waitingOnOthers,
+      j.newsletter,
+      j.automated,
+      j.briefWorth,
+      j.urgency,
+      j.chips,
+      j.model,
+      j.judgedAt,
+    ],
   };
 }
 

@@ -55,6 +55,7 @@ import {
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts";
 import { type IntentSettings, judgeIntent } from "./intent.ts";
+import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
@@ -98,14 +99,34 @@ export type { GuardSeam, GuardSettings, GuardVerdict } from "./guard.ts";
 export { createBodyGuard } from "./guard.ts";
 export type { IntentSettings } from "./intent.ts";
 export { intentQuestions, intentState, judgeIntent } from "./intent.ts";
+export type {
+  JudgeJobPayload,
+  JudgmentFacts,
+  JudgmentQuestionSettings,
+  JudgmentSettings,
+  Judgments,
+} from "./judgments.ts";
+export {
+  createJudgments,
+  JUDGE_STEP,
+  judgeJobId,
+  judgmentQuestions,
+  judgmentState,
+  readJudgments,
+} from "./judgments.ts";
 export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
 export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
 export type { OnboardingSeam, TopSender } from "./onboarding.ts";
 export { createOnboarding } from "./onboarding.ts";
-export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
-export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
+export type {
+  BriefPolicyRule,
+  BriefPolicySettings,
+  BriefThreadFacts,
+  JudgePolicySettings,
+} from "./policy.ts";
+export { createBriefPolicyRule, judgedPolicy, rulePolicy, shouldCompute } from "./policy.ts";
 export type {
   RouteJobPayload,
   Routing,
@@ -186,6 +207,8 @@ export interface Intelligence {
   meter: Meter;
   briefs: Briefs;
   policy: BriefPolicyRule;
+  /** The arrival request and its stored answers (slice 25). */
+  judgments: Judgments;
   routing: Routing;
   agent: AgentHost;
   activity: ActivityLog;
@@ -272,8 +295,30 @@ const INTENT_SETTING_KEYS = [
   "intent.question.kind",
 ] as const;
 
+const JUDGMENT_SETTING_KEYS = [
+  "judgments.on_arrival",
+  "judgments.questions.needs_reply",
+  "judgments.questions.waiting_on_others",
+  "judgments.questions.newsletter",
+  "judgments.questions.automated",
+  "judgments.questions.brief_worth",
+  "judgments.questions.brief_worth_levels",
+  "judgments.questions.urgency",
+  "judgments.questions.urgency_levels",
+  "judgments.questions.chip.reply",
+  "judgments.questions.chip.call",
+  "judgments.questions.chip.review_link",
+  "judgments.questions.chip.open_attachment",
+  "judgments.questions.chip.pay_or_file",
+  "judgments.questions.chip.snooze",
+  "routing.classify.snippet_chars",
+] as const;
+
 const POLICY_SETTING_KEYS = [
   "briefs.policy_mode",
+  "briefs.judge.always_at_least",
+  "briefs.judge.never_below",
+  "briefs.judge.newsletter_at_least",
   "briefs.policy_default",
   "briefs.policy_groups",
   "briefs.prompt",
@@ -325,6 +370,8 @@ const ROUTING_SETTING_KEYS = [
   "routing.rerun.recent",
   "routing.lookback_days",
   "routing.brief_policy.default",
+  "routing.judge.instructions",
+  "routing.judge.none_option",
 ] as const;
 
 /**
@@ -380,6 +427,11 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     const s = await readGlobalSettings(db, POLICY_SETTING_KEYS);
     return {
       mode: s["briefs.policy_mode"],
+      judge: {
+        alwaysAtLeast: s["briefs.judge.always_at_least"],
+        neverBelow: s["briefs.judge.never_below"],
+        newsletterAtLeast: s["briefs.judge.newsletter_at_least"],
+      },
       defaultPolicy: s["briefs.policy_default"],
       groups: s["briefs.policy_groups"],
       prompt: s["briefs.prompt"],
@@ -391,8 +443,41 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       automatedSenders: s["briefs.automated_senders"],
     };
   };
+  const judgments = createJudgments({
+    db,
+    mailstore,
+    runtime,
+    now,
+    log,
+    level,
+    settings: async (): Promise<JudgmentSettings> => {
+      const s = await readGlobalSettings(db, JUDGMENT_SETTING_KEYS);
+      return {
+        onArrival: s["judgments.on_arrival"],
+        snippetChars: s["routing.classify.snippet_chars"],
+        questions: {
+          needsReply: s["judgments.questions.needs_reply"],
+          waitingOnOthers: s["judgments.questions.waiting_on_others"],
+          newsletter: s["judgments.questions.newsletter"],
+          automated: s["judgments.questions.automated"],
+          briefWorth: s["judgments.questions.brief_worth"],
+          briefWorthLevels: s["judgments.questions.brief_worth_levels"],
+          urgency: s["judgments.questions.urgency"],
+          urgencyLevels: s["judgments.questions.urgency_levels"],
+          chips: {
+            reply: s["judgments.questions.chip.reply"],
+            call: s["judgments.questions.chip.call"],
+            review_link: s["judgments.questions.chip.review_link"],
+            open_attachment: s["judgments.questions.chip.open_attachment"],
+            pay_or_file: s["judgments.questions.chip.pay_or_file"],
+            snooze: s["judgments.questions.chip.snooze"],
+          },
+        },
+      };
+    },
+  });
   const policy =
-    options.policy ?? createBriefPolicyRule({ settings: policySettings, runtime, log });
+    options.policy ?? createBriefPolicyRule({ settings: policySettings, runtime, judgments, log });
   const verify = createBriefVerifier({
     runtime,
     log,
@@ -490,6 +575,10 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         rerunRecent: s["routing.rerun.recent"],
         lookbackDays: s["routing.lookback_days"],
         briefPolicyDefault: s["routing.brief_policy.default"],
+        judge: {
+          instructions: s["routing.judge.instructions"],
+          noneOption: s["routing.judge.none_option"],
+        },
       };
     },
   });
@@ -618,6 +707,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     meter,
     briefs,
     policy,
+    judgments,
     routing,
     agent,
     activity,
@@ -661,6 +751,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
     validateKey,
     registerSteps(jobs) {
+      judgments.registerSteps(jobs);
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
       workflows.registerSteps(jobs);

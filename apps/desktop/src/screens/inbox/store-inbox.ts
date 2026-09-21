@@ -9,9 +9,9 @@
 // and the Store's warming put it before open; an open that finds none, or a
 // stale one, asks the Server under the brief policy (docs/spec/inbox.md, Briefs).
 // Sections are decided here, on the client, from the Section rules in
-// Settings over Thread state and Group (CONTEXT.md "Section rule"): fast,
-// local, and never waiting on the Server. A Section the Server assigned
-// (the section Task) is kept as is.
+// Settings over Thread state, Group and the Thread's Judgments from the Cache
+// (CONTEXT.md "Section rule"; slice 25): fast, local, and never waiting on
+// the Server. A Section the Server assigned (the section Task) is kept as is.
 
 import type {
   AiLevel,
@@ -21,6 +21,7 @@ import type {
   SectionRuleSetting,
   Tag,
   Thread,
+  ThreadJudgments,
 } from "@monday/shared";
 import { sectionOf } from "@monday/shared";
 import {
@@ -200,7 +201,7 @@ export async function createStoreInbox(
     setUnavailable(threadId, why);
   };
 
-  /** The Section a row lands in: the Server's when it set one, else the rules over the row. */
+  /** The Section a row lands in: the Server's when it set one, else the rules over the row and its Judgments. */
   const sectioned = (entry: ReturnType<typeof rowToCachedThread>): Thread => {
     const rules = options.sections;
     if (!rules || entry.thread.section !== null) return entry.thread;
@@ -209,6 +210,7 @@ export async function createStoreInbox(
       {
         lastSender: entry.lastSender,
         owner: rules.owner,
+        judgments: entry.judgments,
         ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
       },
       rules.rules(),
@@ -220,12 +222,16 @@ export async function createStoreInbox(
   let lastRows: Record<string, unknown>[] = [];
   /** The Threads in the trash, which the domain type does not carry. */
   const deletedIds = new Set<string>();
+  /** The Judgments per Thread, as the Cache holds them. */
+  const judgmentsById = new Map<string, ThreadJudgments>();
   const project = (rows: Record<string, unknown>[]) => {
     lastRows = rows;
     byId.clear();
     deletedIds.clear();
+    judgmentsById.clear();
     const all = rows.map((r) => {
       const entry = rowToCachedThread(r, store.workspaceId);
+      if (entry.judgments) judgmentsById.set(entry.thread.id, entry.judgments);
       return { thread: sectioned(entry), deleted: entry.deleted };
     });
     for (const { thread, deleted } of all) {
@@ -344,6 +350,7 @@ export async function createStoreInbox(
       };
     },
     brief: (threadId) => watch(threadId).brief,
+    judgments: (threadId) => judgmentsById.get(threadId),
     unavailable: (threadId) => watch(threadId).unavailable,
     async openThread(threadId) {
       let pending = opening.get(threadId);
