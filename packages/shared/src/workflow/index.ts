@@ -524,7 +524,7 @@ export interface DryRunThread {
 export interface DryRunPreview {
   workflowId: Id;
   version: number;
-  /** Threads the trigger would have matched. */
+  /** Threads the trigger would have matched; with a judged trigger, the Threads the judge was asked about. */
   considered: number;
   threads: DryRunThread[];
 }

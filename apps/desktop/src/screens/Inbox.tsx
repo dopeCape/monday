@@ -799,6 +799,12 @@ export function Inbox({
   /** The scheduling card: the composer's own card with the arguments filled, no Session behind it. */
   const openIntentCard = useCallback(
     (intent: TypedIntent) => {
+      // The card lives in the bottom composer this screen owns; in a column
+      // Layout the Agent's own scheduling tool shows the same card, with a Session.
+      if (shell.layout.agent !== "bottom") {
+        askAgent(intent.text);
+        return;
+      }
       setIntentCard({
         id: `intent-${Date.now()}`,
         intent,
@@ -807,7 +813,7 @@ export function Inbox({
       });
       setAgentOpen(true);
     },
-    [s, now],
+    [s, now, shell.layout.agent, askAgent],
   );
 
   const approveIntentCard = useCallback(async () => {

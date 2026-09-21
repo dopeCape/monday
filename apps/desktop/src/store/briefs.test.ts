@@ -135,7 +135,7 @@ describe("briefs in the Cache", () => {
       verified: ["supported", "partly"],
     };
     const [statement] = cachedBriefStatements(brief);
-    expect(statement?.params[1]).toEqual({
+    expect(statement?.params?.[1]).toEqual({
       bullets: brief.bullets,
       verified: ["supported", "partly"],
     });
@@ -146,7 +146,7 @@ describe("briefs in the Cache", () => {
     expect(read?.brief?.verified).toEqual(["supported", "partly"]);
     // A Brief without verdicts is stored as the bullets alone, as before.
     const [plain] = cachedBriefStatements(seed);
-    expect(plain?.params[1]).toEqual(seed.bullets);
+    expect(plain?.params?.[1]).toEqual(seed.bullets);
   });
 
   test("the brief Change statements: insert with headers only, keep content on a stale flip, delete", () => {
