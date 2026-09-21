@@ -1,11 +1,13 @@
 // The full navigation sidebar: workspace, search and compose, Mail folders,
-// the calendar, Groups with their Sub-groups, Automation, and Settings.
+// the calendar, Groups with their Sub-groups, the Sections placed in the nav
+// (CONTEXT.md "Section rule"), Automation, and Settings.
 import type { Group } from "@monday/shared";
 import {
   CaretUpDownIcon,
   GearSixIcon,
   MagnifyingGlassIcon,
   PencilSimpleLineIcon,
+  StackIcon,
 } from "@phosphor-icons/react";
 import { Fragment } from "react";
 import { cx } from "../format.ts";
@@ -32,6 +34,8 @@ export interface NavLabels {
   compose: string;
   mail: string;
   groups: string;
+  /** The heading over the Sections placed in the nav; absent means "Sections". */
+  sections?: string | undefined;
   automation: string;
   settings: string;
 }
@@ -41,6 +45,7 @@ export const DEFAULT_NAV_LABELS: NavLabels = {
   compose: "New message",
   mail: "Mail",
   groups: "Groups",
+  sections: "Sections",
   automation: "Automation",
   settings: "Settings",
 };
@@ -57,6 +62,8 @@ export interface NavSidebarProps {
   counts?: Readonly<Record<string, number>> | undefined;
   /** Icons for top-level Groups; Sub-groups never carry one. */
   groupIcon?: (group: Group) => IconComponent | undefined;
+  /** The Sections placed in the nav, under Groups; none hides the block. */
+  sections?: readonly NavItem[] | undefined;
   automation: readonly NavItem[];
   /** The active folder key, Group id, or "calendar", "settings". */
   active: string;
@@ -97,6 +104,7 @@ export function NavSidebar({
   groups,
   counts,
   groupIcon,
+  sections,
   automation,
   active,
   onSelect,
@@ -156,6 +164,18 @@ export function NavSidebar({
             />
           ))}
         </Fragment>
+      ))}
+
+      {sections?.length ? (
+        <div className="nav-sec">{labels.sections ?? DEFAULT_NAV_LABELS.sections}</div>
+      ) : null}
+      {sections?.map((sec) => (
+        <Item
+          key={sec.key}
+          item={withCount({ icon: StackIcon, ...sec })}
+          on={active === sec.key}
+          onSelect={onSelect}
+        />
       ))}
 
       {automation.length ? <div className="nav-sec">{labels.automation}</div> : null}

@@ -4,7 +4,21 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { BriefAction, ExternalPending, Settings, Tag, Thread } from "@monday/shared";
+import type {
+  BriefAction,
+  CustomActionSetting,
+  ExternalPending,
+  Settings,
+  Tag,
+  Thread,
+} from "@monday/shared";
+import {
+  customActionsFor,
+  isSettingKey,
+  orderedSectionRules,
+  sectionInStream,
+  sectionLabel,
+} from "@monday/shared";
 import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
@@ -42,9 +56,10 @@ import { useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
+import { createCustomActionRunner, customActionTier } from "./inbox/custom-actions.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import { Picker } from "./inbox/Picker.tsx";
-import { Reader } from "./inbox/Reader.tsx";
+import { Reader, type ReaderAction } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
 import { formatWake } from "./inbox/snooze.ts";
 import { Toast } from "./inbox/Toast.tsx";
@@ -112,6 +127,12 @@ export interface InboxProps {
    * Sub-group, under the Group's name. Absent, the whole Inbox.
    */
   group?: string | undefined;
+  /**
+   * A Section lens (CONTEXT.md "Section rule", a Section placed in the nav):
+   * only the Threads under this Section, under its name. Absent, the whole
+   * Inbox, where a Section placed only in the nav shows no heading.
+   */
+  section?: string | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
@@ -121,10 +142,13 @@ type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
 const defaultInbox = fixtureInbox();
 const defaultComposer = fixtureComposer();
 
-/** "needs-reply" as a heading when no strings.section.* Setting names it. */
-function sectionFallbackName(id: string): string {
-  const words = id.replace(/[-_]+/g, " ").trim();
-  return words.charAt(0).toUpperCase() + words.slice(1);
+/** A Section's heading: the rule's own name, the strings.section.<id> Setting, or the id in words. */
+function sectionName(settings: Settings, rule: { id: string; name?: string | undefined }): string {
+  const key = `strings.section.${rule.id}`;
+  return sectionLabel(
+    rule as Parameters<typeof sectionLabel>[0],
+    isSettingKey(key) ? String(settings[key]) : undefined,
+  );
 }
 
 /** The Messages of the open Thread, from the reader seam, fetched on open. */
@@ -189,6 +213,7 @@ export function Inbox({
   externalPending,
   calendar,
   group,
+  section,
 }: InboxProps) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -209,10 +234,21 @@ export function Inbox({
   const groups = useSyncExternalStore(inbox.subscribe, inbox.groups, inbox.groups);
   const tags = useSyncExternalStore(inbox.subscribe, inbox.tags, inbox.tags);
   const lens = group ? groups.find((g) => g.id === group) : undefined;
+  const sectionLens = useMemo(() => {
+    if (!section) return undefined;
+    const rule = settings["sections.rules"].find((r) => r.id === section);
+    return rule
+      ? { id: rule.id, name: sectionName(settings, rule) }
+      : { id: section, name: section };
+  }, [section, settings]);
   const threads = useMemo(
     () =>
-      lens ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id) : allThreads,
-    [allThreads, lens],
+      lens
+        ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
+        : sectionLens
+          ? allThreads.filter((t) => t.section === sectionLens.id)
+          : allThreads,
+    [allThreads, lens, sectionLens],
   );
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
@@ -223,18 +259,29 @@ export function Inbox({
   const rows = useLeavingRows(threads, collapseMs);
 
   // The Sections are the rules in Settings (ADR 0004): the order Setting says
-  // which show and in what order, a rule may hide its Section, and the heading
-  // is the strings.section.<id> Setting where one exists.
+  // which show and in what order (the Agent's create_section writes both, so
+  // a new Section renders at once), a rule may hide its Section or place it
+  // only in the nav, and the heading is the rule's name or the
+  // strings.section.<id> Setting where one exists. A Section lens shows its
+  // one heading.
   const orderedSections = useMemo(() => {
-    const rules = new Map(settings["sections.rules"].map((r) => [r.id, r]));
-    return settings["sections.order"].flatMap((id) => {
-      if (rules.get(id)?.hidden) return [];
-      const nameKey = `strings.section.${id}`;
-      const name =
-        nameKey in settings ? String(settings[nameKey as keyof Settings]) : sectionFallbackName(id);
-      return [{ id, name, rows: rows.filter((r) => r.thread.section === id) }];
-    });
-  }, [rows, settings]);
+    const rules = orderedSectionRules(settings["sections.rules"], settings["sections.order"]);
+    const byId = new Map(rules.map((r) => [r.id, r]));
+    const lensRule = sectionLens
+      ? (byId.get(sectionLens.id) ?? { id: sectionLens.id, when: {} })
+      : null;
+    const shown = lensRule
+      ? [lensRule]
+      : settings["sections.order"].flatMap((id) => {
+          const r = byId.get(id) ?? { id, when: {} };
+          return r.hidden || !sectionInStream(r) ? [] : [r];
+        });
+    return shown.map((r) => ({
+      id: r.id,
+      name: sectionName(settings, r),
+      rows: rows.filter((row) => row.thread.section === r.id),
+    }));
+  }, [rows, settings, sectionLens]);
 
   /** The list order the keyboard walks. Leaving rows are not in it. */
   const order = useMemo(
@@ -587,6 +634,77 @@ export function Inbox({
     [thread, actionRunner, advanceAfter, showToast, t, now],
   );
 
+  // Custom actions (CONTEXT.md "Custom action"): the buttons defined for this
+  // Thread's Group or Section, or where a judge statement holds, each an
+  // ordinary tool call with its Tier. A forward opens compose and never
+  // sends; a reversible tool runs with Undo; one that asks confirms first.
+  const customActions = s["actions.custom"];
+  const alwaysAsk = s["agent.always_ask"];
+  const judgeThreshold = s["sections.judge_threshold"];
+  const groupNames = useMemo(() => Object.fromEntries(groups.map((g) => [g.id, g.name])), [groups]);
+  const threadActions = useMemo<Array<{ action: CustomActionSetting; reader: ReaderAction }>>(
+    () =>
+      thread
+        ? customActionsFor(customActions, thread, {
+            groupNames,
+            judged: inbox.judged?.(thread.id),
+            judgeThreshold,
+          }).map((action) => ({
+            action,
+            reader: {
+              id: action.id,
+              label: action.label,
+              tier: customActionTier(action, alwaysAsk),
+            },
+          }))
+        : [],
+    [thread, customActions, groupNames, inbox, judgeThreshold, alwaysAsk],
+  );
+  const customRunner = useMemo(
+    () =>
+      createCustomActionRunner({
+        inbox,
+        compose: (kind, _threadId, seed) => startReply(kind, undefined, seed),
+        groups: () => groups,
+        tags: () => tags,
+      }),
+    [inbox, startReply, groups, tags],
+  );
+  const [confirming, setConfirming] = useState<{ id: string; threadId: string } | null>(null);
+  const runCustomAction = useCallback(
+    async (actionId: string) => {
+      if (!thread) return;
+      const entry = threadActions.find((a) => a.action.id === actionId);
+      if (!entry) return;
+      const { action, reader } = entry;
+      const handsToCompose = action.tool === "forward_thread" || action.tool === "draft_message";
+      // An always-ask action that does not go through compose confirms on a second click.
+      if (reader.tier === "always-ask" && !handsToCompose) {
+        if (!(confirming?.id === actionId && confirming.threadId === thread.id)) {
+          setConfirming({ id: actionId, threadId: thread.id });
+          showToast(fill(t("strings.actions.toast.confirm"), { label: action.label }), null);
+          return;
+        }
+        setConfirming(null);
+      }
+      const outcome = await customRunner.run(action, thread);
+      if (!outcome.ok) {
+        showToast(fill(t("strings.actions.toast.unavailable"), { label: action.label }), null);
+        return;
+      }
+      if (outcome.handed === "compose") return;
+      if (
+        action.tool === "archive_threads" ||
+        action.tool === "snooze_threads" ||
+        action.tool === "trash_threads"
+      ) {
+        advanceAfter([thread.id]);
+      }
+      showToast(fill(t("strings.actions.toast.done"), { label: action.label }), outcome.undo);
+    },
+    [thread, threadActions, confirming, customRunner, advanceAfter, showToast, t],
+  );
+
   const openAttachment = useCallback(
     async (attachmentId: string) => {
       const all = messages.flatMap((m) => m.attachments);
@@ -774,7 +892,7 @@ export function Inbox({
     if (sg.layout.agent) void shell.set("layout.agent", sg.layout.agent);
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
-  const listTitle = lens?.name ?? t("strings.inbox.title");
+  const listTitle = lens?.name ?? sectionLens?.name ?? t("strings.inbox.title");
   /** The row's hover actions, worded from Settings with the keymap's keys. */
   const rowTitles = {
     archive: `${t("strings.inbox.action.archive")} (${key("thread.archive")})`,
@@ -956,6 +1074,8 @@ export function Inbox({
           }}
           onReply={startReply}
           onBriefAction={(action) => void runBriefAction(action)}
+          actions={threadActions.map((a) => a.reader)}
+          onAction={(id) => void runCustomAction(id)}
           onOpenAttachment={(id) => void openAttachment(id)}
           onOpenLink={(href) => void openExternal(href)}
           attachmentSrc={attachmentSrc}
@@ -1015,6 +1135,7 @@ export function Inbox({
             messages: t("strings.reader.messages"),
             briefSource: fill(t("strings.reader.brief_source"), { runtime }),
             briefUpdating: t("strings.reader.brief_updating"),
+            asksFirst: t("strings.actions.tier.always_ask"),
           }}
           keys={{
             archive: key("thread.archive"),

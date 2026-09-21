@@ -126,6 +126,10 @@ function Root() {
           owner: ws.address,
           groupNames: () =>
             Object.fromEntries((routingSeam?.groups() ?? []).map((g) => [g.id, g.name])),
+          // A judged Section or action asks the Server for what the rules leave open (slice 26).
+          judgeThreshold: () => settingsRef.current["sections.judge_threshold"],
+          judgeBatch: () => settingsRef.current["sections.judge_batch"],
+          actions: () => settingsRef.current["actions.custom"],
         },
         log: (m) => console.warn(`[reader] ${m}`),
       }),
@@ -159,17 +163,22 @@ function Root() {
     };
   }, [store, content, shell.api, ws.address, browser]);
 
-  // Changed Section rules re-section the stream at once, without a new Cache read.
+  // Changed Section rules or custom actions re-section the stream at once,
+  // without a new Cache read; a Section the Agent just made shows this way.
   const sectionRules = shell.settings["sections.rules"];
   const sectionOrder = shell.settings["sections.order"];
+  const judgeThreshold = shell.settings["sections.judge_threshold"];
+  const customActions = shell.settings["actions.custom"];
   useEffect(() => {
     settingsRef.current = {
       ...settingsRef.current,
       "sections.rules": sectionRules,
       "sections.order": sectionOrder,
+      "sections.judge_threshold": judgeThreshold,
+      "actions.custom": customActions,
     };
     seams?.inbox.resection();
-  }, [seams, sectionRules, sectionOrder]);
+  }, [seams, sectionRules, sectionOrder, judgeThreshold, customActions]);
 
   if (!seams) return null;
   return (

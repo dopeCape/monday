@@ -2282,6 +2282,7 @@ export const settingsSchema = {
   "strings.nav.compose": str("appearance", "Nav: new message", "New message"),
   "strings.nav.mail": str("appearance", "Nav: mail heading", "Mail"),
   "strings.nav.groups": str("appearance", "Nav: groups heading", "Groups"),
+  "strings.nav.sections": str("appearance", "Nav: sections heading", "Sections"),
   "strings.nav.automation": str("appearance", "Nav: automation heading", "Automation"),
   "strings.nav.inbox": str("appearance", "Nav: inbox", "Inbox"),
   "strings.nav.starred": str("appearance", "Nav: starred", "Starred"),

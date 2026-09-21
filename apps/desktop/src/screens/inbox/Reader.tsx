@@ -1,6 +1,8 @@
 // The reader: toolbar, title, Brief, the Messages with collapsed history
 // that expands on click, and the reply box. Toolbar actions go through
 // InboxActions via the callbacks so they get the same undo toasts as the list.
+// Custom actions (CONTEXT.md "Custom action") render after the built-in
+// buttons and as chips under the Brief, each with its Tier's affordance.
 // Bodies are the Cache's (filled on open through the content routes);
 // attachments download through the opener; links open through it too.
 
@@ -10,13 +12,24 @@ import type {
   Message as MessageData,
   Tag,
   Thread,
+  Tier,
 } from "@monday/shared";
-import { Brief, Btn, ColHead, Mark, Message, type MessageStrings, ReplyBox } from "@monday/ui";
+import {
+  Brief,
+  Btn,
+  Chip,
+  ColHead,
+  Mark,
+  Message,
+  type MessageStrings,
+  ReplyBox,
+} from "@monday/ui";
 import {
   ArchiveIcon,
   ClockIcon,
   DotsThreeIcon,
   FolderSimpleIcon,
+  LightningIcon,
   StarIcon,
   TrashIcon,
   XIcon,
@@ -49,6 +62,15 @@ export interface ReaderStrings {
   attach: string;
   replyAll: string;
   forward: string;
+  /** The tooltip suffix on a custom action that asks before it runs. */
+  asksFirst: string;
+}
+
+/** A custom action as the reader shows it: its label and the Tier it renders with. */
+export interface ReaderAction {
+  id: string;
+  label: string;
+  tier: Tier;
 }
 
 export interface ReaderProps {
@@ -78,6 +100,10 @@ export interface ReaderProps {
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
   /** A Brief action chip was clicked; the screen runs it as a tool call (docs/spec/inbox.md, Briefs). */
   onBriefAction?: ((action: BriefAction) => void) | undefined;
+  /** The custom actions that apply to this Thread, in the toolbar after the built-in buttons and as chips. */
+  actions?: readonly ReaderAction[] | undefined;
+  /** A custom action was clicked; the screen runs it with its Tier. */
+  onAction?: ((actionId: string) => void) | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
@@ -110,6 +136,8 @@ export function Reader({
   onToggleRead,
   onReply,
   onBriefAction,
+  actions,
+  onAction,
   onOpenAttachment,
   onOpenLink,
   attachmentSrc,
@@ -166,6 +194,19 @@ export function Reader({
             <Btn icon title={title(strings.delete, keys.delete)} onClick={onDelete}>
               <TrashIcon />
             </Btn>
+            {actions?.length ? <span className="vr" /> : null}
+            {actions?.map((a) => (
+              <Btn
+                key={a.id}
+                sm
+                title={a.tier === "always-ask" ? `${a.label} (${strings.asksFirst})` : a.label}
+                data-action={a.id}
+                data-tier={a.tier}
+                onClick={() => onAction?.(a.id)}
+              >
+                <LightningIcon /> {a.label}
+              </Btn>
+            ))}
           </>
         }
       >
@@ -210,6 +251,21 @@ export function Reader({
               updating={strings.briefUpdating}
               onAction={onBriefAction}
             />
+          ) : null}
+          {actions?.length ? (
+            <div className="brief-actions custom-actions">
+              {actions.map((a) => (
+                <Chip
+                  key={a.id}
+                  data-action={a.id}
+                  data-tier={a.tier}
+                  title={a.tier === "always-ask" ? strings.asksFirst : undefined}
+                  onClick={() => onAction?.(a.id)}
+                >
+                  {a.label}
+                </Chip>
+              ))}
+            </div>
           ) : null}
           {banner}
           {messages.map((m, i) => (

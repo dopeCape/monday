@@ -30,7 +30,7 @@ afterEach(async () => {
 function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
   const calls: string[] = [];
   const wrap =
-    <K extends keyof InboxActions>(name: K) =>
+    <K extends Exclude<keyof InboxActions, "setTags">>(name: K) =>
     (...args: Parameters<InboxActions[K]>) => {
       calls.push(`${name}:${JSON.stringify(args[0])}`);
       // biome-ignore lint/suspicious/noExplicitAny: forwarding to the same signature

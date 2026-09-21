@@ -410,6 +410,8 @@ export function App({
         groups: navGroups,
         groupIcon,
         scheduled: { count: pending, label: strings.scheduled.title },
+        sections: shell.settings["sections.rules"],
+        sectionOrder: shell.settings["sections.order"],
         strings: shell.settings,
       }),
     [
@@ -460,6 +462,7 @@ export function App({
         setOpenThread(target.slice("thread:".length));
         setActive("inbox");
       } else if (target.startsWith("group:")) setActive(target.slice("group:".length));
+      else if (target.startsWith("section:")) setActive(target);
       else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
       else setActive("inbox");
     },
@@ -516,6 +519,7 @@ export function App({
         groups={navGroups}
         groupIcon={nav.groupIcon}
         counts={nav.counts}
+        sections={nav.sections}
         automation={nav.automation}
         active={active}
         onSelect={setActive}
@@ -524,6 +528,9 @@ export function App({
       />,
     );
   }
+  // A Group in the nav opens the Inbox as a lens on it; a Section placed in the nav likewise.
+  const groupLens = navGroups.some((g) => g.id === active) ? active : undefined;
+  const sectionLens = active.startsWith("section:") ? active.slice("section:".length) : undefined;
   if (shell.layout.nav === "rail") {
     cols.push("var(--rail-w)");
     parts.push(
@@ -646,6 +653,8 @@ export function App({
         agent={agent}
         externalPending={externalPending}
         calendar={calendar}
+        group={groupLens}
+        section={sectionLens}
       />
     ),
   );

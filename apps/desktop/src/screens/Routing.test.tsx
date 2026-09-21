@@ -110,6 +110,7 @@ function fakeApi(): RoutingApi & { calls: string[] } {
       return { moved: moves.length, asked: 0 };
     },
     route: async () => ({ jobId: "j" }),
+    sectionJudgments: async () => [],
     routeOf: async () => null,
   };
 }

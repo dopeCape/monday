@@ -2,10 +2,14 @@
 // Settings rather than from the design fixtures: the workspace button with the
 // owner's address and its initials, the Mail folders with their labels from
 // Settings, the unread counts per folder and per Group from the Inbox seam,
-// the rail's items (Inbox, then the top-level Groups) and its tail. Pure, so
-// the App composes it in a memo and the tests read it without a DOM.
+// the rail's items (Inbox, then the top-level Groups) and its tail, and every
+// Section placed in the nav with its count (docs/spec/inbox.md: a Section the
+// Agent created a moment ago appears without a reload, because the model is
+// recomputed from the Settings it came in with). Pure, so the App composes it
+// in a memo and the tests read it without a DOM.
 
-import type { Group, Settings, Thread } from "@monday/shared";
+import type { Group, SectionRuleSetting, Settings, Thread } from "@monday/shared";
+import { isSettingKey, orderedSectionRules, sectionInNav, sectionLabel } from "@monday/shared";
 import type { IconComponent, NavItem, NavLabels, NavWorkspace, RailItem } from "@monday/ui";
 import {
   AirplaneIcon,
@@ -30,6 +34,7 @@ import {
   PaperPlaneTiltIcon,
   ReceiptIcon,
   ScalesIcon,
+  StackIcon,
   StarIcon,
   TagIcon,
   TrayIcon,
@@ -38,7 +43,9 @@ import {
 } from "@phosphor-icons/react";
 
 export type NavStringKey = Extract<keyof Settings, `strings.nav.${string}`>;
-export type NavStrings = Pick<Settings, NavStringKey>;
+/** The nav's own strings, plus the shipped Section names a placed Section may read. */
+export type NavStrings = Pick<Settings, NavStringKey> &
+  Partial<Pick<Settings, Extract<keyof Settings, `strings.section.${string}`>>>;
 
 /** The icons a Group may carry, by the name the `routing.group_icons` Setting uses. */
 export const GROUP_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
@@ -93,6 +100,10 @@ export interface NavInput {
   groupIcon?: ((group: Group) => IconComponent | undefined) | undefined;
   /** Sends still scheduled; a Scheduled folder appears while there are any. */
   scheduled?: { count: number; label: string } | undefined;
+  /** The Section rules (sections.rules); those placed in the nav are listed under Groups. */
+  sections?: readonly SectionRuleSetting[] | undefined;
+  /** Their order (sections.order). */
+  sectionOrder?: readonly string[] | undefined;
   strings: NavStrings;
 }
 
@@ -102,7 +113,9 @@ export interface NavModel {
   folders: NavItem[];
   calendar: NavItem;
   automation: NavItem[];
-  /** Unread counts by folder key or Group id; absent keys show no count. */
+  /** Every Section placed in the nav, in Section order, keyed "section:<id>". */
+  sections: NavItem[];
+  /** Unread counts by folder key, Group id or "section:<id>"; absent keys show no count. */
   counts: Record<string, number>;
   rail: RailItem[];
   railTail: RailItem[];
@@ -130,16 +143,23 @@ export function addressInitials(address: string): string {
   );
 }
 
-/** Unread Threads per folder key and per Group id (a Sub-group's count rolls up into its parent). */
+/**
+ * Unread Threads per folder key, per Group id (a Sub-group's count rolls up
+ * into its parent) and, for the Section ids in `sections`, per
+ * "section:<id>", so a Section placed in the nav carries its count like a
+ * folder.
+ */
 export function unreadCounts(
   threads: readonly Thread[],
   groups: readonly Group[],
+  sections: readonly string[] = [],
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   const bump = (key: string) => {
     counts[key] = (counts[key] ?? 0) + 1;
   };
   const parentOf = new Map(groups.map((g) => [g.id, g.parentId]));
+  const counted = new Set(sections);
   for (const t of threads) {
     if (!t.unread) continue;
     bump("inbox");
@@ -150,8 +170,26 @@ export function unreadCounts(
       if (parent) bump(parent);
     }
     if (t.subgroup && t.subgroup !== t.group) bump(t.subgroup);
+    if (t.section && counted.has(t.section)) bump(`section:${t.section}`);
   }
   return counts;
+}
+
+/** The Sections placed in the nav as items, in Section order, labelled from the rule or the strings. */
+export function navSections(
+  rules: readonly SectionRuleSetting[],
+  order: readonly string[],
+  strings: NavStrings,
+): NavItem[] {
+  return orderedSectionRules(rules, order)
+    .filter((r) => sectionInNav(r) && !r.hidden)
+    .map((r) => {
+      const key = `strings.section.${r.id}`;
+      const fromStrings = isSettingKey(key)
+        ? String((strings as Record<string, unknown>)[key] ?? "")
+        : "";
+      return { key: `section:${r.id}`, label: sectionLabel(r, fromStrings || undefined) };
+    });
 }
 
 export function navModel(input: NavInput): NavModel {
@@ -180,6 +218,7 @@ export function navModel(input: NavInput): NavModel {
   }
   const groupIcon = (g: Group) => input.groupIcon?.(g);
   const top = input.groups.filter((g) => g.parentId === null);
+  const sections = navSections(input.sections ?? [], input.sectionOrder ?? [], s);
   return {
     workspace: { name: input.address, initials: addressInitials(input.address), status },
     labels: {
@@ -187,6 +226,7 @@ export function navModel(input: NavInput): NavModel {
       compose: s["strings.nav.compose"],
       mail: s["strings.nav.mail"],
       groups: s["strings.nav.groups"],
+      sections: s["strings.nav.sections"],
       automation: s["strings.nav.automation"],
       settings: s["strings.nav.settings"],
     },
@@ -196,10 +236,16 @@ export function navModel(input: NavInput): NavModel {
       { key: "workflows", label: s["strings.nav.workflows"], icon: FlowArrowIcon },
       { key: "routing", label: s["strings.nav.routing"], icon: GitBranchIcon },
     ],
-    counts: unreadCounts(input.threads, input.groups),
+    sections,
+    counts: unreadCounts(
+      input.threads,
+      input.groups,
+      sections.map((item) => item.key.slice("section:".length)),
+    ),
     rail: [
       { key: "inbox", icon: TrayIcon, title: s["strings.nav.inbox"] },
       ...top.map((g) => ({ key: g.id, icon: groupIcon(g) ?? FolderSimpleIcon, title: g.name })),
+      ...sections.map((item) => ({ key: item.key, icon: StackIcon, title: item.label })),
     ],
     railTail: [
       { key: "calendar", icon: CalendarBlankIcon, title: s["strings.nav.calendar"] },

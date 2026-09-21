@@ -5,7 +5,7 @@
 // fixtureInbox() is the in-memory implementation over packages/ui fixtures,
 // for tests; store-inbox.ts is the Store's, with the same interface.
 
-import type { Brief, Group, Message, Tag, Thread } from "@monday/shared";
+import type { Brief, Group, Message, SectionJudged, Tag, Thread } from "@monday/shared";
 import {
   briefOf,
   groups as fixtureGroups,
@@ -27,6 +27,8 @@ export interface InboxActions {
   /** null moves the Thread out of every Group. */
   moveToGroup(ids: readonly string[], groupId: string | null): Promise<UndoToken>;
   delete(ids: readonly string[]): Promise<UndoToken>;
+  /** Replaces the Tags (by id) on each Thread; a custom action's tag_threads runs through it (slice 26). */
+  setTags?(ids: readonly string[], tagIds: readonly string[]): Promise<UndoToken>;
   /** Reverses one earlier action. Unknown or already used tokens are ignored. */
   undo(token: UndoToken): Promise<void>;
 }
@@ -40,6 +42,8 @@ export interface InboxSource {
   groups(): readonly Group[];
   /** Every Tag of the Workspace, so a row can name the ones its Thread carries. Stable between changes. */
   tags(): readonly Tag[];
+  /** The judged answers held for a Thread (slice 26), by Section or custom action id; absent means none. */
+  judged?(threadId: string): SectionJudged;
   subscribe(listener: () => void): () => void;
 }
 
@@ -199,6 +203,10 @@ export function fixtureInbox(
     delete: (ids) =>
       change(ids, (r) => {
         r.deleted = true;
+      }),
+    setTags: (ids, tagIds) =>
+      change(ids, (r) => {
+        r.thread.tags = [...tagIds];
       }),
     undo(token) {
       const before = undos.get(token);
