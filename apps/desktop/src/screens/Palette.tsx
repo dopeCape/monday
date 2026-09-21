@@ -2,9 +2,22 @@
 // keymap, the navigation and the recent Threads, runs the local search for
 // what is typed, and renders the pure model through the CommandPalette
 // component. Every keystroke is answered from memory and the Cache; nothing
-// here waits on the network or a model.
+// here waits on the network or a model. A sentence that matches no entry is
+// also sent, after a pause, to the judge (slice 27, ADR 0012): when its
+// reading arrives it becomes the first row, and the list never waited for it.
 
-import { type Group, SETTING_SECTIONS, type Settings, type Thread } from "@monday/shared";
+import {
+  type Group,
+  gateIntent,
+  type IntentGroupOption,
+  type IntentSectionOption,
+  type Person,
+  resolveIntent,
+  SETTING_SECTIONS,
+  type Settings,
+  type Thread,
+  type TypedIntent,
+} from "@monday/shared";
 import {
   type CommandItem,
   CommandPalette,
@@ -46,14 +59,17 @@ import {
   type AgentAsk,
   agentHandoff,
   buildPalette,
+  isSentence,
   moveActive,
   type PaletteAction,
   type PaletteCommand,
+  type PaletteIntent,
   type PaletteNav,
   type PaletteStrings,
   type PaletteSuggestion,
 } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import type { IntentJudge } from "./inbox/intents.ts";
 
 export type { PaletteCommand } from "../search/palette.ts";
 
@@ -122,6 +138,18 @@ const NO_GROUPS: readonly Group[] = [];
 
 const fill = (template: string, vars: Record<string, string | number>) =>
   template.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
+
+/** A Date as an ISO string in the Device's own offset, so the Server reads the user's day. */
+export function localIso(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  const offset = -d.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${sign}${p(Math.floor(abs / 60))}:${p(abs % 60)}`;
+}
+
+const NO_CONTACTS: readonly Person[] = [];
+const NO_SECTIONS: readonly IntentSectionOption[] = [];
 
 /** The action catalogue: every named action with its shortcut, plus the screen-level ones. */
 export function paletteActions(keymap: Keymap, settings: Settings, mac: boolean): PaletteAction[] {
@@ -235,6 +263,18 @@ export interface PaletteProps {
   onCommand: (command: PaletteCommand) => void;
   /** Tab: the `agent.ask` action with the parsed query attached. */
   onAsk: (ask: AgentAsk) => void;
+  /**
+   * The judge (slice 27): a sentence that matches no entry is sent here after
+   * a pause and its reading becomes the first row. Absent, or answering null,
+   * the palette behaves as before.
+   */
+  judge?: IntentJudge | null | undefined;
+  /** Contacts by recency, the options for the person a sentence names. */
+  contacts?: readonly Person[] | undefined;
+  /** The Sections a sentence may name, as the stream shows them. */
+  sections?: readonly IntentSectionOption[] | undefined;
+  /** The intent in the user's words, with the count of Threads it names; the screen knows the list. */
+  describeIntent?: ((intent: TypedIntent) => string) | undefined;
   now?: Date | undefined;
   /** On its way out (the screen's exit hook): the leave animation runs, then onLeft. */
   leaving?: boolean | undefined;
@@ -257,6 +297,10 @@ export function Palette({
   suggestions = NO_SUGGESTIONS,
   onCommand,
   onAsk,
+  judge,
+  contacts = NO_CONTACTS,
+  sections: sectionOptions = NO_SECTIONS,
+  describeIntent,
   now,
   leaving,
   onLeft,
@@ -267,6 +311,9 @@ export function Palette({
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const seq = useRef(0);
+  /** The judge's reading of one exact text; a newer text drops it. */
+  const [reading, setReading] = useState<{ text: string; intent: TypedIntent } | null>(null);
+  const judgeSeq = useRef(0);
 
   const agent = settings["ai.level"] !== "off";
   const actions = useMemo(
@@ -286,6 +333,9 @@ export function Palette({
       results: settings["strings.palette.results"],
       askItem: settings["strings.palette.ask_item"],
       searchItem: settings["strings.palette.search_item"],
+      do: settings["strings.palette.do"],
+      didYouMean: settings["strings.palette.did_you_mean"],
+      confirm: settings["strings.palette.intent.confirm"],
     }),
     [settings],
   );
@@ -313,7 +363,7 @@ export function Palette({
       });
   }, [query, search, workspaceId, settings, now]);
 
-  const model = useMemo(
+  const base = useMemo(
     () =>
       buildPalette({
         text: query,
@@ -327,6 +377,104 @@ export function Palette({
         ...(now ? { now } : {}),
       }),
     [query, actions, navigation, recentThreads, suggestions, hits, strings, now, agent],
+  );
+
+  // A sentence that matches no entry goes to the judge after a pause (slice 27).
+  // The reading is code's to assemble: names from the sets sent, dates from
+  // the Device's clock, the gate from Settings. Nothing here waits for it.
+  const groupOptions = useMemo<IntentGroupOption[]>(
+    () => groups.map((g) => ({ id: g.id, name: g.name, sentence: g.rule.sentence })),
+    [groups],
+  );
+  const text = query.trim();
+  const sentence = agent && Boolean(judge) && isSentence(base, text, settings["intent.min_words"]);
+  useEffect(() => {
+    if (!judge || !sentence) return;
+    if (reading?.text === text) return;
+    const mine = ++judgeSeq.current;
+    const at = now ?? new Date();
+    const timer = setTimeout(() => {
+      void judge
+        .intent({
+          workspace: workspaceId,
+          text,
+          now: localIso(at),
+          contacts: contacts.slice(0, settings["intent.contacts_max"]),
+          groups: groupOptions,
+          sections: [...sectionOptions],
+        })
+        .then((r) => {
+          if (mine !== judgeSeq.current || !r) return;
+          setReading({
+            text,
+            intent: resolveIntent(r, {
+              now: at,
+              contacts,
+              groups: groupOptions,
+              sections: sectionOptions,
+              hours: settings["intent.hours"],
+            }),
+          });
+        })
+        .catch(() => {});
+    }, settings["intent.debounce_ms"]);
+    return () => clearTimeout(timer);
+  }, [
+    judge,
+    sentence,
+    text,
+    reading,
+    now,
+    workspaceId,
+    contacts,
+    groupOptions,
+    sectionOptions,
+    settings,
+  ]);
+
+  const intent = useMemo<PaletteIntent | undefined>(() => {
+    if (!reading || reading.text !== text || !sentence) return undefined;
+    const gate = gateIntent(reading.intent, {
+      actAbove: settings["intent.act_above"],
+      askBelow: settings["intent.ask_below"],
+    });
+    if (gate === "agent") return undefined;
+    return {
+      intent: reading.intent,
+      label: describeIntent ? describeIntent(reading.intent) : reading.intent.text,
+      gate,
+    };
+  }, [reading, text, sentence, settings, describeIntent]);
+
+  const model = useMemo(
+    () =>
+      intent
+        ? buildPalette({
+            text: query,
+            actions,
+            navigation,
+            threads: recentThreads,
+            suggestions,
+            hits,
+            strings,
+            agent,
+            intent,
+            ...(now ? { now } : {}),
+          })
+        : base,
+    [
+      base,
+      intent,
+      query,
+      actions,
+      navigation,
+      recentThreads,
+      suggestions,
+      hits,
+      strings,
+      now,
+      agent,
+    ],
   );
 
   // The highlight follows the list: a key that left it lands on the first row.

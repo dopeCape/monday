@@ -34,6 +34,8 @@ import type {
   HostedProvider,
   Id,
   Intent,
+  IntentReading,
+  IntentRequest,
   IntentResult,
   Invite,
   InviteIntent,
@@ -383,6 +385,21 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           return await request<Brief>(`/threads/${encodeURIComponent(threadId)}/brief`);
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+    },
+    judge: {
+      /**
+       * The palette's typed sentence as one Judgment (slice 27): the reading
+       * the Device assembles into an intent, or null when no judge answers
+       * (409 no_judge or ai_off), so the palette behaves as before.
+       */
+      intent: async (body: IntentRequest): Promise<IntentReading | null> => {
+        try {
+          return await request<IntentReading>("/judge/intent", json("POST", body));
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) return null;
           throw error;
         }
       },

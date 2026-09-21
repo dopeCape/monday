@@ -4,8 +4,16 @@
 // actions.ts); the Store implements both. Compose (the overlay, the inline
 // reply, the undo bar) runs through the Composer seam (screens/compose).
 
-import type { BriefAction, ExternalPending, Settings, Tag, Thread } from "@monday/shared";
-import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion } from "@monday/ui";
+import type {
+  BriefAction,
+  EventPreview,
+  ExternalPending,
+  Settings,
+  Tag,
+  Thread,
+  TypedIntent,
+} from "@monday/shared";
+import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion, ToolCard } from "@monday/ui";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -16,7 +24,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { Composer as AgentComposer, composerStrings } from "../agent/Composer.tsx";
+import { Composer as AgentComposer, composerStrings, PreviewView } from "../agent/Composer.tsx";
 import { runtimeLine } from "../agent/runtimeLine.ts";
 import { suggestionsFor } from "../agent/suggestions.ts";
 import { type AgentSession, NULL_SESSION } from "../agent/useAgentSession.ts";
@@ -43,6 +51,14 @@ import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/a
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner } from "./inbox/brief-actions.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
+import {
+  contactsOf,
+  describeIntent,
+  eventCall,
+  eventPreviewOf,
+  type IntentJudge,
+  targetsOf,
+} from "./inbox/intents.ts";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
@@ -112,11 +128,24 @@ export interface InboxProps {
    * Sub-group, under the Group's name. Absent, the whole Inbox.
    */
   group?: string | undefined;
+  /**
+   * The judge behind the palette's typed sentences (slice 27, ADR 0012).
+   * Absent, or answering null, the palette behaves as before.
+   */
+  judge?: IntentJudge | null | undefined;
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
 type ToastState = { text: string; token: UndoToken | null; id: number };
 type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
+/** The scheduling card a typed sentence opened in the composer, without a Session (slice 27). */
+type IntentCard = {
+  id: string;
+  intent: TypedIntent;
+  preview: EventPreview;
+  status: "waiting" | "running" | "done" | "failed";
+  result?: string | undefined;
+};
 
 const defaultInbox = fixtureInbox();
 const defaultComposer = fixtureComposer();
@@ -189,6 +218,7 @@ export function Inbox({
   externalPending,
   calendar,
   group,
+  judge,
 }: InboxProps) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -277,6 +307,7 @@ export function Inbox({
   const [picker, setPicker] = useState<"snooze" | "move" | "more" | null>(null);
   const [pickerIds, setPickerIds] = useState<string[]>([]);
   const [batch, setBatch] = useState<Batch | null>(null);
+  const [intentCard, setIntentCard] = useState<IntentCard | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const lastToken = useRef<UndoToken | null>(null);
   const toastSeq = useRef(0);
@@ -736,6 +767,9 @@ export function Inbox({
       case "suggest":
         askAgent(command.text);
         break;
+      case "intent":
+        runIntent(command.intent);
+        break;
     }
   };
 
@@ -743,6 +777,145 @@ export function Inbox({
     setPaletteOpen(false);
     askAgent(ask.text);
   };
+
+  /* ------------------------------ Typed sentences (slice 27) ------------------------------ */
+
+  /** The contacts a sentence may name: the composer's, else the list's participants, by recency. */
+  const contacts = useMemo(
+    () => contactsOf(composer.participants(), allThreads, s["intent.contacts_max"]),
+    [composer, allThreads, s],
+  );
+  const sectionOptions = useMemo(
+    () => orderedSections.map(({ id, name }) => ({ id, name })),
+    [orderedSections],
+  );
+  /** The intent in the user's words, with how many Threads it names in this list. */
+  const describe = useCallback(
+    (intent: TypedIntent) =>
+      describeIntent(intent, targetsOf(intent, threads, focus).length, s, now),
+    [threads, focus, s, now],
+  );
+
+  /** The scheduling card: the composer's own card with the arguments filled, no Session behind it. */
+  const openIntentCard = useCallback(
+    (intent: TypedIntent) => {
+      setIntentCard({
+        id: `intent-${Date.now()}`,
+        intent,
+        preview: eventPreviewOf(intent, s, now),
+        status: "waiting",
+      });
+      setAgentOpen(true);
+    },
+    [s, now],
+  );
+
+  const approveIntentCard = useCallback(async () => {
+    const card = intentCard;
+    if (!card || card.status !== "waiting") return;
+    if (!calendar) {
+      // No calendar seam on this Device: the Agent has the tool and asks the same way.
+      setIntentCard(null);
+      askAgent(card.intent.text);
+      return;
+    }
+    setIntentCard({ ...card, status: "running" });
+    try {
+      const link = s["calendar.meeting_link"];
+      await calendar.create({
+        title: card.preview.title,
+        start: card.preview.start,
+        end: card.preview.end,
+        timeZone: card.preview.timeZone,
+        attendees: card.preview.attendees,
+        ...(link === "provider" ? {} : { meetingLink: link }),
+      });
+      setIntentCard({ ...card, status: "done", result: t("strings.agent.applied") });
+      showToast(
+        fill(t("strings.reader.brief_action.calendar_added"), { title: card.preview.title }),
+        null,
+      );
+    } catch (error) {
+      setIntentCard({
+        ...card,
+        status: "failed",
+        result: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [intentCard, calendar, askAgent, s, t, showToast]);
+
+  /** What a typed sentence does once its row is picked: by Tier (ADR 0002), through the same actions as a key. */
+  const runIntent = useCallback(
+    (intent: TypedIntent) => {
+      const ids = targetsOf(intent, threads, focus);
+      switch (intent.kind) {
+        case "archive":
+          request("archive", ids);
+          return;
+        case "snooze":
+          if (intent.when) request("snooze", ids, intent.when);
+          else openPicker("snooze", ids);
+          return;
+        case "star":
+          if (ids.length === 0) return;
+          void inbox.star(ids).then((token) => {
+            showToast(countText(t("strings.inbox.toast.starred"), ids.length), token);
+          });
+          return;
+        case "mark_read": {
+          const unread = ids.filter((id) => inbox.thread(id)?.unread);
+          if (unread.length === 0) return;
+          if (needsPreview(unread.length, s["inbox.batch_preview_above"])) {
+            setBatch({ kind: "read", ids: unread });
+            return;
+          }
+          void inbox.markRead(unread).then((token) => {
+            showToast(countText(t("strings.inbox.toast.read"), unread.length), token);
+          });
+          return;
+        }
+        case "move":
+          if (intent.group) void moveTo(ids, intent.group.id);
+          else openPicker("move", ids);
+          return;
+        case "schedule_event":
+          openIntentCard(intent);
+          return;
+        case "search":
+          onSearch?.(intent.text);
+          return;
+        case "compose":
+          compose.openNew();
+          return;
+        case "open_group":
+          if (intent.group) onNavigate?.(`group:${intent.group.id}`);
+          return;
+        case "open_section":
+          if (intent.section) onNavigate?.(`section:${intent.section.id}`);
+          return;
+        default:
+          // Tags and anything else need a conversation: the Agent, as today.
+          askAgent(intent.text);
+      }
+    },
+    [
+      threads,
+      focus,
+      request,
+      openPicker,
+      inbox,
+      showToast,
+      countText,
+      t,
+      s,
+      moveTo,
+      openIntentCard,
+      onSearch,
+      compose,
+      onNavigate,
+      askAgent,
+    ],
+  );
 
   /* ------------------------------ Render ------------------------------ */
 
@@ -775,6 +948,42 @@ export function Inbox({
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
   const listTitle = lens?.name ?? t("strings.inbox.title");
+  /** The scheduling card a sentence opened: the composer's card, approve creates the Event, decline drops it. */
+  const intentCardNode = intentCard ? (
+    <ToolCard
+      className="intent-card"
+      call={{
+        ...eventCall(intentCard.preview, intentCard.id),
+        status: intentCard.status,
+        ...(intentCard.result ? { result: intentCard.result } : {}),
+      }}
+      statusLabel={
+        intentCard.status === "waiting"
+          ? agentStrings["strings.agent.waiting"]
+          : intentCard.status === "running"
+            ? agentStrings["strings.agent.running"]
+            : intentCard.status === "failed"
+              ? agentStrings["strings.agent.failed"]
+              : agentStrings["strings.agent.applied"]
+      }
+      preview={
+        <PreviewView
+          preview={{ kind: "event", event: intentCard.preview }}
+          strings={agentStrings}
+          now={now}
+        />
+      }
+      actions={
+        intentCard.status === "waiting"
+          ? [agentStrings["strings.agent.approve"], agentStrings["strings.agent.decline"]]
+          : undefined
+      }
+      onAction={(action) => {
+        if (action === agentStrings["strings.agent.approve"]) void approveIntentCard();
+        else setIntentCard(null);
+      }}
+    />
+  ) : undefined;
   /** The row's hover actions, worded from Settings with the keymap's keys. */
   const rowTitles = {
     archive: `${t("strings.inbox.action.archive")} (${key("thread.archive")})`,
@@ -1080,6 +1289,7 @@ export function Inbox({
           }}
           onSuggest={applySuggestionLayout}
           onOpenRuntime={() => onNavigate?.("settings:ai")}
+          card={intentCardNode}
         />
       ) : null}
 
@@ -1167,6 +1377,10 @@ export function Inbox({
           now={now}
           onCommand={runCommand}
           onAsk={handoff}
+          judge={judge}
+          contacts={contacts}
+          sections={sectionOptions}
+          describeIntent={describe}
         />
       ) : null}
     </div>

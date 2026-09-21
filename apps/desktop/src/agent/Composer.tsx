@@ -326,6 +326,8 @@ export interface ComposerProps {
   plain?: boolean | undefined;
   /** Clicking the header's runtime line opens Settings, AI and agent. */
   onOpenRuntime?: (() => void) | undefined;
+  /** A card the screen shows above the thread without a Session: the palette's scheduling card (slice 27). */
+  card?: ReactNode | undefined;
 }
 
 export function Composer({
@@ -344,6 +346,7 @@ export function Composer({
   onSuggest,
   plain = false,
   onOpenRuntime,
+  card,
 }: ComposerProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   // Bottom bar: a collapsing panel stays mounted for one sink (--t-med), then goes.
@@ -447,6 +450,11 @@ export function Composer({
           ) : null}
         </div>
       ) : null}
+      {card ? (
+        <div className="agent-thread">
+          <div className="a">{card}</div>
+        </div>
+      ) : null}
       <AgentThread
         turns={turns}
         now={now}
@@ -465,7 +473,7 @@ export function Composer({
       ) : null}
     </>
   );
-  const chips = agent.events.length === 0 && !historyOpen ? suggestions : undefined;
+  const chips = agent.events.length === 0 && !historyOpen && !card ? suggestions : undefined;
   const labels = {
     new: strings["strings.agent.new"],
     history: strings["strings.agent.history"],

@@ -646,6 +646,7 @@ export function App({
         agent={agent}
         externalPending={externalPending}
         calendar={calendar}
+        judge={shell.api.judge}
       />
     ),
   );

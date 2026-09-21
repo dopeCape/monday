@@ -5,9 +5,12 @@
 // the box into search mode, where the hits are the rows; bare text fuzzy
 // matches the catalogues and offers a search. Sections reorder by how well
 // their best item matches. Tab hands the text to the Agent with the parsed
-// query attached.
+// query attached. A sentence that matches no entry may come back from the
+// judge as an intent (slice 27): the container feeds it in, and it renders
+// as the first row, under "Do" when the confidence clears the gate and
+// under "Did you mean" when one key should confirm it first.
 
-import type { Thread } from "@monday/shared";
+import type { Thread, TypedIntent } from "@monday/shared";
 import { fuzzyFilter } from "./fuzzy.ts";
 import type { SearchHit } from "./index.ts";
 import { hasOperator, isEmpty, parseQuery, type SearchQuery } from "./query.ts";
@@ -43,7 +46,9 @@ export type PaletteCommand =
   | { type: "open"; threadId: string; workspaceId: string | null }
   | { type: "search"; text: string; query: SearchQuery }
   | { type: "ask"; text: string; query: SearchQuery }
-  | { type: "suggest"; key: string; text: string };
+  | { type: "suggest"; key: string; text: string }
+  /** A typed sentence the judge read (slice 27); the screen runs it by Tier. */
+  | { type: "intent"; intent: TypedIntent };
 
 export interface PaletteItem {
   key: string;
@@ -61,7 +66,7 @@ export interface PaletteItem {
   score: number;
 }
 
-export type PaletteSectionKey = "ask" | "actions" | "go" | "threads" | "results";
+export type PaletteSectionKey = "ask" | "actions" | "go" | "threads" | "results" | "intent";
 
 export interface PaletteSection {
   key: PaletteSectionKey;
@@ -81,6 +86,21 @@ export interface PaletteStrings {
   askItem: string;
   /** "Search for {text}" */
   searchItem: string;
+  /** The intent section's label when the confidence clears the gate: "Do". */
+  do?: string | undefined;
+  /** The intent section's label in the middle band: "Did you mean". */
+  didYouMean?: string | undefined;
+  /** The key shown on the intent row: "Enter". */
+  confirm?: string | undefined;
+}
+
+/** What the judge read from the text, as the container hands it in (slice 27). */
+export interface PaletteIntent {
+  intent: TypedIntent;
+  /** The interpretation in the user's words: "Schedule Call with Aoife Brennan, Thu 15:00". */
+  label: string;
+  /** Above intent.act_above: "act"; between the two thresholds: "confirm". Below, nothing is handed in. */
+  gate: "act" | "confirm";
 }
 
 export interface PaletteInput {
@@ -100,6 +120,8 @@ export interface PaletteInput {
   inlineHits?: number | undefined;
   /** False at AI level off: no Ask monday section and no suggestion lines (CONTEXT.md "AI level"). */
   agent?: boolean | undefined;
+  /** The judge's reading of the current text, when the container has one for exactly this text. */
+  intent?: PaletteIntent | undefined;
   now?: Date | undefined;
 }
 
@@ -133,6 +155,21 @@ export function isSearchMode(text: string, now?: Date): boolean {
 
 export function agentHandoff(text: string, now?: Date): AgentAsk {
   return { action: "agent.ask", text, query: parseQuery(text, now ? { now } : {}) };
+}
+
+/**
+ * A sentence for the judge (slice 27): browsing, at least `minWords` words,
+ * and nothing in the catalogues matched it. Search mode and anything an
+ * action, a place or a Thread answers stay local.
+ */
+export function isSentence(model: PaletteModel, text: string, minWords: number): boolean {
+  if (model.mode !== "browse") return false;
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length < minWords) return false;
+  return !model.sections.some(
+    (sec) =>
+      (sec.key === "actions" || sec.key === "go" || sec.key === "threads") && sec.items.length,
+  );
 }
 
 function hitItem(h: SearchHit, index: number): PaletteItem {
@@ -259,6 +296,25 @@ export function buildPalette(input: PaletteInput): PaletteModel {
   };
 
   const strength = (items: PaletteItem[]) => items[0]?.score ?? Number.NEGATIVE_INFINITY;
+  // The judge's reading of exactly this text sits first, whatever else matched.
+  if (input.intent && input.intent.intent.text.trim() === text) {
+    const it = input.intent;
+    sections.push({
+      key: "intent",
+      label: (it.gate === "act" ? s.do : s.didYouMean) ?? "",
+      items: [
+        {
+          key: "intent",
+          label: it.label,
+          ai: true,
+          kbd: s.confirm,
+          command: { type: "intent", intent: it.intent },
+          score: Number.POSITIVE_INFINITY,
+        },
+      ],
+      strength: Number.POSITIVE_INFINITY,
+    });
+  }
   if (actions.length) {
     sections.push({
       key: "actions",

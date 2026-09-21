@@ -226,7 +226,8 @@ describe("palette in the Inbox", () => {
       "search",
       "ask",
       "suggest",
+      "intent",
     ];
-    expect(kinds.length).toBe(6);
+    expect(kinds.length).toBe(7);
   });
 });
