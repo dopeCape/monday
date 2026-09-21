@@ -30,6 +30,18 @@ export type PredicateInput = z.output<typeof predicateSchema>;
 export const THREAD_EVENTS = ["tagged", "archived", "snoozed", "moved", "starred"] as const;
 export type ThreadEvent = (typeof THREAD_EVENTS)[number];
 
+/**
+ * A semantic test the judge answers (ADR 0012, slice 27): a statement about
+ * the Thread worded so that yes is high ("the message is a complaint"), and
+ * the probability at or above which it holds. Absent, the threshold is the
+ * Setting workflows.judged.threshold.
+ */
+export const judgedSchema = z.object({
+  statement: z.string().min(1).max(2000),
+  threshold: z.number().min(0).max(1).optional(),
+});
+export type Judged = z.output<typeof judgedSchema>;
+
 export const triggerSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -38,6 +50,8 @@ export const triggerSchema = z.discriminatedUnion("kind", [
       group: z.string().min(1).optional(),
       /** Only Threads whose headers match; combined with `group` when both are set. */
       predicate: predicateSchema.optional(),
+      /** Only Threads the judge says the statement holds for; combined with the two above. */
+      judge: judgedSchema.optional(),
     })
     .describe("A Thread arrives"),
   z
@@ -152,12 +166,39 @@ const base = {
   onFailure: failurePolicy.optional(),
 };
 
-export const conditionSchema = z.object({
-  /** A template whose rendered value is tested, such as {{steps.extract.role}}. */
-  left: template,
-  op: z.enum(["contains", "equals", "matches", "exists", "not_contains"]),
-  value: z.string().optional(),
-});
+export const CONDITION_OPS = [
+  "contains",
+  "equals",
+  "matches",
+  "exists",
+  "not_contains",
+  "judged",
+] as const;
+export type ConditionOp = (typeof CONDITION_OPS)[number];
+
+export const conditionSchema = z
+  .object({
+    /**
+     * A template whose rendered value is tested, such as {{steps.extract.role}}.
+     * A `judged` condition may leave it out: the judge reads the Thread.
+     */
+    left: template.default(""),
+    op: z.enum(CONDITION_OPS),
+    value: z.string().optional(),
+    /** For `judged`: the statement the judge tests, worded so that yes is high. */
+    statement: z.string().min(1).max(2000).optional(),
+    /** For `judged`: the probability at or above which the statement holds; absent means the Setting. */
+    threshold: z.number().min(0).max(1).optional(),
+  })
+  .superRefine((when, ctx) => {
+    if (when.op === "judged" && !when.statement) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["statement"],
+        message: "a judged condition needs a statement",
+      });
+    }
+  });
 export type Condition = z.output<typeof conditionSchema>;
 
 export const stepSchema = z.discriminatedUnion("kind", [
@@ -457,11 +498,26 @@ export interface DryRunStep {
   detail: string;
 }
 
+/** What the judge said about one Thread in a Dry run (slice 27): the trigger's or a condition Step's statement. */
+export interface DryRunJudgment {
+  /** "trigger", or the condition Step's id. */
+  where: string;
+  statement: string;
+  /** The probability the statement holds; null when no judge answered. */
+  probability: number | null;
+  threshold: number;
+  held: boolean;
+  /** Why there is no probability: no judge is configured, or the request failed. */
+  reason?: string | undefined;
+}
+
 export interface DryRunThread {
   threadId: Id;
   subject: string;
   from: string;
   steps: DryRunStep[];
+  /** The judged statements this Thread was tested against, in order. */
+  judged?: DryRunJudgment[] | undefined;
 }
 
 /** What a Dry run reports: the would-be Activity over the last N matching Threads, nothing applied. */
@@ -513,6 +569,7 @@ export function describeTrigger(
       if (trigger.predicate?.subjectPatterns?.length)
         parts.push(`subject ${trigger.predicate.subjectPatterns.join(", ")}`);
       if (trigger.predicate?.hasAttachment) parts.push("with an attachment");
+      if (trigger.judge) parts.push(trigger.judge.statement);
       return {
         kind: "trig",
         icon: "envelope",
@@ -577,7 +634,12 @@ export function describeStep(step: Step, groupName?: (id: string) => string): Fl
     case "wait":
       return act("timer", `${step.hours} h`);
     case "condition":
-      return { kind: "cond", icon: "branch", label: step.name, detail: undefined };
+      return {
+        kind: "cond",
+        icon: "branch",
+        label: step.name,
+        detail: step.when.op === "judged" ? step.when.statement : undefined,
+      };
     case "slack":
       return act("slack", step.channel);
     case "notion":

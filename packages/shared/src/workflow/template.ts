@@ -52,7 +52,7 @@ export function renderTemplate(text: string, ctx: TemplateContext): string {
 export function evaluateCondition(
   when: {
     left: string;
-    op: "contains" | "equals" | "matches" | "exists" | "not_contains";
+    op: "contains" | "equals" | "matches" | "exists" | "not_contains" | "judged";
     value?: string | undefined;
   },
   ctx: TemplateContext,
@@ -60,6 +60,9 @@ export function evaluateCondition(
   const left = renderTemplate(when.left, ctx).trim();
   const value = (when.value ?? "").trim();
   switch (when.op) {
+    // A judged condition needs the judge (the Server asks it first); without one it is false.
+    case "judged":
+      return false;
     case "exists":
       return left.length > 0;
     case "equals":
