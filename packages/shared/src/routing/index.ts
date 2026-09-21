@@ -13,6 +13,12 @@ import type {
   Group as StoredGroup,
 } from "../domain.ts";
 
+export type {
+  CustomActionFacts,
+  CustomActionOn,
+  CustomActionSetting,
+} from "./actions.ts";
+export { customActionApplies, customActionIdFor, customActionsFor } from "./actions.ts";
 export type { PredicateFacts } from "./predicate.ts";
 export {
   domainMatches,
@@ -23,8 +29,27 @@ export {
   predicateIsEmpty,
   subjectMatches,
 } from "./predicate.ts";
-export type { SectionFacts, SectionRuleSetting, SectionWhen } from "./sections.ts";
-export { DEFAULT_SECTION_RULES, sectionMatches, sectionOf } from "./sections.ts";
+export type {
+  SectionCreatedBy,
+  SectionFacts,
+  SectionJudged,
+  SectionPlacement,
+  SectionRuleSetting,
+  SectionWhen,
+} from "./sections.ts";
+export {
+  DEFAULT_SECTION_JUDGE_THRESHOLD,
+  DEFAULT_SECTION_RULES,
+  orderedSectionRules,
+  sectionIdFor,
+  sectionInNav,
+  sectionInStream,
+  sectionLabel,
+  sectionMatches,
+  sectionOf,
+  sectionRuleHolds,
+  sectionsToJudge,
+} from "./sections.ts";
 export type { RoutePlacement, Score, Thresholds } from "./thresholds.ts";
 export { clampConfidence, place } from "./thresholds.ts";
 

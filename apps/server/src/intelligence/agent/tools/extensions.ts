@@ -18,6 +18,7 @@ import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
+import type { OrganizeSeam } from "../../organize.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
@@ -81,6 +82,8 @@ export interface ToolExtensions {
   onboarding?: OnboardingSeam | undefined;
   /** The calendar module (slice 18), once the app has one. */
   calendar?: CalendarSeam | undefined;
+  /** Sections, Groups and custom actions from a sentence (slice 26). */
+  organize?: OrganizeSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });

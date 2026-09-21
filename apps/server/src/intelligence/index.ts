@@ -43,6 +43,7 @@ import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
+import { createOrganize, type OrganizeSeam } from "./organize.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import {
@@ -83,6 +84,8 @@ export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
 export type { OnboardingSeam, TopSender } from "./onboarding.ts";
 export { createOnboarding } from "./onboarding.ts";
+export type { OrganizeSeam, SectionCount, SectionJudgmentView } from "./organize.ts";
+export { createOrganize } from "./organize.ts";
 export type { BriefPolicyRule, BriefPolicySettings, BriefThreadFacts } from "./policy.ts";
 export { createBriefPolicyRule, rulePolicy, shouldCompute } from "./policy.ts";
 export type {
@@ -164,6 +167,8 @@ export interface Intelligence {
   extensions: ToolExtensions;
   /** What the onboarding tools act through (slice 20). */
   onboarding: OnboardingSeam;
+  /** Sections, Groups and custom actions from a sentence, and the judged Sections (slice 26). */
+  organize: OrganizeSeam;
   /** The sealed integration secrets the Workflow steps post with; the routes set and clear them. */
   integrationSecrets: IntegrationSecretStore;
   /** The Voice profile builder the build_voice_profile tool acts through. */
@@ -453,6 +458,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.workflows = workflows;
   const onboarding = createOnboarding({ db, routing, workflows, level });
   extensions.onboarding = onboarding;
+  const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
+  extensions.organize = organize;
 
   return {
     attachCalendar(seam) {
@@ -469,6 +476,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     workflows,
     extensions,
     onboarding,
+    organize,
     integrationSecrets,
     voice,
     level,

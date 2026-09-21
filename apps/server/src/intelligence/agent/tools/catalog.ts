@@ -21,6 +21,7 @@ import { isSettingKey, PREVIEW_LIST_MAX, settingsSchema, validateSetting } from 
 import { z } from "zod";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
+import { ORGANIZE_TOOLS } from "./organize.ts";
 
 export interface ToolSettings {
   /** A reversible batch above this many Threads previews first. */
@@ -690,6 +691,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   undo,
   ...EXTENSION_TOOLS,
   ...ONBOARDING_TOOLS,
+  ...ORGANIZE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {

@@ -27,6 +27,7 @@ export type {
   WorkflowsSeam,
 } from "./extensions.ts";
 export { INTEGRATION_TOOL } from "./extensions.ts";
+export { ACTION_TOOLS, findAction, findSection } from "./organize.ts";
 
 export interface ToolCallRequest {
   name: string;
@@ -461,6 +462,29 @@ export async function replayUndo(
       if (!current) return "Nothing to undo: the Event is already gone.";
       await calendar.deleteEvent(undo.eventId);
       return `Undone: "${current.title}" was cancelled${current.attendees.some((a) => !a.self) ? " and the attendees told" : ""}.`;
+    }
+    case "group": {
+      const organize = extensions?.organize;
+      if (!organize) return "Cannot undo: groups cannot be changed from this host.";
+      if (!undo.previous) {
+        const current = await organize.getGroup(undo.groupId);
+        if (!current) return "Nothing to undo: the Group is already gone.";
+        await organize.deleteGroup(undo.groupId);
+        return `Undone: the Group "${current.name}" was removed; its threads stay.`;
+      }
+      const restored = await organize.updateGroup(undo.groupId, undo.previous);
+      return `Undone: the Group "${restored.name}" is back as it was.`;
+    }
+    case "organize": {
+      const { applied } = await host.applyIntents(undo.intents, { actor: "user" });
+      let forgot = 0;
+      if (undo.sectionId && extensions?.organize) {
+        forgot = await extensions.organize.forget(host.workspaceId, undo.sectionId);
+      }
+      if (undo.sectionId) {
+        return `Undone: ${plural(forgot, "judgment")} forgotten for ${undo.sectionId}; the section fills again as the judge answers.`;
+      }
+      return `Undone: ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
     }
   }
 }

@@ -18,7 +18,13 @@ import type {
   ThreadSummary,
   ToolHost,
 } from "@monday/shared";
-import { defaultSettings, isSettingKey, type Settings } from "@monday/shared";
+import {
+  defaultSettings,
+  isSettingKey,
+  orderedSectionRules,
+  type Settings,
+  sectionLabel,
+} from "@monday/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { LockedError } from "../../crypto/keys.ts";
 import type { Db } from "../../db/client.ts";
@@ -207,20 +213,23 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     },
 
     async listSections() {
-      const s = await readGlobalSettings(db, ["sections.order"]);
+      // Every rule in effect order (slice 26): a user-defined Section carries
+      // its own name; a shipped one reads strings.section.<id>.
+      const s = await readGlobalSettings(db, ["sections.order", "sections.rules"]);
+      const rules = orderedSectionRules(s["sections.rules"], s["sections.order"]);
       const strings = await readGlobalSettings(
         db,
-        s["sections.order"].flatMap((id) => {
-          const key = `strings.section.${id}`;
+        rules.flatMap((r) => {
+          const key = `strings.section.${r.id}`;
           return isSettingKey(key) ? [key] : [];
         }),
       );
-      return s["sections.order"].map((id) => {
-        const key = `strings.section.${id}`;
-        const name = isSettingKey(key)
-          ? String((strings as Record<string, unknown>)[key] ?? id)
-          : id;
-        return { id, name };
+      return rules.map((r) => {
+        const key = `strings.section.${r.id}`;
+        const fromStrings = isSettingKey(key)
+          ? String((strings as Record<string, unknown>)[key] ?? "")
+          : "";
+        return { id: r.id, name: sectionLabel(r, fromStrings || undefined) };
       });
     },
 
