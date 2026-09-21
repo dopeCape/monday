@@ -37,6 +37,7 @@ import {
   wordCount,
 } from "./policy.ts";
 import { type HostedRuntime, NoProviderKeyError } from "./runtime/index.ts";
+import type { BriefVerifier } from "./verify.ts";
 
 export const BRIEF_STEP = "brief";
 
@@ -75,6 +76,8 @@ export interface BriefsOptions {
   policySettings: () => Promise<BriefPolicySettings>;
   /** Whether the Server holds a key for the brief Task's provider; false means no background Briefs. */
   keyAvailable?: () => Promise<boolean>;
+  /** Checks the bullets against the Thread before storage (slice 27); absent, they are stored as written. */
+  verify?: BriefVerifier | undefined;
   /**
    * The AI level (CONTEXT.md). `off` computes nothing; `assist` computes on
    * open only, whatever the policy says; `automate` follows the policy.
@@ -266,6 +269,24 @@ export function parseBriefOutput(
   return { threadId: meta.threadId, bullets, actions, computedAt: meta.computedAt, stale: false };
 }
 
+/* ------------------------------ The bullets envelope ------------------------------ */
+
+/** What the bullets envelope holds: the bullets alone (as before slice 27), or with their verdicts. */
+type BulletsEnvelope = RichText[] | { bullets: RichText[]; verified: Brief["verified"] };
+
+export function bulletsEnvelope(brief: Pick<Brief, "bullets" | "verified">): BulletsEnvelope {
+  return brief.verified ? { bullets: brief.bullets, verified: brief.verified } : brief.bullets;
+}
+
+export function readBulletsEnvelope(json: string): {
+  bullets: RichText[];
+  verified: Brief["verified"];
+} {
+  const parsed = JSON.parse(json) as BulletsEnvelope;
+  if (Array.isArray(parsed)) return { bullets: parsed, verified: undefined };
+  return { bullets: parsed.bullets, verified: parsed.verified };
+}
+
 /* ------------------------------ Module ------------------------------ */
 
 interface ThreadRead {
@@ -382,10 +403,19 @@ export function createBriefs(options: BriefsOptions): Briefs {
       computedAt: computedAt.toISOString(),
       settings,
     });
+    if (options.verify) {
+      const checked = await options.verify.verify(
+        workspaceId,
+        brief.bullets,
+        threadText(text, settings.inputCharsMax),
+      );
+      brief.bullets = checked.bullets;
+      if (checked.verified) brief.verified = checked.verified;
+    }
     const bulletsRef = await mailstore.storeContent(
       workspaceId,
       "brief",
-      JSON.stringify(brief.bullets),
+      JSON.stringify(bulletsEnvelope(brief)),
     );
     const actionsRef = await mailstore.storeContent(
       workspaceId,
@@ -467,12 +497,14 @@ export function createBriefs(options: BriefsOptions): Briefs {
           chunks: [enc],
           size: -1,
         });
+      const { bullets, verified } = readBulletsEnvelope(await read(row.bulletsKey, row.bulletsEnc));
       return {
         threadId,
-        bullets: JSON.parse(await read(row.bulletsKey, row.bulletsEnc)) as RichText[],
+        bullets,
         actions: JSON.parse(await read(row.actionsKey, row.actionsEnc)) as BriefAction[],
         computedAt: row.computedAt.toISOString(),
         stale: row.stale,
+        ...(verified ? { verified } : {}),
       };
     },
 

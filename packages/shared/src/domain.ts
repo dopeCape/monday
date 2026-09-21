@@ -271,6 +271,9 @@ export type Confidence = number;
 export type RichRun = string | { b: string } | { i: string };
 export type RichText = RichRun[];
 
+/** How well the Thread's text supports a bullet (slice 27): unsupported bullets are dropped before storage. */
+export type BulletVerdict = "supported" | "partly";
+
 export interface Brief {
   threadId: Id;
   /** At most three; the first says what happened, the second what is asked, the third context. */
@@ -278,6 +281,8 @@ export interface Brief {
   actions: BriefAction[];
   computedAt: IsoDate;
   stale: boolean;
+  /** Per bullet, by index, once the judge checked them against the Thread (ADR 0012); the reader dims `partly`. */
+  verified?: BulletVerdict[] | undefined;
 }
 
 /** Who decides the brief policy: the rule over Thread state and headers, or the model with the user's prompt. */

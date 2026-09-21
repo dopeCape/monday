@@ -211,7 +211,12 @@ export const BRIEFS_TO_WARM_SQL =
  * stale Brief does, until the fetch replaces them.
  */
 export function rowToBrief(r: Row): Brief | null {
-  const bullets = json<Brief["bullets"]>(r.bullets, []);
+  // The bullets column holds the bullets alone, or with the judge's verdicts per bullet (slice 27).
+  const stored = json<
+    Brief["bullets"] | { bullets: Brief["bullets"]; verified?: Brief["verified"] }
+  >(r.bullets, []);
+  const bullets = Array.isArray(stored) ? stored : stored.bullets;
+  const verified = Array.isArray(stored) ? undefined : stored.verified;
   if (bullets.length === 0) return null;
   return {
     threadId: text(r.thread_id),
@@ -219,6 +224,7 @@ export function rowToBrief(r: Row): Brief | null {
     actions: json<Brief["actions"]>(r.actions, []),
     computedAt: text(r.computed_at),
     stale: bool(r.stale) || bool(r.content_stale),
+    ...(verified ? { verified } : {}),
   };
 }
 

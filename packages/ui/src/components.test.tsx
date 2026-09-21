@@ -274,6 +274,14 @@ describe("reader", () => {
     expect(html).toContain("<b>Aoife submitted the take-home</b>");
   });
 
+  test("a bullet the judge found partly supported is dimmed; the others are not (slice 27)", () => {
+    const html = render(
+      <Brief brief={{ ...brief1, verified: ["supported", "partly", "supported"] }} />,
+    );
+    expect((html.match(/<li class="partly">/g) ?? []).length).toBe(1);
+    expect((html.match(/<li>/g) ?? []).length).toBe(brief1.bullets.length - 1);
+  });
+
   test("Message renders open with avatar, paragraphs and attachments", () => {
     const html = render(<Message message={m1c} now={fx.NOW} />);
     expect(html).toContain('class="msg"');
