@@ -129,7 +129,9 @@ export function graphThreadWorkspaces(db: Db): CheckpointSealer["workspaceOf"] {
     const cached = known.get(threadId);
     if (cached) return cached;
     let workspaceId: string | null = null;
-    const run = /^run:([^:]+):\d+$/.exec(threadId);
+    // A Run's id carries colons of its own (run:<workflow>:<trigger>:<...>), so the
+    // Step index is the last field and everything before it is the Run.
+    const run = /^run:(.+):\d+$/.exec(threadId);
     if (run?.[1]) {
       const row = await db.query.workflowRuns.findFirst({
         where: eq(workflowRuns.id, run[1]),

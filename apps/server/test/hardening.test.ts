@@ -479,6 +479,12 @@ describe("transcripts and checkpoints under the envelope", () => {
     await db.handle.sql`insert into workflow_runs (id, workflow_id, workspace_id, version, trigger)
         values ('run-1', 'wf-1', ${workspaceId}, 1, '{"kind":"manual"}'::jsonb)`;
     expect(await resolve("run:run-1:3")).toBe(workspaceId);
+    // A real Run id carries colons of its own: run:<workflow>:manual:<uuid>.
+    await db.handle.sql`insert into workflow_runs (id, workflow_id, workspace_id, version, trigger)
+        values ('run:wf-1:manual:40c4154b-73ff-4b07-8337-a83656057270', 'wf-1', ${workspaceId}, 1, '{"kind":"manual"}'::jsonb)`;
+    expect(await resolve("run:run:wf-1:manual:40c4154b-73ff-4b07-8337-a83656057270:0")).toBe(
+      workspaceId,
+    );
   });
 
   test("the Agent's host lists Groups by name and filters Threads in the query", async () => {

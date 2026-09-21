@@ -242,6 +242,14 @@ async function main() {
     }
   };
 
+  // A failure nobody awaited (a Job step's background promise, a stream that
+  // closed late) is logged, never the end of the Sidecar: every Device would
+  // lose its Server over one bad row.
+  process.on("unhandledRejection", (reason) => {
+    log(
+      `unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`,
+    );
+  });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("exit", () => embedded?.killSync());
   process.on("SIGINT", () => void shutdown("SIGINT"));
