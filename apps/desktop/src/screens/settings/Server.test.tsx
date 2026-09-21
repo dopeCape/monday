@@ -37,6 +37,7 @@ const hosted: HostedState = {
     HOSTED_PROVIDERS.map((p) => [p, rolesFor(defaultSettings(), p)]),
   ) as HostedState["roles"],
   sharedKeys: [],
+  judge: { provider: "llm", model: "claude-haiku-4-5" },
 };
 
 const caps = (over: Partial<Capabilities> = {}): Capabilities => ({

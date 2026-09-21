@@ -10,13 +10,15 @@
 // runs it again from "Set me up".
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { defaultSettings, type PartialSettings } from "@monday/shared";
+import { defaultSettings, type KeyProvider, type PartialSettings } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { App } from "../App.tsx";
 import { type FakeAgentClient, fakeAgentClient, toolEvent } from "../agent/client.ts";
-import { StaticShell, useShell } from "../shell/Shell.tsx";
+import { type Api, ApiError, createApi } from "../platform/api.ts";
+import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
+import { type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
 import { chipsForQuestion, densityFor, Onboarding, type OnboardingProps } from "./Onboarding.tsx";
 
 let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
@@ -72,9 +74,65 @@ const detected = {
 };
 const nothing = { detect: async () => [] };
 
+/** A keychain for the runtime step: set, get, remove, share through the api. */
+function fakeKeychain(initial: Partial<Record<KeyProvider, string>> = {}) {
+  const store = new Map<KeyProvider, string>(
+    Object.entries(initial) as Array<[KeyProvider, string]>,
+  );
+  const keys: DeviceProviderKeys & { writes: string[] } = {
+    writes: [],
+    get: async (p) => store.get(p) ?? null,
+    set: async (p, k) => {
+      store.set(p, k);
+      keys.writes.push(`${p}:${k}`);
+    },
+    remove: async (p) => {
+      store.delete(p);
+    },
+    resolver: async (p) => store.get(p) ?? null,
+    share: async (api, ws, p) => {
+      const k = store.get(p);
+      if (!k) return false;
+      await api.keys.share(ws, p, k);
+      return true;
+    },
+    unshare: (api, p) => api.keys.unshare(p),
+  };
+  return keys;
+}
+
+/** The keys routes as the Server answers them: the live check knows one TypeSafe key; shares are listed back. */
+function scriptedKeysApi() {
+  const calls: Array<{ name: string; args: unknown[] }> = [];
+  const shared = new Set<KeyProvider>();
+  const api: Api = {
+    ...createApi(() => null),
+    keys: {
+      shared: async () => ({ shared: [...shared] }),
+      share: async (_ws, provider, key) => {
+        calls.push({ name: "keys.share", args: [provider, key] });
+        shared.add(provider);
+        return { provider, shared: true };
+      },
+      unshare: async (provider) => {
+        shared.delete(provider);
+      },
+      validate: async (provider, key) => {
+        calls.push({ name: "keys.validate", args: [provider, key] });
+        if (provider !== "typesafe") throw new ApiError(404, "no_validator");
+        return key === "ts-good"
+          ? { ok: true, models: ["jev-latest"] }
+          : { ok: false, code: "unauthorized", reason: "TypeSafe does not know this key." };
+      },
+    },
+  };
+  return { api, calls, shared };
+}
+
 async function mount(
   props: Partial<OnboardingProps> & { client?: FakeAgentClient },
   settings: PartialSettings = {},
+  shell: Partial<Pick<ShellState, "api">> = {},
 ) {
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -84,7 +142,7 @@ async function mount(
   const { client, ...rest } = props;
   await act(async () =>
     r.render(
-      <StaticShell settings={settings}>
+      <StaticShell settings={settings} shell={shell}>
         <Capture />
         <Onboarding
           accountId="acct-1"
@@ -193,6 +251,86 @@ describe("onboarding: the first screen and the AI level", () => {
       },
     );
     expect(captured?.settings["appearance.density"]).toBe("spacious");
+  });
+
+  test("the runtime step offers TypeSafe, a language model or both: both is recommended at automate, a TypeSafe key alone continues there with the composer note and is shared by default, and at assist TypeSafe alone does not continue", async () => {
+    const scripted = scriptedKeysApi();
+    const keys = fakeKeychain();
+    await mount({ runtimes: nothing, keys }, {}, { api: scripted.api });
+    await click(card("automate"));
+    await clickText("Continue");
+    const step = () => q('[data-panel="runtime-step"]');
+    expect(step()?.dataset.way).toBe("both");
+    const ways = qa('[data-panel="runtime-step"] .choice-card').map((c) => c.dataset.value);
+    expect(ways).toEqual(["typesafe", "llm", "both"]);
+    expect(q('[data-panel="runtime-step"] .choice-card[data-value="both"]')?.textContent).toContain(
+      "Recommended",
+    );
+    // Both cards' controls are on screen: the TypeSafe key row and the language model's.
+    expect(q('[data-setting="ai.share_key.typesafe"]')).not.toBeNull();
+    expect(q('[data-setting="ai.mode"]')).not.toBeNull();
+    const cont = () =>
+      qa<HTMLButtonElement>('[data-panel="runtime-step"] button').find(
+        (b) => b.textContent?.trim() === "Continue",
+      );
+    expect(cont()?.disabled).toBe(true);
+
+    // TypeSafe alone: the card shows only the key row, with the share switch on by default.
+    await click(q('[data-panel="runtime-step"] .choice-card[data-value="typesafe"]'));
+    expect(step()?.dataset.way).toBe("typesafe");
+    expect(q('[data-setting="ai.mode"]')).toBeNull();
+    const row = q('[data-setting="ai.share_key.typesafe"]');
+    expect(row?.querySelector(".switch")?.getAttribute("aria-checked")).toBe("true");
+    await clickText("Add key", row ?? document);
+    await act(async () => {
+      const input = row?.querySelector<HTMLInputElement>("input");
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "ts-good");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickText("Save", row ?? document);
+    // Validated through the Server, kept in the keychain, shared at once, the Setting on.
+    expect(scripted.calls).toEqual([
+      { name: "keys.validate", args: ["typesafe", "ts-good"] },
+      { name: "keys.share", args: ["typesafe", "ts-good"] },
+    ]);
+    expect(keys.writes).toEqual(["typesafe:ts-good"]);
+    expect(captured?.settings["ai.share_key.typesafe"]).toBe(true);
+    expect(text()).not.toContain("ts-good");
+    // Sorting runs on TypeSafe alone; the composer still needs a language model, and Continue is allowed.
+    expect(q('[data-panel="runtime-step"] [data-note]')?.textContent).toContain(
+      "TypeSafe alone sorts. The composer, Briefs and Workflows need a language model",
+    );
+    expect(cont()?.disabled).toBe(false);
+    await click(cont());
+    expect(captured?.settings["ai.level"]).toBe("automate");
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
+  });
+
+  test("at assist a TypeSafe key alone does not continue: the assistant needs a language model", async () => {
+    const scripted = scriptedKeysApi();
+    await mount(
+      { runtimes: nothing, keys: fakeKeychain({ typesafe: "ts-good" }) },
+      {},
+      {
+        api: scripted.api,
+      },
+    );
+    await click(card("assist"));
+    await clickText("Continue");
+    const step = q('[data-panel="runtime-step"]');
+    expect(step?.dataset.way).toBe("llm");
+    expect(step?.querySelector('.choice-card[data-value="both"]')?.textContent).not.toContain(
+      "Recommended",
+    );
+    expect(step?.querySelector("[data-note]")?.textContent).toContain(
+      "Mail with an assistant needs a language model",
+    );
+    const cont = qa<HTMLButtonElement>('[data-panel="runtime-step"] button').find(
+      (b) => b.textContent?.trim() === "Continue",
+    );
+    expect(cont?.disabled).toBe(true);
+    expect(captured?.settings["ai.level"]).toBe("off");
   });
 
   test("while detection still runs, Continue waits on moving up from off, so the runtime question is never skipped", async () => {

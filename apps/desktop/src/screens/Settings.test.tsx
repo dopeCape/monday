@@ -19,9 +19,9 @@ import {
   type Device,
   type ExternalConsent,
   type ExternalCredential,
-  type HostedProvider,
   isSettingKey,
   isStringKey,
+  type KeyProvider,
   type MeterMonth,
   type PartialSettings,
   SETTING_SECTIONS,
@@ -37,7 +37,7 @@ import type { Root } from "react-dom/client";
 import { createMemoryActivityLog } from "../../../server/src/intelligence/agent/activity.ts";
 import { createFakeToolHost } from "../../../server/src/intelligence/agent/tools/fake-host.ts";
 import { createToolServer } from "../../../server/src/intelligence/agent/tools/index.ts";
-import { type Api, createApi, type PendingPairings } from "../platform/api.ts";
+import { type Api, ApiError, createApi, type PendingPairings } from "../platform/api.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { fakePlatform } from "../platform/tauri.ts";
 import { Shell, type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
@@ -117,12 +117,13 @@ function scriptedApi(
     activity?: ActivityRecord[];
     voice?: VoiceProfile;
     stored?: Record<string, unknown>;
-    shared?: HostedProvider[];
+    shared?: KeyProvider[];
     credentials?: ExternalCredential[];
     consents?: ExternalConsent[];
   } = {},
 ): Scripted {
   const calls: Scripted["calls"] = [];
+  const sharedNow = new Set<KeyProvider>();
   const stored = over.stored ?? {};
   const base = createApi(() => ({ baseUrl: "http://127.0.0.1:4242", token: "t" }));
   const api: Api = {
@@ -203,13 +204,24 @@ function scriptedApi(
       },
     },
     keys: {
-      shared: async () => ({ shared: over.shared ?? [] }),
+      // Shares made through the api are listed back, as the Server would.
+      shared: async () => ({ shared: [...new Set([...(over.shared ?? []), ...sharedNow])] }),
       share: async (_ws, provider, key) => {
         calls.push({ name: "keys.share", args: [provider, key] });
+        sharedNow.add(provider);
         return { provider, shared: true };
       },
       unshare: async (provider) => {
         calls.push({ name: "keys.unshare", args: [provider] });
+        sharedNow.delete(provider);
+      },
+      // The Server's live check, scripted: one TypeSafe key is known, every other refused.
+      validate: async (provider, key) => {
+        calls.push({ name: "keys.validate", args: [provider, key] });
+        if (provider !== "typesafe") throw new ApiError(404, "no_validator");
+        return key === "ts-good"
+          ? { ok: true, models: ["jev-latest"] }
+          : { ok: false, code: "unauthorized", reason: "TypeSafe does not know this key." };
       },
     },
     routing: {
@@ -287,9 +299,9 @@ function scriptedApi(
 }
 
 /** A keychain of provider keys for the tests: set, get, remove, share through the api. */
-function fakeKeys(initial: Partial<Record<HostedProvider, string>> = {}) {
-  const store = new Map<HostedProvider, string>(
-    Object.entries(initial) as Array<[HostedProvider, string]>,
+function fakeKeys(initial: Partial<Record<KeyProvider, string>> = {}) {
+  const store = new Map<KeyProvider, string>(
+    Object.entries(initial) as Array<[KeyProvider, string]>,
   );
   const keys: DeviceProviderKeys & { writes: string[] } = {
     writes: [],
@@ -605,6 +617,72 @@ describe("Settings › AI and agent", () => {
     await click(gemini?.querySelector(".switch"));
     expect(captured?.settings["ai.share_key.gemini"]).toBe(false);
     expect(gemini?.textContent).toContain("No key on this device");
+  });
+
+  test("the TypeSafe group sits above the providers: a key is checked live through the Server before it is saved, a wrong key is refused with the reason, the status line says who answers judgments, and Judgments is a segmented choice", async () => {
+    const scripted = scriptedApi();
+    const keys = fakeKeys();
+    await mount({ initialSection: "ai", keys }, { api: scripted.api });
+    // The group order: TypeSafe right after Runtime, before Anthropic.
+    const groups = qa("[data-group]").map((el) => el.getAttribute("data-group"));
+    expect(groups.indexOf("TypeSafe")).toBe(groups.indexOf("Runtime") + 1);
+    expect(groups.indexOf("TypeSafe")).toBeLessThan(groups.indexOf("Anthropic"));
+    // Auto with no key: the language model answers.
+    const status = () => q('[data-panel="judge-status"]');
+    expect(status()?.dataset.judge).toBe("llm");
+    expect(status()?.textContent).toContain("The language model answers judgments.");
+    expect(q('[data-setting="ai.judge.provider"] .seg')).not.toBeNull();
+
+    const row = q('[data-setting="ai.share_key.typesafe"]');
+    expect(row?.textContent).toContain("No key on this device");
+    await clickText("Add key", row ?? document);
+    const input = row?.querySelector<HTMLInputElement>("input");
+    expect(input?.type).toBe("password");
+    // A wrong key never reaches the keychain; the Server's reason is shown.
+    await type(input ?? null, "ts-wrong");
+    await clickText("Save", row ?? document);
+    expect(scripted.calls).toContainEqual({
+      name: "keys.validate",
+      args: ["typesafe", "ts-wrong"],
+    });
+    expect(keys.writes).toEqual([]);
+    expect(row?.textContent).toContain("TypeSafe does not know this key.");
+    expect(text()).not.toContain("ts-wrong");
+    // The right key is saved once TypeSafe accepted it, and never displayed.
+    await type(row?.querySelector<HTMLInputElement>("input") ?? null, "ts-good");
+    await clickText("Save", row ?? document);
+    expect(keys.writes).toEqual(["typesafe:ts-good"]);
+    expect(text()).not.toContain("ts-good");
+    expect(row?.textContent).toContain("Key accepted");
+    // In Settings the share switch keeps its default, off: the key stays on this device.
+    expect(scripted.calls.some((c) => c.name === "keys.share")).toBe(false);
+    expect(captured?.settings["ai.share_key.typesafe"]).toBe(false);
+    expect(status()?.dataset.judge).toBe("typesafe");
+    expect(status()?.textContent).toContain("TypeSafe answers judgments on jev-1.13.0.");
+    expect(status()?.textContent).toContain("The key is on this device only.");
+    // The share switch sends it under the envelope like any provider's.
+    await click(row?.querySelector(".switch"));
+    expect(scripted.calls).toContainEqual({ name: "keys.share", args: ["typesafe", "ts-good"] });
+    expect(captured?.settings["ai.share_key.typesafe"]).toBe(true);
+    expect(row?.textContent).toContain("Shared with the server");
+    // Judgments pinned to the language model: the status follows the Setting.
+    await click(
+      [...(q('[data-setting="ai.judge.provider"]')?.querySelectorAll("button") ?? [])].find(
+        (b) => b.textContent?.trim() === "Language model",
+      ),
+    );
+    expect(captured?.settings["ai.judge.provider"]).toBe("llm");
+    expect(status()?.dataset.judge).toBe("llm");
+    // Removing the key with the Setting pinned to TypeSafe: no key answers.
+    await click(
+      [...(q('[data-setting="ai.judge.provider"]')?.querySelectorAll("button") ?? [])].find(
+        (b) => b.textContent?.trim() === "TypeSafe",
+      ),
+    );
+    await clickText("Remove", row ?? document);
+    await clickText("Confirm", row ?? document);
+    expect(status()?.dataset.judge).toBe("none");
+    expect(status()?.textContent).toContain("No TypeSafe key.");
   });
 
   test("the task map, the tier list, the Meter and the Activity log", async () => {

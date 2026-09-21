@@ -163,6 +163,8 @@ export interface JudgeCall<Q extends JudgeQuestions = JudgeQuestions> {
   key: string;
   state: JsonValue;
   questions: Q;
+  /** The judge API's base URL from Settings (ai.endpoint.typesafe); absent means the provider's default. */
+  baseUrl?: string;
 }
 
 export type JudgeModel = <Q extends JudgeQuestions>(
@@ -269,7 +271,13 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
       const key = await options.keys("typesafe");
       if (!key) throw new NoJudgeError("no_key");
       const started = now();
-      const response = await judge({ model: settings["ai.judge.model"], key, state, questions });
+      const response = await judge({
+        model: settings["ai.judge.model"],
+        key,
+        state,
+        questions,
+        baseUrl: settings["ai.endpoint.typesafe"],
+      });
       const durationMs = Math.max(0, now() - started);
       const usage: Usage = {
         inputTokens: Math.max(0, Math.round(response.usage.inputTokens)),

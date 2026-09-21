@@ -1,8 +1,12 @@
 // Hosted runtime routes (ADR 0007): shared provider keys, the Meter and the
 // Brief Task.
-//   GET    /keys                         {shared: HostedProvider[]}   which providers hold a shared key; never the key
+//   GET    /keys                         {shared: KeyProvider[]}      which providers hold a shared key; never the key
 //   PUT    /keys/:provider               {workspace, key}             stores the key under the envelope (423 when locked)
 //   DELETE /keys/:provider               forgets the shared key
+//   POST   /keys/:provider/validate      {key}                        live check of a pasted key from the Server (slice 24):
+//                                          200 {ok: true, models}   the provider accepted it
+//                                          200 {ok: false, reason}  refused, in plain words; the key is never stored
+//                                          404 no_validator         the provider has no live check
 //   GET    /meter?workspace=&month=      this month by Task and provider with cost; month "YYYY-MM", default now
 //   POST   /threads/:id/brief            {workspace, trigger?}         asks for a Brief under the policy (slice 13):
 //                                          202 {jobId}   the brief Job is queued (trigger "user", the default, always queues)
@@ -11,7 +15,7 @@
 //   GET    /threads/:id/brief            the stored Brief, or 404
 //   DELETE /threads/:id/brief            removes the Brief; the feed says so
 
-import { HOSTED_PROVIDERS } from "@monday/shared";
+import { KEY_PROVIDERS } from "@monday/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
@@ -19,8 +23,9 @@ import type { Intelligence } from "../intelligence/index.ts";
 import { isMonth, monthOf } from "../intelligence/meter.ts";
 import { parseBody } from "./validate.ts";
 
-const provider = z.enum(HOSTED_PROVIDERS);
+const provider = z.enum(KEY_PROVIDERS);
 const putKeyBody = z.object({ workspace: z.string().min(1), key: z.string().min(1).max(4000) });
+const validateKeyBody = z.object({ key: z.string().min(1).max(4000) });
 const briefBody = z.object({
   workspace: z.string().min(1),
   trigger: z.enum(["sync", "open", "user"]).default("user"),
@@ -53,6 +58,16 @@ export function intelligenceRoutes(
     if (!p.success) return c.json({ error: "unknown_provider" }, 400);
     await intelligence.keys.remove(p.data);
     return c.body(null, 204);
+  });
+
+  app.post("/keys/:provider/validate", async (c) => {
+    const p = provider.safeParse(c.req.param("provider"));
+    if (!p.success) return c.json({ error: "unknown_provider" }, 400);
+    const body = await parseBody(c, validateKeyBody);
+    if (!body.ok) return body.response;
+    const result = await intelligence.validateKey(p.data, body.data.key);
+    if (!result) return c.json({ error: "no_validator" }, 404);
+    return c.json(result);
   });
 
   app.get("/meter", async (c) => {

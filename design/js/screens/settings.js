@@ -154,8 +154,8 @@ function routing() {
 
 const levels = [
   { key: "off", t: "Just mail", s: "No AI at all. A fast mail client with Groups you make by hand, search, keymaps and the calendar. No provider key asked for." },
-  { key: "assist", t: "Mail with an assistant", s: "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking." },
-  { key: "automate", t: "Mail that sorts and acts for me", s: "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.", on: true },
+  { key: "assist", t: "Mail with an assistant", s: "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking. With a TypeSafe key the palette also answers typed sentences." },
+  { key: "automate", t: "Mail that sorts and acts for me", s: "Everything: routing into Groups and Sections you describe in your own words, Briefs in the background, custom actions, Workflows with their approvals. Sorting runs on TypeSafe when its key exists, on the language model otherwise.", on: true },
 ];
 
 function ai() {
@@ -171,6 +171,7 @@ function ai() {
       card({ key: "ai.local.cli", title: "Local CLI", help: "Detected on this machine. The agent talks to them over their local protocol, no extra setup.", ctrl: `<div class="providers">${cli("CC", "Claude Code", true)}${cli("CX", "Codex", false)}${cli("OC", "OpenCode", false)}</div>`, block: true, scope: "device", dflt: "Claude code" }),
       card({ key: "ai.hosted.provider", title: "Hosted provider", help: "Keys are stored in the system keychain. The server receives a copy only when you share it below.", ctrl: `<div class="providers">${prov("A", "Anthropic", "claude-sonnet-5", true)}${prov("G", "Gemini", "gemini-2.5-pro", false)}${prov("O", "OpenAI", "gpt-5", false)}${prov("K", "Kimi", "kimi-k2-thinking", false)}${prov("OR", "OpenRouter", "anthropic/claude-sonnet-5", false)}</div>`, block: true, dflt: "Anthropic" }),
     ], { advanced: true })),
+    G("TypeSafe", group("TypeSafe", [])),
     G("Anthropic", group("Anthropic", [])),
     G("Gemini", group("Gemini", [])),
     G("OpenAI", group("OpenAI", [])),

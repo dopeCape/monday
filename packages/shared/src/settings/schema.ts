@@ -21,7 +21,7 @@ import type {
   Task,
   ThemeMode,
 } from "../domain.ts";
-import type { KeyProvider } from "../judge.ts";
+import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
 
@@ -160,6 +160,11 @@ const hostedProvider = z.enum([
   "openrouter",
 ]) satisfies z.ZodType<HostedProvider>;
 export const HOSTED_PROVIDERS = hostedProvider.options;
+const judgeProvider = z.enum(["typesafe"]) satisfies z.ZodType<JudgeProvider>;
+/** The providers that answer judgments (ADR 0012). */
+export const JUDGE_PROVIDERS = judgeProvider.options;
+/** Every provider a key can be stored for: the language models, then the judge. */
+export const KEY_PROVIDERS = [...HOSTED_PROVIDERS, ...JUDGE_PROVIDERS] as const;
 /** How each Hosted provider is named on screen. */
 export const PROVIDER_LABELS: Readonly<Record<KeyProvider, string>> = {
   anthropic: "Anthropic",
@@ -290,8 +295,11 @@ function aiShareKey(provider: KeyProvider) {
     section: "ai",
     group: PROVIDER_LABELS[provider],
     control: "provider-key",
-    label: `Let the server use the ${provider} key`,
-    help: `Send the ${provider} key to the Server, stored under the envelope, so Briefs and Workflows run while every device is off. Anyone who controls the Server host can then use the key; keep it off if you do not trust the host.`,
+    label: `Let the server use the ${PROVIDER_LABELS[provider]} key`,
+    help:
+      provider === "typesafe"
+        ? "Send the TypeSafe key to the Server, stored under the envelope, so sorting, Sections and the brief policy are judged on arrival while every device is off. Thread text leaves the mailbox for a judgment as it does for a Brief. Anyone who controls the Server host can then use the key; keep it off if you do not trust the host."
+        : `Send the ${PROVIDER_LABELS[provider]} key to the Server, stored under the envelope, so Briefs and Workflows run while every device is off. Anyone who controls the Server host can then use the key; keep it off if you do not trust the host.`,
   });
 }
 
@@ -347,7 +355,7 @@ function aiLocalModel(cli: LocalCli) {
   });
 }
 
-function aiEndpoint(provider: HostedProvider, url: string) {
+function aiEndpoint(provider: KeyProvider, url: string) {
   return setting({
     type: z.url(),
     default: url,
@@ -356,7 +364,10 @@ function aiEndpoint(provider: HostedProvider, url: string) {
     group: PROVIDER_LABELS[provider],
     advanced: true,
     label: `${provider} endpoint`,
-    help: `The OpenAI-compatible base URL the Hosted runtime calls for ${provider}.`,
+    help:
+      provider === "typesafe"
+        ? "The base URL of the TypeSafe API the judge calls: POST /v1/systemone for judgments, GET /v1/models to validate a key."
+        : `The OpenAI-compatible base URL the Hosted runtime calls for ${provider}.`,
   });
 }
 
@@ -1357,6 +1368,7 @@ export const settingsSchema = {
     scope: "global",
     section: "ai",
     group: "TypeSafe",
+    control: "judge-provider",
     label: "Judgments",
     help: "Who decides the judgments: which Group a Thread belongs to, which Section, whether a Brief is worth writing, what a typed sentence asks for. Auto uses TypeSafe when its key is configured and the language model otherwise. TypeSafe answers in milliseconds for a fraction of a cent; the language model writes the same answers as text and costs more.",
   }),
@@ -1396,6 +1408,17 @@ export const settingsSchema = {
   }),
   "ai.endpoint.kimi": aiEndpoint("kimi", "https://api.moonshot.ai/v1"),
   "ai.endpoint.openrouter": aiEndpoint("openrouter", "https://openrouter.ai/api/v1"),
+  "ai.endpoint.typesafe": aiEndpoint("typesafe", "https://api.typesafe.ai"),
+  "ai.judge.share_by_default": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "ai",
+    group: "TypeSafe",
+    advanced: true,
+    label: "Share a new TypeSafe key with the server",
+    help: "On onboarding's TypeSafe card the share switch starts on, so a pasted key also reaches the Server and sorting runs on arrival while every device is off. Off starts the switch off; the key then stays on this device until you share it.",
+  }),
   "ai.max_output_tokens": setting({
     type: z.int().min(256).max(128_000),
     default: 4096,
@@ -2988,6 +3011,40 @@ export const settingsSchema = {
   "strings.settings.keys.placeholder": str("ai", "Key: placeholder", "Paste the key"),
   "strings.settings.keys.none": str("ai", "Key state: none", "No key on this device"),
   "strings.settings.keys.shared": str("ai", "Key state: shared", "Shared with the server"),
+  "strings.settings.keys.checking": str("ai", "Key: checking live", "Checking the key"),
+  "strings.settings.keys.validated": str("ai", "Key: accepted live", "Key accepted"),
+  "strings.settings.intro.ai.typesafe": str(
+    "ai",
+    "TypeSafe group intro",
+    "TypeSafe answers judgments: which Group a thread belongs to, which Section, whether a Brief is worth writing, what a typed sentence asks for. Probabilities, never text, in milliseconds for a fraction of a cent. The key is checked live, kept in the keychain and never displayed.",
+  ),
+  "strings.settings.judge.option.auto": str("ai", "Judgments option: auto", "Auto"),
+  "strings.settings.judge.option.typesafe": str("ai", "Judgments option: TypeSafe", "TypeSafe"),
+  "strings.settings.judge.option.llm": str(
+    "ai",
+    "Judgments option: language model",
+    "Language model",
+  ),
+  "strings.settings.judge.status.typesafe": str(
+    "ai",
+    "Judge status: TypeSafe",
+    "TypeSafe answers judgments on {model}.",
+  ),
+  "strings.settings.judge.status.llm": str(
+    "ai",
+    "Judge status: language model",
+    "The language model answers judgments.",
+  ),
+  "strings.settings.judge.status.none": str(
+    "ai",
+    "Judge status: no key",
+    "No TypeSafe key. Judgments wait for one; header rules decide until then.",
+  ),
+  "strings.settings.judge.status.device_only": str(
+    "ai",
+    "Judge status: key on this device only",
+    "The key is on this device only. Share it so the server judges on arrival.",
+  ),
   "strings.settings.roles.main": str("ai", "Role: main", "Main"),
   "strings.settings.roles.fast": str("ai", "Role: fast", "Fast"),
   "strings.settings.tasks.role": str("ai", "Task column: Role", "Role"),
@@ -3734,7 +3791,7 @@ export const settingsSchema = {
   "strings.ai.level.assist_sub": str(
     "ai",
     "AI level card: assist, body",
-    "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking.",
+    "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking. With a TypeSafe key the palette also answers typed sentences.",
   ),
   "strings.ai.level.automate": str(
     "ai",
@@ -3744,7 +3801,7 @@ export const settingsSchema = {
   "strings.ai.level.automate_sub": str(
     "ai",
     "AI level card: automate, body",
-    "Everything: routing into Groups, Briefs in the background, Workflows with their approvals.",
+    "Everything: routing into Groups and Sections you describe in your own words, Briefs in the background, custom actions, Workflows with their approvals. Sorting runs on TypeSafe when its key exists, on the language model otherwise.",
   ),
   "strings.ai.level.change_note": str(
     "ai",
@@ -3755,7 +3812,41 @@ export const settingsSchema = {
   "strings.ai.level.runtime_intro": str(
     "ai",
     "Runtime step intro",
-    "The assistant needs somewhere to run: a command-line agent already on this machine, or a provider key. Pick one and you are set.",
+    "monday needs somewhere to run. A TypeSafe key sorts and judges for a fraction of a cent; a language model writes and plans; both is everything. Any of them can be added later under Settings, AI and agent.",
+  ),
+  "strings.ai.level.runtime.typesafe": str("ai", "Runtime card: TypeSafe", "TypeSafe"),
+  "strings.ai.level.runtime.typesafe_sub": str(
+    "ai",
+    "Runtime card: TypeSafe, body",
+    "Paste a TypeSafe key. Sorting into Groups and Sections, action chips, the brief policy and the palette's typed sentences run on it for a fraction of a cent. No conversation.",
+  ),
+  "strings.ai.level.runtime.llm": str("ai", "Runtime card: language model", "A language model"),
+  "strings.ai.level.runtime.llm_sub": str(
+    "ai",
+    "Runtime card: language model, body",
+    "An Anthropic, Gemini, OpenAI, Kimi or OpenRouter key, or Claude Code, Codex or OpenCode found on this computer. The composer, Briefs and Workflows.",
+  ),
+  "strings.ai.level.runtime.both": str("ai", "Runtime card: both", "Both"),
+  "strings.ai.level.runtime.both_sub": str(
+    "ai",
+    "Runtime card: both, body",
+    "TypeSafe for the sorting, a language model for the writing. Everything monday can do.",
+  ),
+  "strings.ai.level.runtime.recommended": str("ai", "Runtime card: recommended", "Recommended"),
+  "strings.ai.level.runtime.typesafe_intro": str(
+    "ai",
+    "Runtime step: TypeSafe key intro",
+    "The key is checked against TypeSafe before it is saved, kept in this device's keychain, and shared with the server when the switch is on so sorting runs on arrival while this device is off.",
+  ),
+  "strings.ai.level.runtime.composer_needs_llm": str(
+    "ai",
+    "Runtime step: TypeSafe alone at automate",
+    "TypeSafe alone sorts. The composer, Briefs and Workflows need a language model; add one now or later under Settings, AI and agent.",
+  ),
+  "strings.ai.level.runtime.assist_needs_llm": str(
+    "ai",
+    "Runtime step: TypeSafe alone at assist",
+    "Mail with an assistant needs a language model; TypeSafe alone cannot write.",
   ),
   "strings.ai.level.runtime_continue": str("ai", "Runtime step continue", "Continue"),
   "strings.ai.level.runtime_back": str("ai", "Runtime step back", "Back"),
@@ -3862,6 +3953,19 @@ export const settingsSchema = {
   "strings.meter.empty": str("ai", "Meter empty", "No Hosted calls this month."),
   "strings.meter.line": str("ai", "Meter line", "{task} on {provider}: {calls} calls, {cost}"),
   "strings.meter.total": str("ai", "Meter total", "Estimated {cost} this month"),
+  "strings.meter.judge.route": str("ai", "Meter line: routing judgments", "Routing judgments"),
+  "strings.meter.judge.section": str("ai", "Meter line: section judgments", "Section judgments"),
+  "strings.meter.judge.policy": str("ai", "Meter line: brief policy judgments", "Brief policy"),
+  "strings.meter.judge.chips": str("ai", "Meter line: action chips", "Action chips"),
+  "strings.meter.judge.intent": str("ai", "Meter line: typed sentences", "Typed sentences"),
+  "strings.meter.judge.guard": str("ai", "Meter line: guardrails", "Guardrails"),
+  "strings.meter.judge.verify": str("ai", "Meter line: brief verification", "Brief verification"),
+  "strings.meter.judge.rerank": str("ai", "Meter line: search re-ranking", "Search re-ranking"),
+  "strings.meter.judge.condition": str(
+    "ai",
+    "Meter line: workflow conditions",
+    "Workflow conditions",
+  ),
   "strings.brief.none": str("ai", "No Brief yet", "No Brief yet."),
   "strings.brief.computing": str("ai", "Brief in progress", "monday is reading this thread."),
   "strings.about.telemetry": str("about", "Telemetry line", "monday sends no telemetry."),
@@ -4214,6 +4318,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
   ai: [
     "Level",
     "Runtime",
+    "TypeSafe",
     "Anthropic",
     "Gemini",
     "OpenAI",

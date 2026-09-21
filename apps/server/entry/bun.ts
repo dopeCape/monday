@@ -127,7 +127,7 @@ async function main() {
     log,
     debug,
   });
-  const { auth, keys, jobs, mailstore, sync, push, accounts, calendar } = services;
+  const { auth, keys, jobs, mailstore, sync, push, accounts, calendar, judge } = services;
   await services.startAccounts();
   // LangGraph's checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after our migrations.
   const checkpointer = await createCheckpointer(databaseUrl, handle.db, mailstore);
@@ -181,6 +181,7 @@ async function main() {
     sync,
     changes: changeBus,
     checkpointer,
+    judge,
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     remoteAddress: (c) => {
