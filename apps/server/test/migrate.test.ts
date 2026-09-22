@@ -52,6 +52,7 @@ describe("migrations", () => {
       "provider_keys",
       "routing_decisions",
       "scheduled_sends",
+      "section_judgments",
       "servers",
       "session_events",
       "sessions",

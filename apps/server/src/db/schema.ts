@@ -40,7 +40,6 @@ import type {
   SendError,
   StepContext,
   StepKind,
-  Task,
   Tier,
   ToolCall,
   ToolPreview,
@@ -1227,5 +1226,35 @@ export const invites = pgTable(
     unique("invites_message").on(t.messageId),
     index("invites_thread_idx").on(t.threadId),
     index("invites_uid_idx").on(t.workspaceId, t.uid),
+  ],
+);
+
+/**
+ * A judged Section or custom action per Thread (slice 26, ADR 0012): the
+ * probability that the rule's statement holds, keyed by the rule id and the
+ * statement it was asked with, so a reworded statement is asked again and
+ * the old answer never decides. Headers only went into the state; the row
+ * holds a number. The client reads it through POST /sections/judgments and
+ * keeps the Thread's Section local from there.
+ */
+export const sectionJudgments = pgTable(
+  "section_judgments",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    /** The Section or custom action id. */
+    ruleId: text("rule_id").notNull(),
+    statement: text("statement").notNull(),
+    probability: real("probability").notNull(),
+    model: text("model").notNull(),
+    judgedAt: timestamp("judged_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.threadId, t.ruleId] }),
+    index("section_judgments_rule_idx").on(t.workspaceId, t.ruleId),
   ],
 );

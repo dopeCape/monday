@@ -11,6 +11,7 @@ export {
   rolesFor,
 } from "./hosted.ts";
 export type {
+  CustomActionValue,
   Effort,
   MeetingLink,
   ModelPrice,
@@ -31,6 +32,7 @@ export type {
 } from "./schema.ts";
 export {
   AI_LEVELS,
+  customActionShape,
   defaultSettings,
   groupsInSection,
   groupsInSectionAt,

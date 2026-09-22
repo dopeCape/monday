@@ -19,6 +19,7 @@ import type { IntegrationPost, IntegrationResult } from "../../../workflows/inte
 import type { McpCallResult } from "../../../workflows/mcp.ts";
 import type { GuardSeam } from "../../guard.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
+import type { OrganizeSeam } from "../../organize.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
@@ -84,6 +85,8 @@ export interface ToolExtensions {
   calendar?: CalendarSeam | undefined;
   /** The guardrail on Thread text entering a turn (slice 27); absent, text goes through unmarked. */
   guard?: GuardSeam | undefined;
+  /** Sections, Groups and custom actions from a sentence (slice 26). */
+  organize?: OrganizeSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });

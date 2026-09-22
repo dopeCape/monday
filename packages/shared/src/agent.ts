@@ -16,6 +16,7 @@ import type {
   Tier,
   ToolCall,
 } from "./domain.ts";
+import type { GroupInput } from "./routing/index.ts";
 import type { Actor, DraftContent, Intent, IntentArgs } from "./sync.ts";
 
 /* ------------------------------ Tiers ------------------------------ */
@@ -80,6 +81,19 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   rsvp: "leaves_mailbox",
   update_event: "leaves_mailbox",
   delete_event: "destructive",
+  // Organizing mail by talking (slice 26, docs/spec/agent-composer.md): Sections,
+  // Groups and custom actions from a sentence, every one reversible; Undo puts
+  // the previous Setting or Group back. Routing existing mail previews above
+  // the threshold.
+  create_section: "reversible",
+  update_section: "reversible",
+  delete_section: "reversible",
+  create_action: "reversible",
+  update_action: "reversible",
+  delete_action: "reversible",
+  create_group: "reversible",
+  update_group: "reversible",
+  organize_existing: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -162,7 +176,14 @@ export type UndoRecord =
       kind: "voice";
       workspaceId: Id;
       previous: { description: string; excerpts: string[]; enabled: boolean };
-    };
+    }
+  /** A Group the organization tools made or changed (slice 26): null previous means it was created and Undo deletes it. */
+  | { kind: "group"; groupId: Id; previous: GroupInput | null }
+  /**
+   * Existing mail organized into a new Group or Section (slice 26): the moves
+   * to put back, and the Section whose cached judgments Undo forgets.
+   */
+  | { kind: "organize"; intents: (IntentArgs & { threadId: Id })[]; sectionId: string | null };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

@@ -8,7 +8,10 @@
 // newsletter, automated, urgency): when the Thread has been judged those
 // decide in place of the header heuristics they stand in for, and a Thread
 // not yet judged falls back to the header conditions, so the stream is right
-// before the judge answers and better after.
+// before the judge answers and better after. Since slice 26 a rule may also
+// carry its own `judge` statement, a Noul the Judge answers per Thread through
+// the Server's section_judgments cache; it decides last, after `when` and the
+// arrival Judgments have let the Thread through (see sectionRuleHolds).
 
 import type { GroupId, Section, Thread } from "../domain.ts";
 import type { ThreadJudgments } from "../judge.ts";
@@ -71,12 +74,31 @@ export interface SectionWhen extends JudgedWhen {
   ungrouped?: boolean | undefined;
 }
 
+/** Where a Section shows: as a heading in the stream, as an entry in the nav, or both (CONTEXT.md "Section rule"). */
+export type SectionPlacement = "stream" | "nav" | "both";
+
+/** Who made a Section: the user or the Agent from a sentence, or monday's shipped defaults. */
+export type SectionCreatedBy = "user" | "agent" | "shipped";
+
 /** One Section rule as the `sections.rules` Setting stores it (the schema's sectionRuleShape). */
 export interface SectionRuleSetting {
   id: Section;
   when: SectionWhen;
-  /** A sentence for the `section` Task when the conditions are not enough; empty means model-free. */
+  /** The heading and nav label; absent, the strings.section.<id> Setting or the id names it. */
+  name?: string | undefined;
+  /** The user's own words for the Section ("invoices I still owe"). */
   sentence?: string | undefined;
+  /**
+   * A Noul statement the Section holds when the deterministic conditions do
+   * not decide alone (ADR 0012): asked per Thread through the Judge and
+   * cached. Absent means the conditions decide by themselves.
+   */
+  judge?: string | undefined;
+  /** Default `stream`. */
+  placement?: SectionPlacement | undefined;
+  /** A position among rules not listed in `sections.order`; lower first. */
+  order?: number | undefined;
+  createdBy?: SectionCreatedBy | undefined;
   hidden?: boolean | undefined;
 }
 
@@ -86,6 +108,9 @@ export type SectionJudgments = Pick<
   "needsReply" | "waitingOnOthers" | "newsletter" | "automated" | "urgency"
 >;
 
+/** The probability, per Section id, that a Thread holds the Section's judge statement. */
+export type SectionJudged = Readonly<Record<Section, number>>;
+
 /** What the evaluator knows about a Thread beyond its header row. */
 export interface SectionFacts {
   /** The address of the newest Message's sender, lowercased, or null when the Cache has no Messages. */
@@ -94,21 +119,32 @@ export interface SectionFacts {
   owner: string;
   /** Group id to name, so a rule may name a Group either way. */
   groupNames?: Readonly<Record<GroupId, string>>;
+  // Two kinds of judged facts, from two slices, read at two points of the
+  // evaluation. `judgments` (slice 25) are the Thread's arrival Judgments
+  // from `thread_judgments`: the `_at_least` and `_at_most` bounds in `when`
+  // read them, at no extra request. `judged` (slice 26) are the answers to
+  // each rule's own `judge` statement, from the Server's `section_judgments`
+  // cache, keyed by Section id; `sectionRuleHolds` reads them after `when`
+  // has let the Thread through.
   /** The Thread's Judgments once the arrival request has run (slice 25); absent or null means not judged yet. */
   judgments?: SectionJudgments | null | undefined;
+  /** The judged answers for this Thread, by Section id (slice 26); a judged rule without one does not decide. */
+  judged?: SectionJudged | undefined;
+  /** The probability at or above which a judge statement holds (the sections.judge_threshold Setting). */
+  judgeThreshold?: number | undefined;
 }
 
-/** The probability at or above which a shipped Section trusts a Judgment; the `sections.rules` Setting carries it. */
+/** The probability at or above which a shipped Section trusts an arrival Judgment; the `sections.rules` Setting carries it. */
 export const DEFAULT_JUDGED_THRESHOLD = 0.6;
 
 /**
- * The shipped defaults, matching the mock's four Sections in their order.
- * Each pairs a header rule (what decides before the judge answers) with a
- * judged condition (what decides once it has): Needs your reply is unread
- * mail someone else wrote last, or a Thread judged to need a reply; Waiting
- * is an ongoing exchange someone else wrote last, or one judged waiting;
- * Newsletters is list mail, or a Thread judged a newsletter; For your
- * information is the rest.
+ * The shipped defaults, matching the mock's four Sections in their order:
+ * rows like any other, placed in the stream. Each pairs a header rule (what
+ * decides before the judge answers) with a judged condition (what decides
+ * once it has): Needs your reply is unread mail someone else wrote last, or
+ * a Thread judged to need a reply; Waiting is an ongoing exchange someone
+ * else wrote last, or one judged waiting; Newsletters is list mail, or a
+ * Thread judged a newsletter; For your information is the rest.
  */
 export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
   {
@@ -119,6 +155,8 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
       bulk: false,
       needs_reply_at_least: DEFAULT_JUDGED_THRESHOLD,
     },
+    placement: "stream",
+    createdBy: "shipped",
   },
   {
     id: "waiting",
@@ -128,10 +166,84 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
       bulk: false,
       waiting_at_least: DEFAULT_JUDGED_THRESHOLD,
     },
+    placement: "stream",
+    createdBy: "shipped",
   },
-  { id: "newsletters", when: { bulk: true, newsletter_at_least: DEFAULT_JUDGED_THRESHOLD } },
-  { id: "fyi", when: { bulk: false, newsletter_at_most: DEFAULT_JUDGED_THRESHOLD } },
+  {
+    id: "newsletters",
+    when: { bulk: true, newsletter_at_least: DEFAULT_JUDGED_THRESHOLD },
+    placement: "stream",
+    createdBy: "shipped",
+  },
+  {
+    id: "fyi",
+    when: { bulk: false, newsletter_at_most: DEFAULT_JUDGED_THRESHOLD },
+    placement: "stream",
+    createdBy: "shipped",
+  },
 ];
+
+/** The judge threshold when a caller passes none; the Setting sections.judge_threshold is the real default. */
+export const DEFAULT_SECTION_JUDGE_THRESHOLD = 0.7;
+
+/** Whether a Section shows as a heading in the stream. */
+export function sectionInStream(rule: SectionRuleSetting): boolean {
+  return (rule.placement ?? "stream") !== "nav";
+}
+
+/** Whether a Section shows as an entry in the nav. */
+export function sectionInNav(rule: SectionRuleSetting): boolean {
+  return rule.placement === "nav" || rule.placement === "both";
+}
+
+/**
+ * The rules in effect order: those in `order` first, in that order, then
+ * the rest by their `order` number (stable). A rule the Agent just appended
+ * to `sections.rules` therefore renders before `sections.order` names it.
+ */
+export function orderedSectionRules(
+  rules: readonly SectionRuleSetting[],
+  order: readonly Section[] = [],
+): SectionRuleSetting[] {
+  const byId = new Map(rules.map((r) => [r.id, r]));
+  const seen = new Set<Section>();
+  const out: SectionRuleSetting[] = [];
+  for (const id of order) {
+    const r = byId.get(id);
+    if (r && !seen.has(id)) {
+      out.push(r);
+      seen.add(id);
+    }
+  }
+  const rank = (r: SectionRuleSetting) => r.order ?? Number.MAX_SAFE_INTEGER;
+  const rest = rules
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => !seen.has(r.id))
+    .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
+    .map(({ r }) => r);
+  return [...out, ...rest];
+}
+
+/** A Section's label: its own name, else the caller's string Setting, else the id in words ("needs-reply" is "Needs reply"). */
+export function sectionLabel(rule: SectionRuleSetting, fromStrings?: string | undefined): string {
+  if (rule.name?.trim()) return rule.name.trim();
+  if (fromStrings) return fromStrings;
+  const words = rule.id.replace(/[-_]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** A Section id from a name: lowercase words joined by dashes, never one of `taken`. */
+export function sectionIdFor(name: string, taken: readonly Section[] = []): Section {
+  const base =
+    name
+      .trim()
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9]+/g, "-")
+      .replaceAll(/^-+|-+$/g, "") || "section";
+  let id = base;
+  for (let n = 2; taken.includes(id); n++) id = `${base}-${n}`;
+  return id;
+}
 
 const lower = (s: string) => s.trim().toLowerCase();
 
@@ -190,10 +302,32 @@ export function sectionMatches(when: SectionWhen, thread: Thread, facts: Section
 }
 
 /**
- * The Section a Thread belongs to: the first rule, in `order`, whose
- * conditions hold. Rules not in `order` come after it; hidden rules still
- * claim their Threads (a hidden Section is not rendered, its Threads are not
- * shown elsewhere). Null when no rule matches.
+ * Whether one rule claims a Thread, in this order: the deterministic `when`
+ * conditions, then the judged bounds in `when` read from the arrival
+ * Judgments when the Thread has them (`sectionMatches` does both), then the
+ * rule's own `judge` statement when the Section cache has an answer, which
+ * must be at or above the threshold. A judged rule with no answer yet does
+ * not decide, so the Thread falls through to the next rule until the Judge
+ * has spoken.
+ */
+export function sectionRuleHolds(
+  rule: SectionRuleSetting,
+  thread: Thread,
+  facts: SectionFacts,
+): boolean {
+  if (!sectionMatches(rule.when, thread, facts)) return false;
+  if (!rule.judge?.trim()) return true;
+  const p = facts.judged?.[rule.id];
+  if (p === undefined) return false;
+  return p >= (facts.judgeThreshold ?? DEFAULT_SECTION_JUDGE_THRESHOLD);
+}
+
+/**
+ * The Section a Thread belongs to: the first rule, in `order`, that holds.
+ * Rules not in `order` come after it; hidden rules still claim their
+ * Threads (a hidden Section is not rendered, its Threads are not shown
+ * elsewhere), and so does a Section placed only in the nav. Null when no
+ * rule matches.
  */
 export function sectionOf(
   thread: Thread,
@@ -201,17 +335,31 @@ export function sectionOf(
   rules: readonly SectionRuleSetting[],
   order: readonly Section[] = [],
 ): Section | null {
-  const byId = new Map(rules.map((r) => [r.id, r]));
-  const seen = new Set<Section>();
-  const ordered: SectionRuleSetting[] = [];
-  for (const id of order) {
-    const r = byId.get(id);
-    if (r && !seen.has(id)) {
-      ordered.push(r);
-      seen.add(id);
-    }
+  for (const r of orderedSectionRules(rules, order)) {
+    if (sectionRuleHolds(r, thread, facts)) return r.id;
   }
-  for (const r of rules) if (!seen.has(r.id)) ordered.push(r);
-  for (const r of ordered) if (sectionMatches(r.when, thread, facts)) return r.id;
   return null;
+}
+
+/**
+ * The judged rules whose answer a Thread still needs: every judged rule the
+ * conditions let through, up to the first rule that decides the Thread on
+ * its own. Empty when the Thread's Section is settled without the Judge.
+ */
+export function sectionsToJudge(
+  thread: Thread,
+  facts: SectionFacts,
+  rules: readonly SectionRuleSetting[],
+  order: readonly Section[] = [],
+): Section[] {
+  const out: Section[] = [];
+  const threshold = facts.judgeThreshold ?? DEFAULT_SECTION_JUDGE_THRESHOLD;
+  for (const r of orderedSectionRules(rules, order)) {
+    if (!sectionMatches(r.when, thread, facts)) continue;
+    if (!r.judge?.trim()) break;
+    const p = facts.judged?.[r.id];
+    if (p === undefined) out.push(r.id);
+    else if (p >= threshold) break;
+  }
+  return out;
 }

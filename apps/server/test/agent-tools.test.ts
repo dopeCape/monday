@@ -141,6 +141,16 @@ describe("the tool catalog", () => {
       rsvp: "leaves_mailbox",
       update_event: "leaves_mailbox",
       delete_event: "destructive",
+      // Slice 26: Sections, Groups and custom actions from a sentence; every one reversible.
+      create_section: "reversible",
+      update_section: "reversible",
+      delete_section: "reversible",
+      create_action: "reversible",
+      update_action: "reversible",
+      delete_action: "reversible",
+      create_group: "reversible",
+      update_group: "reversible",
+      organize_existing: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

@@ -17,7 +17,7 @@ import type {
   ThreadSummary,
   ToolHost,
 } from "@monday/shared";
-import { isSettingKey } from "@monday/shared";
+import { isSettingKey, orderedSectionRules, sectionLabel } from "@monday/shared";
 import type { Composer } from "../screens/compose/composer.ts";
 import type { Inbox, UndoToken } from "../screens/inbox/actions.ts";
 import type { SearchModule } from "../search/index.ts";
@@ -174,9 +174,16 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
     },
 
     async listSections() {
-      return shell.settings["sections.order"].map((id) => {
-        const key = `strings.section.${id}`;
-        return { id, name: isSettingKey(key) ? String(shell.settings[key]) : id };
+      // Every rule in effect order (slice 26): a user-defined Section carries its own name.
+      return orderedSectionRules(
+        shell.settings["sections.rules"],
+        shell.settings["sections.order"],
+      ).map((r) => {
+        const key = `strings.section.${r.id}`;
+        return {
+          id: r.id,
+          name: sectionLabel(r, isSettingKey(key) ? String(shell.settings[key]) : undefined),
+        };
       });
     },
 

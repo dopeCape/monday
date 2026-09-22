@@ -69,7 +69,35 @@ export interface BriefProps {
   /** How many action chips to show. The mock shows three. */
   maxActions?: number | undefined;
   onAction?: ((action: BriefAction) => void) | undefined;
+  /** More chips for the same row, after the Brief's own: the custom actions the user defined (slice 26). */
+  extra?: ReactNode | undefined;
   className?: string | undefined;
+}
+
+/** The chip row under a Brief, or in its place: the model's chips first, the caller's after them. */
+function ChipRow({
+  actions,
+  onAction,
+  extra,
+}: {
+  actions: readonly BriefAction[];
+  onAction?: ((action: BriefAction) => void) | undefined;
+  extra?: ReactNode | undefined;
+}) {
+  if (actions.length === 0 && !extra) return null;
+  return (
+    <div className="brief-actions">
+      {actions.map((a) => {
+        const label = briefActionLabel(a);
+        return (
+          <Chip key={`${a.kind}:${label}`} onClick={() => onAction?.(a)}>
+            {label}
+          </Chip>
+        );
+      })}
+      {extra}
+    </div>
+  );
 }
 
 export function Brief({
@@ -78,6 +106,7 @@ export function Brief({
   updating,
   maxActions = 3,
   onAction,
+  extra,
   className,
 }: BriefProps) {
   const actions = brief.actions.slice(0, maxActions);
@@ -95,18 +124,7 @@ export function Brief({
           </li>
         ))}
       </ul>
-      {actions.length ? (
-        <div className="brief-actions">
-          {actions.map((a) => {
-            const label = briefActionLabel(a);
-            return (
-              <Chip key={label} onClick={() => onAction?.(a)}>
-                {label}
-              </Chip>
-            );
-          })}
-        </div>
-      ) : null}
+      <ChipRow actions={actions} onAction={onAction} extra={extra} />
     </div>
   );
 }
@@ -115,28 +133,22 @@ export interface ActionChipsProps {
   /** The chips, likeliest first; the caller has already applied the threshold and the cap. */
   actions: readonly BriefAction[];
   onAction?: ((action: BriefAction) => void) | undefined;
+  /** More chips for the same row, after the judged ones (the custom actions, slice 26). */
+  extra?: ReactNode | undefined;
   className?: string | undefined;
 }
 
 /**
  * Action chips without a Brief (slice 25): what the Thread's Judgments say
  * the reader would do first, shown where the Brief will sit until one
- * arrives. Renders nothing for an empty list.
+ * arrives, with the caller's extra chips after them. Renders nothing when
+ * there is neither.
  */
-export function ActionChips({ actions, onAction, className }: ActionChipsProps) {
-  if (actions.length === 0) return null;
+export function ActionChips({ actions, onAction, extra, className }: ActionChipsProps) {
+  if (actions.length === 0 && !extra) return null;
   return (
     <div className={cx("brief chips", className)} data-testid="action-chips">
-      <div className="brief-actions">
-        {actions.map((a) => {
-          const label = briefActionLabel(a);
-          return (
-            <Chip key={`${a.kind}:${label}`} onClick={() => onAction?.(a)}>
-              {label}
-            </Chip>
-          );
-        })}
-      </div>
+      <ChipRow actions={actions} onAction={onAction} extra={extra} />
     </div>
   );
 }

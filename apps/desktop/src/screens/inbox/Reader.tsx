@@ -1,6 +1,11 @@
 // The reader: toolbar, title, Brief, the Messages with collapsed history
 // that expands on click, and the reply box. Toolbar actions go through
 // InboxActions via the callbacks so they get the same undo toasts as the list.
+// The chip row under the Brief is one row: the Brief's own chips when a
+// Brief exists, else the chips the Thread's Judgments suggest (slice 25),
+// then the custom actions (CONTEXT.md "Custom action", slice 26), each with
+// its Tier's affordance; the same custom actions render in the toolbar after
+// the built-in buttons.
 // Bodies are the Cache's (filled on open through the content routes);
 // attachments download through the opener; links open through it too.
 
@@ -10,11 +15,13 @@ import type {
   Message as MessageData,
   Tag,
   Thread,
+  Tier,
 } from "@monday/shared";
 import {
   ActionChips,
   Brief,
   Btn,
+  Chip,
   ColHead,
   Mark,
   Message,
@@ -26,6 +33,7 @@ import {
   ClockIcon,
   DotsThreeIcon,
   FolderSimpleIcon,
+  LightningIcon,
   StarIcon,
   TrashIcon,
   XIcon,
@@ -58,6 +66,15 @@ export interface ReaderStrings {
   attach: string;
   replyAll: string;
   forward: string;
+  /** The tooltip suffix on a custom action that asks before it runs. */
+  asksFirst: string;
+}
+
+/** A custom action as the reader shows it: its label and the Tier it renders with. */
+export interface ReaderAction {
+  id: string;
+  label: string;
+  tier: Tier;
 }
 
 export interface ReaderProps {
@@ -89,6 +106,10 @@ export interface ReaderProps {
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
   /** A Brief action chip was clicked; the screen runs it as a tool call (docs/spec/inbox.md, Briefs). */
   onBriefAction?: ((action: BriefAction) => void) | undefined;
+  /** The custom actions that apply to this Thread, in the toolbar after the built-in buttons and as chips. */
+  actions?: readonly ReaderAction[] | undefined;
+  /** A custom action was clicked; the screen runs it with its Tier. */
+  onAction?: ((actionId: string) => void) | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
@@ -122,6 +143,8 @@ export function Reader({
   onToggleRead,
   onReply,
   onBriefAction,
+  actions,
+  onAction,
   onOpenAttachment,
   onOpenLink,
   attachmentSrc,
@@ -148,6 +171,22 @@ export function Reader({
       : strings.messages.replace("{n}", String(thread.messageCount));
   const title = (label: string, key: string) => `${label} (${key})`;
   const recipient = last?.from.name ?? thread.participants[0]?.name ?? "";
+
+  // The custom actions as chips, after the model's in the same row, each with its Tier.
+  const customChips = actions?.length
+    ? actions.map((a) => (
+        <Chip
+          key={a.id}
+          className="custom-action"
+          data-action={a.id}
+          data-tier={a.tier}
+          title={a.tier === "always-ask" ? strings.asksFirst : undefined}
+          onClick={() => onAction?.(a.id)}
+        >
+          {a.label}
+        </Chip>
+      ))
+    : null;
 
   return (
     <section
@@ -178,6 +217,19 @@ export function Reader({
             <Btn icon title={title(strings.delete, keys.delete)} onClick={onDelete}>
               <TrashIcon />
             </Btn>
+            {actions?.length ? <span className="vr" /> : null}
+            {actions?.map((a) => (
+              <Btn
+                key={a.id}
+                sm
+                title={a.tier === "always-ask" ? `${a.label} (${strings.asksFirst})` : a.label}
+                data-action={a.id}
+                data-tier={a.tier}
+                onClick={() => onAction?.(a.id)}
+              >
+                <LightningIcon /> {a.label}
+              </Btn>
+            ))}
           </>
         }
       >
@@ -221,10 +273,11 @@ export function Reader({
               source={strings.briefSource}
               updating={strings.briefUpdating}
               onAction={onBriefAction}
+              extra={customChips}
             />
-          ) : chips?.length ? (
-            <ActionChips actions={chips} onAction={onBriefAction} />
-          ) : null}
+          ) : (
+            <ActionChips actions={chips ?? []} onAction={onBriefAction} extra={customChips} />
+          )}
           {banner}
           {messages.map((m, i) => (
             <Message

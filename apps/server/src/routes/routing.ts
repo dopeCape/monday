@@ -11,6 +11,8 @@
 //   POST   /threads/:id/route                    {workspace} -> {jobId}  enqueues the route Job (202)
 //   GET    /threads/:id/route                    ThreadRoute, or 404 when never routed
 //   POST   /threads/:id/classify                 {workspace} -> Scored  scores without moving, for the Agent
+//   POST   /sections/judgments                   {workspace, threads} -> {judgments}  the judged Sections and
+//                                                custom actions per Thread (slice 26): cached, plus the Judge for the rest
 
 import type { GroupInput, Predicate } from "@monday/shared";
 import { Hono } from "hono";
@@ -49,6 +51,11 @@ const decideBody = z.object({
 const rerunBody = z.object({
   workspace: z.string().min(1),
   recent: z.int().min(1).max(1000).optional(),
+});
+/** POST /sections/judgments (slice 26): the judged Sections and custom actions per Thread. */
+const judgmentsBody = z.object({
+  workspace: z.string().min(1),
+  threads: z.array(z.string().min(1)).min(1).max(500),
 });
 const candidate = z.object({ groupId: z.string().min(1), confidence: z.number().min(0).max(1) });
 const moveShape = z.object({
@@ -128,6 +135,15 @@ export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
   app.delete("/groups/:id", async (c) => {
     await routing.deleteGroup(c.req.param("id"));
     return c.body(null, 204);
+  });
+
+  // The judged Sections and custom actions per Thread (slice 26): cached
+  // answers, plus the Judge's for what was missing when it is available.
+  app.post("/sections/judgments", async (c) => {
+    const body = await parseBody(c, judgmentsBody);
+    if (!body.ok) return body.response;
+    const judgments = await intelligence.organize.judge(body.data.workspace, body.data.threads);
+    return c.json({ judgments });
   });
 
   app.get("/routing/decisions", async (c) => {

@@ -90,6 +90,13 @@ export type BriefRequestResult =
   | { jobId: Id; fresh?: undefined }
   | { fresh: true; jobId?: undefined };
 
+/** One Thread's judged Sections and custom actions, as POST /sections/judgments returns them (slice 26). */
+export interface SectionJudgmentView {
+  threadId: Id;
+  /** Probability per rule id: a Section's judge statement or a custom action's. */
+  rules: Record<string, number>;
+}
+
 /** One Message's header with attachments and body state, as GET /threads/:id/messages returns it. */
 export interface MessageHeaderResponse {
   id: Id;
@@ -523,6 +530,16 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           "/routing/rerun/apply",
           json("POST", { workspace: workspaceId, moves }),
         ),
+      /**
+       * The judged Sections and custom actions per Thread (slice 26): the
+       * cached answers, plus the Judge's for what was missing when it is
+       * available. Threads the conditions settle alone are left out.
+       */
+      sectionJudgments: (workspaceId: Id, threadIds: readonly Id[]) =>
+        request<{ judgments: SectionJudgmentView[] }>(
+          "/sections/judgments",
+          json("POST", { workspace: workspaceId, threads: threadIds }),
+        ).then((r) => r.judgments),
       /** Enqueues the route Job for one Thread. */
       route: (workspaceId: Id, threadId: Id) =>
         request<{ jobId: Id }>(

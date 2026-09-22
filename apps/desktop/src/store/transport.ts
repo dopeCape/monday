@@ -75,6 +75,15 @@ export interface ContentTransport {
    * no key for the brief Task.
    */
   requestBrief(workspaceId: Id, threadId: Id, trigger: BriefTrigger): Promise<BriefRequestResult>;
+  /**
+   * The judged Sections and custom actions for Threads the rules could not
+   * settle alone (slice 26): cached answers, plus the Judge's for what was
+   * missing. Absent on a Server without the route.
+   */
+  sectionJudgments?(
+    workspaceId: Id,
+    threadIds: readonly Id[],
+  ): Promise<Array<{ threadId: Id; rules: Record<string, number> }>>;
   uploadBlob(
     workspaceId: Id,
     file: { name: string; mediaType: string; bytes: Uint8Array },
@@ -163,6 +172,8 @@ export function apiContent(api: Api): ContentTransport {
     attachment: (attachmentId) => api.attachments.bytes(attachmentId),
     requestBrief: (workspaceId, threadId, trigger) =>
       api.briefs.compute(workspaceId, threadId, trigger),
+    sectionJudgments: (workspaceId, threadIds) =>
+      api.routing.sectionJudgments(workspaceId, threadIds),
     async uploadBlob(workspaceId, file, onProgress) {
       const started = await api.blobs.start(workspaceId, {
         name: file.name,

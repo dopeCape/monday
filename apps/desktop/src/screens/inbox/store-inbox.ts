@@ -12,18 +12,26 @@
 // Settings over Thread state, Group and the Thread's Judgments from the Cache
 // (CONTEXT.md "Section rule"; slice 25): fast, local, and never waiting on
 // the Server. A Section the Server assigned (the section Task) is kept as is.
+// A rule with a judge statement (slice 26, ADR 0012) needs the Judge's answer
+// per Thread beyond the arrival Judgments: the Thread falls through to the
+// next rule until the answer is here, the missing answers are asked for in
+// one batched request through the content transport, and the stream is
+// re-sectioned when they land. The same answers say where a judged custom
+// action shows.
 
 import type {
   AiLevel,
   Brief,
+  CustomActionSetting,
   Group,
   Message,
+  SectionJudged,
   SectionRuleSetting,
   Tag,
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
-import { sectionOf } from "@monday/shared";
+import { sectionOf, sectionsToJudge } from "@monday/shared";
 import {
   ALL_THREADS_SQL,
   BRIEF_OF_THREAD_SQL,
@@ -52,6 +60,8 @@ type Reversal = Array<StoreIntent>;
 export interface StoreInbox extends Inbox {
   /** Re-evaluates the Section rules over the cached rows, after the Settings change. */
   resection(): void;
+  /** The judged answers held for a Thread, by Section or custom action id; empty when none yet. */
+  judged(threadId: string): SectionJudged;
   close(): void;
 }
 
@@ -63,6 +73,12 @@ export interface SectionSource {
   owner: string;
   /** Group id to name, so a rule may name a Group either way. */
   groupNames?: (() => Readonly<Record<string, string>>) | undefined;
+  /** The sections.judge_threshold Setting, read when rows arrive. */
+  judgeThreshold?: (() => number) | undefined;
+  /** The custom actions (actions.custom), so judged ones are asked for with the Sections. */
+  actions?: (() => readonly CustomActionSetting[]) | undefined;
+  /** How many Threads one request judges (sections.judge_batch). */
+  judgeBatch?: (() => number) | undefined;
 }
 
 export interface StoreInboxOptions {
@@ -201,22 +217,96 @@ export async function createStoreInbox(
     setUnavailable(threadId, why);
   };
 
-  /** The Section a row lands in: the Server's when it set one, else the rules over the row and its Judgments. */
+  /** The judged answers per Thread, filled through the transport; the Server keeps them too. */
+  const judgedById = new Map<string, Record<string, number>>();
+  /** Threads whose judged rules have no answer yet, waiting for the next request. */
+  const toJudge = new Set<string>();
+  /** Threads asked for and not answered, so a Thread is never asked twice in flight. */
+  const asking = new Set<string>();
+  /** Threads the Server had no answer for (the Judge was away): not asked again until the rules change. */
+  const unanswered = new Set<string>();
+  let judgeTimer: ReturnType<typeof setTimeout> | null = null;
+  const EMPTY_JUDGED: SectionJudged = Object.freeze({});
+
+  /** The facts a rule reads: the row, the arrival Judgments the Cache holds (slice 25), the judged answers (slice 26). */
+  const factsFor = (entry: ReturnType<typeof rowToCachedThread>, rules: SectionSource) => ({
+    lastSender: entry.lastSender,
+    owner: rules.owner,
+    ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
+    judgments: entry.judgments,
+    judged: judgedById.get(entry.thread.id),
+    ...(rules.judgeThreshold ? { judgeThreshold: rules.judgeThreshold() } : {}),
+  });
+
+  /** Whether any custom action with a judge statement lacks an answer for a Thread. */
+  const actionsToJudge = (threadId: string): boolean => {
+    const actions = options.sections?.actions?.() ?? [];
+    const have = judgedById.get(threadId);
+    return actions.some((a) => a.on.judge?.trim() && have?.[a.id] === undefined);
+  };
+
+  /** The Section a row lands in: the Server's when it set one, else the rules over the row, its Judgments and the judged answers. */
   const sectioned = (entry: ReturnType<typeof rowToCachedThread>): Thread => {
     const rules = options.sections;
-    if (!rules || entry.thread.section !== null) return entry.thread;
-    const section = sectionOf(
-      entry.thread,
-      {
-        lastSender: entry.lastSender,
-        owner: rules.owner,
-        judgments: entry.judgments,
-        ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
-      },
-      rules.rules(),
-      rules.order(),
-    );
+    if (!rules) return entry.thread;
+    const facts = factsFor(entry, rules);
+    const ruleList = rules.rules();
+    const order = rules.order();
+    const queue = () => {
+      if (!unanswered.has(entry.thread.id)) toJudge.add(entry.thread.id);
+    };
+    // A Thread the Server sectioned keeps its Section; its judged actions are still asked for.
+    if (entry.thread.section !== null) {
+      if (actionsToJudge(entry.thread.id)) queue();
+      return entry.thread;
+    }
+    if (
+      sectionsToJudge(entry.thread, facts, ruleList, order).length > 0 ||
+      actionsToJudge(entry.thread.id)
+    ) {
+      queue();
+    }
+    const section = sectionOf(entry.thread, facts, ruleList, order);
     return section === null ? entry.thread : { ...entry.thread, section };
+  };
+
+  /** Asks the Server for the judged answers still missing, one batch at a time. Never throws. */
+  const askJudgments = async () => {
+    judgeTimer = null;
+    const content = options.content;
+    if (!content?.sectionJudgments || options.level?.() === "off") {
+      toJudge.clear();
+      return;
+    }
+    const batch = options.sections?.judgeBatch?.() ?? 25;
+    const ids = [...toJudge].filter((id) => !asking.has(id)).slice(0, batch);
+    for (const id of ids) {
+      toJudge.delete(id);
+      asking.add(id);
+    }
+    if (ids.length === 0) return;
+    try {
+      const answers = await content.sectionJudgments(store.workspaceId, ids);
+      const answered = new Set<string>();
+      for (const a of answers) {
+        judgedById.set(a.threadId, { ...(judgedById.get(a.threadId) ?? {}), ...a.rules });
+        answered.add(a.threadId);
+      }
+      // What did not come back (the Judge was away) is not asked again until the rules change.
+      for (const id of ids) if (!answered.has(id)) unanswered.add(id);
+      project(lastRows);
+    } catch (error) {
+      log(`judge sections: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      for (const id of ids) asking.delete(id);
+      // The rows may have queued more while the request ran.
+      for (const id of ids) toJudge.delete(id);
+      if (toJudge.size > 0) scheduleJudgments();
+    }
+  };
+  const scheduleJudgments = () => {
+    if (judgeTimer !== null || toJudge.size === 0) return;
+    judgeTimer = setTimeout(() => void askJudgments(), 0);
   };
 
   let lastRows: Record<string, unknown>[] = [];
@@ -242,6 +332,7 @@ export async function createStoreInbox(
       .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
       .map(({ thread }) => thread);
     for (const l of [...listeners]) l();
+    scheduleJudgments();
   };
 
   const live = store.live<Record<string, unknown>>(ALL_THREADS_SQL);
@@ -396,6 +487,11 @@ export async function createStoreInbox(
         reverse: { kind: "move", threadId: t.id, group: t.group, subgroup: t.subgroup },
       })),
     delete: (ids) => act(ids, flip("delete", "undelete")),
+    setTags: (ids, tagIds) =>
+      act(ids, (t) => ({
+        intent: { kind: "tags", threadId: t.id, tags: [...tagIds] },
+        reverse: { kind: "tags", threadId: t.id, tags: [...t.tags] },
+      })),
     async undo(token) {
       const reversal = undos.get(token);
       if (!reversal) return;
@@ -403,9 +499,14 @@ export async function createStoreInbox(
       for (const intent of reversal) await store.intent(intent);
     },
     resection() {
+      // Reworded rules may need new answers; the Server re-asks only for a changed statement.
+      unanswered.clear();
       project(lastRows);
     },
+    judged: (threadId) => judgedById.get(threadId) ?? EMPTY_JUDGED,
     close() {
+      if (judgeTimer !== null) clearTimeout(judgeTimer);
+      judgeTimer = null;
       live.close();
       groupsLive.close();
       tagsLive.close();

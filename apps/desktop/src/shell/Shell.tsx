@@ -299,7 +299,25 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       setHostKind(p.isTauri ? "tauri" : "browser");
       // The browser dev server is the design fixture, whose world has the assistant
       // everywhere: its Workspace's saved Settings say the full AI level.
-      if (!p.isTauri) setStored((s) => ({ "ai.level": "automate", ...s }));
+      if (!p.isTauri) {
+        setStored((s) => ({
+          "ai.level": "automate",
+          // The mock's nav shows one Section the user placed there (design/js/data.js).
+          "sections.rules": [
+            ...defaultSettings()["sections.rules"],
+            {
+              id: "reading",
+              name: "Reading",
+              sentence: "Newsletters I have read and want to come back to",
+              when: { bulk: true, unread: false },
+              placement: "nav",
+              createdBy: "user",
+            },
+          ],
+          "sections.order": [...defaultSettings()["sections.order"], "reading"],
+          ...s,
+        }));
+      }
       const first = await p.readConfig();
       if (!alive) return;
       setConfig((last) => parseFile(first, last));
