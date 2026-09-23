@@ -3,8 +3,8 @@
 //   GET /threads?workspace=&section=&group=&limit=&cursor=   header projection, no decryption
 //   GET /threads/:id/subject                                  {subject}
 //   GET /threads/:id/messages                                 {messages: [header + attachments + bodyState]}
-//   GET /messages/:id/body                                    {text, html, snippet, display: {html, quoted, blockedImages}}
-//   GET /messages/bodies?workspace=&after=&before=&limit=     decrypted bodies by date range, newest first (423 locked)
+//   GET /messages/:id/body?images=                            {text, html, snippet, bodyState, display: {html, quoted, blockedImages}}
+//   GET /messages/bodies?workspace=&after=&before=&limit=     fetched bodies by date range, newest first, html sanitised (423 locked)
 //   GET /search/headers?workspace=&q=&limit=                  the headers-only index (ADR 0011), no decryption
 //   GET /attachments/:id                                      the bytes, with name and media type
 // Write intents, the ones the Outbox replays (ADR 0005). Each body carries
@@ -93,11 +93,20 @@ export interface MailRouteOptions {
   placement?: (
     threadId: string,
   ) => Promise<{ group: string | null; subgroup: string | null } | null>;
+  /** The reader.load_remote_images Setting, for a body asked for without ?images. */
+  remoteImages?: () => Promise<boolean>;
   log?: (message: string) => void;
 }
 
 export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+
+  /** ?images=1 or 0 when the client says; the reader.load_remote_images Setting otherwise. */
+  const remoteImages = async (query: string | undefined): Promise<boolean> => {
+    if (query === "1") return true;
+    if (query === "0") return false;
+    return (await options.remoteImages?.().catch(() => false)) ?? false;
+  };
 
   for (const kind of SIMPLE_INTENTS) {
     app.post(`/threads/:id/${kind}`, async (c) => {
@@ -179,13 +188,24 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
       return c.json({ error: "invalid_query", issues: parsed.error.issues }, 400);
     }
     const q = parsed.data;
-    return c.json(
-      await mailstore.listBodies(q.workspace, {
-        after: q.after ?? null,
-        before: q.before ?? null,
-        limit: q.limit,
-      }),
-    );
+    const page = await mailstore.listBodies(q.workspace, {
+      after: q.after ?? null,
+      before: q.before ?? null,
+      limit: q.limit,
+    });
+    // A body the sync has not fetched is not a body: it stays out, so the
+    // Cache asks again later instead of keeping an empty one for good. What
+    // goes out is what the reader renders, sanitised like the single route.
+    const states = await options.bodyStates?.(page.bodies.map((b) => b.id));
+    const allowRemoteImages = await remoteImages(c.req.query("images"));
+    const bodies = [];
+    for (const b of page.bodies) {
+      if ((states?.get(b.id) ?? "fetched") !== "fetched") continue;
+      const header = await mailstore.findMessage(b.id);
+      const display = displayBody(b, header?.attachments ?? [], { allowRemoteImages });
+      bodies.push({ ...b, html: display.html });
+    }
+    return c.json({ ...page, bodies });
   });
 
   // The body as stored plus what the reader shows: sanitised HTML (or the
@@ -195,17 +215,26 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     const messageId = c.req.param("id");
     // A body the sync has not fetched yet is fetched on demand, so an open
     // Thread never waits for the pass to come around to it.
-    if (options.fetchBody && options.bodyStates) {
-      const state = (await options.bodyStates([messageId])).get(messageId);
-      if (state === "pending" || state === "deferred") {
-        await options.fetchBody(messageId).catch(() => {});
+    let bodyState: BodyState = "fetched";
+    if (options.bodyStates) {
+      bodyState = (await options.bodyStates([messageId])).get(messageId) ?? "fetched";
+      if ((bodyState === "pending" || bodyState === "deferred") && options.fetchBody) {
+        await options.fetchBody(messageId).catch((error) => {
+          options.log?.(
+            `body ${messageId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+        bodyState = (await options.bodyStates([messageId])).get(messageId) ?? "fetched";
       }
     }
     const body = await mailstore.readMessageBody(messageId);
     const header = await mailstore.findMessage(messageId);
-    const allowRemoteImages = c.req.query("images") === "1";
+    const allowRemoteImages = await remoteImages(c.req.query("images"));
+    // bodyState tells the Message's body from the empty stand-in a
+    // header-only sync leaves: a client caches only a fetched one.
     return c.json({
       ...body,
+      bodyState,
       display: displayBody(body, header?.attachments ?? [], { allowRemoteImages }),
     });
   });
