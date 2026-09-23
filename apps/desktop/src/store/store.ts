@@ -476,6 +476,12 @@ export function changeStatements(change: Change): Statement[] {
                   cc = excluded.cc, date = excluded.date, has_attachments = excluded.has_attachments`,
           params: [m.id, m.threadId, m.from, m.to, m.cc, m.date, m.hasAttachments],
         },
+        {
+          // A pre-warm that found no body yet marked the row tried; the Server's
+          // news about the Message (its body fetched, among others) lets it try again.
+          sql: "update messages set body_at = null where id = ? and body_text is null and body_at is not null",
+          params: [m.id],
+        },
       ];
     }
     case "label":
@@ -1366,7 +1372,10 @@ export async function createStore(options: StoreOptions): Promise<Store> {
           )
         ).map((r) => String(r.id)),
       );
-      const landing = bodies.filter((b) => known.has(b.id));
+      // A body the Server has not fetched yet is its empty stand-in, not a body: never cached.
+      const landing = bodies.filter(
+        (b) => known.has(b.id) && (b.bodyState === undefined || b.bodyState === "fetched"),
+      );
       await write(landing.flatMap((b) => bodyStatements(b, at)));
       if (landing.length > 0) await driver.exec(FTS_MERGE_SQL);
       return landing.length;

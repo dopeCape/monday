@@ -11,6 +11,7 @@
 // uses, and the platform through `conditions`.
 
 import type { NetworkInfo, PowerInfo } from "../platform/tauri.ts";
+import type { Statement } from "../store/driver.ts";
 import type { Store } from "../store/store.ts";
 import type { FetchBodies } from "./index.ts";
 
@@ -192,7 +193,7 @@ export function createPrewarm(options: PrewarmOptions): Prewarm {
 
     const windowStart = new Date(now().getTime() - s.windowDays * DAY_MS).toISOString();
     const [next] = await store.query<{ date: string }>(
-      "select date from messages where body_text is null and date >= ? and date > ? order by date desc limit 1",
+      "select date from messages where body_text is null and body_at is null and date >= ? and date > ? order by date desc limit 1",
       [windowStart, floor ?? ""],
     );
     if (!next) return finish({ kind: "done", evicted });
@@ -217,15 +218,29 @@ export function createPrewarm(options: PrewarmOptions): Prewarm {
       limit: s.batch,
     });
     const landed = await store.applyBodies(page.bodies, now().toISOString());
-    if (landed === 0 && page.bodies.length === 0) {
-      // The Server has nothing for the gap (a header-only Message); mark it so the loop moves on.
-      await store.write([
-        {
-          sql: "update messages set body_text = '', body_at = ? where body_text is null and date >= ? and date < ?",
-          params: [now().toISOString(), windowStart, before],
-        },
-      ]);
+    // A Message the Server has no body for yet (its sync has not fetched it)
+    // is marked tried, body_at without a body, so the loop moves on; the body
+    // itself stays missing, and the reader asks for it on open. A "message"
+    // change from the feed clears the mark, so a later pass tries again.
+    const notYet = page.bodies
+      .filter((b) => b.bodyState !== undefined && b.bodyState !== "fetched")
+      .map((b) => b.id);
+    const stamp = now().toISOString();
+    const marks: Statement[] = [];
+    if (notYet.length > 0) {
+      marks.push({
+        sql: `update messages set body_at = ? where body_text is null and id in (${notYet.map(() => "?").join(", ")})`,
+        params: [stamp, ...notYet],
+      });
     }
+    if (landed === 0 && page.bodies.length === 0) {
+      // The Server has nothing for the gap (a Message it does not hold); mark it so the loop moves on.
+      marks.push({
+        sql: "update messages set body_at = ? where body_text is null and body_at is null and date >= ? and date < ?",
+        params: [stamp, windowStart, before],
+      });
+    }
+    if (marks.length > 0) await store.write(marks);
     bytes = await bodyBytes(store);
     log(`pre-warm: ${landed} bodies landed, ${bytes} bytes held`);
     return finish({ kind: "fetched", landed, evicted });

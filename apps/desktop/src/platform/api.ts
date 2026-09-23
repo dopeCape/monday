@@ -123,6 +123,12 @@ export interface BodyResponse {
   text: string;
   html: string | null;
   snippet: string;
+  /**
+   * Whether this is the Message's body or the empty stand-in a header-only
+   * sync keeps (the Provider has not handed it over yet). Absent from older
+   * Servers, which never said; only a fetched body belongs in the Cache.
+   */
+  bodyState?: "pending" | "fetched" | "deferred";
   display: { html: string; quoted: boolean; blockedImages: number };
 }
 

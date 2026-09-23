@@ -193,17 +193,22 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
       before: q.before ?? null,
       limit: q.limit,
     });
-    // A body the sync has not fetched is not a body: it stays out, so the
-    // Cache asks again later instead of keeping an empty one for good. What
-    // goes out is what the reader renders, sanitised like the single route.
+    // A body the sync has not fetched is not a body: it goes out marked, so
+    // the Cache skips it and asks again later instead of keeping an empty
+    // one for good. What goes out is what the reader renders, sanitised like
+    // the single route.
     const states = await options.bodyStates?.(page.bodies.map((b) => b.id));
     const allowRemoteImages = await remoteImages(c.req.query("images"));
     const bodies = [];
     for (const b of page.bodies) {
-      if ((states?.get(b.id) ?? "fetched") !== "fetched") continue;
+      const bodyState = states?.get(b.id) ?? "fetched";
+      if (bodyState !== "fetched") {
+        bodies.push({ ...b, text: "", html: null, bodyState });
+        continue;
+      }
       const header = await mailstore.findMessage(b.id);
       const display = displayBody(b, header?.attachments ?? [], { allowRemoteImages });
-      bodies.push({ ...b, html: display.html });
+      bodies.push({ ...b, html: display.html, bodyState });
     }
     return c.json({ ...page, bodies });
   });

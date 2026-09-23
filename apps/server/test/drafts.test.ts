@@ -883,7 +883,7 @@ describe("drafts and scheduled sends", () => {
     expect(json.text).toBe("");
   });
 
-  test("GET /messages/bodies leaves out bodies the sync has not fetched and sends the reader's sanitised html", async () => {
+  test("GET /messages/bodies marks bodies the sync has not fetched and sends the reader's sanitised html", async () => {
     const pending = await headersOnly("bulk-pending", null, "Not yet.");
     const rich = await headersOnly(
       "bulk-rich",
@@ -895,11 +895,15 @@ describe("drafts and scheduled sends", () => {
     const res = await request(`/messages/bodies?workspace=${workspaceId}&limit=1000`);
     expect(res.status).toBe(200);
     const page = (await res.json()) as {
-      bodies: { id: string; html: string | null; text: string }[];
+      bodies: { id: string; html: string | null; text: string; bodyState: string }[];
     };
-    const ids = page.bodies.map((b) => b.id);
-    expect(ids).not.toContain(pending.messageId);
+    expect(page.bodies.find((b) => b.id === pending.messageId)).toMatchObject({
+      bodyState: "pending",
+      text: "",
+      html: null,
+    });
     const body = page.bodies.find((b) => b.id === rich.messageId);
+    expect(body?.bodyState).toBe("fetched");
     expect(body?.html).toBe(
       `<p>Rich <img data-src="https://cdn.example.com/a.png" data-blocked="" /></p>`,
     );

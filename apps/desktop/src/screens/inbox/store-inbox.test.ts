@@ -184,6 +184,60 @@ describe("storeInbox bodies", () => {
     stop();
     inbox.close();
   });
+
+  test("a body the Server has not fetched stays Loading, and paints when a pull brings it", async () => {
+    // The user's case: Gmail refused the body (quota) and the Server answered
+    // the header-only stand-in. The Cache used to keep that empty body, so the
+    // reader showed nothing forever and never asked again.
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { content: fake.content });
+    await fake.store.write([
+      {
+        sql: "update messages set body_text = null, body_html = null, body_at = null where thread_id = 'e1'",
+      },
+    ]);
+    fake.server.pendingBodies.add("m1c");
+    const stop = inbox.watchMessages("e1", () => {});
+    await inbox.openThread("e1");
+    await settled(
+      inbox,
+      () => inbox.messages("e1").find((m) => m.id === "m1a")?.bodyText !== undefined,
+    );
+    const waitingRow = inbox.messages("e1").find((m) => m.id === "m1c");
+    // Neither text nor html: the reader's Loading line.
+    expect(waitingRow?.bodyText).toBeUndefined();
+    expect(waitingRow?.bodyHtml).toBeUndefined();
+    expect(await fake.store.query("select body_text from messages where id = 'm1c'")).toEqual([
+      { body_text: null },
+    ]);
+    // The sync fetched it; the next pull (a wake, a change) asks again and the body lands.
+    fake.server.pendingBodies.delete("m1c");
+    await fake.store.sync();
+    await settled(
+      inbox,
+      () => inbox.messages("e1").find((m) => m.id === "m1c")?.bodyText !== undefined,
+    );
+    expect(inbox.messages("e1").find((m) => m.id === "m1c")?.bodyText).toContain("Aoife");
+    stop();
+    inbox.close();
+  });
+
+  test("an empty body an earlier build cached is not a body: the open clears it and asks again", async () => {
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { content: fake.content });
+    await fake.store.write([
+      {
+        sql: "update messages set body_text = '', body_html = null where thread_id = 'e1'",
+      },
+    ]);
+    const stop = inbox.watchMessages("e1", () => {});
+    await settled(inbox, () => inbox.messages("e1").length > 0);
+    expect(inbox.messages("e1").every((m) => m.bodyText === "")).toBe(true);
+    await inbox.openThread("e1");
+    await settled(inbox, () => inbox.messages("e1").every((m) => (m.bodyText ?? "") !== ""));
+    stop();
+    inbox.close();
+  });
 });
 
 describe("storeInbox Briefs (slice 13)", () => {

@@ -12,8 +12,15 @@ export interface MessageBodyRow {
   threadId: Id;
   date: IsoDate;
   text: string;
+  /** What the reader renders: the Server's sanitised display HTML, never the raw part. */
   html: string | null;
   snippet: string;
+  /**
+   * "fetched" for a real body. Anything else is the empty stand-in for a
+   * Message whose body the Server has not fetched from the Provider yet: the
+   * Cache skips it and asks again later. Absent from older Servers.
+   */
+  bodyState?: "pending" | "fetched" | "deferred";
 }
 
 /**
