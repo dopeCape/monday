@@ -54,6 +54,8 @@ export interface FirstSyncViewProps {
   eta: string | null;
   /** The Provider is pacing for quota. */
   pacing: boolean;
+  /** Older Inbox Messages the wait does not cover; they arrive after the app opens. */
+  later?: number | undefined;
   /** The reason the sync stopped, in plain words; null while it runs. */
   error: string | null;
   /** Retry was pressed and the Server has not answered yet. */
@@ -132,6 +134,11 @@ export function FirstSyncView(props: FirstSyncViewProps) {
               <Line key={line.phase} line={line} />
             ))}
           </div>
+          {props.later && props.later > 0 ? (
+            <p className="first-sync-note" data-note="later">
+              {fill(s["strings.first_sync.later"], { count: props.later.toLocaleString("en-US") })}
+            </p>
+          ) : null}
           {failed ? (
             <div className="first-sync-error" role="alert">
               <WarningCircleIcon />
@@ -330,6 +337,11 @@ export function FirstSyncGate({ account, children, onOpen, now = Date.now }: Fir
         lines={progress ? phaseLines(progress, tracker, wait, s) : []}
         eta={eta === null ? null : formatEta(eta, s)}
         pacing={progress?.pacing ?? false}
+        later={
+          progress?.headers.inboxTotal !== undefined && progress.headers.total !== null
+            ? progress.headers.inboxTotal - progress.headers.total
+            : undefined
+        }
         error={errorText(progress, unreachable, s)}
         retrying={retrying}
         leaving={stage === "leaving"}
