@@ -176,6 +176,8 @@ function MondayTool(props: ToolCallMessagePartProps) {
   // A call still running once the turn is not was stopped: no spinner, and it says so.
   const stopped = call.status === "running" && !running;
   const shown: ToolCall = stopped ? { ...call, status: "failed" } : call;
+  // A step that read something has no result line to show: the check says it is done.
+  const step = isStep(call);
   const onAction = (action: string) => {
     if (action === strings["strings.agent.approve"] || action === strings["strings.agent.apply"]) {
       actions.approve(call.id);
@@ -188,11 +190,15 @@ function MondayTool(props: ToolCallMessagePartProps) {
   return (
     <ToolCard
       call={shown}
-      className={
-        isStep(call) ? (stopped ? "step stopped" : "step") : stopped ? "stopped" : undefined
-      }
+      className={step ? (stopped ? "step stopped" : "step") : stopped ? "stopped" : undefined}
       title={cardTitle(call, strings)}
-      statusLabel={stopped ? strings["strings.agent.stopped"] : statusLabel(call, strings)}
+      statusLabel={
+        stopped
+          ? strings["strings.agent.stopped"]
+          : step && call.status === "done" && !call.result
+            ? ""
+            : statusLabel(call, strings)
+      }
       preview={preview ? <PreviewView preview={preview} strings={strings} now={now} /> : undefined}
       actions={stopped ? [] : cardActions(call, strings)}
       onAction={onAction}

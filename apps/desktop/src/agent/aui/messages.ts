@@ -47,7 +47,7 @@ function draftsOf(events: readonly TranscriptEvent[]): Draft[] {
     switch (event.kind) {
       case "user":
         agent = null;
-        drafts.push({ id: event.id, role: "user", sources: [event] });
+        drafts.push({ id: `u-${event.id}`, role: "user", sources: [event] });
         break;
       case "runtime":
         // The switch line starts the next runtime's answer.
@@ -60,6 +60,13 @@ function draftsOf(events: readonly TranscriptEvent[]): Draft[] {
       default:
         agentDraft(event).sources.push(event);
     }
+  }
+  // Assistant UI refuses two messages with one id; a transcript that repeats an event id stays renderable.
+  const seen = new Map<string, number>();
+  for (const draft of drafts) {
+    const n = seen.get(draft.id) ?? 0;
+    seen.set(draft.id, n + 1);
+    if (n > 0) draft.id = `${draft.id}~${n}`;
   }
   return drafts;
 }

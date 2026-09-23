@@ -1122,6 +1122,62 @@ button.msg {
 .agent-bar .kbd {
   opacity: 0.7;
 }
+/* The composer's bar (Assistant UI's composer): a textarea that grows to
+   ai.composer.max_rows, the mark and the round Send or Stop at its foot. */
+form.agent-bar {
+  align-items: flex-end;
+  height: auto;
+  min-height: var(--bar-h);
+  padding: calc((var(--bar-h) - 30px) / 2) calc((var(--bar-h) - 30px) / 2)
+    calc((var(--bar-h) - 30px) / 2) 14px;
+  transition:
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+form.agent-bar:focus-within {
+  border-color: color-mix(in srgb, var(--fg) 28%, var(--border-strong));
+}
+form.agent-bar :where(.mk) {
+  margin-block: 5px;
+}
+.agent-bar textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  resize: none;
+  font: inherit;
+  font-size: var(--fs-lg);
+  line-height: 22px;
+  color: var(--fg);
+  overflow-y: auto;
+}
+.agent-bar textarea::placeholder {
+  color: var(--fg-faint);
+}
+.agent-bar .send,
+.agent-bar .stop {
+  flex: none;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  animation: fade-in var(--t-fast) var(--ease);
+}
+.agent-bar .send:hover,
+.agent-bar .stop:hover {
+  background: color-mix(in srgb, var(--fg) 86%, var(--bg));
+  color: var(--bg);
+}
+.agent-bar .send:disabled {
+  opacity: 1;
+  background: var(--hover);
+  color: var(--fg-faint);
+}
+.agent-bar .stop i {
+  font-size: 12px;
+}
 .agent-panel {
   margin-bottom: 10px;
   max-height: min(600px, 64vh);
@@ -1189,13 +1245,29 @@ button.msg {
   outline-offset: 2px;
 }
 .agent-thread {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 18px var(--pad) 12px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
+}
+/* the jump to the newest turn, while the thread is scrolled up */
+.agent-latest {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  flex: none;
+  border-radius: 999px;
+  background: var(--overlay);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  animation: fade-in var(--t-fast) var(--ease);
+}
+.agent-latest:disabled {
+  display: none;
 }
 .agent-suggest {
   display: flex;
@@ -1213,6 +1285,7 @@ button.msg {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: var(--bg);
   border-right: 1px solid var(--border);
 }
@@ -1228,6 +1301,8 @@ button.msg {
 }
 .u {
   animation: fade-in var(--t-med) var(--ease);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   align-self: flex-end;
   max-width: 86%;
   padding: 9px 13px;
@@ -1240,11 +1315,13 @@ button.msg {
 .a {
   max-width: 96%;
   font-size: var(--fs-md);
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--fg);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .a p,
 .a .line {
@@ -1421,8 +1498,351 @@ button.msg {
   font-size: var(--fs-xs);
 }
 .agent-developer .warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--warning);
   animation: fade-in var(--t-fast) var(--ease);
+}
+
+/* ---- The Agent's answer as Markdown (Streamdown, styled by its data attributes) ---- */
+.agent-plain {
+  white-space: pre-wrap;
+}
+.agent-md > div {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agent-md :where(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+}
+.agent-md :where(h1, h2, h3, h4, h5, h6) {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.agent-md :where(h1, h2) {
+  font-size: var(--fs-lg);
+}
+.agent-md :where(ul, ol) {
+  padding-left: 20px;
+  list-style: disc;
+}
+.agent-md ol {
+  list-style: decimal;
+}
+.agent-md li + li {
+  margin-top: 3px;
+}
+.agent-md li > :where(ul, ol) {
+  margin-top: 3px;
+}
+.agent-md li::marker {
+  color: var(--fg-faint);
+}
+.agent-md :where(strong, b, [data-streamdown="strong"]) {
+  font-weight: 600;
+}
+.agent-md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color var(--t-fast);
+}
+.agent-md a:hover {
+  text-decoration-color: var(--accent);
+}
+.agent-md blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-muted);
+}
+.agent-md hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.agent-md :where(:not(pre) > code) {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--sunken);
+  border: 1px solid var(--border);
+}
+/* code blocks: the language in a header, Copy at its right */
+.agent-md [data-streamdown="code-block"] {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  overflow: hidden;
+}
+.agent-md [data-streamdown="code-block-header"] {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  border-bottom: 1px solid var(--border);
+}
+.agent-md [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+}
+.agent-md [data-streamdown="code-block-actions"] {
+  display: flex;
+  gap: 2px;
+}
+.agent-md [data-streamdown="code-block-body"] {
+  overflow: auto;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.65;
+  color: var(--fg);
+}
+.agent-md [data-streamdown="code-block-body"] :where(pre, code) {
+  margin: 0;
+  font: inherit;
+  background: none;
+  white-space: pre;
+}
+/* tables: bordered, a sunken header row, Copy in the header's corner on hover */
+.agent-md [data-streamdown="table-wrapper"] {
+  position: relative;
+}
+.agent-md [data-streamdown="table-wrapper"] > div:first-child {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  opacity: var(--table-controls, 0);
+  transition: opacity var(--t-fast);
+}
+.agent-md [data-streamdown="table-wrapper"]:is(:hover, :focus-within) {
+  --table-controls: 1;
+}
+.agent-md [data-streamdown="table-wrapper"] > div:last-child {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.agent-md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.agent-md :where(th, td) {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.agent-md th {
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: var(--sunken);
+  white-space: nowrap;
+}
+.agent-md tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* Streamdown's copy buttons: quiet icons that answer the hover */
+.agent-md :where([data-streamdown] button) {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  color: var(--fg-faint);
+  transition:
+    color var(--t-fast),
+    background var(--t-fast);
+}
+.agent-md :where([data-streamdown] button:hover) {
+  color: var(--fg);
+  background: var(--hover);
+}
+.agent-md :where([data-streamdown] button svg) {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---- A turn's read-only steps, folded into one line (Mosaic's tool group) ---- */
+.agent-steps {
+  display: flex;
+  flex-direction: column;
+  animation: fade-in var(--t-med) var(--ease);
+}
+.agent-steps .head {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 3px 8px 3px 4px;
+  margin-left: -4px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  text-align: left;
+  transition:
+    color var(--t-fast),
+    background var(--t-fast);
+}
+.agent-steps .head:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.agent-steps .head .caret {
+  font-size: 12px;
+  color: var(--fg-faint);
+  transition: transform var(--t-med) var(--ease);
+}
+.agent-steps[data-state="open"] .head .caret {
+  transform: rotate(90deg);
+}
+.agent-steps.active .head .caret {
+  transform: none;
+  animation: spin var(--t-spin) linear infinite;
+}
+.agent-steps .head .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-steps :where(.head .n) {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.agent-steps .body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--t-med) var(--ease);
+}
+.agent-steps[data-state="open"] .body {
+  grid-template-rows: 1fr;
+}
+.agent-steps .rows {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  margin-left: 5px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  opacity: 0;
+  transition:
+    opacity var(--t-med) var(--ease),
+    margin var(--t-med) var(--ease);
+}
+.agent-steps[data-state="open"] .rows {
+  margin-top: 4px;
+  opacity: 1;
+}
+/* a step: one row, the verb, what it read, the result */
+.tool.step {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "t d st";
+  align-items: baseline;
+  column-gap: 8px;
+  padding: 4px 4px 4px 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  animation: none;
+}
+.tool.step:hover {
+  background: var(--hover);
+}
+.tool.step .t {
+  grid-area: t;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+.tool.step :where(.d) {
+  grid-area: d;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.tool.step .st {
+  grid-area: st;
+}
+.tool.stopped .st {
+  color: var(--fg-faint);
+}
+
+/* "Working" before the first token and between cards; the steps' label while they run */
+.agent-working {
+  font-size: var(--fs-sm);
+  animation: fade-in var(--t-med) var(--ease);
+}
+.a .agent-working .label,
+.agent-steps.active .head .label {
+  color: transparent;
+  background:
+    linear-gradient(
+      90deg,
+      var(--fg-faint) 0%,
+      var(--fg-faint) 35%,
+      var(--fg) 50%,
+      var(--fg-faint) 65%,
+      var(--fg-faint) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer calc(var(--t-spin) * 1.8) linear infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+:root[data-transitions="off"] .a .agent-working .label,
+:root[data-transitions="off"] .agent-steps.active .head .label {
+  animation: none;
+  color: var(--fg-faint);
+}
+
+/* Copy under a finished answer */
+.agent-answer-acts {
+  display: flex;
+  gap: 2px;
+  margin: -6px 0 0 -6px;
+  animation: fade-in var(--t-fast) var(--ease);
+}
+.agent-answer-acts .btn {
+  color: var(--fg-faint);
+}
+.agent-answer-acts .btn:hover {
+  color: var(--fg);
+}
+.a .line.stopped {
+  color: var(--fg-faint);
 }
 .results {
   display: flex;
