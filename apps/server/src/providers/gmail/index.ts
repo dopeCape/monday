@@ -328,6 +328,10 @@ export class GmailSession implements Session {
     return this.client.auth;
   }
 
+  pacing(): boolean {
+    return this.client.quota.pacing?.() ?? false;
+  }
+
   capabilities(): ProviderCapabilities {
     return {
       push: this.pubsubTopic !== null,
@@ -355,9 +359,22 @@ export class GmailSession implements Session {
   async listMailboxes(): Promise<Mailbox[]> {
     this.labelCache = null;
     const all = await this.labels();
-    return all
+    const mailboxes = all
       .filter((l) => !NOT_MAILBOXES.has(l.id) && !l.id.startsWith("CATEGORY_"))
       .map((l) => mailboxOfLabel(l, all));
+    // labels.list carries no counts; the Inbox's total is one labels.get, for
+    // the first sync screen's "of N". Best effort: the list never fails on it.
+    const inbox = mailboxes.find((m) => m.role === "inbox");
+    if (inbox) {
+      try {
+        const detail = await this.client.request<{ messagesTotal?: number }>(
+          `labels/${encodeURIComponent(inbox.id)}`,
+          { cost: "labels.get" },
+        );
+        if (typeof detail?.messagesTotal === "number") inbox.totalMessages = detail.messagesTotal;
+      } catch {}
+    }
+    return mailboxes;
   }
 
   private async currentHistoryId(): Promise<string> {

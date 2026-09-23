@@ -5,6 +5,8 @@
 //   POST   /accounts/discover  {address}                       autoconfig ladder result
 //   POST   /accounts           {provider: jmap | imap, address, displayName?, auth, endpoint}
 //   DELETE /accounts/:id
+//   GET    /accounts/:id/sync                                  the first sync's progress
+//   POST   /accounts/:id/sync                                  clears the failure, syncs now
 
 import { Hono } from "hono";
 import { z } from "zod";
@@ -12,6 +14,7 @@ import type { AccountService } from "../accounts.ts";
 import type { AppEnv } from "../auth/middleware.ts";
 import type { Discovery, DiscoveryDeps } from "../providers/autoconfig.ts";
 import { discover } from "../providers/autoconfig.ts";
+import type { FirstSyncReader } from "../providers/first-sync.ts";
 import type { Credentials } from "../providers/types.ts";
 import { parseBody } from "./validate.ts";
 
@@ -55,6 +58,8 @@ export interface AccountRoutesOptions {
   accounts: AccountService;
   /** The autoconfig ladder's network; defaults to none, which answers "manual". */
   discovery?: () => Promise<DiscoveryDeps>;
+  /** The first sync screen's progress (docs/spec/onboarding.md, "First sync"); absent answers 404. */
+  firstSync?: FirstSyncReader;
 }
 
 export function accountRoutes(options: AccountRoutesOptions): Hono<AppEnv> {
@@ -97,6 +102,16 @@ export function accountRoutes(options: AccountRoutesOptions): Hono<AppEnv> {
       if (code === "unsupported") return c.json({ error: "unsupported", message }, 400);
       throw error;
     }
+  });
+
+  app.get("/accounts/:id/sync", async (c) => {
+    const progress = await options.firstSync?.read(c.req.param("id"));
+    return progress ? c.json({ progress }) : c.json({ error: "not_found" }, 404);
+  });
+
+  app.post("/accounts/:id/sync", async (c) => {
+    const ok = await options.firstSync?.retry(c.req.param("id"));
+    return ok ? c.body(null, 202) : c.json({ error: "not_found" }, 404);
   });
 
   app.delete("/accounts/:id", async (c) => {
