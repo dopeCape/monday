@@ -63,6 +63,8 @@ export interface StoreInbox extends Inbox {
   resection(): void;
   /** The judged answers held for a Thread, by Section or custom action id; empty when none yet. */
   judged(threadId: string): SectionJudged;
+  /** A Mail folder's Threads (Starred, Snoozed, Sent, Archive), from the same rows as the stream. */
+  folder(key: FolderKey): readonly Thread[];
   close(): void;
 }
 
