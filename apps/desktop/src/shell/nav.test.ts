@@ -1,10 +1,11 @@
 /// <reference types="bun-types" />
 // The navigation model: the workspace button names the owner's address with
 // its initials and the connection state, the folder labels come from Settings,
-// the counts come from the Inbox's unread Threads (Sub-groups roll up), the
-// rail lists Inbox then the top-level Groups with an icon from the
-// `routing.group_icons` Setting or a folder, and a Scheduled folder appears
-// only while a send is scheduled. Pure functions over the shapes the App holds.
+// the counts come from the Inbox's unread Threads (Sub-groups roll up) with
+// the Drafts and Snoozed totals beside their folders (none when empty), the
+// rail lists Inbox and the Mail folders then the top-level Groups with an
+// icon from the `routing.group_icons` Setting or a folder, and a Scheduled
+// folder appears only while a send is scheduled. Pure functions over the shapes the App holds.
 
 import { describe, expect, test } from "bun:test";
 import { defaultSettings, type Group, type Thread } from "@monday/shared";
@@ -123,7 +124,7 @@ describe("navModel", () => {
     ).toBe("Syncing");
   });
 
-  test("the folders, headings and tail read from Settings and the rail lists Inbox then the top-level Groups", () => {
+  test("the folders, headings and tail read from Settings and the rail lists Inbox, the folders, then the top-level Groups", () => {
     const nav = navModel({
       address: "tejas@genai-labs.io",
       status: "online",
@@ -144,10 +145,21 @@ describe("navModel", () => {
     expect(nav.labels.mail).toBe("Post");
     expect(nav.labels.settings).toBe("Settings");
     expect(nav.counts).toEqual({ inbox: 1, hiring: 1 });
-    expect(nav.rail.map((r) => r.key)).toEqual(["inbox", "hiring", "finance", "ops"]);
-    expect(nav.rail[1]?.icon).toBe(UsersThreeIcon);
+    expect(nav.rail.map((r) => r.key)).toEqual([
+      "inbox",
+      "starred",
+      "snoozed",
+      "drafts",
+      "sent",
+      "archive",
+      "hiring",
+      "finance",
+      "ops",
+    ]);
+    expect(nav.rail[0]?.title).toBe("Posteingang");
+    expect(nav.rail[6]?.icon).toBe(UsersThreeIcon);
     // A Group with no icon shows a folder in the rail, and none in the sidebar.
-    expect(nav.rail[3]?.icon).toBe(FolderSimpleIcon);
+    expect(nav.rail[8]?.icon).toBe(FolderSimpleIcon);
     expect(nav.groupIcon(groups[3] as Group)).toBeUndefined();
     expect(nav.railTail.map((r) => r.key)).toEqual([
       "calendar",
@@ -157,6 +169,17 @@ describe("navModel", () => {
     ]);
     expect(nav.calendar.label).toBe("Calendar");
     expect(nav.automation.map((a) => a.label)).toEqual(["Workflows", "Routing"]);
+  });
+
+  test("Drafts and Snoozed carry their totals; an empty folder shows no count, not zero", () => {
+    const base = { address: "a@b.c", status: "online" as const, threads: [], groups: [], strings };
+    expect(navModel({ ...base, folderCounts: { drafts: 3, snoozed: 2 } }).counts).toEqual({
+      drafts: 3,
+      snoozed: 2,
+    });
+    const empty = navModel({ ...base, folderCounts: { drafts: 0, snoozed: 0 } }).counts;
+    expect("drafts" in empty).toBe(false);
+    expect("snoozed" in empty).toBe(false);
   });
 
   test("a Scheduled folder appears only while a send is scheduled", () => {

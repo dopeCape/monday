@@ -21,6 +21,7 @@ import {
   threads as fixtureThreads,
   messagesOf,
 } from "@monday/ui/fixtures";
+import { type FolderKey, folderThreads } from "./folders.ts";
 
 export type UndoToken = string;
 
@@ -52,6 +53,12 @@ export interface InboxSource {
   tags(): readonly Tag[];
   /** The judged answers held for a Thread (slice 26), by Section or custom action id; absent means none. */
   judged?(threadId: string): SectionJudged;
+  /**
+   * The Threads of a Mail folder (Starred, Snoozed, Sent, Archive), newest
+   * first, Snoozed soonest to wake first. Stable between changes; the same
+   * subscription as threads().
+   */
+  folder?(key: FolderKey): readonly Thread[];
   subscribe(listener: () => void): () => void;
 }
 
@@ -100,6 +107,8 @@ interface Row {
 export interface FixtureInboxOptions {
   groups?: readonly Group[] | undefined;
   tags?: readonly Tag[] | undefined;
+  /** The owner's address, for Sent. Defaults to the fixture Workspace's. */
+  owner?: string | undefined;
 }
 
 export function fixtureInbox(
@@ -114,9 +123,12 @@ export function fixtureInbox(
   const undos = new Map<UndoToken, Row[]>();
   let tokenSeq = 0;
   let cache: readonly Thread[] | null = null;
+  const folderCache = new Map<FolderKey, readonly Thread[]>();
+  const owner = options.owner ?? "tejas@genai-labs.io";
 
   const emit = () => {
     cache = null;
+    folderCache.clear();
     for (const l of listeners) l();
   };
 
@@ -174,6 +186,21 @@ export function fixtureInbox(
       return cache;
     },
     thread: (id) => rows.get(id)?.thread,
+    folder(key) {
+      let list = folderCache.get(key);
+      if (!list) {
+        const entries = [...rows.values()]
+          .sort((a, b) => b.thread.lastActivity.localeCompare(a.thread.lastActivity))
+          .map((r) => ({
+            thread: r.thread,
+            deleted: r.deleted,
+            lastSender: messagesOf(r.thread.id).at(-1)?.from.email ?? null,
+          }));
+        list = folderThreads(key, entries, owner);
+        folderCache.set(key, list);
+      }
+      return list;
+    },
     groups: () => groupList,
     tags: () => tagList,
     subscribe(listener) {

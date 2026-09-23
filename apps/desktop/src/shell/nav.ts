@@ -2,7 +2,8 @@
 // Settings rather than from the design fixtures: the workspace button with the
 // owner's address and its initials, the Mail folders with their labels from
 // Settings, the unread counts per folder and per Group from the Inbox seam,
-// the rail's items (Inbox, then the top-level Groups) and its tail, and every
+// the rail's items (Inbox, the Mail folders, then the top-level Groups) and
+// its tail, the Drafts and Snoozed totals beside their folders, and every
 // Section placed in the nav with its count (docs/spec/inbox.md: a Section the
 // Agent created a moment ago appears without a reload, because the model is
 // recomputed from the Settings it came in with). Pure, so the App composes it
@@ -98,6 +99,11 @@ export interface NavInput {
   groups: readonly Group[];
   /** Icons for top-level Groups, when the caller has some; the rail falls back to a folder. */
   groupIcon?: ((group: Group) => IconComponent | undefined) | undefined;
+  /**
+   * How many Drafts are open and how many Threads are snoozed: the nav shows
+   * them beside Drafts and Snoozed, and nothing when there are none.
+   */
+  folderCounts?: { drafts?: number | undefined; snoozed?: number | undefined } | undefined;
   /** Sends still scheduled; a Scheduled folder appears while there are any. */
   scheduled?: { count: number; label: string } | undefined;
   /** The Section rules (sections.rules); those placed in the nav are listed under Groups. */
@@ -192,6 +198,14 @@ export function navSections(
     });
 }
 
+/** The Drafts and Snoozed totals as nav counts; an empty folder shows no count, not zero. */
+function totals(folderCounts: NavInput["folderCounts"]): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (folderCounts?.drafts) out.drafts = folderCounts.drafts;
+  if (folderCounts?.snoozed) out.snoozed = folderCounts.snoozed;
+  return out;
+}
+
 export function navModel(input: NavInput): NavModel {
   const s = input.strings;
   const status =
@@ -208,6 +222,12 @@ export function navModel(input: NavInput): NavModel {
     { key: "sent", label: s["strings.nav.sent"], icon: PaperPlaneTiltIcon },
     { key: "archive", label: s["strings.nav.archive"], icon: ArchiveIcon },
   ];
+  // The rail carries the same folders, as icons, after the Inbox.
+  const railFolders: RailItem[] = folders.map((f) => ({
+    key: f.key,
+    icon: f.icon ?? TrayIcon,
+    title: f.label,
+  }));
   if (input.scheduled && input.scheduled.count > 0) {
     folders.push({
       key: "scheduled",
@@ -237,13 +257,16 @@ export function navModel(input: NavInput): NavModel {
       { key: "routing", label: s["strings.nav.routing"], icon: GitBranchIcon },
     ],
     sections,
-    counts: unreadCounts(
-      input.threads,
-      input.groups,
-      sections.map((item) => item.key.slice("section:".length)),
-    ),
+    counts: {
+      ...unreadCounts(
+        input.threads,
+        input.groups,
+        sections.map((item) => item.key.slice("section:".length)),
+      ),
+      ...totals(input.folderCounts),
+    },
     rail: [
-      { key: "inbox", icon: TrayIcon, title: s["strings.nav.inbox"] },
+      ...railFolders,
       ...top.map((g) => ({ key: g.id, icon: groupIcon(g) ?? FolderSimpleIcon, title: g.name })),
       ...sections.map((item) => ({ key: item.key, icon: StackIcon, title: item.label })),
     ],

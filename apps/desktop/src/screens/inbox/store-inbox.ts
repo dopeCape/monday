@@ -49,6 +49,7 @@ import {
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
 import type { BodyUnavailable, Inbox, UndoToken } from "./actions.ts";
+import { type FolderEntry, type FolderKey, folderThreads } from "./folders.ts";
 
 /**
  * What an undo puts back: the inverse intents, in the order the action ran.
@@ -90,6 +91,8 @@ export interface StoreInboxOptions {
   sections?: SectionSource | undefined;
   /** The AI level, read at open time: at `off` no Brief is asked for (CONTEXT.md "AI level"). */
   level?: (() => AiLevel) | undefined;
+  /** The owner's address, for the Sent folder; defaults to the Section rules' owner. */
+  owner?: string | undefined;
   log?: ((message: string) => void) | undefined;
 }
 
@@ -314,16 +317,22 @@ export async function createStoreInbox(
   const deletedIds = new Set<string>();
   /** The Judgments per Thread, as the Cache holds them. */
   const judgmentsById = new Map<string, ThreadJudgments>();
+  /** Every row as the folders read it, and each folder's list, computed on first read after a change. */
+  let folderEntries: readonly FolderEntry[] = [];
+  const folders = new Map<FolderKey, readonly Thread[]>();
+  const owner = options.owner ?? options.sections?.owner ?? "";
   const project = (rows: Record<string, unknown>[]) => {
     lastRows = rows;
     byId.clear();
     deletedIds.clear();
     judgmentsById.clear();
+    folders.clear();
     const all = rows.map((r) => {
       const entry = rowToCachedThread(r, store.workspaceId);
       if (entry.judgments) judgmentsById.set(entry.thread.id, entry.judgments);
-      return { thread: sectioned(entry), deleted: entry.deleted };
+      return { thread: sectioned(entry), deleted: entry.deleted, lastSender: entry.lastSender };
     });
+    folderEntries = all;
     for (const { thread, deleted } of all) {
       byId.set(thread.id, thread);
       if (deleted) deletedIds.add(thread.id);
@@ -425,6 +434,14 @@ export async function createStoreInbox(
   return {
     threads: () => stream,
     thread: (id) => byId.get(id),
+    folder(key) {
+      let list = folders.get(key);
+      if (!list) {
+        list = folderThreads(key, folderEntries, owner);
+        folders.set(key, list);
+      }
+      return list;
+    },
     groups: () => groups,
     tags: () => tags,
     messages: (threadId) => watch(threadId).messages,
