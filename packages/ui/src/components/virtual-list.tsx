@@ -64,10 +64,13 @@ function rowToken(): number {
   return Number.isFinite(px) && px > 0 ? px : 0;
 }
 
+/** Used when the overscan Setting is missing or invalid. */
+const DEFAULT_OVERSCAN = 10;
+
 export function VirtualList<T extends VirtualItem>({
   items,
   render,
-  overscan,
+  overscan: overscanProp,
   focusKey,
   revealWithPrevious,
   scrollKey = "",
@@ -77,6 +80,11 @@ export function VirtualList<T extends VirtualItem>({
   role,
   "aria-label": ariaLabel,
 }: VirtualListProps<T>) {
+  // A missing or non-finite overscan (a Setting not yet loaded) must never blank the list.
+  const overscan =
+    Number.isFinite(overscanProp) && overscanProp >= 0
+      ? Math.floor(overscanProp)
+      : DEFAULT_OVERSCAN;
   const scroller = useRef<HTMLDivElement>(null);
   const mark = useRef<HTMLDivElement>(null);
   const sizes = useRef(new Map<string, number>());

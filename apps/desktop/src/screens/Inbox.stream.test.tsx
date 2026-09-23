@@ -243,6 +243,13 @@ describe("a long stream renders only what is near the view", () => {
     expect(Math.max(...at)).toBeLessThan(1100);
   });
 
+  test("a missing overscan Setting (a stale settings object) still renders rows", async () => {
+    restore = fakeLayout();
+    await mount({ inbox: bigInbox() }, { "inbox.overscan_rows": undefined as unknown as number });
+    expect(rowIds().length).toBeGreaterThan(14);
+    expect(rowIds()[0]).toBe("t0");
+  });
+
   test("J walks to the last Thread, which ends in view", async () => {
     restore = fakeLayout();
     // From row 1,900 (opened, then the sheet closed) J walks the rest of the way.
