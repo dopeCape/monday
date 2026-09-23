@@ -1677,6 +1677,7 @@ export function Inbox({
 
       {shownThread ? (
         <Reader
+          loadRemoteImages={settings["reader.load_remote_images"]}
           banner={
             calendar ? (
               <ThreadInviteBar calendar={calendar} threadId={shownThread.id} settings={settings} />
