@@ -1171,8 +1171,14 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     const deadline = opts.deadline;
     const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
     try {
+      const began = Date.now();
+      const trace = (step: string) =>
+        log(`sync ${acct.address}: ${step} (+${Date.now() - began} ms)`);
+      trace("pass starts");
       await withSession(acct, async (s) => {
+        trace("session open");
         const map = await syncMailboxList(acct.workspaceId, s);
+        trace(`${map.mailboxes.length} mailboxes listed`);
         await saveState(acct, { tier: s.capabilities().syncTier });
         const inbox = map.mailboxes.find((m) => m.role === "inbox") ?? null;
         if (inbox && inbox.totalMessages !== null) {
@@ -1207,7 +1213,11 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
               : undefined;
           // Each pass opens with the newest Inbox bodies, so they arrive even
           // when a paced header page outlasts the Job's budget.
-          if (interleave && pending.has(mailbox.id)) await interleave();
+          if (interleave && pending.has(mailbox.id)) {
+            const before = report.bodies;
+            await interleave();
+            trace(`${report.bodies - before} Inbox bodies`);
+          }
           const { complete } = await syncOneMailbox(
             acct,
             s,
@@ -1218,6 +1228,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
             deadline,
             interleave,
           );
+          trace(`${mailbox.id} ${complete ? "complete" : "paged"}, ${report.added} added`);
           if (!complete) {
             report.more = true;
             continue;
@@ -1462,12 +1473,21 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
     async startAccount(jobs, accountId) {
       const payload: SyncPayload = { accountId };
-      await jobs.enqueue(SYNC_STEP, payload, { id: `${SYNC_STEP}:${accountId}:initial` });
+      // Re-armed at every boot: an Account whose Jobs failed (a quota streak,
+      // restarts mid-sync) would otherwise never sync again.
+      await jobs.enqueue(SYNC_STEP, payload, {
+        id: `${SYNC_STEP}:${accountId}:initial`,
+        revive: true,
+      });
       await jobs.enqueue(WATCH_STEP, payload, {
         id: `${WATCH_STEP}:${accountId}`,
         needs: ["needs-process"],
+        revive: true,
       });
-      await jobs.enqueue(RECONCILE_STEP, payload, { id: `${RECONCILE_STEP}:${accountId}` });
+      await jobs.enqueue(RECONCILE_STEP, payload, {
+        id: `${RECONCILE_STEP}:${accountId}`,
+        revive: true,
+      });
     },
 
     async forget(accountId) {

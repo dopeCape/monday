@@ -44,6 +44,12 @@ export interface EnqueueOptions {
   needs?: string[];
   /** Supply an id to make the enqueue idempotent; a duplicate is ignored. */
   id?: string;
+  /**
+   * With an id: a row under it that failed is queued again with fresh
+   * attempts, instead of being ignored. For standing Jobs an Account needs
+   * to keep syncing (its sync, reconcile and watch), re-armed at every boot.
+   */
+  revive?: boolean;
 }
 
 export interface JobsOptions {
@@ -77,6 +83,11 @@ export interface Jobs {
    */
   cancelByPayload(field: string, value: string): Promise<number>;
   sweepExpiredLeases(): Promise<number>;
+  /**
+   * Hands this owner's running jobs back to the queue without spending an
+   * attempt: the Server is shutting down, which says nothing about the step.
+   */
+  release(owner: string): Promise<number>;
   /**
    * Removes a job that has not started. True when a queued row was removed;
    * false when it is running, done, failed or unknown (ADR 0010: Undo works
@@ -133,6 +144,18 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
           runAt: opts.runAt ?? now(),
         })
         .onConflictDoNothing({ target: jobs.id });
+      if (opts.revive && opts.id) {
+        await db
+          .update(jobs)
+          .set({
+            status: "queued",
+            attempts: 0,
+            leaseOwner: null,
+            leaseUntil: null,
+            runAt: opts.runAt ?? now(),
+          })
+          .where(and(eq(jobs.id, id), eq(jobs.status, "failed")));
+      }
       await db.execute(sql`select pg_notify(${JOBS_CHANNEL}, ${id})`);
       onEnqueue(id);
       return id;
@@ -230,6 +253,21 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
         .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")))
         .returning({ id: jobs.id });
       return rows.length > 0;
+    },
+
+    async release(owner) {
+      const rows = await db
+        .update(jobs)
+        .set({
+          status: "queued",
+          leaseOwner: null,
+          leaseUntil: null,
+          attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+          runAt: now(),
+        })
+        .where(and(eq(jobs.status, "running"), eq(jobs.leaseOwner, owner)))
+        .returning({ id: jobs.id });
+      return rows.length;
     },
 
     async sweepExpiredLeases() {

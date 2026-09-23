@@ -267,4 +267,43 @@ describe("jobs", () => {
     clock.advance(60_000);
     await jobs.complete((await jobs.claim("server-a", ANY, 1000))?.id ?? "", "server-a");
   });
+
+  test("a shutdown hands running jobs back without spending an attempt", async () => {
+    clock.advance(60_000);
+    const id = await jobs.enqueue("long-sync", {}, { id: "long-sync:1" });
+    const claimed = await jobs.claim("server-stop", ANY, 60_000);
+    expect(claimed?.id).toBe(id);
+    expect(claimed?.attempts).toBe(1);
+    expect(await jobs.release("server-stop")).toBe(1);
+    const row = await jobs.get(id);
+    expect(row?.status).toBe("queued");
+    expect(row?.attempts).toBe(0);
+    expect(row?.leaseOwner).toBeNull();
+    // Another server's jobs are not touched.
+    const other = await jobs.claim("server-other", ANY, 60_000);
+    expect(await jobs.release("server-stop")).toBe(0);
+    expect((await jobs.get(other?.id ?? ""))?.status).toBe("running");
+    await jobs.complete(other?.id ?? "", "server-other");
+  });
+
+  test("revive queues a failed standing job again with fresh attempts; a plain enqueue leaves it", async () => {
+    clock.advance(60_000);
+    const id = await jobs.enqueue("standing", {}, { id: "standing:1" });
+    for (let i = 0; i < jobs.maxAttempts; i++) {
+      clock.advance(600_000);
+      const c = await jobs.claim("server-a", ANY, 1000);
+      expect(c?.id).toBe(id);
+      await jobs.fail(id, "server-a", "boom");
+    }
+    expect((await jobs.get(id))?.status).toBe("failed");
+    await jobs.enqueue("standing", {}, { id });
+    expect((await jobs.get(id))?.status).toBe("failed");
+    await jobs.enqueue("standing", {}, { id, revive: true });
+    const row = await jobs.get(id);
+    expect(row?.status).toBe("queued");
+    expect(row?.attempts).toBe(0);
+    const again = await jobs.claim("server-a", ANY, 1000);
+    expect(again?.id).toBe(id);
+    await jobs.complete(id, "server-a");
+  });
 });

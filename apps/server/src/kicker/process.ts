@@ -22,6 +22,8 @@ export interface ProcessKickerOptions extends KickerOptions {
   /** How often expired leases are swept back to the queue. */
   sweepMs?: number;
   heartbeatMs?: number;
+  /** How long stop() lets running steps finish before handing them back to the queue. */
+  stopGraceMs?: number;
 }
 
 export function createProcessKicker(options: ProcessKickerOptions): Kicker {
@@ -37,6 +39,7 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
     sweepMs = 30_000,
     heartbeatMs = HEARTBEAT_INTERVAL_MS,
     workers = 1,
+    stopGraceMs = 3_000,
     log = () => {},
   } = options;
 
@@ -154,7 +157,17 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
       heartbeatTimer = null;
       if (sweepTimer) clearInterval(sweepTimer);
       sweepTimer = null;
-      await loop;
+      // Steps that finish within the grace record their own outcome; the rest
+      // go back to the queue without spending an attempt, since a restart in
+      // the middle of a long first sync says nothing about the step.
+      const graceful = await Promise.race([
+        loop?.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), stopGraceMs)),
+      ]);
+      if (!graceful) {
+        const released = await jobs.release(serverId).catch(() => 0);
+        if (released > 0) log(`released ${released} running job(s) on stop`);
+      }
       loop = null;
       if (listener) await listener.end({ timeout: 2 }).catch(() => {});
       listener = null;
