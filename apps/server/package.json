@@ -24,6 +24,7 @@
     "@monday/shared": "workspace:*",
     "@monday/ui": "workspace:*",
     "@noble/hashes": "^2.4.0",
+    "domhandler": "^6",
     "drizzle-orm": "^0.45.2",
     "embedded-postgres": "18.4.0-beta.17",
     "hono": "^4.7.0",
@@ -32,12 +33,15 @@
     "nodemailer": "^10.0.10",
     "pg": "^8.12.0",
     "postal-mime": "^3.0.0",
+    "postcss": "^8.5.28",
     "postgres": "^3.4.9",
+    "sanitize-html": "^2.17.7",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.11.0",
+    "@types/sanitize-html": "^2.16.1",
     "bun-types": "latest",
     "drizzle-kit": "^0.31.10"
   },

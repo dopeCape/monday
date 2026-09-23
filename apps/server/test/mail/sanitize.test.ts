@@ -43,13 +43,40 @@ const XSS: string[] = [
   `<div style="color: red; background-image: url('https://evil.test/a.png')">x</div>`,
   `<x-custom onclick=alert(1)>x</x-custom>`,
   `<template><img src=x onerror=alert(1)></template>`,
+  // What real-mail support opened up: presentational attributes, srcset, backgrounds, style blocks.
+  `<td background="javascript:alert(1)">x</td>`,
+  `<table background="data:text/html;base64,PHNjcmlwdD4="><tr><td>x</td></tr></table>`,
+  `<img srcset="javascript:alert(1) 1x, https://ok.test/a.png 2x">`,
+  `<font color="red" face="x" onmouseover="alert(1)">x</font>`,
+  `<div bgcolor="red&quot; onload=&quot;alert(1)">x</div>`,
+  `<div style="background:url(https://ok.test/a.png); width: expression(alert(1))">x</div>`,
+  `<div data-blocked-style="background:url(javascript:alert(1))" data-blocked>x</div>`,
+  `<style>@import url(https://evil.test/x.css); .a{color:red}</style><p class="a">x</p>`,
+  `<style>.a{background:url(javascript:alert(1))}</style>`,
+  `<style>@media screen{.a{-moz-binding:url(https://evil.test/x.xml#x)}}</style>`,
+  `<style>.a</style><script>alert(1)</script>{color:red}</style>`,
+  `<body bgcolor="#fff" onload="alert(1)" style="background:url(javascript:alert(1))">x</body>`,
+  `<center onclick=alert(1)>x</center>`,
+  `<picture><source srcset="https://evil.test/a.png"><img src="https://evil.test/b.png"></picture>`,
 ];
+
+/** The markup a browser acts on: the stash "Show images" reads from is inert until then. */
+function live(html: string): string {
+  return html
+    .replace(/<style media="not all" data-blocked="">[\s\S]*?<\/style>/g, "")
+    .replace(/\sdata-[a-z-]+="[^"]*"/g, "");
+}
 
 describe("sanitizeHtml", () => {
   test("no payload in the corpus survives", () => {
     for (const payload of XSS) {
       const { html } = sanitizeHtml(payload);
-      const lower = html.toLowerCase();
+      // What waits for "Show images" is an http(s) image and nothing else.
+      for (const m of html.matchAll(/\sdata-(?:src|srcset|background|blocked-style)="([^"]*)"/g)) {
+        expect(m[1]?.toLowerCase()).not.toMatch(/javascript:|expression\(|behavior|data:text/);
+        expect(m[1]).toMatch(/https?:\/\//);
+      }
+      const lower = live(html).toLowerCase();
       expect(lower).not.toContain("<script");
       expect(lower).not.toContain("javascript:");
       expect(lower).not.toMatch(/\son[a-z]+=/);
@@ -62,7 +89,15 @@ describe("sanitizeHtml", () => {
       expect(lower).not.toContain("<meta");
       expect(lower).not.toContain("<link");
       expect(lower).not.toContain("<base");
-      expect(lower).not.toContain("<style");
+      // A style block survives only cleaned and scoped, at the head of the body.
+      const blocks = [...lower.matchAll(/^<style>([\s\S]*?)<\/style>/g)];
+      for (const [, css = ""] of blocks) {
+        expect(css).not.toMatch(/@import|binding|javascript|expression|url\(/);
+        for (const [, selector = ""] of css.matchAll(/(?:^|\})\s*([^{}@]+)\{/g)) {
+          for (const s of selector.split(",")) expect(s.trim()).toMatch(/^\.monday-mail\b/);
+        }
+      }
+      expect(lower.replace(/^<style>[\s\S]*?<\/style>/, "")).not.toContain("<style");
       expect(lower).not.toContain("expression(");
       expect(lower).not.toContain("url(");
       expect(lower).not.toContain("behavior");
@@ -76,7 +111,7 @@ describe("sanitizeHtml", () => {
       `<p>Hi <b>there</b> &amp; <i>you</i> <br> 1 &lt; 2 <span title="t">s</span></p><ul><li>a</li></ul><table><tr><td colspan="2">c</td></tr></table>`,
     );
     expect(html).toBe(
-      `<p>Hi <b>there</b> &amp; <i>you</i> <br> 1 &lt; 2 <span title="t">s</span></p><ul><li>a</li></ul><table><tbody><tr><td colspan="2">c</td></tr></tbody></table>`
+      `<p>Hi <b>there</b> &amp; <i>you</i> <br /> 1 &lt; 2 <span title="t">s</span></p><ul><li>a</li></ul><table><tbody><tr><td colspan="2">c</td></tr></tbody></table>`
         .replace("<tbody>", "")
         .replace("</tbody>", ""),
     );
@@ -105,13 +140,13 @@ describe("sanitizeHtml", () => {
       `<img src="cid:part1@x" alt="a"><img src="https://r.test/i.png"><img src="cid:unknown">`,
       { cidUrl: (id) => (id === "part1@x" ? "/attachments/att-1" : null) },
     );
-    expect(html).toContain(`<img src="/attachments/att-1" alt="a">`);
-    expect(html).toContain(`<img data-src="https://r.test/i.png" data-blocked="">`);
+    expect(html).toContain(`<img alt="a" src="/attachments/att-1" />`);
+    expect(html).toContain(`<img data-src="https://r.test/i.png" data-blocked="" />`);
     expect(html).not.toMatch(/\ssrc="https:\/\/r\.test/);
-    expect(html).toContain("<img>");
+    expect(html).toContain("<img />");
     expect(blockedImages).toBe(1);
     const allowed = sanitizeHtml(`<img src="https://r.test/i.png">`, { allowRemoteImages: true });
-    expect(allowed.html).toBe(`<img src="https://r.test/i.png">`);
+    expect(allowed.html).toBe(`<img src="https://r.test/i.png" />`);
     expect(allowed.blockedImages).toBe(0);
   });
 
@@ -119,7 +154,7 @@ describe("sanitizeHtml", () => {
     const ok = sanitizeHtml(`<img src="data:image/png;base64,iVBORw0KGgo=">`);
     expect(ok.html).toContain("data:image/png;base64,iVBORw0KGgo=");
     const bad = sanitizeHtml(`<img src="data:text/html;base64,PHNjcmlwdD4=">`);
-    expect(bad.html).toBe("<img>");
+    expect(bad.html).toBe("<img />");
   });
 
   test("style keeps listed properties only", () => {
@@ -137,7 +172,7 @@ describe("sanitizeHtml", () => {
     );
     expect(gmail.quoted).toBe(true);
     expect(gmail.html).toBe(
-      `<div dir="ltr">Reply</div><div class="quoted"><div><div>On Mon, X wrote:</div><blockquote>old</blockquote></div></div>`,
+      `<div dir="ltr">Reply</div><div class="quoted"><div class="gmail_quote"><div>On Mon, X wrote:</div><blockquote>old</blockquote></div></div>`,
     );
     const apple = sanitizeHtml(`<div>Reply</div><blockquote type="cite">old</blockquote>`);
     expect(apple.quoted).toBe(true);
@@ -149,7 +184,7 @@ describe("sanitizeHtml", () => {
     );
     expect(outlook.quoted).toBe(true);
     expect(outlook.html).toBe(
-      `<div><p>Reply</p><div class="quoted"><div><b>From:</b> x</div><hr><p>old</p></div></div>`,
+      `<div><p>Reply</p><div class="quoted"><div><b>From:</b> x</div><hr /><p>old</p></div></div>`,
     );
     expect(sanitizeHtml("<p>no quote</p>").quoted).toBe(false);
   });
@@ -243,7 +278,7 @@ describe("displayBody", () => {
         inline: true,
       },
     ]);
-    expect(out.html).toBe(`<p>rich <img src="/attachments/att-9"></p>`);
+    expect(out.html).toBe(`<p>rich <img src="/attachments/att-9" /></p>`);
   });
 
   test("falls back to the text part", () => {
