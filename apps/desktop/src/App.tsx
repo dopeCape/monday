@@ -194,7 +194,10 @@ export function App({
   /** A Draft the Drafts folder asked to open; the inbox opens the composer on it on mount. */
   const [composeDraft, setComposeDraft] = useState<string | null>(null);
   /** The workspace switcher under the workspace button. */
-  const [switcherOpen, setSwitcherOpen] = useState(false);
+  // `?overlay=ws` opens it on the dev server, as the mock's state does.
+  const [switcherOpen, setSwitcherOpen] = useState(
+    () => new URLSearchParams(location.search).get("overlay") === "ws",
+  );
   /** The App's own bottom agent, on the pages that are not the stream: raised, and its text. */
   const [bottomOpen, setBottomOpen] = useState(false);
   const [bottomText, setBottomText] = useState("");
@@ -560,9 +563,11 @@ export function App({
     [shell, openOnboarding, openSearch, askHere],
   );
 
-  // A page's bottom agent closes when the page changes; the stream has its own.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the screen change alone
+  // A page's bottom agent and the switcher close when the screen changes.
+  const shownScreen = useRef(active);
   useEffect(() => {
+    if (shownScreen.current === active) return;
+    shownScreen.current = active;
     setBottomOpen(false);
     setSwitcherOpen(false);
   }, [active]);
