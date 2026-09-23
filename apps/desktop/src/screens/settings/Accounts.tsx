@@ -23,7 +23,6 @@ import { useShell } from "../../shell/Shell.tsx";
 import { AddAccount, type AddAccountView } from "./AddAccount.tsx";
 import { Disclosure } from "./disclosure.tsx";
 import { CalDavLink, VoiceCard } from "./panels.tsx";
-import { SignInAppsPanel } from "./SignInApps.tsx";
 import {
   Card,
   DangerAction,
@@ -36,6 +35,7 @@ import {
   useSetting,
   useSettingsScreen,
 } from "./render.tsx";
+import { SignInAppsPanel } from "./SignInApps.tsx";
 import { fill } from "./wizard.ts";
 
 const PROVIDER_LOGO: Record<string, ReactNode> = {

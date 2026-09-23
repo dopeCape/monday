@@ -109,6 +109,8 @@ export interface EnvVar {
   /** What to put in it, in one sentence. */
   help: string;
   required: boolean;
+  /** The exact value, for a variable that has only one (MONDAY_MODE). */
+  value?: string | undefined;
 }
 
 /** Variables every Cloud mode reads; the platform cards add their own. */
@@ -142,16 +144,33 @@ export const CLOUD_ENV: readonly EnvVar[] = [
 
 export const PLATFORM_ENV: Record<CloudPlatform, readonly EnvVar[]> = {
   vercel: [
-    { name: "MONDAY_MODE", help: "vercel", required: true },
+    {
+      name: "MONDAY_MODE",
+      value: "vercel",
+      help: "Which platform the server runs on. Set it to exactly this value.",
+      required: true,
+    },
     {
       name: "CRON_SECRET",
       help: "A random string; Vercel Cron sends it so nobody else can trigger the Job tick.",
       required: true,
     },
   ],
-  netlify: [{ name: "MONDAY_MODE", help: "netlify", required: true }],
+  netlify: [
+    {
+      name: "MONDAY_MODE",
+      value: "netlify",
+      help: "Which platform the server runs on. Set it to exactly this value.",
+      required: true,
+    },
+  ],
   container: [
-    { name: "MONDAY_MODE", help: "container", required: true },
+    {
+      name: "MONDAY_MODE",
+      value: "container",
+      help: "Which platform the server runs on. Set it to exactly this value.",
+      required: true,
+    },
     { name: "PORT", help: "The port to listen on; 8787 in the compose file.", required: false },
   ],
 };

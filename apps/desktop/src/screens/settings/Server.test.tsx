@@ -215,14 +215,18 @@ describe("Settings › Server on a Sidecar-only install", () => {
     expect(text()).toContain("Sidecar only");
     expect(text()).toContain("Sidecar on port 4242");
 
-    const cards = [...document.querySelectorAll(".upgrade-card")];
+    const cards = [...document.querySelectorAll<HTMLButtonElement>(".upgrade-card")];
     expect(cards.map((c) => c.getAttribute("data-platform"))).toEqual([
       "vercel",
       "netlify",
       "container",
     ]);
-    const vercel = cards[0];
-    const env = [...(vercel?.querySelectorAll(".env-list code") ?? [])].map((c) => c.textContent);
+    // Vercel is picked first; one setup panel lists what it needs.
+    expect(cards.map((c) => c.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
+    const detail = () => document.querySelector(".upgrade-detail");
+    const env = [...(detail()?.querySelectorAll(".env-name > code:first-child") ?? [])].map(
+      (c) => c.textContent,
+    );
     expect(env).toEqual([
       "DATABASE_URL",
       "DATABASE_URL_UNPOOLED",
@@ -232,13 +236,18 @@ describe("Settings › Server on a Sidecar-only install", () => {
       "MONDAY_MODE",
       "CRON_SECRET",
     ]);
-    expect(vercel?.textContent).toContain("scheduled sends while this laptop is closed");
-    expect(cards[2]?.textContent).toContain("IMAP accounts without this laptop");
+    expect(detail()?.querySelector(".env-value")?.textContent).toBe("vercel");
+    expect(detail()?.textContent).toContain("scheduled sends while this laptop is closed");
+    expect(cards[2]?.textContent).toContain("IMAP always on");
 
-    const deploys = [...document.querySelectorAll<HTMLButtonElement>(".upgrade-card button")];
-    await act(async () => deploys[0]?.click());
-    await act(async () => deploys[1]?.click());
-    await act(async () => deploys[2]?.click());
+    const deploy = () => detail()?.querySelector<HTMLButtonElement>(".upgrade-detail-h button");
+    await act(async () => deploy()?.click());
+    await act(async () => cards[1]?.click());
+    expect(detail()?.getAttribute("data-platform")).toBe("netlify");
+    await act(async () => deploy()?.click());
+    await act(async () => cards[2]?.click());
+    expect(detail()?.textContent).toContain("IMAP accounts without this laptop");
+    await act(async () => deploy()?.click());
     expect(m.opened[0]).toStartWith("https://vercel.com/new/clone?");
     expect(m.opened[0]).toContain("repository-url=https%3A%2F%2Fgithub.com%2FdopeCape%2Fmonday");
     expect(m.opened[0]).toContain("root-directory=apps%2Fserver");

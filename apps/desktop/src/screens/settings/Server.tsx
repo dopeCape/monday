@@ -15,8 +15,9 @@ import {
   type EnvVar,
   type Settings,
 } from "@monday/shared";
-import { Btn, Input, Tag } from "@monday/ui";
-import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
+import { Btn, cx, Input, Tag } from "@monday/ui";
+import { ArrowSquareOutIcon, CheckIcon, CopyIcon } from "@phosphor-icons/react";
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import {
   ApiError,
   type CopyResult,
@@ -196,39 +197,69 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
   const shell = useShell();
   const s = shell.settings;
   const repo = s["server.deploy_repo"];
+  const [picked, setPicked] = useState<CloudPlatform>(PLATFORMS[0] ?? "vercel");
+  const tagsOf = (p: CloudPlatform) => {
+    const f = DEPLOYMENT_FEATURES[p];
+    return [
+      f.pushWebhooks ? s["strings.server.card.tag.push"] : null,
+      f.scheduledSendsWhileClosed ? s["strings.server.card.tag.closed"] : null,
+      f.holdsConnections ? s["strings.server.card.tag.connections"] : null,
+    ].filter((x): x is string => x !== null);
+  };
+  const f = DEPLOYMENT_FEATURES[picked];
+  const adds = [
+    f.pushWebhooks ? s["strings.server.card.push"] : null,
+    f.scheduledSendsWhileClosed ? s["strings.server.card.closed"] : null,
+    f.holdsConnections ? s["strings.server.card.connections"] : null,
+  ].filter((x): x is string => x !== null);
+  const link = deployLink(picked, repo);
   return (
     <Card title={s["strings.server.upgrade.title"]} block attrs={{ "data-panel": "upgrade" }}>
-      <div className="upgrade-cards">
-        {PLATFORMS.map((p) => {
-          const link = deployLink(p, repo);
-          const mode = p === "container" ? "container" : p;
-          const f = DEPLOYMENT_FEATURES[mode];
-          const adds = [
-            f.pushWebhooks ? s["strings.server.card.push"] : null,
-            f.scheduledSendsWhileClosed ? s["strings.server.card.closed"] : null,
-            f.holdsConnections ? s["strings.server.card.connections"] : null,
-          ].filter((x): x is string => x !== null);
-          return (
-            <div className="upgrade-card" key={p} data-platform={p}>
-              <b>{s[`strings.server.card.${p}.title`]}</b>
-              <span>{s[`strings.server.card.${p}.blurb`]}</span>
-              <span className="adds">
-                {s["strings.server.card.gives"]} {adds.join(", ")}.
-              </span>
-              <EnvList env={link.env} />
-              <Btn
-                primary={p !== "container"}
-                onClick={() => {
-                  void openExternal(link.url);
-                }}
-              >
-                {p === "container"
-                  ? s["strings.server.card.guide"]
-                  : s["strings.server.card.deploy"]}
-              </Btn>
-            </div>
-          );
-        })}
+      <div
+        className="choice-cards upgrade-pick upgrade-cards"
+        role="group"
+        aria-label={s["strings.server.card.pick"]}
+      >
+        {PLATFORMS.map((p) => (
+          <button
+            type="button"
+            aria-pressed={p === picked}
+            className={cx("choice-card upgrade-card", p === picked && "on")}
+            key={p}
+            data-platform={p}
+            onClick={() => setPicked(p)}
+          >
+            <b>{s[`strings.server.card.${p}.title`]}</b>
+            <span>{s[`strings.server.card.${p}.blurb`]}</span>
+            <span className="upgrade-tags">
+              {tagsOf(p).map((t) => (
+                <Tag key={t}>{t}</Tag>
+              ))}
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="upgrade-detail" data-platform={picked} key={picked}>
+        <div className="upgrade-detail-h">
+          <div>
+            <b>{s[`strings.server.card.${picked}.setup`]}</b>
+            <span>
+              {s["strings.server.card.gives"]} {adds.join(", ")}.
+            </span>
+          </div>
+          <Btn
+            primary
+            onClick={() => {
+              void openExternal(link.url);
+            }}
+          >
+            {picked === "container"
+              ? s["strings.server.card.guide"]
+              : s["strings.server.card.deploy"]}
+            <ArrowSquareOutIcon />
+          </Btn>
+        </div>
+        <EnvList env={link.env} />
       </div>
     </Card>
   );
@@ -236,12 +267,47 @@ function UpgradeCards({ openExternal }: { openExternal: (url: string) => Promise
 
 function EnvList({ env }: { env: EnvVar[] }) {
   const s = useShell().settings;
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (name: string, text: string) => {
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => setCopied(name))
+      .catch(() => {});
+  };
+  useEffect(() => {
+    if (copied === null) return;
+    const timer = setTimeout(() => setCopied(null), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
     <div className="env-list">
       <i>{s["strings.server.card.env"]}</i>
       {env.map((e) => (
-        <div key={e.name} className={e.required ? "req" : ""}>
-          <code>{e.name}</code>
+        <div key={e.name} className={cx("env-row", e.required && "req")}>
+          <div className="env-name">
+            <code>{e.name}</code>
+            {e.value !== undefined ? <code className="env-value">{e.value}</code> : null}
+            {!e.required ? (
+              <Tag className="env-opt">{s["strings.server.card.optional"]}</Tag>
+            ) : null}
+            <button
+              type="button"
+              className="env-copy"
+              title={
+                copied === e.name
+                  ? s["strings.server.card.copied"]
+                  : fill(s["strings.server.card.copy"], { name: e.name })
+              }
+              aria-label={
+                copied === e.name
+                  ? s["strings.server.card.copied"]
+                  : fill(s["strings.server.card.copy"], { name: e.name })
+              }
+              onClick={() => copy(e.name, e.name)}
+            >
+              {copied === e.name ? <CheckIcon /> : <CopyIcon />}
+            </button>
+          </div>
           <span>{e.help}</span>
         </div>
       ))}
