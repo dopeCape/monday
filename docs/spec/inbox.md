@@ -4,10 +4,11 @@ Behaviors a tester can check. Every default below is a Setting (ADR 0004) unless
 
 ## Stream
 
-- Sections appear in the user's order. Default: Needs your reply, Waiting on you, For your information, Newsletters. A Section the user defined ("Invoices I still owe", "Things Aoife needs") is a heading like the shipped ones; the same Section may also show as an entry in the nav, or only there, by its placement.
-- The nav lists every Group and Sub-group the user has, in the user's order, with unread counts, and every Section placed in the nav; a Group or Section created a moment ago by the Agent appears without a reload.
-- Inside a Section, Threads are ordered by newest activity first.
-- An empty Section is not rendered. An empty Inbox shows one line, "Nothing needs you", and nothing else.
+- **The Inbox is one plain list of every Thread in the Inbox, newest activity first.** No Section headings and no routing in it: it is the whole mailbox at a glance. Groups and Sections never split or reorder it.
+- **Sections live in the nav only**, under Groups, in the user's order, with unread counts. Clicking one shows that Section's Threads as their own list (a lens). Default Sections: Needs your reply, Waiting on you, For your information, Newsletters; a Section the user defined ("Invoices I still owe") sits beside them. A Section is a view onto the Inbox, never a move out of it.
+- The nav lists every Group and Sub-group the user has, in the user's order, with unread counts; a Group or Section created a moment ago by the Agent appears without a reload.
+- Inside any list, Threads are ordered by newest activity first.
+- A Section with no Threads stays in the nav with no count. An empty Inbox shows one line, "Nothing needs you", and nothing else.
 - A Thread is in exactly one Section and at most one Group plus one Sub-group.
 
 ## Rows
@@ -44,6 +45,13 @@ Each action maps to the provider's native concept where one exists and is emulat
 - Every action shows an undo toast; Z undoes the last one. Mark-all-read is undoable.
 - Custom actions: a Thread whose Group or Section carries custom actions shows them in the reader toolbar after the built-in ones and as chips under the Brief; each is a tool call with its Tier, so a "forward to accounting" asks and an "archive and tag" just runs with Undo.
 - Batch actions above 10 Threads preview first (ADR 0002).
+
+## Composing several messages at once
+
+- A compose window can be **minimized**: it collapses into a chip docked along the bottom edge (subject or "New message", recipient, a dot when unsent changes exist). Several can be minimized at once; clicking one restores it, the others stay docked. Each is an ordinary Draft, so it survives a restart and is also in Drafts.
+- Opening a new message while one is open minimizes the open one instead of replacing it. Closing a window with content keeps the Draft (Discard is explicit, with Undo).
+- Keyboard: a shortcut cycles through open and minimized drafts; Esc minimizes rather than closes when the draft has content.
+- All of it is Settings (and so config file keys): whether windows minimize or close by default, where the dock sits (bottom right, bottom left, bottom full width), the most minimized windows shown before they collapse into "+N", whether a new message minimizes the current one or stacks beside it, and the window style (floating sheet, docked, full screen).
 
 ## Briefs
 

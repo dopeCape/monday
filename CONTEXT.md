@@ -44,7 +44,7 @@ _Avoid_: label, smart label, AI label
 ### Attention and routing
 
 **Section**:
-A heading in the stream that a Section rule fills. Shipped defaults are the kinds of attention a Thread needs: Needs your reply, Waiting on you, For your information, Newsletters. User-defined, independent of Group.
+A list in the nav that a Section rule fills, opened as its own view; the Inbox itself is never divided into Sections. Shipped defaults are the kinds of attention a Thread needs: Needs your reply, Waiting on you, For your information, Newsletters. User-defined, independent of Group.
 _Avoid_: inbox type, category, bucket
 
 **Judgment**:
