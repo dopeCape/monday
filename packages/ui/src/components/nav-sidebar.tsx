@@ -9,10 +9,11 @@ import {
   PencilSimpleLineIcon,
   StackIcon,
 } from "@phosphor-icons/react";
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 import { cx } from "../format.ts";
 import { Icon, type IconComponent } from "./icon.tsx";
 import { Avatar, Kbd } from "./primitives.tsx";
+import { WorkspaceMenu, type WorkspaceSwitcher } from "./workspace-menu.tsx";
 
 export interface NavItem {
   key: string;
@@ -70,7 +71,10 @@ export interface NavSidebarProps {
   onSelect?: ((key: string) => void) | undefined;
   onSearch?: (() => void) | undefined;
   onCompose?: (() => void) | undefined;
+  /** The workspace button: toggles the switcher. */
   onWorkspace?: (() => void) | undefined;
+  /** The switcher the workspace button opens; absent, the button does nothing more than onWorkspace. */
+  switcher?: WorkspaceSwitcher | undefined;
   className?: string | undefined;
 }
 
@@ -111,8 +115,10 @@ export function NavSidebar({
   onSearch,
   onCompose,
   onWorkspace,
+  switcher,
   className,
 }: NavSidebarProps) {
+  const wsButton = useRef<HTMLButtonElement>(null);
   const top = groups.filter((g) => g.parentId === null);
   const childrenOf = (g: Group) => groups.filter((c) => c.parentId === g.id);
   const withCount = (item: NavItem): NavItem =>
@@ -122,11 +128,20 @@ export function NavSidebar({
 
   return (
     <aside className={cx("nav", className)}>
-      <button type="button" className="ws" title={workspace.status} onClick={onWorkspace}>
+      <button
+        ref={wsButton}
+        type="button"
+        className="ws"
+        title={workspace.status}
+        aria-haspopup={switcher ? "menu" : undefined}
+        aria-expanded={switcher ? switcher.open : undefined}
+        onClick={onWorkspace}
+      >
         <Avatar name={workspace.name} initials={workspace.initials} color="var(--fg)" square live />
         <span className="ws-name">{workspace.name}</span>
         <Icon icon={CaretUpDownIcon} />
       </button>
+      {switcher?.open ? <WorkspaceMenu {...switcher} anchor={wsButton} /> : null}
       <button type="button" className="nav-item" onClick={onSearch}>
         <Icon icon={MagnifyingGlassIcon} />
         <span>{labels.search}</span>

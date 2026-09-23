@@ -26,8 +26,10 @@ import {
 import {
   type CurrentWorkspace,
   FIXTURE_WORKSPACE,
+  pickAccount,
   useWorkspace,
   WorkspaceProvider,
+  workspaceOf,
 } from "./workspace.tsx";
 
 /**
@@ -235,17 +237,18 @@ function WorkspaceGate() {
     };
   }, [server, shell.api, pollMs]);
 
-  const first = accounts?.[0] ?? null;
-  const firstId = first?.id;
-  const firstWorkspace = first?.workspaceId;
-  const firstAddress = first?.address;
+  // The workspace switcher writes workspace.current; the Account it names opens here.
+  const picked = pickAccount(accounts, shell.settings["workspace.current"]);
+  const pickedId = picked?.id;
+  const pickedWorkspace = picked?.workspaceId;
+  const pickedAddress = picked?.address;
   // Keyed on the values, so a poll that answers the same Account keeps the same object.
   const current = useMemo<CurrentWorkspace | null>(() => {
     if (shell.host === "browser" && !server) return FIXTURE_WORKSPACE;
-    return firstId && firstWorkspace && firstAddress !== undefined
-      ? { id: firstWorkspace, accountId: firstId, address: firstAddress }
+    return pickedId && pickedWorkspace && pickedAddress !== undefined
+      ? workspaceOf({ id: pickedId, workspaceId: pickedWorkspace, address: pickedAddress })
       : null;
-  }, [shell.host, server, firstId, firstWorkspace, firstAddress]);
+  }, [shell.host, server, pickedId, pickedWorkspace, pickedAddress]);
 
   // In the app a Sidecar that reported a failure, or a Server that has not
   // answered within one reachability check, shows the Server section (which
@@ -298,7 +301,7 @@ function WorkspaceGate() {
     );
   }
   const app = (
-    <WorkspaceProvider value={current}>
+    <WorkspaceProvider key={current.id} value={current}>
       <StoreProvider workspaceId={current.id}>
         <Root />
       </StoreProvider>
