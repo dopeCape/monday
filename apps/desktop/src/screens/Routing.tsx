@@ -37,7 +37,14 @@ import {
 } from "@monday/ui";
 import { groupIcon as fixtureGroupIcon } from "@monday/ui/fixtures";
 import { ArrowsClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { Api } from "../platform/api.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
@@ -57,6 +64,11 @@ export interface RoutingProps {
   onNavigate?: ((target: string) => void) | undefined;
   /** Hands "Ask for a group" to the composer with the sentence typed; without it the composer just opens. */
   onAsk?: ((text: string) => void) | undefined;
+  /**
+   * The bottom agent the App owns, so asking here opens it here without
+   * leaving the page; absent, a bar that hands off to the Inbox's.
+   */
+  agent?: ReactNode | undefined;
   /** The Server side of the page; the Shell's client by default, a fake in tests. */
   api?: RoutingApi | undefined;
   /** Which Hosted providers hold a shared key; the Shell's client by default, null where no Server is. */
@@ -152,6 +164,7 @@ export function Routing({
   api: apiOverride,
   keys: keysProp,
   groupIcon: groupIconProp,
+  agent,
 }: RoutingProps) {
   const shell = useShell();
   const { settings } = shell;
@@ -653,14 +666,16 @@ export function Routing({
           </div>
         </div>
       </div>
-      {shell.layout.agent === "bottom" && !aiOff ? (
-        <AgentDock>
-          <AgentBar
-            placeholder={settings["strings.agent.placeholder"]}
-            onFocus={() => onNavigate?.("agent")}
-          />
-        </AgentDock>
-      ) : null}
+      {shell.layout.agent === "bottom" && !aiOff
+        ? (agent ?? (
+            <AgentDock>
+              <AgentBar
+                placeholder={settings["strings.agent.placeholder"]}
+                onFocus={() => onNavigate?.("agent")}
+              />
+            </AgentDock>
+          ))
+        : null}
     </div>
   );
 }

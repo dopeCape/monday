@@ -26,7 +26,7 @@ import {
   WEEKDAY_SHORT,
 } from "@monday/ui";
 import { CalendarBlankIcon, CaretLeftIcon, CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
-import { type FormEvent, useMemo, useState, useSyncExternalStore } from "react";
+import { type FormEvent, type ReactNode, useMemo, useState, useSyncExternalStore } from "react";
 import { openExternal } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { type CalendarSource, type Occurrence, occurrencesIn } from "./calendar/calendar-data.ts";
@@ -43,6 +43,11 @@ export interface CalendarProps {
   onNavigate?: ((target: string) => void) | undefined;
   now?: Date | undefined;
   initialView?: CalendarView | undefined;
+  /**
+   * The bottom agent the App owns, so asking here opens it here without
+   * leaving the page; absent, a bar that hands off to the Inbox's.
+   */
+  agent?: ReactNode | undefined;
 }
 
 type Strings = Settings;
@@ -105,6 +110,7 @@ export function Calendar({
   onOpenLink,
   now: nowProp,
   initialView,
+  agent,
 }: CalendarProps) {
   const shell = useShell();
   const open = onOpenLink ?? ((href: string) => void openExternal(href));
@@ -520,14 +526,16 @@ export function Calendar({
           </aside>
         </div>
       </div>
-      {shell.layout.agent === "bottom" && !aiOff ? (
-        <AgentDock>
-          <AgentBar
-            placeholder={s["strings.agent.placeholder"]}
-            onFocus={() => onNavigate?.("agent")}
-          />
-        </AgentDock>
-      ) : null}
+      {shell.layout.agent === "bottom" && !aiOff
+        ? (agent ?? (
+            <AgentDock>
+              <AgentBar
+                placeholder={s["strings.agent.placeholder"]}
+                onFocus={() => onNavigate?.("agent")}
+              />
+            </AgentDock>
+          ))
+        : null}
     </div>
   );
 }

@@ -59,6 +59,7 @@ import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/a
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
 import { createCustomActionRunner, customActionTier } from "./inbox/custom-actions.ts";
+import type { FolderKey } from "./inbox/folders.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import {
   contactsOf,
@@ -115,6 +116,8 @@ export interface InboxProps {
   timing?: { collapse?: number; toast?: number } | undefined;
   /** Bumped by the nav's New message; each change opens a fresh compose. */
   composeRequest?: number | undefined;
+  /** Bumped by Search in the nav, the rail or the palette; each change opens the stream's inline search. */
+  searchRequest?: number | undefined;
   /** Opens compose on mount: "new", or a Draft id. Defaults to `?compose=` in the URL. */
   initialCompose?: string | null | undefined;
   /** The Cache search behind the palette; absent in fixture mode. */
@@ -144,6 +147,13 @@ export interface InboxProps {
    */
   section?: string | undefined;
   /**
+   * A Mail folder lens (Starred, Snoozed, Sent, Archive): the stream over
+   * the folder's Threads instead of the Inbox's, one list with no Section
+   * headings, under the folder's name with its own empty line; Snoozed rows
+   * say when they wake. Absent, the Inbox.
+   */
+  folder?: FolderKey | undefined;
+  /**
    * The judge behind the palette's typed sentences (slice 27, ADR 0012).
    * Absent, or answering null, the palette behaves as before.
    */
@@ -163,6 +173,15 @@ type IntentCard = {
 };
 
 const defaultInbox = fixtureInbox();
+const NO_THREADS: readonly Thread[] = [];
+
+/** A snoozed row says when it wakes, ahead of its snippet (strings.folder.snoozed.wakes). */
+function wakeSnippet(thread: Thread, settings: Settings, now: Date): Thread {
+  if (!thread.snoozedUntil) return thread;
+  const when = formatWake(new Date(thread.snoozedUntil), now);
+  const wakes = fill(String(settings["strings.folder.snoozed.wakes"]), { when });
+  return { ...thread, snippet: thread.snippet ? `${wakes} · ${thread.snippet}` : wakes };
+}
 const defaultComposer = fixtureComposer();
 
 /** A Section's heading: the rule's own name, the strings.section.<id> Setting, or the id in words. */
@@ -246,6 +265,7 @@ export function Inbox({
   calendar,
   group,
   section,
+  folder,
   judge,
 }: InboxProps) {
   const shell = useShell();
@@ -263,7 +283,11 @@ export function Inbox({
 
   /* ------------------------------ Data ------------------------------ */
 
-  const allThreads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const streamOf = useCallback(
+    () => (folder ? (inbox.folder?.(folder) ?? NO_THREADS) : inbox.threads()),
+    [inbox, folder],
+  );
+  const allThreads = useSyncExternalStore(inbox.subscribe, streamOf, streamOf);
   const groups = useSyncExternalStore(inbox.subscribe, inbox.groups, inbox.groups);
   const tags = useSyncExternalStore(inbox.subscribe, inbox.tags, inbox.tags);
   const lens = group ? groups.find((g) => g.id === group) : undefined;
@@ -280,8 +304,10 @@ export function Inbox({
         ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
         : sectionLens
           ? allThreads.filter((t) => t.section === sectionLens.id)
-          : allThreads,
-    [allThreads, lens, sectionLens],
+          : folder === "snoozed"
+            ? allThreads.map((t) => wakeSnippet(t, settings, now))
+            : allThreads,
+    [allThreads, lens, sectionLens, folder, settings, now],
   );
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
@@ -300,6 +326,8 @@ export function Inbox({
   const orderedSections = useMemo(() => {
     const rules = orderedSectionRules(settings["sections.rules"], settings["sections.order"]);
     const byId = new Map(rules.map((r) => [r.id, r]));
+    // A folder is one list: every row, no heading.
+    if (folder) return [{ id: folder, name: "", rows }];
     const lensRule = sectionLens
       ? (byId.get(sectionLens.id) ?? { id: sectionLens.id, when: {} })
       : null;
@@ -314,7 +342,7 @@ export function Inbox({
       name: sectionName(settings, r),
       rows: rows.filter((row) => row.thread.section === r.id),
     }));
-  }, [rows, settings, sectionLens]);
+  }, [rows, settings, sectionLens, folder]);
 
   /** The list order the keyboard walks. Leaving rows are not in it. */
   const order = useMemo(
@@ -1118,7 +1146,10 @@ export function Inbox({
     if (sg.layout.agent) void shell.set("layout.agent", sg.layout.agent);
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
-  const listTitle = lens?.name ?? sectionLens?.name ?? t("strings.inbox.title");
+  const listTitle =
+    lens?.name ??
+    sectionLens?.name ??
+    (folder ? t(`strings.nav.${folder}`) : t("strings.inbox.title"));
   /** The scheduling card a sentence opened: the composer's card, approve creates the Event, decline drops it. */
   const intentCardNode = intentCard ? (
     <ToolCard
@@ -1269,14 +1300,20 @@ export function Inbox({
             <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
           ) : null}
           {rows.length === 0 && !syncing ? (
-            <div className="empty-line">{t("strings.inbox.empty")}</div>
+            <div className="empty-line">
+              {t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
+            </div>
           ) : null}
           {orderedSections.map((sec) =>
             sec.rows.length === 0 ? null : (
               <Fragment key={sec.id}>
-                <SectionLabel className={sec.rows.every((r) => r.leaving) ? "leaving" : undefined}>
-                  {sec.name}
-                </SectionLabel>
+                {sec.name ? (
+                  <SectionLabel
+                    className={sec.rows.every((r) => r.leaving) ? "leaving" : undefined}
+                  >
+                    {sec.name}
+                  </SectionLabel>
+                ) : null}
                 {sec.rows.map(({ thread: th, leaving }) => (
                   <MessageRow
                     key={th.id}
