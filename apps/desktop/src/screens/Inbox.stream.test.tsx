@@ -74,15 +74,6 @@ async function press(key: string, mods: Partial<KeyboardEventInit> = {}) {
 
 const rowIds = () =>
   [...document.querySelectorAll<HTMLElement>(".list .row")].map((r) => r.dataset.thread);
-/** Each Section heading with the rows under it, in document order. */
-const sections = () => {
-  const out: Array<{ name: string; rows: string[] }> = [];
-  for (const el of document.querySelectorAll<HTMLElement>(".list .col-body .sec, .list .row")) {
-    if (el.classList.contains("sec")) out.push({ name: el.textContent ?? "", rows: [] });
-    else out[out.length - 1]?.rows.push(el.dataset.thread ?? "");
-  }
-  return out;
-};
 const reader = () => document.querySelector<HTMLElement>(".reader")?.dataset.thread ?? null;
 
 /**
@@ -112,37 +103,45 @@ function resectioning(base: InboxData): InboxData {
 }
 
 describe("a Thread keeps its place while the user reads it", () => {
-  test("opening a Thread reads it, drops its unread look, and leaves it where it was", async () => {
+  // The old shipped rule, through the seam: a read Thread leaves Needs your reply.
+  const rules = {
+    "sections.rules": [
+      { id: "needs-reply", name: "Needs your reply", when: {} },
+      { id: "fyi", name: "For your information", when: {} },
+    ],
+  };
+
+  test("opening a Thread in a Section lens reads it, drops its unread look, and leaves it where it was", async () => {
     const inbox = resectioning(fixtureInbox());
-    await mount({ inbox });
-    const before = sections();
-    expect(before[0]?.name).toBe("Needs your reply");
-    expect(before[0]?.rows).toContain("e1");
+    await mount({ inbox, section: "needs-reply" }, rules);
+    expect(rowIds()).toEqual(["e1", "e2"]);
     await act(async () => document.querySelector<HTMLElement>(".row[data-thread=e1]")?.click());
     expect(reader()).toBe("e1");
-    // The seam now puts e1 under For your information; the stream holds it.
+    // The seam now puts e1 under For your information; the lens holds it.
     expect(inbox.thread("e1")?.section).toBe("fyi");
-    expect(sections()).toEqual(before);
+    expect(rowIds()).toEqual(["e1", "e2"]);
     const row = document.querySelector(".row[data-thread=e1]");
     expect(row?.classList.contains("unread")).toBe(false);
     expect(row?.classList.contains("on")).toBe(true);
     // Moving on and closing the reader does not move it either.
     await press("Escape");
     await press("j");
-    expect(sections()).toEqual(before);
+    expect(rowIds()).toEqual(["e1", "e2"]);
   });
 
-  test("a rebuilt stream (a new mount) takes the Sections the rules give now", async () => {
+  test("a rebuilt list (a new mount) takes the Sections the rules give now", async () => {
     const inbox = resectioning(fixtureInbox());
     await inbox.markRead(["e1"]);
-    await mount({ inbox });
-    const fyi = sections().find((s) => s.name === "For your information");
-    expect(fyi?.rows).toContain("e1");
+    await mount({ inbox, section: "needs-reply" }, rules);
+    expect(rowIds()).toEqual(["e2"]);
   });
 
-  test("archive still removes the row", async () => {
+  test("in the Inbox a read Thread keeps its row, and archive still removes it", async () => {
     const inbox = resectioning(fixtureInbox());
-    await mount({ inbox, initialOpen: "e1" });
+    await mount({ inbox });
+    const before = rowIds();
+    await act(async () => document.querySelector<HTMLElement>(".row[data-thread=e1]")?.click());
+    expect(rowIds()).toEqual(before);
     await press("e");
     expect(rowIds()).not.toContain("e1");
   });
@@ -300,10 +299,9 @@ describe("the Filter menu", () => {
     expect(button()?.textContent).toContain("Filter");
   });
 
-  test("Needs a reply and Starred narrow the Sections; Clear lifts the filter", async () => {
+  test("Needs a reply and Starred narrow the list; Clear lifts the filter", async () => {
     await mount();
     await pick("Needs a reply");
-    expect(sections().map((s) => s.name)).toEqual(["Needs your reply"]);
     expect(rowIds()).toEqual(["e1", "e2", "e3"]);
     await pick("Starred");
     expect(rowIds()).toEqual(["e2"]);
@@ -328,7 +326,6 @@ describe("the inline search", () => {
     await mount();
     await type(input(), "invoice");
     expect(rowIds()).toEqual(["e7"]);
-    expect(document.querySelectorAll(".list .col-body .sec").length).toBe(0);
     expect(document.querySelector(".row[data-thread=e7] mark")?.textContent).toBe("Invoice");
     await type(input(), "nothing like this");
     expect(rowIds()).toEqual([]);

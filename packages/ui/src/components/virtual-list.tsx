@@ -25,8 +25,8 @@ import { offsetsOf, scrollToReveal, type VirtualWindow, windowOf } from "../virt
 
 export interface VirtualItem {
   key: string;
-  /** Items of one kind share a height estimate until measured. */
-  kind: string;
+  /** Items of one kind share a height estimate until measured; absent, all items are one kind. */
+  kind?: string | undefined;
 }
 
 export interface VirtualListProps<T extends VirtualItem> {
@@ -92,7 +92,7 @@ export function VirtualList<T extends VirtualItem>({
     stats.current.clear();
   }
 
-  const estimate = (kind: string): number => {
+  const estimate = (kind = ""): number => {
     const own = stats.current.get(kind);
     if (own?.count) return own.sum / own.count;
     let sum = 0;
@@ -167,11 +167,11 @@ export function VirtualList<T extends VirtualItem>({
       if (!item || h <= 0 || node.classList.contains("leaving")) continue;
       const old = sizes.current.get(item.key);
       if (old === h) continue;
-      const s = stats.current.get(item.kind) ?? { sum: 0, count: 0 };
+      const s = stats.current.get(item.kind ?? "") ?? { sum: 0, count: 0 };
       if (old === undefined) s.count++;
       else s.sum -= old;
       s.sum += h;
-      stats.current.set(item.kind, s);
+      stats.current.set(item.kind ?? "", s);
       sizes.current.set(item.key, h);
       changed = true;
     }

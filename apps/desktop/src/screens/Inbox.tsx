@@ -14,20 +14,13 @@ import type {
   Thread,
   TypedIntent,
 } from "@monday/shared";
-import {
-  customActionsFor,
-  isSettingKey,
-  orderedSectionRules,
-  sectionInStream,
-  sectionLabel,
-} from "@monday/shared";
+import { customActionsFor, isSettingKey, orderedSectionRules, sectionLabel } from "@monday/shared";
 import {
   Btn,
   ColHead,
   Kbd,
   MessageRow,
   personName,
-  SectionLabel,
   type Suggestion,
   ToolCard,
   VirtualList,
@@ -179,10 +172,11 @@ export interface InboxProps {
 }
 
 type RemovingKind = "archive" | "snooze" | "delete";
-/** One entry in the virtual list: a Section heading or a row. */
-type ListItem =
-  | { kind: "head"; key: string; name: string; leaving: boolean }
-  | { kind: "row"; key: string; row: DisplayRow };
+/** One row of the virtual list. */
+interface ListItem {
+  key: string;
+  row: DisplayRow;
+}
 /** The search's "search older mail" pull in flight. */
 type Pull = { older: OlderMail; progress: PullProgress | null; error: string | null };
 
@@ -270,6 +264,20 @@ function useThreadUnavailable(inbox: InboxData, threadId: string | null) {
   return useSyncExternalStore(subscribe, get, get);
 }
 
+const activityOf = (t: Thread) => {
+  const ms = Date.parse(t.lastActivity);
+  return Number.isNaN(ms) ? 0 : ms;
+};
+/** Newest activity first, stable; the list itself when it already is. */
+function newestFirst(list: readonly Thread[]): readonly Thread[] {
+  for (let i = 1; i < list.length; i++) {
+    if (activityOf(list[i] as Thread) > activityOf(list[i - 1] as Thread)) {
+      return [...list].sort((a, b) => activityOf(b) - activityOf(a));
+    }
+  }
+  return list;
+}
+
 function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
@@ -340,15 +348,14 @@ export function Inbox({
       ? { id: rule.id, name: sectionName(settings, rule) }
       : { id: section, name: section };
   }, [section, settings]);
-  const threads = useMemo(
-    () =>
-      lens
-        ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
-        : sectionLens
-          ? allThreads.filter((t) => t.section === sectionLens.id)
-          : allThreads,
-    [allThreads, lens, sectionLens],
-  );
+  const threads = useMemo(() => {
+    const list = lens
+      ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
+      : sectionLens
+        ? allThreads.filter((t) => t.section === sectionLens.id)
+        : allThreads;
+    return newestFirst(list);
+  }, [allThreads, lens, sectionLens]);
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
     [tags],
@@ -469,52 +476,28 @@ export function Inbox({
     return found.filter(keeps).map((th) => ({ thread: th, leaving: false }));
   }, [searching, search, hits, liveById, inbox, allThreads, searchText, keeps]);
 
-  // The Sections are the rules in Settings (ADR 0004): the order Setting says
-  // which show and in what order (the Agent's create_section writes both, so
-  // a new Section renders at once), a rule may hide its Section or place it
-  // only in the nav, and the heading is the rule's name or the
-  // strings.section.<id> Setting where one exists. A Section lens shows its
-  // one heading.
-  const orderedSections = useMemo(() => {
-    const rules = orderedSectionRules(settings["sections.rules"], settings["sections.order"]);
-    const byId = new Map(rules.map((r) => [r.id, r]));
-    const lensRule = sectionLens
-      ? (byId.get(sectionLens.id) ?? { id: sectionLens.id, when: {} })
-      : null;
-    const shown = lensRule
-      ? [lensRule]
-      : settings["sections.order"].flatMap((id) => {
-          const r = byId.get(id) ?? { id, when: {} };
-          return r.hidden || !sectionInStream(r) ? [] : [r];
-        });
-    return shown.map((r) => ({
-      id: r.id,
-      name: sectionName(settings, r),
-      rows: rows.filter((row) => row.thread.section === r.id),
-    }));
-  }, [rows, settings, sectionLens]);
-
-  /** What the list shows: the search results, or the Sections, narrowed by the filter. */
+  // The Inbox is one plain list, newest activity first (docs/spec/inbox.md,
+  // Stream): no Section headings, nothing reordered by Groups or Sections.
+  // Sections are nav entries; a Section lens shows that Section's Threads as
+  // their own list. The Filter menu and the search narrow whichever list is
+  // shown; a search replaces it with the ranked results.
   const items = useMemo<ListItem[]>(() => {
-    if (searchRows) return searchRows.map((row) => ({ kind: "row", key: row.thread.id, row }));
-    return orderedSections.flatMap((sec) => {
-      const shown = sec.rows.filter((r) => r.leaving || keeps(r.thread));
-      if (shown.length === 0) return [];
-      return [
-        {
-          kind: "head" as const,
-          key: `section:${sec.id}`,
-          name: sec.name,
-          leaving: shown.every((r) => r.leaving),
-        },
-        ...shown.map((row) => ({ kind: "row" as const, key: row.thread.id, row })),
-      ];
-    });
-  }, [searchRows, orderedSections, keeps]);
+    const shown = searchRows ?? rows.filter((r) => r.leaving || keeps(r.thread));
+    return shown.map((row) => ({ key: row.thread.id, row }));
+  }, [searchRows, rows, keeps]);
+
+  /** The Sections the palette may name: every rule not hidden, in the user's order (they all live in the nav). */
+  const sectionOptions = useMemo(
+    () =>
+      orderedSectionRules(settings["sections.rules"], settings["sections.order"])
+        .filter((r) => !r.hidden)
+        .map((r) => ({ id: r.id, name: sectionName(settings, r) })),
+    [settings],
+  );
 
   /** The list order the keyboard walks. Leaving rows are not in it. */
   const order = useMemo(
-    () => items.flatMap((it) => (it.kind === "row" && !it.row.leaving ? [it.row.thread.id] : [])),
+    () => items.flatMap((it) => (it.row.leaving ? [] : [it.row.thread.id])),
     [items],
   );
 
@@ -1200,10 +1183,6 @@ export function Inbox({
     () => contactsOf(composer.participants(), allThreads, s["intent.contacts_max"]),
     [composer, allThreads, s],
   );
-  const sectionOptions = useMemo(
-    () => orderedSections.map(({ id, name }) => ({ id, name })),
-    [orderedSections],
-  );
   /** The intent in the user's words, with how many Threads it names in this list. */
   const describe = useCallback(
     (intent: TypedIntent) =>
@@ -1428,13 +1407,6 @@ export function Inbox({
     );
   const olderMissing = older.reduce((n, o) => n + o.missing, 0);
   const renderItem = (item: ListItem) => {
-    if (item.kind === "head") {
-      return (
-        <SectionLabel key={item.key} className={item.leaving ? "leaving" : undefined}>
-          {item.name}
-        </SectionLabel>
-      );
-    }
     const { thread: th, leaving } = item.row;
     return (
       <MessageRow
@@ -1609,7 +1581,6 @@ export function Inbox({
           render={renderItem}
           overscan={s["inbox.overscan_rows"]}
           focusKey={focus}
-          revealWithPrevious={(prev) => prev.kind === "head"}
           scrollKey={searching ? "search" : `stream:${filter ?? ""}`}
           layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
           before={

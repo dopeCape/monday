@@ -1,7 +1,7 @@
 // Shared UI components. Each returns an HTML string.
 // Calm rules: one surface per pane, no cards inside cards, no icons in list rows,
 // color only for state, secondary actions appear on hover or focus.
-import { workspace, nav, groups, emails, suggestions, commands, agentThread, agentThreadShort, agentThreadLayout } from "./data.js";
+import { workspace, nav, emails, suggestions, commands, agentThread, agentThreadShort, agentThreadLayout } from "./data.js";
 import { state } from "./theme.js";
 
 export const ic = (name, w = "") => `<i class="ph${w ? "-" + w : ""} ${name}"></i>`;
@@ -98,10 +98,8 @@ export function messageList(route, ui) {
     || (filter === "starred" && e.starred)
     || (filter === "attachments" && e.att)
     || (filter === "reply" && e.group === "needs-reply");
-  const grouped = groups.map(g => {
-    const items = emails.filter(e => e.group === g.key && keeps(e));
-    return items.length ? `<div class="sec">${g.label}</div>${items.map(row).join("")}` : "";
-  }).join("");
+  // The Inbox is one plain list, newest activity first: no Section headings (Sections live in the nav).
+  const list = emails.filter(keeps).map(row).join("");
   const stream = state.list === "stream";
   return `
   <section class="col list">
@@ -119,7 +117,7 @@ export function messageList(route, ui) {
       ${Object.values(filters).map((label, i) => `<button class="pop-item ${i === 0 ? "on" : ""}"><span>${label}</span></button>`).join("")}
       ${filter ? `<button class="pop-item"><span>Clear</span></button>` : ""}
     </div>` : ""}
-    <div class="col-body">${grouped}</div>
+    <div class="col-body">${list}</div>
   </section>`;
 }
 

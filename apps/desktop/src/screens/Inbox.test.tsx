@@ -107,49 +107,45 @@ const toast = () => document.querySelector(".toast")?.textContent ?? null;
 const reader = () => document.querySelector<HTMLElement>(".reader")?.dataset.thread ?? null;
 
 describe("Inbox rendering", () => {
-  test("renders the Sections in order with a focus row on the first Thread", async () => {
+  test("renders one plain list, newest activity first, with a focus row on the first Thread", async () => {
     await mount();
-    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual([
-      "Needs your reply",
-      "Waiting on you",
-      "For your information",
-      "Newsletters",
-    ]);
+    // No Section headings: the Inbox is never divided (docs/spec/inbox.md, Stream).
+    expect(document.querySelectorAll(".list .sec").length).toBe(0);
     expect(rowIds()).toEqual(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11"]);
     expect(focusRow()).toBe("e1");
     expect(reader()).toBeNull();
   });
 
-  test("Section names and order come from Settings, and an empty Section is not rendered", async () => {
-    await mount(
-      {},
-      { "sections.order": ["newsletters", "waiting"], "strings.section.waiting": "Pending" },
-    );
-    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual([
-      "Newsletters",
-      "Pending",
-    ]);
-    expect(rowIds()).toEqual(["e10", "e11", "e4", "e5"]);
-  });
-
-  test("a user-defined Section renders from its rule; a hidden rule hides its Section", async () => {
+  test("the Section order, hidden rules and placements never split or reorder the Inbox", async () => {
     const custom = fixtureInbox([
       { ...fixtureThreads[0], id: "p1", section: "projects" } as Thread,
       { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
+      { ...fixtureThreads[9], id: "n1", section: "reading" } as Thread,
     ]);
     await mount(
       { inbox: custom },
       {
-        "sections.order": ["projects", "waiting"],
+        "sections.order": ["reading", "waiting", "projects"],
         "sections.rules": [
           { id: "projects", when: { groups: ["hiring"] } },
           { id: "waiting", when: { lastFrom: "others" }, hidden: true },
+          { id: "reading", name: "Reading", when: { bulk: true }, placement: "stream" },
         ],
       },
     );
-    // No strings.section.projects Setting: the id reads as a heading.
-    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual(["Projects"]);
-    expect(rowIds()).toEqual(["p1"]);
+    expect(document.querySelectorAll(".list .sec").length).toBe(0);
+    expect(rowIds()).toEqual(["p1", "w1", "n1"]);
+  });
+
+  test("the list is newest activity first whatever order the seam gives", async () => {
+    const [a, b, c] = fixtureThreads as [Thread, Thread, Thread];
+    const custom = fixtureInbox([
+      { ...a, id: "old", lastActivity: "2026-09-01T09:00:00Z" },
+      { ...b, id: "new", lastActivity: "2026-09-16T09:00:00Z" },
+      { ...c, id: "mid", lastActivity: "2026-09-10T09:00:00Z" },
+    ]);
+    await mount({ inbox: custom });
+    expect(rowIds()).toEqual(["new", "mid", "old"]);
   });
 
   test("a Group lens shows only that Group's Threads under the Group's name", async () => {
@@ -159,7 +155,7 @@ describe("Inbox rendering", () => {
     expect(document.querySelector(".col-head .count")?.textContent).toBe("2");
   });
 
-  test("a Section created a moment ago renders in the nav and the stream, without a reload", async () => {
+  test("a Section created a moment ago shows in the nav without a reload, and the Inbox stays one list", async () => {
     // Two Threads the new rule will hold, beside the fixture's; the seam sections them as the Store would.
     const custom = fixtureInbox([
       ...fixtureThreads.slice(0, 3),
@@ -213,10 +209,9 @@ describe("Inbox rendering", () => {
     );
     const navText = () =>
       [...document.querySelectorAll(".nav .nav-item span")].map((s) => s.textContent);
-    const headings = () => [...document.querySelectorAll(".sec")].map((s) => s.textContent);
     expect(navText()).not.toContain("Reading");
-    expect(headings()).not.toContain("Reading");
-    expect(rowIds()).not.toContain("r1");
+    // Every Inbox Thread is in the one list, whatever Section holds it.
+    expect(rowIds()).toEqual(["e1", "e2", "e3", "r1", "r2"]);
 
     // The Agent's create_section writes the two Settings; the Shell's refresh hands them to the screens.
     const shell = shellRef as unknown as ReturnType<typeof useShell>;
@@ -241,31 +236,8 @@ describe("Inbox rendering", () => {
     );
     expect(item).not.toBeUndefined();
     expect(item?.querySelector(".n")?.textContent).toBe("1");
-    expect(headings()).toContain("Reading");
+    expect(document.querySelectorAll(".list .sec").length).toBe(0);
     expect(rowIds()).toEqual(["e1", "e2", "e3", "r1", "r2"]);
-  });
-
-  test("a hidden Section keeps its Threads out of the other Sections, and so does one placed only in the nav", async () => {
-    const custom = fixtureInbox([
-      { ...fixtureThreads[0], id: "h1", section: "hidden-one" } as Thread,
-      { ...fixtureThreads[9], id: "n1", section: "reading" } as Thread,
-      { ...fixtureThreads[3], id: "w1", section: "waiting" } as Thread,
-    ]);
-    await mount(
-      { inbox: custom },
-      {
-        "sections.order": ["hidden-one", "reading", "waiting"],
-        "sections.rules": [
-          { id: "hidden-one", when: { unread: true }, hidden: true },
-          { id: "reading", name: "Reading", when: { bulk: true }, placement: "nav" },
-          { id: "waiting", when: { lastFrom: "others" } },
-        ],
-      },
-    );
-    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual([
-      "Waiting on you",
-    ]);
-    expect(rowIds()).toEqual(["w1"]);
   });
 
   test("a Section lens shows only that Section's Threads under its name", async () => {
@@ -284,7 +256,7 @@ describe("Inbox rendering", () => {
       },
     );
     expect(document.querySelector(".col-head h2")?.textContent).toBe("Reading");
-    expect([...document.querySelectorAll(".sec")].map((s) => s.textContent)).toEqual(["Reading"]);
+    expect(document.querySelectorAll(".list .sec").length).toBe(0);
     expect(rowIds()).toEqual(["n1"]);
   });
 
@@ -320,7 +292,7 @@ describe("Inbox rendering", () => {
   test("an empty Inbox shows one line from Settings and nothing else", async () => {
     await mount({ inbox: fixtureInbox([]) }, { "strings.inbox.empty": "All clear" });
     expect(document.querySelector(".empty-line")?.textContent).toBe("All clear");
-    expect(document.querySelectorAll(".sec").length).toBe(0);
+    expect(document.querySelectorAll(".list .sec").length).toBe(0);
     expect(rows().length).toBe(0);
   });
 

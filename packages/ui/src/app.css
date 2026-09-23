@@ -733,8 +733,7 @@ i.ph-bold > svg {
   color: var(--fg-muted);
   font-weight: 500;
 }
-.sec:first-child,
-.vlist > .vstart:first-child + .sec {
+.sec:first-child {
   padding-top: 10px;
 }
 /* the virtual list: offsets are measured from its own box */
