@@ -495,6 +495,19 @@ export interface ToolCall {
   builtin?: boolean;
   /** The external credential that made the call (docs/spec/external-mcp.md); the card names it. */
   actorName?: string | null;
+  /**
+   * A Draft the call wrote, edited or asked to open (draft_message, update_draft,
+   * open_draft): the card's "Open draft" opens it in the composer, a new message
+   * in a window and a reply on its Thread.
+   */
+  open?: DraftOpen | null;
+}
+
+/** What "Open draft" on an Agent card opens. */
+export interface DraftOpen {
+  draftId: Id;
+  threadId: Id | null;
+  kind: DraftKind;
 }
 
 export interface ActivityEntry extends ToolCall {

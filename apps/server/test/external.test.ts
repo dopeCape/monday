@@ -253,6 +253,9 @@ describe("the external MCP server", () => {
         "explain_placement",
         "list_judgments",
         "test_judgment",
+        "list_drafts",
+        "read_draft",
+        "open_draft",
       ].sort(),
     );
     expect(listed.every((t) => t._meta?.tier === "read")).toBe(true);

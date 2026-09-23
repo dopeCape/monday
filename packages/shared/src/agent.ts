@@ -43,6 +43,12 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   tag_threads: "reversible",
   move_threads: "reversible",
   draft_message: "reversible",
+  // The composer (docs/spec/agent-composer.md): the Agent reads, edits and
+  // opens Drafts; sending stays send_draft, which always asks.
+  list_drafts: "read",
+  read_draft: "read",
+  update_draft: "reversible",
+  open_draft: "read",
   change_setting: "reversible",
   change_layout: "reversible",
   trash_threads: "destructive",
@@ -167,6 +173,8 @@ export type UndoRecord =
   | { kind: "intents"; intents: (IntentArgs & { threadId: Id })[] }
   | { kind: "settings"; entries: Array<{ key: string; previous: unknown }> }
   | { kind: "draft"; draftId: Id }
+  /** A Draft the Agent edited (update_draft): Undo puts the previous content back. */
+  | { kind: "draft_content"; draftId: Id; previous: DraftContent }
   | { kind: "send"; sendId: Id }
   /** A Workflow made, edited or switched: null previous means it was created and Undo deletes it. */
   | {
@@ -293,6 +301,10 @@ export interface ToolHost {
   createDraft(content: DraftContent): Promise<Draft>;
   deleteDraft(draftId: Id): Promise<void>;
   readDraft(draftId: Id): Promise<Draft | null>;
+  /** Replaces a Draft's content (the Agent's update_draft and its Undo); absent on hosts that cannot. */
+  updateDraft?(draftId: Id, content: DraftContent): Promise<Draft>;
+  /** Open Drafts, newest first; absent on hosts that cannot list them. */
+  listDrafts?(): Promise<Draft[]>;
   scheduleSend(draftId: Id): Promise<{ sendId: Id; runAt: IsoDate }>;
   cancelSend(sendId: Id): Promise<{ applied: boolean }>;
   readSetting(key: string): Promise<SettingRead>;
@@ -337,6 +349,11 @@ export interface TurnContext {
   pinned?: string[] | undefined;
   /** The Thread the reader shows, for "About this thread". */
   threadId?: Id | null | undefined;
+  /**
+   * The Draft open in the composer (a window or the inline reply), so "make
+   * this shorter" in the agent bar acts on it through the compose tools.
+   */
+  draftId?: Id | null | undefined;
   /** The Session's Developer mode switch (CONTEXT.md); only a Local runtime reads it. */
   developerMode?: boolean | undefined;
   /** This Session is the onboarding conversation (docs/spec/onboarding.md): the onboarding prompt is appended. */

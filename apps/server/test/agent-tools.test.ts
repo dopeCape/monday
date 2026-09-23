@@ -156,6 +156,11 @@ describe("the tool catalog", () => {
       test_judgment: "read",
       update_judgment: "reversible",
       add_example: "reversible",
+      // The composer: read, edit and open Drafts; sending stays send_draft.
+      list_drafts: "read",
+      read_draft: "read",
+      update_draft: "reversible",
+      open_draft: "read",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

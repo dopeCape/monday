@@ -59,6 +59,8 @@ export interface RunContext {
   sessionId: string;
   system: string;
   pinned: readonly string[];
+  /** The Draft open in the composer on the Device, for the compose tools. */
+  openDraftId?: string | null | undefined;
   maxSteps: number;
   tools: ToolServer;
   onText(delta: string): void;
@@ -175,6 +177,7 @@ export function createAgentGraph(options: AgentGraphOptions): AgentGraph {
             sessionId: ctx.runId ? null : ctx.sessionId,
             runId: ctx.runId ?? null,
             pinned: ctx.pinned,
+            openDraftId: ctx.openDraftId ?? null,
           },
           {
             ask: async (row, preview) => {
