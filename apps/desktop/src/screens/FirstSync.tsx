@@ -2,21 +2,25 @@
 // after the first Account is connected, and on any launch where the current
 // Workspace's first sync has not finished. It stands in for the whole app:
 // the gate mounts nothing behind it, so there is no nav, palette, agent bar
-// or keymap to reach. It reads the Server's progress (the engine's mirror and
+// or keymap to reach. Two ways out stay open the whole time: the account
+// header opens the workspace switcher (another Account, or a new one), and
+// Settings opens the app's Settings, with a way back here. It reads the Server's progress (the engine's mirror and
 // body_state, never a client guess) every `sync.first_run_poll_seconds`, and
 // once the phase `sync.first_run_wait` names is complete it steps aside with
 // one slow beat of the motion tokens (none with transitions off).
 //
-// An error shows the reason in plain words with the only two ways out: Retry
-// (clears the failure and syncs now) and Open settings (the Accounts section,
-// where the Account can be reconnected or removed, with a way back here).
+// An error shows the reason in plain words and adds Retry (clears the failure
+// and syncs now); Settings then opens on the Accounts section, where the
+// Account can be reconnected or removed.
 
 import type { FirstSyncProgress, Provider, Settings as SettingsValues } from "@monday/shared";
 import { firstSyncComplete } from "@monday/shared";
-import { Btn, cx, motionMs } from "@monday/ui";
+import { Btn, cx, Icon, motionMs, WorkspaceMenu, type WorkspaceMenuAccount } from "@monday/ui";
 import {
   ArrowLeftIcon,
+  CaretUpDownIcon,
   EnvelopeSimpleIcon,
+  GearSixIcon,
   GoogleLogoIcon,
   WarningCircleIcon,
   WindowsLogoIcon,
@@ -29,7 +33,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ApiError } from "../platform/api.ts";
+import { type AccountView, ApiError } from "../platform/api.ts";
 import { useShell } from "../shell/Shell.tsx";
 import {
   emptyTracker,
@@ -64,6 +68,10 @@ export interface FirstSyncViewProps {
   leaving?: boolean | undefined;
   onRetry: () => void;
   onSettings: () => void;
+  /** Every connected Account, for the switcher on the account header. */
+  accounts?: readonly WorkspaceMenuAccount[] | undefined;
+  onPick?: ((accountId: string) => void) | undefined;
+  onAdd?: (() => void) | undefined;
   s: SettingsValues;
 }
 
@@ -71,16 +79,20 @@ export function providerName(provider: Provider, s: SettingsValues): string {
   return s[`strings.first_sync.provider.${provider}`];
 }
 
-function ProviderMark({ provider }: { provider: Provider }) {
-  const Glyph =
+function Glyph({ provider }: { provider: Provider }) {
+  const G =
     provider === "gmail"
       ? GoogleLogoIcon
       : provider === "graph"
         ? WindowsLogoIcon
         : EnvelopeSimpleIcon;
+  return <G />;
+}
+
+function ProviderMark({ provider }: { provider: Provider }) {
   return (
     <span className="lg" aria-hidden="true">
-      <Glyph />
+      <Glyph provider={provider} />
     </span>
   );
 }
@@ -111,6 +123,9 @@ function Line({ line }: { line: PhaseLine }) {
 export function FirstSyncView(props: FirstSyncViewProps) {
   const { s } = props;
   const failed = props.error !== null;
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const accountButton = useRef<HTMLButtonElement>(null);
+  const accounts: readonly WorkspaceMenuAccount[] = props.accounts ?? [];
   return (
     <div
       className="main page"
@@ -120,12 +135,52 @@ export function FirstSyncView(props: FirstSyncViewProps) {
     >
       <div className="first-sync">
         <div className="first-sync-in">
-          <div className="first-sync-account">
-            <ProviderMark provider={props.provider} />
-            <div>
-              <b>{props.address}</b>
-              <span>{providerName(props.provider, s)}</span>
-            </div>
+          <div className="first-sync-top">
+            <button
+              ref={accountButton}
+              type="button"
+              className="first-sync-account"
+              aria-label={s["strings.switcher.label"]}
+              aria-haspopup="menu"
+              aria-expanded={switcherOpen}
+              onClick={() => setSwitcherOpen((open) => !open)}
+            >
+              <ProviderMark provider={props.provider} />
+              <div>
+                <b>{props.address}</b>
+                <span>{providerName(props.provider, s)}</span>
+              </div>
+              <Icon icon={CaretUpDownIcon} />
+            </button>
+            <Btn onClick={props.onSettings}>
+              <GearSixIcon /> {s["strings.switcher.settings"]}
+            </Btn>
+            {switcherOpen ? (
+              <WorkspaceMenu
+                className="first-sync-menu"
+                accounts={accounts}
+                labels={{
+                  label: s["strings.switcher.label"],
+                  title: s["strings.switcher.title"],
+                  add: s["strings.switcher.add"],
+                  settings: s["strings.switcher.settings"],
+                }}
+                anchor={accountButton}
+                onPick={(id) => {
+                  setSwitcherOpen(false);
+                  props.onPick?.(id);
+                }}
+                onAdd={() => {
+                  setSwitcherOpen(false);
+                  props.onAdd?.();
+                }}
+                onSettings={() => {
+                  setSwitcherOpen(false);
+                  props.onSettings();
+                }}
+                onClose={() => setSwitcherOpen(false)}
+              />
+            ) : null}
           </div>
           <h1>{s["strings.first_sync.title"]}</h1>
           <p>{s["strings.first_sync.why"]}</p>
@@ -161,8 +216,7 @@ export function FirstSyncView(props: FirstSyncViewProps) {
           {failed ? (
             <div className="actions">
               <span className="sp" />
-              <Btn onClick={props.onSettings}>{s["strings.first_sync.settings"]}</Btn>
-              {/* The screen's own controls take focus; there is nothing else to reach. */}
+              {/* Retry takes the focus: it is what the screen asks for. */}
               <Btn primary autoFocus disabled={props.retrying} onClick={props.onRetry}>
                 {s["strings.first_sync.retry"]}
               </Btn>
@@ -214,6 +268,8 @@ type Stage = "checking" | "waiting" | "leaving" | "open";
 
 export interface FirstSyncGateProps {
   account: FirstSyncAccount;
+  /** Every connected Account, for the switcher; the current one is `account`. */
+  accounts?: readonly AccountView[] | undefined;
   /** The app. Not mounted at all until the wait is over. */
   children: ReactNode;
   /** Told once when the app opens. */
@@ -222,7 +278,13 @@ export interface FirstSyncGateProps {
   now?: (() => number) | undefined;
 }
 
-export function FirstSyncGate({ account, children, onOpen, now = Date.now }: FirstSyncGateProps) {
+export function FirstSyncGate({
+  account,
+  accounts,
+  children,
+  onOpen,
+  now = Date.now,
+}: FirstSyncGateProps) {
   const shell = useShell();
   const s = shell.settings;
   const wait = s["sync.first_run_wait"];
@@ -232,7 +294,8 @@ export function FirstSyncGate({ account, children, onOpen, now = Date.now }: Fir
   const [tracker, setTracker] = useState<Tracker>(() => trackers.get(account.id) ?? emptyTracker());
   const [unreachable, setUnreachable] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The Settings section open over the screen, or null for the screen itself.
+  const [settingsAt, setSettingsAt] = useState<string | null>(null);
   const stageRef = useRef(stage);
   stageRef.current = stage;
   const settingsRef = useRef(s);
@@ -316,17 +379,44 @@ export function FirstSyncGate({ account, children, onOpen, now = Date.now }: Fir
 
   if (stage === "open") return <>{children}</>;
   if (stage === "checking") return null;
-  if (settingsOpen) {
+  if (settingsAt !== null) {
     return (
       <div className="app first-sync-settings" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
         <div className="first-sync-back">
-          <Btn onClick={() => setSettingsOpen(false)}>
+          <Btn onClick={() => setSettingsAt(null)}>
             <ArrowLeftIcon /> {s["strings.first_sync.back"]}
           </Btn>
         </div>
-        <Settings initialSection="accounts" />
+        <Settings key={settingsAt} initialSection={settingsAt || undefined} />
       </div>
     );
+  }
+  const failed = errorText(progress, unreachable, s) !== null;
+  const switchable = (accounts ?? []).map(
+    (a): WorkspaceMenuAccount => ({
+      id: a.id,
+      address: a.address,
+      mark: <Glyph provider={a.provider} />,
+      state: a.lastError
+        ? s["strings.switcher.error"]
+        : !a.connected
+          ? s["strings.switcher.disconnected"]
+          : a.id === account.id
+            ? s["strings.nav.status.syncing"]
+            : s["strings.nav.status.online"],
+      tone: a.lastError ? "warn" : !a.connected ? "off" : "ok",
+      current: a.id === account.id,
+    }),
+  );
+  if (!switchable.some((a) => a.current)) {
+    switchable.unshift({
+      id: account.id,
+      address: account.address,
+      mark: <Glyph provider={account.provider} />,
+      state: s["strings.nav.status.syncing"],
+      tone: "ok",
+      current: true,
+    });
   }
   const eta = steadyEta(tracker, etaSettings(s));
   return (
@@ -346,7 +436,14 @@ export function FirstSyncGate({ account, children, onOpen, now = Date.now }: Fir
         retrying={retrying}
         leaving={stage === "leaving"}
         onRetry={retry}
-        onSettings={() => setSettingsOpen(true)}
+        // With an error Settings opens where the Account can be fixed; else on its first section.
+        onSettings={() => setSettingsAt(failed ? "accounts" : "")}
+        accounts={switchable}
+        // The gate is keyed on the Account, so the one picked mounts its own screen (or the app).
+        onPick={(id) => {
+          if (id !== account.id) void shell.set("workspace.current", id);
+        }}
+        onAdd={() => setSettingsAt("accounts")}
         s={s}
       />
     </div>

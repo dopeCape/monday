@@ -206,7 +206,8 @@ function Root() {
  * screen is the whole app until one is connected. Once one is, the first sync
  * screen stands in for the app until the Inbox is fetched (FirstSync.tsx);
  * the Accounts keep being asked for meanwhile, so an Account removed from
- * that screen's Settings takes the gate back to the Accounts screen.
+ * that screen's Settings takes the gate back to the Accounts screen, and one
+ * added there shows in its switcher.
  */
 function WorkspaceGate() {
   const shell = useShell();
@@ -313,6 +314,7 @@ function WorkspaceGate() {
     <FirstSyncGate
       key={picked.id}
       account={{ id: picked.id, address: picked.address, provider: picked.provider }}
+      accounts={accounts ?? undefined}
       onOpen={() => {
         appOpen.current = true;
       }}

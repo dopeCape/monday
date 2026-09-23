@@ -5882,11 +5882,42 @@ button.prov {
     transform: translateY(-4px);
   }
 }
+.first-sync-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .first-sync-account {
+  flex: 1;
+  min-width: 0;
   display: grid;
-  grid-template-columns: 32px 1fr;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+  margin: -6px -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.first-sync-account:hover,
+.first-sync-account[aria-expanded="true"] {
+  background: var(--hover);
+}
+.first-sync-account > svg {
+  color: var(--fg-faint);
+}
+.pop.ws-menu.first-sync-menu {
+  top: calc(100% + 8px);
+  left: -8px;
+  right: auto;
+  width: 320px;
 }
 .first-sync-account .lg {
   width: 32px;

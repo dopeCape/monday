@@ -3,8 +3,9 @@
 // sync"): the gate shows it while the Inbox's headers, or its window bodies,
 // are pending per `sync.first_run_wait`, and opens the app on its own once
 // they are not; nothing behind it is in the DOM meanwhile (no nav, palette or
-// agent bar); the bars never go backwards, also across a remount; an error
-// offers exactly Retry and Open settings; a Server without the route never
+// agent bar), but the account switcher and Settings are always reachable;
+// the bars never go backwards, also across a remount; an error adds Retry and
+// sends Settings to the Accounts section; a Server without the route never
 // blocks the app.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
@@ -12,7 +13,7 @@ import type { FirstSyncProgress, PartialSettings } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { type Api, ApiError, createApi } from "../platform/api.ts";
+import { type AccountView, type Api, ApiError, createApi } from "../platform/api.ts";
 import { StaticShell } from "../shell/Shell.tsx";
 import { FirstSyncGate, resetFirstSyncMemory } from "./FirstSync.tsx";
 import { emptyTracker, remainingMs, steadyEta, track } from "./first-sync/model.ts";
@@ -106,7 +107,22 @@ function Behind() {
   );
 }
 
-async function mount(api: Api, settings: PartialSettings = {}, now?: () => number) {
+const OTHER: AccountView = {
+  id: "acct-2",
+  workspaceId: "ws-2",
+  provider: "graph",
+  address: "sam@work.test",
+  connected: true,
+  lastSync: null,
+  lastError: null,
+} as AccountView;
+
+async function mount(
+  api: Api,
+  settings: PartialSettings = {},
+  now?: () => number,
+  accounts?: readonly AccountView[],
+) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -114,7 +130,7 @@ async function mount(api: Api, settings: PartialSettings = {}, now?: () => numbe
   await act(async () =>
     root?.render(
       <StaticShell settings={{ "sync.first_run_poll_seconds": POLL, ...settings }} shell={{ api }}>
-        <FirstSyncGate account={account} now={now}>
+        <FirstSyncGate account={account} accounts={accounts} now={now}>
           <Behind />
         </FirstSyncGate>
       </StaticShell>,
@@ -155,8 +171,11 @@ describe("the first sync gate", () => {
     });
     await settle();
     expect(qa(".cmdk")).toHaveLength(0);
-    // The only controls are the screen's own (none while syncing).
-    expect(qa("button")).toHaveLength(0);
+    // The only controls are the screen's own: the account switcher and Settings.
+    expect(qa("button").map((b) => b.textContent?.trim())).toEqual([
+      "sam@monday.testGmail",
+      "Settings",
+    ]);
   });
 
   test("the app opens on its own once the headers are in, under `headers`", async () => {
@@ -246,7 +265,7 @@ describe("the first sync gate", () => {
     expect(detail("headers")).toBe("700 of 1,400");
   });
 
-  test("an error says why in plain words and offers only Retry and Open settings", async () => {
+  test("an error says why in plain words and adds Retry", async () => {
     const server = fakeServer(
       reading(
         { done: 40, total: 1000, complete: false },
@@ -262,7 +281,7 @@ describe("the first sync gate", () => {
     );
     expect(alert?.textContent).not.toContain("invalid_grant");
     const labels = qa("button").map((b) => b.textContent?.trim());
-    expect(labels).toEqual(["Open settings", "Retry"]);
+    expect(labels).toEqual(["sam@monday.testGmail", "Settings", "Retry"]);
     expect(behind()).toBeNull();
 
     // Retry clears the failure on the Server and reads again at once.
@@ -279,7 +298,7 @@ describe("the first sync gate", () => {
     expect(q('[role="alert"]')).toBeNull();
   });
 
-  test("Open settings reaches the Accounts section, with a way back and nothing else", async () => {
+  test("after an error Settings opens on the Accounts section, with a way back and nothing else", async () => {
     const server = fakeServer(
       reading(
         { done: 40, total: 1000, complete: false },
@@ -289,7 +308,7 @@ describe("the first sync gate", () => {
     );
     await mount(server.api);
     expect(q('[role="alert"]')?.textContent).toContain("monday cannot reach Gmail right now.");
-    const open = qa<HTMLButtonElement>("button").find((b) => b.textContent === "Open settings");
+    const open = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Settings");
     await act(async () => open?.click());
     await settle();
     expect(screen()).toBeNull();
@@ -299,6 +318,49 @@ describe("the first sync gate", () => {
     await act(async () => back?.click());
     await settle();
     expect(screen()).not.toBeNull();
+  });
+
+  test("Settings is there while the sync runs, and Back returns to the screen", async () => {
+    const server = fakeServer(HEADERS_PENDING);
+    await mount(server.api);
+    const open = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Settings");
+    await act(async () => open?.click());
+    await settle();
+    expect(screen()).toBeNull();
+    expect(q(".first-sync-back")).not.toBeNull();
+    expect(behind()).toBeNull();
+    await act(async () => q<HTMLButtonElement>(".first-sync-back button")?.click());
+    await settle();
+    expect(screen()).not.toBeNull();
+  });
+
+  test("the account header opens the switcher: every Account, then Add an account", async () => {
+    const server = fakeServer(HEADERS_PENDING);
+    await mount(server.api, {}, undefined, [
+      {
+        ...OTHER,
+        id: "acct-1",
+        workspaceId: "ws-1",
+        provider: "gmail",
+        address: "sam@monday.test",
+      },
+      OTHER,
+    ]);
+    await act(async () => q<HTMLButtonElement>(".first-sync-account")?.click());
+    await settle();
+    const menu = q(".first-sync-menu");
+    expect(menu).not.toBeNull();
+    const rows = qa(".first-sync-menu .ws-acct .addr").map((n) => n.textContent);
+    expect(rows).toEqual(["sam@monday.test", "sam@work.test"]);
+    expect(q(".first-sync-menu .ws-acct.current .addr")?.textContent).toBe("sam@monday.test");
+    const add = qa<HTMLButtonElement>(".first-sync-menu .pop-item").find(
+      (b) => b.textContent?.trim() === "Add an account",
+    );
+    await act(async () => add?.click());
+    await settle();
+    // Adding goes through Settings, never past the screen into the app.
+    expect(q(".first-sync-back")).not.toBeNull();
+    expect(behind()).toBeNull();
   });
 
   test("an unreachable Server shows its own line, never a blank window", async () => {
