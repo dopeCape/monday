@@ -1,7 +1,10 @@
 // The in-process kicker for the Sidecar and the container: a loop that claims
 // and runs steps, woken by Postgres LISTEN/NOTIFY on an unpooled connection
 // and by a poll interval, plus the 30 s heartbeat writer (ADR 0005, research
-// 22 section 2.2). No Bun-only APIs here; it runs on Node too.
+// 22 section 2.2). Up to `workers` steps run at once, so one slow step (a big
+// mailbox paced by its Provider) never holds up the rest, and expired leases
+// are swept on their own timer rather than between claims. No Bun-only APIs
+// here; it runs on Node too.
 
 import { settingsSchema } from "@monday/shared";
 import postgres, { type Sql } from "postgres";
@@ -33,6 +36,7 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
     pollMs = 5_000,
     sweepMs = 30_000,
     heartbeatMs = HEARTBEAT_INTERVAL_MS,
+    workers = 1,
     log = () => {},
   } = options;
 
@@ -71,29 +75,57 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
       wakeResolve = finish;
     });
 
+  const active = new Set<Promise<void>>();
+  let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  const sweep = async () => {
+    try {
+      const swept = await jobs.sweepExpiredLeases();
+      if (swept > 0) log(`swept ${swept} expired lease(s)`);
+    } catch (error) {
+      log(`sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const workerCount = async () => {
+    const n = typeof workers === "function" ? await workers() : workers;
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+  };
+
   const runLoop = async () => {
-    let lastSweep = 0;
+    await sweep();
     while (running) {
       try {
-        const now = Date.now();
-        if (now - lastSweep >= sweepMs) {
-          const swept = await jobs.sweepExpiredLeases();
-          if (swept > 0) log(`swept ${swept} expired lease(s)`);
-          lastSweep = now;
-        }
-        const serve = await canServe();
-        const budgetMs = typeof budget === "function" ? await budget() : budget;
-        const job = await jobs.claim(serverId, serve, budgetMs);
-        if (job) {
-          const result = await jobs.run(job, budgetMs);
-          log(`job ${job.id} (${job.class}) -> ${typeof result === "string" ? result : "sleep"}`);
-          continue;
+        // Claim while a worker is free; each finished step wakes the loop.
+        while (running && active.size < (await workerCount())) {
+          const serve = await canServe();
+          const budgetMs = typeof budget === "function" ? await budget() : budget;
+          const job = await jobs.claim(serverId, serve, budgetMs);
+          if (!job) break;
+          const run = jobs
+            .run(job, budgetMs)
+            .then((result) => {
+              log(
+                `job ${job.id} (${job.class}) -> ${typeof result === "string" ? result : "sleep"}`,
+              );
+            })
+            .catch((error: unknown) => {
+              log(
+                `job ${job.id} crashed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            })
+            .finally(() => {
+              active.delete(run);
+              wake();
+            });
+          active.add(run);
         }
       } catch (error) {
         log(`kicker error: ${error instanceof Error ? error.message : String(error)}`);
       }
       if (running) await waitForWake(pollMs);
     }
+    await Promise.allSettled([...active]);
   };
 
   return {
@@ -106,6 +138,7 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
           log(`heartbeat failed: ${error instanceof Error ? error.message : String(error)}`),
         );
       }, heartbeatMs);
+      sweepTimer = setInterval(() => void sweep(), sweepMs);
       if (listenUrl) {
         listener = postgres(listenUrl, { max: 1, onnotice: () => {} });
         await listener.listen(JOBS_CHANNEL, () => wake());
@@ -119,6 +152,8 @@ export function createProcessKicker(options: ProcessKickerOptions): Kicker {
       wake();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       heartbeatTimer = null;
+      if (sweepTimer) clearInterval(sweepTimer);
+      sweepTimer = null;
       await loop;
       loop = null;
       if (listener) await listener.end({ timeout: 2 }).catch(() => {});

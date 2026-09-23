@@ -64,6 +64,12 @@ export const PENALTY_FLOOR = 0.1;
 export const RECOVERY_STEP_UNITS = 2_000;
 /** Each recovery step restores this share of the configured rate. */
 export const RECOVERY_STEP = 0.1;
+/**
+ * A quiet stretch this long without a refusal also restores one step, so a
+ * rate cut to the floor (where clean units come slowly) climbs back in about
+ * two minutes instead of stalling a large first sync.
+ */
+export const RECOVERY_INTERVAL_MS = 15_000;
 
 export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
   const now = options.now ?? (() => Date.now());
@@ -74,11 +80,21 @@ export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
   let last = now();
   /** Units taken since the last penalty, towards the next recovery step. */
   let clean = 0;
+  /** When the rate last stepped down or back up. */
+  let steppedAt = last;
   // Takes are served in order so a big request cannot starve behind small ones.
   let queue: Promise<void> = Promise.resolve();
 
   function refill(): void {
     const at = now();
+    while (refillPerMs < full && at - steppedAt >= RECOVERY_INTERVAL_MS) {
+      // Fill at the old rate up to the step, then carry on at the new one.
+      const stepAt = steppedAt + RECOVERY_INTERVAL_MS;
+      level = Math.min(options.capacity, level + Math.max(0, stepAt - last) * refillPerMs);
+      last = Math.max(last, stepAt);
+      refillPerMs = Math.min(full, refillPerMs + full * RECOVERY_STEP);
+      steppedAt = stepAt;
+    }
     level = Math.min(options.capacity, level + (at - last) * refillPerMs);
     last = at;
   }
@@ -94,6 +110,7 @@ export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
           if (clean >= RECOVERY_STEP_UNITS) {
             clean = 0;
             refillPerMs = Math.min(full, refillPerMs + full * RECOVERY_STEP);
+            steppedAt = now();
           }
         }
         return;
@@ -118,11 +135,14 @@ export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
       level = 0;
       clean = 0;
       refillPerMs = Math.max(full * PENALTY_FLOOR, refillPerMs / 2);
+      steppedAt = now();
     },
     rate() {
+      refill();
       return refillPerMs * 60_000;
     },
     pacing() {
+      refill();
       return refillPerMs < full;
     },
   };

@@ -1120,6 +1120,131 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
   /* ------------------------------ The engine ------------------------------ */
 
+  // One pass per Account at a time: with several job workers, the sync and
+  // the reconcile of one Account queue behind each other instead of paging
+  // the same mailboxes (and spending the same quota) at once.
+  const accountLocks = new Map<string, Promise<unknown>>();
+  function oneAtATime<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
+    const before = accountLocks.get(accountId) ?? Promise.resolve();
+    const run = before.catch(() => {}).then(fn);
+    const tail = run.catch(() => {});
+    accountLocks.set(accountId, tail);
+    void tail.then(() => {
+      if (accountLocks.get(accountId) === tail) accountLocks.delete(accountId);
+    });
+    return run;
+  }
+
+  async function syncAccountNow(
+    accountId: string,
+    opts: Parameters<SyncEngine["syncAccount"]>[1] = {},
+  ): Promise<SyncReport> {
+    const acct = await account(accountId);
+    const report: SyncReport = {
+      accountId,
+      added: 0,
+      changed: 0,
+      removed: 0,
+      bodies: 0,
+      more: false,
+    };
+    const settingsNow = await readSettings();
+    const deadline = opts.deadline;
+    const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
+    try {
+      await withSession(acct, async (s) => {
+        const map = await syncMailboxList(acct.workspaceId, s);
+        await saveState(acct, { tier: s.capabilities().syncTier });
+        const inbox = map.mailboxes.find((m) => m.role === "inbox") ?? null;
+        if (inbox && inbox.totalMessages !== null) {
+          await recordFirstSync(acct, { inboxTotal: inbox.totalMessages });
+        }
+        const wanted = opts.mailboxIds ? new Set(opts.mailboxIds) : null;
+        const state = await loadState(acct);
+        const pending = new Set(state.pending);
+        const targets = syncable(map.mailboxes).filter(
+          (m) => !wanted || wanted.has(m.id) || pending.has(m.id),
+        );
+        for (const mailbox of targets) {
+          if (outOfTime()) {
+            report.more = true;
+            break;
+          }
+          // A large Inbox pages its headers for hours at the Provider's
+          // quota; its newest bodies keep pace page by page rather than
+          // waiting for the last header, so what the user sees first reads.
+          const interleave =
+            mailbox.role === "inbox" && !opts.headersOnly
+              ? async () => {
+                  await fetchBodies(
+                    acct,
+                    s,
+                    settingsNow.bodyWindowDays,
+                    deadline,
+                    report,
+                    mailbox.id,
+                  );
+                }
+              : undefined;
+          const { complete } = await syncOneMailbox(
+            acct,
+            s,
+            mailbox,
+            map,
+            report,
+            settingsNow.batchSize,
+            deadline,
+            interleave,
+          );
+          if (!complete) {
+            report.more = true;
+            continue;
+          }
+          // The Inbox's window bodies follow its headers at once, before the
+          // other folders, so the first sync screen can let the app open.
+          if (mailbox.role === "inbox" && !opts.headersOnly) {
+            for (;;) {
+              if (outOfTime()) {
+                report.more = true;
+                break;
+              }
+              const inboxBodies = await fetchBodies(
+                acct,
+                s,
+                settingsNow.bodyWindowDays,
+                deadline,
+                report,
+                mailbox.id,
+              );
+              if (!inboxBodies.more) break;
+            }
+          }
+        }
+        if (!opts.headersOnly && !outOfTime()) {
+          const bodies = await fetchBodies(acct, s, settingsNow.bodyWindowDays, deadline, report);
+          if (bodies.more) report.more = true;
+        }
+        if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s, map);
+        await notifyTouched(acct);
+        if (!report.more) {
+          const fresh = await loadState(acct);
+          await saveState(acct, {
+            lastReconcile: now(),
+            ...(fresh.lastFullSync ? {} : { lastFullSync: now() }),
+          });
+        }
+      });
+    } catch (error) {
+      await saveState(acct, {
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      const code = (error as Partial<ProviderError>).code ?? null;
+      await recordFirstSync(acct, { errorCode: code }).catch(() => {});
+      throw error;
+    }
+    return report;
+  }
+
   const engine: SyncEngine = {
     async session(accountId) {
       return session(await account(accountId));
@@ -1130,110 +1255,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     },
 
     async syncAccount(accountId, opts = {}) {
-      const acct = await account(accountId);
-      const report: SyncReport = {
-        accountId,
-        added: 0,
-        changed: 0,
-        removed: 0,
-        bodies: 0,
-        more: false,
-      };
-      const settingsNow = await readSettings();
-      const deadline = opts.deadline;
-      const outOfTime = () => deadline !== undefined && Date.now() >= deadline;
-      try {
-        await withSession(acct, async (s) => {
-          const map = await syncMailboxList(acct.workspaceId, s);
-          await saveState(acct, { tier: s.capabilities().syncTier });
-          const inbox = map.mailboxes.find((m) => m.role === "inbox") ?? null;
-          if (inbox && inbox.totalMessages !== null) {
-            await recordFirstSync(acct, { inboxTotal: inbox.totalMessages });
-          }
-          const wanted = opts.mailboxIds ? new Set(opts.mailboxIds) : null;
-          const state = await loadState(acct);
-          const pending = new Set(state.pending);
-          const targets = syncable(map.mailboxes).filter(
-            (m) => !wanted || wanted.has(m.id) || pending.has(m.id),
-          );
-          for (const mailbox of targets) {
-            if (outOfTime()) {
-              report.more = true;
-              break;
-            }
-            // A large Inbox pages its headers for hours at the Provider's
-            // quota; its newest bodies keep pace page by page rather than
-            // waiting for the last header, so what the user sees first reads.
-            const interleave =
-              mailbox.role === "inbox" && !opts.headersOnly
-                ? async () => {
-                    await fetchBodies(
-                      acct,
-                      s,
-                      settingsNow.bodyWindowDays,
-                      deadline,
-                      report,
-                      mailbox.id,
-                    );
-                  }
-                : undefined;
-            const { complete } = await syncOneMailbox(
-              acct,
-              s,
-              mailbox,
-              map,
-              report,
-              settingsNow.batchSize,
-              deadline,
-              interleave,
-            );
-            if (!complete) {
-              report.more = true;
-              continue;
-            }
-            // The Inbox's window bodies follow its headers at once, before the
-            // other folders, so the first sync screen can let the app open.
-            if (mailbox.role === "inbox" && !opts.headersOnly) {
-              for (;;) {
-                if (outOfTime()) {
-                  report.more = true;
-                  break;
-                }
-                const inboxBodies = await fetchBodies(
-                  acct,
-                  s,
-                  settingsNow.bodyWindowDays,
-                  deadline,
-                  report,
-                  mailbox.id,
-                );
-                if (!inboxBodies.more) break;
-              }
-            }
-          }
-          if (!opts.headersOnly && !outOfTime()) {
-            const bodies = await fetchBodies(acct, s, settingsNow.bodyWindowDays, deadline, report);
-            if (bodies.more) report.more = true;
-          }
-          if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s, map);
-          await notifyTouched(acct);
-          if (!report.more) {
-            const fresh = await loadState(acct);
-            await saveState(acct, {
-              lastReconcile: now(),
-              ...(fresh.lastFullSync ? {} : { lastFullSync: now() }),
-            });
-          }
-        });
-      } catch (error) {
-        await saveState(acct, {
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-        const code = (error as Partial<ProviderError>).code ?? null;
-        await recordFirstSync(acct, { errorCode: code }).catch(() => {});
-        throw error;
-      }
-      return report;
+      return oneAtATime(accountId, () => syncAccountNow(accountId, opts));
     },
 
     async fetchBody(messageId) {

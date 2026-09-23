@@ -14,6 +14,7 @@ import {
   GMAIL_COST,
   gmailQuotaBucket,
   PENALTY_FLOOR,
+  RECOVERY_INTERVAL_MS,
   RECOVERY_STEP,
   RECOVERY_STEP_UNITS,
 } from "../../src/providers/gmail/quota.ts";
@@ -262,10 +263,25 @@ describe("Gmail adapter", () => {
     expect(gmail.rate()).toBe(full / 2);
     for (let i = 0; i < 8; i++) gmail.penalize();
     expect(gmail.rate()).toBe(full * PENALTY_FLOOR);
-    // Every RECOVERY_STEP_UNITS taken cleanly restores a tenth of the pace.
-    await gmail.take(RECOVERY_STEP_UNITS / 2);
-    await gmail.take(RECOVERY_STEP_UNITS / 2);
+    // A quiet stretch restores a tenth of the pace per RECOVERY_INTERVAL_MS.
+    await clock.sleep(RECOVERY_INTERVAL_MS);
     expect(gmail.rate()).toBeCloseTo(full * (PENALTY_FLOOR + RECOVERY_STEP), 6);
+    await clock.sleep(RECOVERY_INTERVAL_MS * 2);
+    expect(gmail.rate()).toBeCloseTo(full * (PENALTY_FLOOR + 3 * RECOVERY_STEP), 6);
+    // A new refusal halves it again, and the quiet stretch starts over.
+    gmail.penalize();
+    const halved = gmail.rate();
+    await clock.sleep(RECOVERY_INTERVAL_MS - 1);
+    expect(gmail.rate()).toBe(halved);
+    // Clean calls grow it back as well: RECOVERY_STEP_UNITS taken restores one step.
+    for (let i = 0; i < 9; i++) gmail.penalize();
+    const before = gmail.rate();
+    await gmail.take(RECOVERY_STEP_UNITS / 2);
+    await gmail.take(RECOVERY_STEP_UNITS / 2);
+    expect(gmail.rate()).toBeGreaterThan(before);
+    // With no more refusals it climbs back to the full pace in about two minutes.
+    await clock.sleep(RECOVERY_INTERVAL_MS * 10);
+    expect(gmail.rate()).toBe(full);
   });
 
   test("a 403 rate-limit part inside a batch is retried after a backoff, never dropped", async () => {

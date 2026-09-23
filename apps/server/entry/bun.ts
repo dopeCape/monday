@@ -147,6 +147,7 @@ async function main() {
     log: debug,
     heartbeatMs: timing.intervalMs,
     budgetMs: async () => (await readGlobalSetting(handle.db, "server.job_lease_seconds")) * 1000,
+    workers: () => readGlobalSetting(handle.db, "server.job_workers"),
     canServe: async () => {
       // When no Cloud heartbeat is fresh, the Sidecar claims every class (ADR 0005).
       const stale = (await readHeartbeatTiming(handle.db)).staleMs;

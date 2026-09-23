@@ -15,6 +15,8 @@ export interface KickerOptions {
   canServe: () => Promise<string[]> | string[];
   /** Milliseconds a claimed step may run before its lease expires (server.job_lease_seconds). */
   budgetMs?: number | (() => Promise<number> | number);
+  /** Steps run at once (server.job_workers); one when absent. */
+  workers?: number | (() => Promise<number> | number);
   log?: (message: string) => void;
 }
 

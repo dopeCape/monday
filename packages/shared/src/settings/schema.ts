@@ -3303,6 +3303,16 @@ export const settingsSchema = {
     label: "Job lease",
     help: "Seconds a claimed Job step may run before its lease expires and another server may take it over. Cloud functions shorten it to what their platform allows.",
   }),
+  "server.job_workers": setting({
+    type: z.int().min(1).max(32),
+    default: 6,
+    scope: "global",
+    section: "server",
+    group: "Jobs",
+    tier: "advanced",
+    label: "Job workers",
+    help: "Job steps this server runs at once. One slow step (a large mailbox paced by its provider) never holds up the rest while a worker is free.",
+  }),
   "server.cloud_tick_seconds": setting({
     type: z.int().min(5).max(800),
     default: 25,

@@ -292,12 +292,21 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
           return kept;
         },
       };
+      // A step still working keeps its lease, so a slow one is never swept as
+      // dead and run twice. The step's own deadline stays where it was: that
+      // is its budget, and it yields "again" by it.
+      const keepAlive = setInterval(
+        () => void api.extend(job.id, owner, budgetMs).catch(() => {}),
+        Math.max(1_000, Math.floor(budgetMs / 2)),
+      );
       let result: StepResult;
       try {
         result = await step(job, ctx);
       } catch (error) {
         await api.fail(job.id, owner, error instanceof Error ? error.message : String(error));
         return "failed";
+      } finally {
+        clearInterval(keepAlive);
       }
       if (result === "done") await api.complete(job.id, owner);
       else if (result === "again") await api.requeue(job.id, owner, 0);

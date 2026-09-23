@@ -119,6 +119,63 @@ describe("process kicker", () => {
   }, 20_000);
 });
 
+describe("process kicker workers", () => {
+  let db: TestDatabase;
+
+  beforeAll(async () => {
+    db = await testDatabase();
+  }, 60_000);
+
+  afterAll(async () => {
+    await db.drop();
+  });
+
+  test("a slow step holds one worker; the others keep running jobs, and its lease stays alive", async () => {
+    const jobs = createJobs(db.handle.db);
+    let release: () => void = () => {};
+    const slowGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ran: string[] = [];
+    jobs.registerStep("slow", async () => {
+      await slowGate;
+      ran.push("slow");
+      return "done";
+    });
+    jobs.registerStep<{ n: number }>("quick", async (job) => {
+      ran.push(`quick-${job.payload.n}`);
+      return "done";
+    });
+    const kicker = createProcessKicker({
+      jobs,
+      db: db.handle.db,
+      serverId: "workers-kicker",
+      mode: "sidecar",
+      canServe: () => ["needs-process"],
+      pollMs: 30,
+      sweepMs: 50,
+      budgetMs: 2_000,
+      workers: () => 3,
+    });
+    await kicker.start();
+    const slow = await jobs.enqueue("slow", {});
+    await waitFor(async () => (await jobs.get(slow))?.status === "running", 3_000);
+    for (let n = 1; n <= 4; n++) await jobs.enqueue("quick", { n });
+    await waitFor(() => ran.filter((r) => r.startsWith("quick")).length === 4, 3_000);
+    expect(ran).not.toContain("slow");
+
+    // Past its 2 s budget the slow step still holds its lease: it is never swept as dead.
+    await new Promise((r) => setTimeout(r, 2_600));
+    const held = await jobs.get(slow);
+    expect(held?.status).toBe("running");
+    expect(held?.attempts).toBe(1);
+    release();
+    await waitFor(async () => (await jobs.get(slow))?.status === "done", 3_000);
+    expect(ran.filter((r) => r === "slow")).toHaveLength(1);
+    await kicker.stop();
+  }, 20_000);
+});
+
 describe("serverless kicker", () => {
   let db: TestDatabase;
 
