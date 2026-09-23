@@ -410,6 +410,109 @@ describe("Gmail adapter", () => {
     expect(server.sent.at(-1)).toMatchObject({ draftId: "draft-10", via: "resumable" });
   });
 
+  test("drafts: create, update under the same id, threadId for a reply, delete, large via resumable", async () => {
+    const server = createGmailServer(fixture);
+    const session = await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+      simpleUploadLimit: 4096,
+    }).connect(credentialsFor(server));
+    if (!session.putDraft || !session.deleteDraft) throw new Error("no draft calls");
+    const original = [...server.emails.values()].find((e) => e.labelIds.includes("INBOX"));
+    if (!original) throw new Error("no message");
+    const parent = original.headers["message-id"]?.replace(/^<|>$/g, "") ?? "";
+    const reply = (text: string) =>
+      composeMime({
+        from: { name: "Me", email: fixture.address },
+        to: [original.from],
+        subject: `Re: ${original.subject}`,
+        text,
+        html: `<p>${text}</p>`,
+        inReplyTo: parent,
+        references: [parent],
+      });
+
+    const created = await session.putDraft(await reply("First go."), null);
+    expect(created.id).toMatch(/^r-/);
+    const first = server.draftWrites.at(-1);
+    expect(first).toMatchObject({
+      draftId: created.id,
+      threadId: original.threadId,
+      update: false,
+    });
+    const firstMessage = server.drafts.get(created.id) ?? "";
+    expect(server.emails.get(firstMessage)?.labelIds).toEqual(["DRAFT"]);
+    const raw = new TextDecoder().decode(first?.raw);
+    expect(raw).toMatch(/^In-Reply-To: <[^>]+>/m);
+    expect(raw).toMatch(/^References: <[^>]+>/m);
+    expect(raw).toContain("text/plain");
+    expect(raw).toContain("text/html");
+
+    // An update keeps the draft id; Gmail mints a new message for it.
+    const updated = await session.putDraft(await reply("Second go."), created.id);
+    expect(updated.id).toBe(created.id);
+    expect(server.draftWrites.at(-1)).toMatchObject({ update: true, threadId: original.threadId });
+    expect(server.emails.has(firstMessage)).toBe(false);
+    expect(server.quota[`drafts/${created.id}`]).toBe(GMAIL_COST["drafts.update"]);
+
+    // Deleted in Gmail meanwhile: the update creates it again.
+    await session.deleteDraft(created.id);
+    expect(server.drafts.has(created.id)).toBe(false);
+    const again = await session.putDraft(await reply("Third go."), created.id);
+    expect(again.id).not.toBe(created.id);
+    expect(server.drafts.has(again.id)).toBe(true);
+    // A draft already gone is not an error.
+    await session.deleteDraft("r-missing");
+
+    const big = await composeMime({
+      from: { name: "Me", email: fixture.address },
+      to: [{ name: "", email: fixture.address }],
+      subject: "Big draft",
+      text: "x",
+      attachments: [
+        { name: "big.bin", mediaType: "application/octet-stream", bytes: new Uint8Array(20_000) },
+      ],
+    });
+    const large = await session.putDraft(big, null);
+    expect(server.draftWrites.at(-1)).toMatchObject({ draftId: large.id, via: "resumable" });
+    await session.putDraft(big, large.id);
+    expect(server.draftWrites.at(-1)).toMatchObject({
+      draftId: large.id,
+      via: "resumable",
+      update: true,
+    });
+    expect(server.draftWrites.at(-1)?.raw.byteLength).toBe(big.byteLength);
+
+    // drafts.send with the mirrored draft's id removes the draft.
+    await session.send(await reply("Sending."), { draftId: again.id });
+    expect(server.sent.at(-1)).toMatchObject({ draftId: again.id });
+    expect(server.drafts.has(again.id)).toBe(false);
+  });
+
+  test("a 403 quota refusal on drafts.create is retried; a lasting one throws", async () => {
+    const server = createGmailServer(fixture);
+    const clock = virtualClock();
+    const session = await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0,
+    }).connect(credentialsFor(server));
+    const mime = await composeMime({
+      from: { name: "Me", email: fixture.address },
+      to: [{ name: "", email: "someone@example.com" }],
+      subject: "Quota",
+      text: "Hello.",
+    });
+    server.quotaRefuseNext = 2;
+    const draft = await session.putDraft?.(mime, null);
+    expect(draft?.id).toMatch(/^r-/);
+    expect(clock.slept()).toBeGreaterThan(0);
+    server.quotaRefuseNext = 100;
+    await expect(session.putDraft?.(mime, null)).rejects.toMatchObject({ code: "rate-limit" });
+  });
+
   test("fetchMessage decodes the raw format into headers, text and attachments", async () => {
     const server = createGmailServer(fixture);
     const session = await createGmailProvider({
