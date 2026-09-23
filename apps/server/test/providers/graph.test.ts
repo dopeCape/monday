@@ -280,7 +280,7 @@ describe("Graph adapter", () => {
     expect(created?.parentFolderId).toBe(server.folderId("drafts"));
     expect(created?.subject).toBe("Take-home review");
     expect(created?.to[0]?.email).toBe("aoife@northlight.dev");
-    const post = server.requests.findLast((r) => r.path.endsWith("/me/messages"));
+    const post = server.requests.filter((r) => r.path.endsWith("/me/messages")).at(-1);
     expect(post?.headers["content-type"]).toBe("text/plain");
 
     const second = await session.putDraft(await mime("Second."), first.id);

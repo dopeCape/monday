@@ -449,6 +449,18 @@ export function normalizeMessageId(value: string | null | undefined): string | n
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * The Message-ID a Draft mirror carries: `monday-draft.<draft id>@<domain>`.
+ * The import pass skips a Drafts-folder message with it, so a Provider that
+ * names drafts apart from their messages (Gmail) never gets its own mirror
+ * imported back as a second Draft. The real send gets a fresh id.
+ */
+export const MIRROR_MESSAGE_ID_PREFIX = "monday-draft.";
+
+export function isMirrorMessageId(value: string | null | undefined): boolean {
+  return normalizeMessageId(value)?.startsWith(MIRROR_MESSAGE_ID_PREFIX) ?? false;
+}
+
 /** Splits a References header into normalized ids. */
 export function parseReferences(value: string | null | undefined): string[] {
   if (!value) return [];

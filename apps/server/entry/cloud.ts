@@ -28,6 +28,7 @@ import { type AppEnv, createApp } from "../src/app.ts";
 import { claimableNeeds } from "../src/capabilities.ts";
 import { createDb, type DbHandle, dbOptionsFor } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
+import { backfillDraftMirrors } from "../src/drafts/index.ts";
 import { createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createNetlifyKicker } from "../src/kicker/netlify.ts";
@@ -137,6 +138,10 @@ export async function bootCloud(
       ? createVercelKicker({ ...kickerOptions, cronSecret: env.CRON_SECRET })
       : createNetlifyKicker({ ...kickerOptions, waitUntil: (p) => waitUntilNow?.(p) });
   await services.startAccounts();
+  // Drafts saved before their Provider could hold them reach its Drafts folder now.
+  await backfillDraftMirrors(handle.db, services.jobs).catch((error) =>
+    log(`draft mirror backfill failed: ${error}`),
+  );
   // LangGraph checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after the migrations.
   const checkpointer = await createCheckpointer(databaseUrl, handle.db, services.mailstore);
 

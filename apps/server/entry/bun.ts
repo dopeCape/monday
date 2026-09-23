@@ -39,6 +39,7 @@ import { claimableNeeds, isDeploymentMode } from "../src/capabilities.ts";
 import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
 import { createDb, dbOptionsFor } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
+import { backfillDraftMirrors } from "../src/drafts/index.ts";
 import { createLineNotifier, createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
@@ -129,6 +130,10 @@ async function main() {
   });
   const { auth, keys, jobs, mailstore, sync, push, accounts, calendar, judge } = services;
   await services.startAccounts();
+  // Drafts saved before their Provider could hold them reach its Drafts folder now.
+  await backfillDraftMirrors(handle.db, jobs)
+    .then((n) => n > 0 && debug(`draft mirrors queued at boot: ${n}`))
+    .catch((error) => log(`draft mirror backfill failed: ${error}`));
   // LangGraph's checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after our migrations.
   const checkpointer = await createCheckpointer(databaseUrl, handle.db, mailstore);
 

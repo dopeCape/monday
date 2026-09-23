@@ -25,7 +25,7 @@ import type {
   VoiceProfile,
 } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { ALWAYS_ON_NEED } from "../capabilities.ts";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
@@ -43,7 +43,12 @@ import type { Jobs } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import { composeMime, textFromHtml } from "../providers/mime.ts";
 import type { ProviderDraft, SyncEngine } from "../providers/sync.ts";
-import { normalizeMessageId, ProviderError, parseReferences } from "../providers/types.ts";
+import {
+  MIRROR_MESSAGE_ID_PREFIX,
+  normalizeMessageId,
+  ProviderError,
+  parseReferences,
+} from "../providers/types.ts";
 import { readGlobalSettings } from "../settings/read.ts";
 
 export const MIRROR_STEP = "draft.mirror";
@@ -109,6 +114,8 @@ export interface Drafts {
   getSend(id: string): Promise<ScheduledSend>;
   /** The mirror step's body, for tests and the step. */
   mirror(draftId: string): Promise<"mirrored" | "unchanged" | "skipped">;
+  /** Queues a mirror for every open Draft the Provider does not hold yet; 0 before registerSteps. */
+  backfillMirrors(): Promise<number>;
   /**
    * The deliver step's body: sends, or records the typed failure. A transient
    * Provider failure is rethrown so the Job retries, unless `lastAttempt`
@@ -364,7 +371,11 @@ export function createDrafts(options: DraftsOptions): Drafts {
   };
 
   /** The RFC 5322 bytes for a Draft: text and html parts always, attachments from blobs, reply headers. */
-  const buildMime = async (draft: Draft, from: Person): Promise<Uint8Array> => {
+  const buildMime = async (
+    draft: Draft,
+    from: Person,
+    purpose: "send" | "mirror" = "send",
+  ): Promise<Uint8Array> => {
     let inReplyTo: string | null = null;
     let references: string[] = [];
     if (draft.inReplyToMessageId) {
@@ -407,7 +418,11 @@ export function createDrafts(options: DraftsOptions): Drafts {
       html,
       inReplyTo,
       references,
-      messageId: `${crypto.randomUUID()}@${domain}`,
+      // A mirror names itself as monday's, so the import pass never takes it for a new Draft.
+      messageId:
+        purpose === "mirror"
+          ? `${MIRROR_MESSAGE_ID_PREFIX}${draft.id}@${domain}`
+          : `${crypto.randomUUID()}@${domain}`,
       date: now(),
       attachments,
     });
@@ -661,17 +676,24 @@ export function createDrafts(options: DraftsOptions): Drafts {
       const hash = await contentHash(draft);
       if (hash === row.mirroredHash && row.providerDraftId) return "unchanged";
       const from: Person = { name: acct.displayName, email: acct.address };
-      const mime = await buildMime(draft, from);
+      const mime = await buildMime(draft, from, "mirror");
       const result = await sync.withSession(acct.id, async (s) => {
         if (!s.putDraft) return null;
         return s.putDraft(mime, row.providerDraftId);
       });
-      if (!result) return "skipped";
+      if (!result) {
+        log(`draft ${draftId} not mirrored: the Account's Provider has no Drafts folder to write`);
+        return "skipped";
+      }
       await db
         .update(drafts)
         .set({ providerDraftId: result.id, mirroredHash: hash })
         .where(eq(drafts.id, draftId));
       return "mirrored";
+    },
+
+    async backfillMirrors() {
+      return jobsRef ? backfillDraftMirrors(db, jobsRef, now) : 0;
     },
 
     async deliver(sendId, jobId, deliverOptions = {}) {
@@ -902,6 +924,39 @@ export function textToSimpleHtml(text: string): string {
     .filter((p) => p.trim() !== "")
     .map((p) => `<p>${escapeText(p).replace(/\n/g, "<br>")}</p>`)
     .join("");
+}
+
+/**
+ * Queues a mirror Job for every open Draft the Provider does not hold yet
+ * (no provider id, or never hashed): Drafts saved before the Account's
+ * adapter could write Drafts reach its Drafts folder once. Run at boot; the
+ * Job id shares the save path's debounce bucket, so a boot during a typing
+ * burst queues nothing twice. Returns how many were queued.
+ */
+export async function backfillDraftMirrors(
+  db: Db,
+  jobs: Jobs,
+  now: () => Date = () => new Date(),
+): Promise<number> {
+  const rows = await db
+    .select({ id: drafts.id })
+    .from(drafts)
+    .where(
+      and(
+        eq(drafts.deleted, false),
+        eq(drafts.status, "open"),
+        or(isNull(drafts.providerDraftId), isNull(drafts.mirroredHash)),
+      ),
+    );
+  const bucket = Math.floor(now().getTime() / MIRROR_DEBOUNCE_MS);
+  for (const row of rows) {
+    await jobs.enqueue(
+      MIRROR_STEP,
+      { draftId: row.id },
+      { id: `${MIRROR_STEP}:${row.id}:${bucket}` },
+    );
+  }
+  return rows.length;
 }
 
 /** For tests and diagnostics: the Draft rows of a Workspace. */
