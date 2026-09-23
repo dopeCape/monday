@@ -16,15 +16,7 @@ import {
   ImageIcon,
   PaperclipIcon,
 } from "@phosphor-icons/react";
-import {
-  type ChangeEvent,
-  Fragment,
-  type MouseEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type ChangeEvent, Fragment, type ReactNode } from "react";
 import {
   cx,
   firstName,
@@ -34,6 +26,7 @@ import {
   preview as previewOf,
   uniqueKeys,
 } from "../format.ts";
+import { HtmlBody } from "./html-body.tsx";
 import { Icon, type IconComponent } from "./icon.tsx";
 import { Avatar, Btn, Chip, Mark } from "./primitives.tsx";
 
@@ -49,10 +42,13 @@ function Rich({ runs }: { runs: RichText }) {
     <>
       {runs.map((r, i) =>
         typeof r === "string" ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a Brief's runs are fixed text, never reordered
           <Fragment key={i}>{r}</Fragment>
         ) : "b" in r ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a Brief's runs are fixed text, never reordered
           <b key={i}>{r.b}</b>
         ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a Brief's runs are fixed text, never reordered
           <i key={i}>{r.i}</i>
         ),
       )}
@@ -119,6 +115,7 @@ export function Brief({
       </div>
       <ul>
         {brief.bullets.map((b, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the verdicts are indexed by bullet position
           <li key={i} className={brief.verified?.[i] === "partly" ? "partly" : undefined}>
             <Rich runs={b} />
           </li>
@@ -193,6 +190,8 @@ export interface MessageStrings {
   hideQuoted: string;
   showImages: string;
   loading: string;
+  /** The accessible name of the frame an HTML body renders in. */
+  frameTitle: string;
 }
 
 const DEFAULT_MESSAGE_STRINGS: MessageStrings = {
@@ -200,6 +199,7 @@ const DEFAULT_MESSAGE_STRINGS: MessageStrings = {
   hideQuoted: "Hide quoted text",
   showImages: "Show images",
   loading: "Loading",
+  frameTitle: "Message body",
 };
 
 export interface MessageProps {
@@ -214,113 +214,14 @@ export interface MessageProps {
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
   /** Quoted history starts folded (a Setting). */
   collapseQuoted?: boolean | undefined;
+  /** Remote images load without asking (the reader.load_remote_images Setting). */
+  loadRemoteImages?: boolean | undefined;
   /** Neither text nor html has arrived yet: the body shows the loading line. */
   loading?: boolean | undefined;
   strings?: Partial<MessageStrings> | undefined;
   /** For the relative time. Defaults to the wall clock. */
   now?: Date | undefined;
   className?: string | undefined;
-}
-
-const QUOTED_MARK = 'class="quoted"';
-const BLOCKED_MARK = "data-blocked";
-const ATTACHMENT_SRC = /^\/attachments\/([^/?#]+)/;
-
-/** Sanitised HTML from the Server, with folded history, blocked images and intercepted links. */
-function HtmlBody({
-  html,
-  collapseQuoted,
-  strings,
-  onOpenLink,
-  attachmentSrc,
-}: {
-  html: string;
-  collapseQuoted: boolean;
-  strings: MessageStrings;
-  onOpenLink: ((href: string) => void) | undefined;
-  attachmentSrc: ((attachmentId: string) => Promise<string>) | undefined;
-}) {
-  const hasQuoted = html.includes(QUOTED_MARK);
-  const hasBlocked = html.includes(BLOCKED_MARK);
-  const [quotedOpen, setQuotedOpen] = useState(!collapseQuoted);
-  const [imagesShown, setImagesShown] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Show images: the Server moved each remote src to data-src and marked the
-  // element blocked (the stylesheet hides it); showing puts the src back and
-  // lifts the mark. Runs again when the html itself changes.
-  useEffect(() => {
-    const root = ref.current;
-    if (!root || !imagesShown || html === "") return;
-    for (const img of root.querySelectorAll<HTMLImageElement>("img[data-src]")) {
-      const src = img.dataset.src;
-      if (!src) continue;
-      img.src = src;
-      img.removeAttribute("data-blocked");
-    }
-  }, [imagesShown, html]);
-
-  // Inline parts (<img src="/attachments/:id">) resolve through the opener to a URL the webview may load.
-  useEffect(() => {
-    const root = ref.current;
-    if (!root || !attachmentSrc || html === "") return;
-    let cancelled = false;
-    const urls: string[] = [];
-    for (const img of root.querySelectorAll<HTMLImageElement>("img")) {
-      const raw = img.getAttribute("src") ?? "";
-      const m = raw.match(ATTACHMENT_SRC);
-      if (!m?.[1]) continue;
-      img.removeAttribute("src");
-      void attachmentSrc(decodeURIComponent(m[1])).then((url) => {
-        if (cancelled) return;
-        urls.push(url);
-        img.src = url;
-      });
-    }
-    return () => {
-      cancelled = true;
-      // Object URLs the opener minted are released with the body they served.
-      if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
-        for (const url of urls) if (url.startsWith("blob:")) URL.revokeObjectURL(url);
-      }
-    };
-  }, [attachmentSrc, html]);
-
-  const onClick = (e: MouseEvent<HTMLDivElement>) => {
-    const target = (e.target as HTMLElement | null)?.closest?.("a[href]");
-    if (!target) return;
-    e.preventDefault();
-    const href = target.getAttribute("href");
-    if (href) onOpenLink?.(href);
-  };
-
-  return (
-    <>
-      <div
-        ref={ref}
-        className="msg-body"
-        data-quoted={hasQuoted ? (quotedOpen ? "open" : "collapsed") : undefined}
-        onClick={onClick}
-        onKeyDown={undefined}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: the Server sanitised it (apps/server/src/mail/sanitize.ts)
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      {hasQuoted || (hasBlocked && !imagesShown) ? (
-        <div className="msg-more">
-          {hasQuoted ? (
-            <Btn sm onClick={() => setQuotedOpen((o) => !o)}>
-              {quotedOpen ? strings.hideQuoted : strings.showQuoted}
-            </Btn>
-          ) : null}
-          {hasBlocked && !imagesShown ? (
-            <Btn sm onClick={() => setImagesShown(true)}>
-              {strings.showImages}
-            </Btn>
-          ) : null}
-        </div>
-      ) : null}
-    </>
-  );
 }
 
 export function Message({
@@ -331,6 +232,7 @@ export function Message({
   onOpenLink,
   attachmentSrc,
   collapseQuoted = true,
+  loadRemoteImages,
   loading,
   strings: stringOverrides,
   now,
@@ -368,6 +270,7 @@ export function Message({
         <HtmlBody
           html={message.bodyHtml}
           collapseQuoted={collapseQuoted}
+          loadRemoteImages={loadRemoteImages}
           strings={strings}
           onOpenLink={onOpenLink}
           attachmentSrc={attachmentSrc}

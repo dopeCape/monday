@@ -92,6 +92,8 @@ export interface ReaderProps {
   keys: { archive: string; snooze: string; delete: string; close: string };
   /** Quoted history starts folded (a Setting). */
   collapseQuoted?: boolean | undefined;
+  /** The reader.load_remote_images Setting: HTML bodies show remote images without asking. */
+  loadRemoteImages?: boolean | undefined;
   /** The reply box, once a reply is open; the mock's textarea otherwise. */
   reply?: ReactNode | undefined;
   onClose: () => void;
@@ -132,6 +134,7 @@ export function Reader({
   messageStrings,
   keys,
   collapseQuoted,
+  loadRemoteImages,
   reply,
   onClose,
   onAsk,
@@ -289,6 +292,7 @@ export function Reader({
               onOpenLink={onOpenLink}
               attachmentSrc={attachmentSrc}
               collapseQuoted={collapseQuoted}
+              loadRemoteImages={loadRemoteImages}
               loading={m.bodyText === undefined && m.bodyHtml === undefined}
               strings={messageStrings}
               now={now}

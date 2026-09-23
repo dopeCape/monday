@@ -113,6 +113,8 @@ const FORBIDDEN =
 const SAFE_VALUE = /^[\w\s#%.,()'"!/:+-]*$/;
 const URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s]*))\s*\)/gi;
 const MAX_VALUE = 4096;
+/** Marks a url() set aside while the declaration is rebuilt; never in the output. */
+const BLOCKED_URL = "\u0000blocked\u0000";
 
 export function isAllowedProperty(property: string): boolean {
   return PROPERTIES.has(property) || SIDED.test(property);
@@ -136,7 +138,13 @@ function cssUrl(url: string): string {
 
 export type DeclarationVerdict =
   | { kind: "keep"; value: string }
-  | { kind: "block"; value: string; urls: number }
+  | {
+      kind: "block";
+      value: string;
+      urls: number;
+      /** What renders meanwhile: a background shorthand keeps its colour, the image as none. */
+      fallback: string | null;
+    }
   | null;
 
 /** One declaration: kept (maybe with its url() rewritten), set aside until images are shown, or dropped. */
@@ -163,7 +171,7 @@ export function cleanDeclaration(
     }
     if ("block" in verdict) {
       blocked += 1;
-      return `url('${cssUrl(verdict.block)}')`;
+      return `url('${BLOCKED_URL}${cssUrl(verdict.block)}')`;
     }
     return `url('${cssUrl(verdict.keep)}')`;
   });
@@ -173,9 +181,12 @@ export function cleanDeclaration(
   const outside = rewritten.replace(/url\('[^']*'\)/g, "");
   if (/url\(/i.test(outside) || !SAFE_VALUE.test(outside)) return null;
   const clean = rewritten.replace(/"/g, "'");
-  return blocked > 0
-    ? { kind: "block", value: clean, urls: blocked }
-    : { kind: "keep", value: clean };
+  if (blocked === 0) return { kind: "keep", value: clean };
+  const full = clean.split(BLOCKED_URL).join("");
+  const rest = clean.replace(/url\('[^']*'\)/g, (u) => (u.includes(BLOCKED_URL) ? "none" : u));
+  const fallback =
+    property === "background" && !/^(none[\s,]*)+(!important)?$/.test(rest.trim()) ? rest : null;
+  return { kind: "block", value: full, urls: blocked, fallback };
 }
 
 export interface CleanStyle {
@@ -208,6 +219,7 @@ export function cleanInlineStyle(style: string, policy: CssPolicy): CleanStyle {
     if (verdict.kind === "keep") keep.push(line);
     else {
       blocked.push(line);
+      if (verdict.fallback) keep.push(`${d.prop.trim().toLowerCase()}: ${verdict.fallback}`);
       blockedImages += verdict.urls;
     }
   }
@@ -286,6 +298,7 @@ export function cleanStylesheet(css: string, policy: CssPolicy): CleanSheet {
         if (verdict.kind === "keep") node.append(decl);
         else {
           twin.append(decl);
+          if (verdict.fallback) node.append(decl.clone({ value: verdict.fallback }));
           blockedImages += verdict.urls;
         }
       }

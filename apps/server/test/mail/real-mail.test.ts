@@ -76,6 +76,8 @@ describe("a newsletter", () => {
     expect(html).toContain(
       `data-blocked-style="background: #333 url('https://cdn.example.com/bg.jpg') no-repeat center"`,
     );
+    // Meanwhile the shorthand keeps its colour, so the layout still reads.
+    expect(html).toContain(`style="background: #333 none no-repeat center; padding: 24px 32px"`);
     expect(html).toMatch(
       /<style media="not all" data-blocked="">\.monday-mail \.banner \{\s*background-image: url\('https:\/\/cdn\.example\.com\/banner\.png'\)/,
     );
