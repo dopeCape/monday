@@ -17,18 +17,23 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   type ActivityRecord,
   type Device,
+  defaultSettings,
   type ExternalConsent,
   type ExternalCredential,
   isSettingKey,
   isStringKey,
   type KeyProvider,
+  keyConditions,
   type MeterMonth,
   type PartialSettings,
   SETTING_SECTIONS,
   type SettingEntry,
   type SettingKey,
+  type SettingSection,
+  satisfyingValue,
   settingKeys,
   settingsSchema,
+  unmetConditions,
   type VoiceProfile,
 } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
@@ -42,6 +47,7 @@ import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { fakePlatform } from "../platform/tauri.ts";
 import { Shell, type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
 import { Settings, type SettingsProps, writeAll } from "./Settings.tsx";
+import { resetDisclosures } from "./settings/disclosure.tsx";
 import { controlKinds } from "./settings/render.tsx";
 import { buildSearchIndex, searchSettings } from "./settings/search.ts";
 
@@ -57,6 +63,8 @@ afterEach(async () => {
   root = null;
   host?.remove();
   host = null;
+  // Disclosures are remembered for the session; each case starts folded.
+  resetDisclosures();
 });
 
 const NOW = new Date("2026-09-17T10:00:00Z");
@@ -136,6 +144,13 @@ function scriptedApi(
       ...base.upgrade,
       status: async () => {
         throw new Error("no upgrade scripted");
+      },
+    },
+    // Each Account's card asks whether its calendar is a CalDAV link.
+    calendar: {
+      ...base.calendar,
+      info: async () => {
+        throw new Error("no calendar scripted");
       },
     },
     accounts: {
@@ -360,13 +375,85 @@ async function mount(
   return { asked };
 }
 
+/** Opens every disclosure on the page, in rounds, since an opened one may hold more. */
+async function openAll() {
+  for (let round = 0; round < 12; round++) {
+    const closed = qa('[data-disclosure][aria-expanded="false"]');
+    if (closed.length === 0) return;
+    for (const b of closed) await act(async () => b.click());
+    await settle();
+  }
+  throw new Error("disclosures kept appearing");
+}
+
+/** The Hosted runtime at the full level: the provider cards and the Task map are on the page. */
+const HOSTED: PartialSettings = { "ai.level": "automate", "ai.mode": "hosted" };
+
+/** mount, then every disclosure open: for tests about a card, not about what folds. */
+async function mountOpen(...args: Parameters<typeof mount>) {
+  const out = await mount(...args);
+  await openAll();
+  return out;
+}
+
+async function unmount() {
+  if (root) await act(async () => root?.unmount());
+  root = null;
+  host?.remove();
+  host = null;
+  resetDisclosures();
+}
+
+/** A value for a free dependency (a URL, a palette file) no single option satisfies. */
+const FREE_VALUES: Record<string, unknown> = {
+  "server.url": "https://cloud.example.test",
+  "appearance.palette": "~/.config/monday/palette.toml",
+};
+
+/**
+ * The Settings that bring a key onto its page: its unmet conditions met, the
+ * chain followed. Throws when a dependency cannot be satisfied.
+ */
+function satisfying(key: SettingKey): Record<string, unknown> {
+  const values: Record<string, unknown> = { ...defaultSettings(), "ai.level": "automate" };
+  const out: Record<string, unknown> = {};
+  for (let i = 0; i < 6; i++) {
+    const unmet = unmetConditions(keyConditions(key), values);
+    if (unmet.length === 0) return out;
+    for (const c of unmet) {
+      const v = satisfyingValue(c)?.value ?? FREE_VALUES[c.key];
+      if (v === undefined) throw new Error(`${key}: cannot satisfy ${JSON.stringify(c)}`);
+      values[c.key] = v;
+      out[c.key] = v;
+    }
+  }
+  throw new Error(`${key}: dependencies never settle`);
+}
+
 /* ------------------------------ Coverage ------------------------------ */
 
 describe("Settings pages come from the schema", () => {
-  test("every control's data-setting is a schema key, and every non-string key renders on exactly one page", async () => {
+  test("every control's data-setting is a schema key, and every non-string key is reachable on exactly one page: shown, behind a disclosure, or behind a choice that can be made", async () => {
     const seen = new Map<string, Set<string>>();
-    for (const section of SETTING_SECTIONS) {
-      await mount({ initialSection: section }, { api: scriptedApi().api });
+    // Each section on a fresh install at the full level, then each distinct set
+    // of choices a dependency needs, on the section that holds the key.
+    const runs = new Map<string, { section: SettingSection; settings: Record<string, unknown> }>();
+    for (const section of SETTING_SECTIONS) runs.set(section, { section, settings: {} });
+    for (const key of settingKeys) {
+      const entry = settingsSchema[key] as SettingEntry;
+      if (isStringKey(key) || entry.hidden || entry.renderedBy) continue;
+      if (keyConditions(key).length === 0) continue;
+      const settings = satisfying(key);
+      const at = settingsSchema[key].section;
+      if (Object.keys(settings).length === 0) continue;
+      runs.set(`${at}:${JSON.stringify(settings)}`, { section: at, settings });
+    }
+    for (const { section, settings } of runs.values()) {
+      await mountOpen(
+        { initialSection: section },
+        { api: scriptedApi().api },
+        { "ai.level": "automate", ...(settings as PartialSettings) },
+      );
       const page = q(".settings-in");
       expect(page?.dataset.section).toBe(section);
       const keys = qa("[data-setting]").map((el) => el.getAttribute("data-setting") ?? "");
@@ -385,10 +472,7 @@ describe("Settings pages come from the schema", () => {
         const inside = el.closest("[data-setting], [data-panel], .settings-nav, .settings-search");
         expect(inside, `${section}: ${el.outerHTML.slice(0, 80)}`).not.toBeNull();
       }
-      if (root) await act(async () => root?.unmount());
-      root = null;
-      host?.remove();
-      host = null;
+      await unmount();
     }
     // The search results are the same cards: every data-setting there is a
     // schema key and no key appears twice, for a query that matches nearly everything.
@@ -403,10 +487,7 @@ describe("Settings pages come from the schema", () => {
     for (const el of qa(".settings-results input, .settings-results .switch")) {
       expect(el.closest("[data-setting], [data-panel-result]")).not.toBeNull();
     }
-    if (root) await act(async () => root?.unmount());
-    root = null;
-    host?.remove();
-    host = null;
+    await unmount();
     for (const key of settingKeys) {
       const entry = settingsSchema[key] as SettingEntry;
       if (isStringKey(key) || entry.hidden) {
@@ -422,6 +503,93 @@ describe("Settings pages come from the schema", () => {
       const control = (settingsSchema[key] as SettingEntry).control;
       if (control) expect(controlKinds[control], `${key}: ${control}`).toBeDefined();
     }
+  });
+
+  test("a fresh page shows only what the current choices make relevant, folded behind disclosures that remember their state", async () => {
+    await mount({ initialSection: "ai" }, { api: scriptedApi().api });
+    // Local CLI: the CLIs and the chosen one's settings; no provider cards, no fold.
+    expect(q('[data-setting="ai.local.cli"]')).not.toBeNull();
+    expect(q('[data-setting="ai.hosted.provider"]')).toBeNull();
+    expect(q('[data-group="Anthropic"]')).toBeNull();
+    expect(q('[data-group="Other providers"]')).toBeNull();
+    expect(q('[data-setting="ai.local.model.claude-code"]')).toBeNull();
+    await click(q('[data-disclosure="ai/more/Runtime"]'));
+    expect(q('[data-setting="ai.local.model.claude-code"]')).not.toBeNull();
+    expect(q('[data-setting="ai.local.model.codex"]')).toBeNull();
+    // The overview says it in plain words.
+    expect(q('[data-overview="ai"]')?.textContent).toContain(
+      "Claude Code on this computer answers the agent.",
+    );
+    // Hosted: the chosen provider's card is open, the rest fold into one row that says which have keys.
+    await click(q('[data-setting="ai.mode"] .mode button:nth-child(2)'));
+    expect(q('[data-group="Anthropic"] [data-setting="ai.share_key.anthropic"]')).not.toBeNull();
+    expect(q('[data-setting="ai.local.cli"]')).toBeNull();
+    const fold = q('[data-group="Other providers"]');
+    expect(fold?.textContent).toContain("Gemini, OpenAI, Kimi, OpenRouter. None has a key.");
+    expect(q('[data-setting="ai.share_key.gemini"]')).toBeNull();
+    await click(q('[data-disclosure="ai/fold/Other providers"]'));
+    expect(qa(".disclosure.folded").map((el) => el.dataset.folded)).toEqual([
+      "Gemini",
+      "OpenAI",
+      "Kimi",
+      "OpenRouter",
+    ]);
+    await click(q('[data-disclosure="ai/fold/Other providers/Gemini"]'));
+    expect(q('[data-setting="ai.share_key.gemini"]')).not.toBeNull();
+    // Prices and endpoints stay under the provider's own Advanced.
+    expect(q('[data-setting="ai.pricing.anthropic"]')).toBeNull();
+    await click(q('[data-disclosure="ai/own-advanced/Anthropic"]'));
+    expect(q('[data-setting="ai.pricing.anthropic"]')).not.toBeNull();
+    // The index lists what is on the page and marks what is folded.
+    const index = qa(".settings-index a").map((a) => [a.textContent, a.dataset.folded ?? ""]);
+    expect(index).toContainEqual(["Other providers", "true"]);
+    expect(index).toContainEqual(["Anthropic", ""]);
+    expect(index.at(-1)).toEqual(["Advanced", "true"]);
+    // Leaving and coming back keeps what was open for the session.
+    await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    host = null;
+    await mount(
+      { initialSection: "ai" },
+      { api: scriptedApi().api },
+      { "ai.mode": "hosted", "ai.level": "automate" },
+    );
+    expect(q('[data-setting="ai.share_key.gemini"]')).not.toBeNull();
+    expect(q('[data-setting="ai.pricing.anthropic"]')).not.toBeNull();
+  });
+
+  test("routing: thresholds only when sorting is on, brief thresholds only in judge mode, the prompt only in model mode", async () => {
+    await mountOpen({ initialSection: "routing" }, { api: scriptedApi().api });
+    expect(q('[data-setting="routing.threshold.route"]')).not.toBeNull();
+    expect(q('[data-setting="briefs.judge.always_at_least"]')).not.toBeNull();
+    expect(q('[data-setting="briefs.prompt"]')).toBeNull();
+    await clickText("Model", q('[data-setting="briefs.policy_mode"]') ?? document);
+    expect(q('[data-setting="briefs.prompt"]')).not.toBeNull();
+    expect(q('[data-setting="briefs.judge.always_at_least"]')).toBeNull();
+    await click(q('[data-setting="routing.on_arrival"] .switch'));
+    expect(q('[data-setting="routing.threshold.route"]')).toBeNull();
+    expect(q('[data-group="Confidence"]')).toBeNull();
+  });
+
+  test("search finds a card a choice keeps off the page, says which choice, and one click makes it", async () => {
+    await mount({ initialSection: "accounts" }, { api: scriptedApi().api });
+    await type(q<HTMLInputElement>(".settings-search input"), "meeting url");
+    const hit = q('[data-result-key="calendar.custom_link"]');
+    expect(hit?.querySelector(".hidden-line")?.textContent).toContain(
+      "Not on the page right now. It shows when Meeting link is Custom.",
+    );
+    await clickText("Set Meeting link to Custom", hit ?? document);
+    expect(captured?.settings["calendar.meeting_link"]).toBe("custom");
+    expect(q('[data-result-key="calendar.custom_link"] .hidden-line')).toBeNull();
+    // Show in section on a folded card opens what it sits in.
+    await type(q<HTMLInputElement>(".settings-search input"), "full check");
+    await clickText("Show in sectionAccounts / Sync", q('[data-result="0"]') ?? document);
+    expect(q(".settings-in")?.dataset.section).toBe("accounts");
+    expect(q('[data-setting="sync.reconcile_minutes"]')).not.toBeNull();
+    expect(q('[data-disclosure="accounts/group/Sync"]')?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
   });
 
   test("a Pinned key is locked with the file value and the line it is set on", async () => {
@@ -479,7 +647,7 @@ describe("Settings pages come from the schema", () => {
     const row = q('[data-setting="appearance.mode"]');
     await clickText("Dark", row ?? document);
     expect(captured?.settings["appearance.mode"]).toBe("dark");
-    expect(q(".toast")?.textContent).toContain("Mode changed");
+    expect(q(".toast")?.textContent).toContain("Light or dark changed");
     await clickText("Undo Z", q(".toast") ?? document);
     expect(captured?.settings["appearance.mode"]).toBe("system");
     expect(q(".toast")?.textContent).toContain("Undone");
@@ -518,7 +686,7 @@ describe("Settings pages come from the schema", () => {
   });
 
   test("Undo restores a boolean, an array and a record, in one toast each", async () => {
-    await mount({ initialSection: "routing" }, { api: scriptedApi().api });
+    await mountOpen({ initialSection: "routing" }, { api: scriptedApi().api });
     // A boolean.
     await click(q('[data-setting="reader.load_remote_images"] .switch'));
     expect(captured?.settings["reader.load_remote_images"]).toBe(true);
@@ -526,7 +694,6 @@ describe("Settings pages come from the schema", () => {
     expect(captured?.settings["reader.load_remote_images"]).toBe(false);
     // An array: a list item added, then undone.
     const senders = q('[data-setting="briefs.automated_senders"]');
-    await click(senders?.closest("details")?.querySelector("summary"));
     const before = captured?.settings["briefs.automated_senders"] ?? [];
     await type(senders?.querySelector<HTMLInputElement>(".set-list-add input") ?? null, "bot");
     await clickText("Add", senders ?? document);
@@ -542,7 +709,7 @@ describe("Settings pages come from the schema", () => {
   });
 
   test("Ask monday inputs hand their text to the composer, and Fix with monday carries the warnings", async () => {
-    const { asked } = await mount(
+    const { asked } = await mountOpen(
       { initialSection: "appearance" },
       {
         config: {
@@ -594,7 +761,7 @@ describe("Settings › AI and agent", () => {
   test("keys are added and shared without ever being displayed", async () => {
     const scripted = scriptedApi();
     const keys = fakeKeys();
-    await mount({ initialSection: "ai", keys }, { api: scripted.api });
+    await mountOpen({ initialSection: "ai", keys }, { api: scripted.api }, HOSTED);
     const row = q('[data-setting="ai.share_key.anthropic"]');
     expect(row?.textContent).toContain("No key on this device");
     await clickText("Add key", row ?? document);
@@ -622,7 +789,7 @@ describe("Settings › AI and agent", () => {
   test("the TypeSafe group sits above the providers: a key is checked live through the Server before it is saved, a wrong key is refused with the reason, the status line says who answers judgments, and Judgments is a segmented choice", async () => {
     const scripted = scriptedApi();
     const keys = fakeKeys();
-    await mount({ initialSection: "ai", keys }, { api: scripted.api });
+    await mountOpen({ initialSection: "ai", keys }, { api: scripted.api }, HOSTED);
     // The group order: TypeSafe right after Runtime, before Anthropic.
     const groups = qa("[data-group]").map((el) => el.getAttribute("data-group"));
     expect(groups.indexOf("TypeSafe")).toBe(groups.indexOf("Runtime") + 1);
@@ -746,7 +913,7 @@ describe("Settings › AI and agent", () => {
         costMicros: 120_000,
       },
     });
-    await mount({ initialSection: "ai" }, { api: scripted.api });
+    await mountOpen({ initialSection: "ai" }, { api: scripted.api }, HOSTED);
 
     // Every Task has a row; promoting draft_message to always-ask writes the Setting.
     expect(qa('[data-setting^="ai.task."]')).toHaveLength(9);
@@ -930,7 +1097,7 @@ describe("Settings › AI › External access", () => {
       configurable: true,
       value: { writeText: async (t: string) => void copied.push(t) },
     });
-    await mount({ initialSection: "ai" }, { api: scripted.api });
+    await mountOpen({ initialSection: "ai" }, { api: scripted.api });
     const panel = q('[data-panel="external"]');
     expect(panel).not.toBeNull();
     // The Setting controls of the group render beside the panel, under Advanced.
@@ -1012,7 +1179,7 @@ describe("Settings › Sync server", () => {
         setupAvailable: false,
       },
     });
-    await mount(
+    await mountOpen(
       { initialSection: "server" },
       {
         api: scripted.api,
@@ -1037,7 +1204,8 @@ describe("Settings › Sync server", () => {
     expect(scripted.calls).toContainEqual({ name: "confirm", args: ["123456"] });
 
     // The schema-backed Connection controls render beside the panel.
-    expect(q('[data-setting="server.prefer"]')).not.toBeNull();
+    // Talk-to, the public URL and the root key only mean something with a Cloud; plain HTTP always does.
+    expect(q('[data-setting="server.prefer"]')).toBeNull();
     expect(q('[data-setting="server.insecure_allowed"] .switch')).not.toBeNull();
 
     // Storage: the count and size, the recovery file from the keychain, export and import.
@@ -1063,8 +1231,8 @@ describe("Settings › Sync server", () => {
 
 describe("Settings › Shortcuts", () => {
   test("the binding table is grouped, remappable and highlights conflicts", async () => {
-    await mount({ initialSection: "shortcuts" }, { api: scriptedApi().api });
-    expect(qa(".bindings h4").map((h) => h.textContent)).toEqual([
+    await mountOpen({ initialSection: "shortcuts" }, { api: scriptedApi().api });
+    expect(qa(".bindings-area .g-name").map((h) => h.textContent)).toEqual([
       "Navigate",
       "Act",
       "Compose",
@@ -1129,13 +1297,13 @@ describe("Settings › search", () => {
     expect(idx.find((e) => e.kind === "panel")?.terms).toContain("pairing");
     // "density" is a label prefix on appearance.density; the help mentions of it come after.
     expect(keysOf("density")[0]).toBe("appearance.density");
-    // "font" as a label prefix beats "Monospace font", a label word.
-    expect(keysOf("font").slice(0, 2)).toEqual(["appearance.font", "appearance.font_size"]);
+    // "font" as a label prefix beats "Code font", a label word.
+    expect(keysOf("font").slice(0, 2)).toEqual(["appearance.font", "appearance.monospace"]);
     expect(keysOf("font")).toContain("appearance.monospace");
     // An option label finds its setting: vim is a keymap, dark is a mode, meet is a link kind.
     expect(keysOf("vim")).toContain("keyboard.keymap");
     expect(keysOf("dark")).toContain("appearance.mode");
-    expect(keysOf("meet")[0]).toBe("calendar.meeting_link");
+    expect(keysOf("meet").slice(0, 2)).toContain("calendar.meeting_link");
     // A raw key matches last, but matches.
     expect(keysOf("undo_toast")).toEqual(["inbox.undo_toast_ms"]);
     // A panel by its own terms and by its section name.
@@ -1212,18 +1380,25 @@ describe("Settings › search", () => {
       "Theme",
       "Palette",
       "Layout",
+      "Text",
       "Views",
-      "Type",
-      "Config file",
       "Inbox",
       "Calendar",
       "Search",
-      "Settings page",
+      "Config file",
+      "Advanced",
     ]);
+    // Groups with nothing primary start folded, and the index marks them.
+    const folded = qa(".settings-index a[data-folded]").map((a) => a.textContent);
+    expect(folded).toEqual(["Views", "Inbox", "Calendar", "Search", "Advanced"]);
     expect(q(".settings-index a.on")?.textContent).toBe("Theme");
-    await click(q('.settings-index a[data-index-group="Type"]'));
-    expect(q(".settings-index a.on")?.textContent).toBe("Type");
-    expect(q("#group-type")).not.toBeNull();
+    await click(q('.settings-index a[data-index-group="Text"]'));
+    expect(q(".settings-index a.on")?.textContent).toBe("Text");
+    expect(q("#group-text")).not.toBeNull();
+    // A click on a folded group opens it.
+    expect(q('[data-setting="calendar.day_start_hour"]')).toBeNull();
+    await click(q('.settings-index a[data-index-group="Calendar"]'));
+    expect(q('[data-setting="calendar.day_start_hour"]')).not.toBeNull();
     // About has one group: no index.
     if (root) await act(async () => root?.unmount());
     root = null;
@@ -1419,7 +1594,7 @@ describe("Settings › panels", () => {
       throw new Error("already gone");
     };
     const releases: string[] = [];
-    await mount(
+    await mountOpen(
       {
         initialSection: "ai",
         latestRelease: async (source) => {
@@ -1497,7 +1672,7 @@ describe("Settings › panels", () => {
     scripted.api.voice.put = async () => {
       throw new Error("no server");
     };
-    await mount(
+    await mountOpen(
       { initialSection: "appearance" },
       { api: scripted.api },
       {
@@ -1537,7 +1712,7 @@ describe("Settings › panels", () => {
     if (root) await act(async () => root?.unmount());
     root = null;
     host?.remove();
-    await mount({ initialSection: "accounts" }, { api: scripted.api });
+    await mountOpen({ initialSection: "accounts" }, { api: scripted.api });
     const voice = q('[data-panel="voice"]');
     expect(voice?.textContent).toContain("Built");
     await click(voice?.querySelector(".switch"));
@@ -1598,6 +1773,7 @@ describe("Settings › Appearance on the document", () => {
       ),
     );
     await settle();
+    await openAll();
     const doc = document.documentElement;
     expect(doc.dataset.transitions).toBe("auto");
     const card = q('[data-setting="appearance.transitions"]');
@@ -1738,7 +1914,7 @@ describe("the Agent's change_setting tool reaches every page", () => {
         now: () => NOW,
         settings: async () => ({ previewAbove: 10, alwaysAsk: [], searchLimit: 100 }),
       });
-      await mount({ initialSection: c.section }, { api: scripted.api });
+      await mountOpen({ initialSection: c.section }, { api: scripted.api });
       const before = q<HTMLElement>(`[data-setting="${c.key}"]`);
       expect(before, c.key).not.toBeNull();
       expect(c.shows(before as HTMLElement)).toBe(false);

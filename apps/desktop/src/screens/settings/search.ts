@@ -76,8 +76,7 @@ export function buildSearchIndex(
   for (const section of SETTING_SECTIONS) {
     const sectionName = sectionNames[section];
     for (const group of groupsInSection(section)) {
-      const panel = panels.find((p) => p.section === section && p.group === group.name);
-      if (panel) {
+      for (const panel of panels.filter((p) => p.section === section && p.group === group.name)) {
         out.push({
           kind: "panel",
           section,

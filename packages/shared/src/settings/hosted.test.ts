@@ -61,7 +61,7 @@ describe("task-to-Role map", () => {
   });
 
   test("the share switch help carries its threat model", () => {
-    expect(settingsSchema["ai.share_key.anthropic"].help).toContain("controls the Server host");
+    expect(settingsSchema["ai.share_key.anthropic"].help).toContain("controls the server");
   });
 });
 
