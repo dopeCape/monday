@@ -2940,6 +2940,10 @@ select.select {
   gap: 8px;
   margin-top: 12px;
 }
+.soverview > .soverview-actions > .btn.sm {
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
 /* a folded group in the index: a small dot says it opens on a click */
 .settings-index a.folded::after {
   content: "";

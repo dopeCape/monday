@@ -5787,6 +5787,8 @@ export const SETTING_GROUP_META: Readonly<
     OpenAI: providerGroup("openai"),
     Kimi: providerGroup("kimi"),
     OpenRouter: providerGroup("openrouter"),
+    // The tool list is long; its heading line says what it holds.
+    Permissions: { collapsed: true },
     "Activity log": { collapsed: true },
     "External access": { collapsed: true },
   },

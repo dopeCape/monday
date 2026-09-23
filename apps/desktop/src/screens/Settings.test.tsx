@@ -972,7 +972,7 @@ describe("Settings › AI and agent: the AI level", () => {
     root = null;
     host?.remove();
     // Assist: the Runtime and Permissions show; Workflows keeps only what the level allows.
-    await mount({ initialSection: "ai" }, { api: scriptedApi().api }, { "ai.level": "assist" });
+    await mountOpen({ initialSection: "ai" }, { api: scriptedApi().api }, { "ai.level": "assist" });
     expect(q('[data-setting="ai.mode"]')).not.toBeNull();
     expect(q('[data-setting="agent.always_ask"]')).not.toBeNull();
     if (root) await act(async () => root?.unmount());
