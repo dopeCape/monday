@@ -4,8 +4,10 @@
 //                                 opens the Sidecar's loopback listener when one exists and
 //                                 answers {state, url, redirectUri}; the browser goes to url
 //   POST /oauth/:provider/finish  {state, code}   exchanges the code, creates the Account
-//   GET  /oauth/:provider/status?state=           pending | done {account} | error {message},
-//                                 long-polled by the wizard while the browser is open
+//   GET  /oauth/:provider/status?state=           pending | done {account} | error {message}
+//                                 | cancelled, long-polled by the wizard while the browser is open
+//   POST /oauth/:provider/cancel  {state}   the wizard's Cancel: closes the loopback listener and
+//                                 forgets the flow, so a late redirect adds no Account
 //   GET    /oauth/:provider/app   {app}  the saved app, never its secret (hasSecret says one is kept)
 //   PUT    /oauth/:provider/app   {clientId, clientSecret?, tenant?, accountType?, projectId?, pubsubTopic?}
 //                                 checks the registration live and saves it only when it passes:
@@ -58,7 +60,8 @@ export interface OAuthRoutesOptions {
 type Outcome =
   | { status: "pending" }
   | { status: "done"; account: AccountView }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
 
 const startBody = z.object({
   /** Absent: sign in through the saved app. */
@@ -86,6 +89,7 @@ const appPatchBody = z.object({
 });
 
 const finishBody = z.object({ state: z.string().min(1), code: z.string().min(1) });
+const cancelBody = z.object({ state: z.string().min(1) });
 
 function providerOf(param: string): OAuthIssuerName | null {
   return param === "google" || param === "microsoft" ? param : null;
@@ -128,8 +132,11 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
   const statusWait = options.statusWaitMs ?? 20_000;
   const outcomes = new Map<string, Outcome>();
   const waiters = new Map<string, Set<() => void>>();
+  const listeners = new Map<string, { close(): void }>();
 
   function settle(state: string, outcome: Outcome): void {
+    // A cancelled sign-in stays cancelled, whatever the browser does afterwards.
+    if (outcomes.get(state)?.status === "cancelled") return;
     outcomes.set(state, outcome);
     for (const w of waiters.get(state) ?? []) w();
     waiters.delete(state);
@@ -197,8 +204,10 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
     } satisfies StartInput);
     outcomes.set(started.state, { status: "pending" });
     if (listener) {
+      listeners.set(started.state, listener);
       void listener.callback
         .then(async (query) => {
+          if (outcomes.get(started.state)?.status === "cancelled") return;
           if (query.error) {
             settle(started.state, {
               status: "error",
@@ -232,7 +241,10 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
             message: error instanceof Error ? error.message : String(error),
           });
         })
-        .finally(() => listener.close());
+        .finally(() => {
+          listeners.delete(started.state);
+          listener.close();
+        });
     }
     return c.json({ state: started.state, url: started.url, redirectUri });
   });
@@ -286,6 +298,9 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
     if (!providerOf(c.req.param("provider"))) return c.json({ error: "unknown_provider" }, 404);
     const body = await parseBody(c, finishBody);
     if (!body.ok) return body.response;
+    if (outcomes.get(body.data.state)?.status === "cancelled") {
+      return c.json({ error: "cancelled", message: "the sign-in was cancelled" }, 409);
+    }
     try {
       const account = await complete(body.data.state, body.data.code);
       settle(body.data.state, { status: "done", account });
@@ -299,6 +314,22 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
         code === "auth" ? 401 : 502,
       );
     }
+  });
+
+  app.post("/oauth/:provider/cancel", async (c) => {
+    if (!providerOf(c.req.param("provider"))) return c.json({ error: "unknown_provider" }, 404);
+    const body = await parseBody(c, cancelBody);
+    if (!body.ok) return body.response;
+    const { state } = body.data;
+    const current = outcomes.get(state);
+    if (!current) return c.json({ error: "unknown_state" }, 404);
+    // Too late to cancel: the Account is already added, or the sign-in already failed.
+    if (current.status !== "pending") return c.json(current);
+    settle(state, { status: "cancelled" });
+    listeners.get(state)?.close();
+    listeners.delete(state);
+    flow.forget(state);
+    return c.json({ status: "cancelled" });
   });
 
   app.get("/oauth/:provider/status", async (c) => {

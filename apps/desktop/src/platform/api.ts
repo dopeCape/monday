@@ -840,6 +840,12 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
       /** Long-polls until the loopback listener has finished the sign-in. */
       status: (provider: OAuthProvider, state: string) =>
         request<OAuthStatus>(`/oauth/${provider}/status?${new URLSearchParams({ state })}`),
+      /** Stops a sign-in still waiting on the browser; a late redirect then adds nothing. */
+      cancel: (provider: OAuthProvider, state: string) =>
+        request<OAuthStatus>(`/oauth/${provider}/cancel`, {
+          method: "POST",
+          body: JSON.stringify({ state }),
+        }),
       finish: (provider: OAuthProvider, state: string, code: string) =>
         request<{ account: AccountView }>(`/oauth/${provider}/finish`, {
           method: "POST",
@@ -1001,6 +1007,7 @@ export interface OAuthStartBody {
 export type OAuthStatus =
   | { status: "pending" }
   | { status: "done"; account: AccountView }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
 
 export type Api = ReturnType<typeof createApi>;

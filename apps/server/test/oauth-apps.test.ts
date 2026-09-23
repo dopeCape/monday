@@ -225,3 +225,75 @@ describe("the OAuth app routes", () => {
     expect((await call("PUT", "/oauth/yahoo/app", { clientId: "x" })).status).toBe(404);
   });
 });
+
+describe("cancelling a sign-in", () => {
+  test("Cancel closes the loopback listener, and a late redirect adds no Account", async () => {
+    const google = createGmailServer(generateFixture());
+    let deliver: (query: Record<string, string>) => void = () => {};
+    let closed = 0;
+    const added: unknown[] = [];
+    const routes = oauthRoutes({
+      flow: createOAuthFlow({ fetch: google.fetch }),
+      accounts: {
+        list: async () => [],
+        add: async (input) => {
+          added.push(input);
+          throw new Error("no Account may be added");
+        },
+        remove: async () => false,
+      },
+      fetch: google.fetch,
+      loopback: {
+        open: async () => ({
+          redirectUri: "http://127.0.0.1:5558/callback",
+          callback: new Promise<Record<string, string>>((resolve) => {
+            deliver = resolve;
+          }),
+          close: () => {
+            closed += 1;
+          },
+        }),
+      },
+      statusWaitMs: 10,
+    });
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await routes.request(path, {
+        method,
+        ...(body !== undefined
+          ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } }
+          : {}),
+      });
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+
+    const started = await call("POST", "/oauth/google/start", {
+      clientId: CLIENT,
+      clientSecret: SECRET,
+    });
+    const state = String(started.json.state);
+    expect((await call("GET", `/oauth/google/status?state=${state}`)).json).toEqual({
+      status: "pending",
+    });
+
+    expect((await call("POST", "/oauth/google/cancel", { state })).json).toEqual({
+      status: "cancelled",
+    });
+    expect(closed).toBeGreaterThan(0);
+    expect((await call("GET", `/oauth/google/status?state=${state}`)).json).toEqual({
+      status: "cancelled",
+    });
+
+    // The browser finishes anyway: nothing is added, by the listener or by /finish.
+    deliver({ code: "late-code", state });
+    await Bun.sleep(20);
+    expect(added).toHaveLength(0);
+    expect((await call("GET", `/oauth/google/status?state=${state}`)).json).toEqual({
+      status: "cancelled",
+    });
+    const finish = await call("POST", "/oauth/google/finish", { state, code: "late-code" });
+    expect(finish.status).toBe(409);
+    expect(added).toHaveLength(0);
+
+    expect((await call("POST", "/oauth/google/cancel", { state: "nope" })).status).toBe(404);
+  });
+});

@@ -107,6 +107,10 @@ function fakeApi(script: Script = {}) {
         calls.push({ name: "status", args: [provider, state] });
         return statuses.shift() ?? { status: "pending" };
       },
+      cancel: async (provider, state) => {
+        calls.push({ name: "cancel", args: [provider, state] });
+        return { status: "cancelled" };
+      },
       finish: async () => ({ account: account() }),
       app: async (provider) => {
         calls.push({ name: "app", args: [provider] });
@@ -257,10 +261,14 @@ describe("Add account: the Google wizard", () => {
 
     await clickText("Next");
     expect(step()).toBe("api");
-    expect(sentence()).toBe("Enable the Gmail API in that project.");
+    expect(sentence()).toBe("Enable the Gmail API and the Google Calendar API in that project.");
     await clickText("Enable Gmail API");
     expect(opened.at(-1)).toBe(
       "https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=monday-1",
+    );
+    await clickText("Enable Calendar API");
+    expect(opened.at(-1)).toBe(
+      "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=monday-1",
     );
 
     await clickText("Next");
@@ -344,7 +352,9 @@ describe("Add account: the Google wizard", () => {
     await type(".wizard-field:nth-child(2) input", "projects/monday-1/topics/monday-gmail");
     await clickText("Next");
     expect(step()).toBe("signin");
-    expect(sentence()).toBe("Sign in with Google and allow monday to read and send your mail.");
+    expect(sentence()).toBe(
+      "Sign in with Google and allow monday to read and send your mail, and to read and change your calendar.",
+    );
     // No Next here: the sign-in itself advances.
     expect(
       [...document.querySelectorAll(".wizard-foot button")].map((b) => b.textContent?.trim()),
@@ -390,6 +400,35 @@ describe("Add account: the Google wizard", () => {
     await clickText("Try again");
     expect(text()).not.toContain("Sign-in failed");
     expect(step()).toBe("signin");
+  });
+
+  test("Cancel stops a sign-in waiting on the browser, and a new one can start", async () => {
+    const { api, calls } = fakeApi();
+    await mount({ initial: "google", api });
+    for (let i = 0; i < 4; i++) await clickText("Next");
+    await type(".wizard-field:nth-child(1) input", "1234-abc.apps.googleusercontent.com");
+    await type(".wizard-field:nth-child(2) input", "GOCSPX-secret");
+    await settle();
+    await clickText("Next");
+    await clickText("Skip");
+    await clickText("Sign in");
+    await act(async () => Bun.sleep(20));
+    expect(text()).toContain("Finish signing in in your browser");
+    await clickText("Cancel");
+    await act(async () => Bun.sleep(20));
+    expect(calls.find((c) => c.name === "cancel")?.args).toEqual(["google", "st-1"]);
+    expect(text()).toContain("Sign-in cancelled");
+    expect(text()).not.toContain("Finish signing in in your browser");
+    // The polling stopped with it.
+    const polled = calls.filter((c) => c.name === "status").length;
+    await act(async () => Bun.sleep(30));
+    expect(calls.filter((c) => c.name === "status").length).toBe(polled);
+    // Back works again, and so does a fresh sign-in.
+    expect(q<HTMLButtonElement>(".wizard-foot button")?.disabled).toBe(false);
+    await clickText("Sign in");
+    await act(async () => Bun.sleep(20));
+    expect(calls.filter((c) => c.name === "start")).toHaveLength(2);
+    expect(text()).toContain("Finish signing in in your browser");
   });
 
   test("the escape hatch leaves the wizard for the IMAP form", async () => {

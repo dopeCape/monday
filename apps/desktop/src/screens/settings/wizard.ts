@@ -70,7 +70,8 @@ export type SignIn =
   | { status: "starting" }
   | { status: "waiting"; state: string; url: string }
   | { status: "done"; address: string }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
 
 /** The non-secret part of a saved sign-in app, as the Server answers it. */
 export interface SavedApp {
@@ -113,6 +114,7 @@ export type WizardAction =
   | { type: "signin.done"; address: string; at: number }
   | { type: "signin.failed"; message: string }
   | { type: "signin.retry" }
+  | { type: "signin.cancel" }
   | { type: "escape" }
   | { type: "app.loaded"; app: SavedApp | null };
 
@@ -246,6 +248,10 @@ export function reduceWizard(state: WizardState, action: WizardAction): WizardSt
       return { ...state, signIn: { status: "error", message: action.message } };
     case "signin.retry":
       return { ...state, signIn: { status: "idle" } };
+    case "signin.cancel":
+      return state.signIn.status === "starting" || state.signIn.status === "waiting"
+        ? { ...state, signIn: { status: "cancelled" } }
+        : state;
     case "escape":
       return { ...state, escaped: true };
     case "app.loaded": {
@@ -319,6 +325,14 @@ export function deepLink(state: WizardState): string | null {
     default:
       return null;
   }
+}
+
+/** The Google Calendar API's page, the API step's second link; null elsewhere. */
+export function calendarApiLink(state: WizardState): string | null {
+  if (state.provider !== "google" || state.step !== "api") return null;
+  const project = state.fields.projectId.trim();
+  const url = "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com";
+  return project ? `${url}?project=${encodeURIComponent(project)}` : url;
 }
 
 /** The topic the Pub/Sub step suggests once a project id is known. */

@@ -41,6 +41,7 @@ import {
 import { platform } from "../../platform/tauri.ts";
 import { useShell } from "../../shell/Shell.tsx";
 import {
+  calendarApiLink,
   canAdvance,
   canSkip,
   canValidate,
@@ -669,7 +670,11 @@ export function Wizard(props: WizardProps) {
     );
   }, [finished, provider, props.log, state, now]);
 
+  // Each sign-in is one run; Cancel (or a new run) retires the one polling.
+  const signInRun = useRef(0);
   const signIn = async () => {
+    const run = ++signInRun.current;
+    const live = () => signInRun.current === run;
     dispatch({ type: "signin.start" });
     try {
       // The Server signs in through the saved app; nothing secret leaves this page again.
@@ -678,10 +683,16 @@ export function Wizard(props: WizardProps) {
         provider,
         provider === "google" && topic ? { pubsubTopic: topic } : {},
       );
+      if (!live()) {
+        void api.oauth.cancel(provider, started.state).catch(() => {});
+        return;
+      }
       dispatch({ type: "signin.opened", state: started.state, url: started.url });
       await props.openExternal(started.url);
       for (;;) {
+        if (!live()) return;
         const status = await api.oauth.status(provider, started.state);
+        if (!live() || status.status === "cancelled") return;
         if (status.status === "done") {
           dispatch({ type: "signin.done", address: status.account.address, at: now() });
           props.onAdded?.(status.account);
@@ -694,8 +705,16 @@ export function Wizard(props: WizardProps) {
         await new Promise((r) => setTimeout(r, props.pollMs));
       }
     } catch (error) {
-      dispatch({ type: "signin.failed", message: errorMessage(error) });
+      if (live()) dispatch({ type: "signin.failed", message: errorMessage(error) });
     }
+  };
+
+  const cancelSignIn = () => {
+    signInRun.current += 1;
+    if (state.signIn.status === "waiting") {
+      void api.oauth.cancel(provider, state.signIn.state).catch(() => {});
+    }
+    dispatch({ type: "signin.cancel" });
   };
 
   const copy = async (text: string) => {
@@ -721,6 +740,7 @@ export function Wizard(props: WizardProps) {
   };
 
   const link = state.fromSaved ? null : deepLink(state);
+  const calendarLink = state.fromSaved ? null : calendarApiLink(state);
   const { n, total } = stepIndex(state);
   const title = state.fromSaved
     ? s[`strings.oauth_apps.wizard.title.${provider}`]
@@ -755,6 +775,11 @@ export function Wizard(props: WizardProps) {
             <Btn primary onClick={() => void props.openExternal(link)}>
               <ArrowSquareOutIcon /> {actionFor(state, s)}
             </Btn>
+            {calendarLink ? (
+              <Btn onClick={() => void props.openExternal(calendarLink)}>
+                <ArrowSquareOutIcon /> {s["strings.accounts.google.calendar_api_action"]}
+              </Btn>
+            ) : null}
           </div>
         ) : null}
         <StepBody
@@ -764,6 +789,7 @@ export function Wizard(props: WizardProps) {
           onField={(name, value) => dispatch({ type: "field", name, value })}
           onCopy={(text) => void copy(text)}
           onSignIn={() => void signIn()}
+          onCancel={cancelSignIn}
           onRetry={() => dispatch({ type: "signin.retry" })}
           now={now}
         />
@@ -879,6 +905,7 @@ function StepBody({
   onField,
   onCopy,
   onSignIn,
+  onCancel,
   onRetry,
   now,
 }: {
@@ -888,6 +915,7 @@ function StepBody({
   onField: (name: keyof WizardState["fields"], value: string) => void;
   onCopy: (text: string) => void;
   onSignIn: () => void;
+  onCancel: () => void;
   onRetry: () => void;
   now: () => number;
 }) {
@@ -1011,7 +1039,9 @@ function StepBody({
     case "signin":
       return (
         <div className="wizard-fields">
-          {state.signIn.status === "idle" || state.signIn.status === "error" ? (
+          {state.signIn.status === "idle" ||
+          state.signIn.status === "error" ||
+          state.signIn.status === "cancelled" ? (
             <div className="wizard-action">
               <Btn primary onClick={onSignIn}>
                 {s["strings.accounts.wizard.signin"]}
@@ -1027,9 +1057,17 @@ function StepBody({
               {fill(s["strings.accounts.wizard.signin_failed"], { message: state.signIn.message })}
             </div>
           ) : null}
+          {state.signIn.status === "cancelled" ? (
+            <div className="wizard-check" data-state="cancelled">
+              {s["strings.accounts.wizard.signin_cancelled"]}
+            </div>
+          ) : null}
           {state.signIn.status === "starting" || state.signIn.status === "waiting" ? (
-            <div className="wizard-check checking">
-              <span className="live" /> {s["strings.accounts.wizard.signin_waiting"]}
+            <div className="wizard-waiting">
+              <div className="wizard-check checking">
+                <span className="live" /> {s["strings.accounts.wizard.signin_waiting"]}
+              </div>
+              <Btn onClick={onCancel}>{s["strings.accounts.wizard.cancel_signin"]}</Btn>
             </div>
           ) : null}
         </div>

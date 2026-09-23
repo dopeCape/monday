@@ -5182,6 +5182,12 @@ export const settingsSchema = {
   ),
   "strings.accounts.wizard.step_of": str("accounts", "Wizard: progress", "Step {n} of {total}"),
   "strings.accounts.wizard.back": str("accounts", "Wizard: back", "Back"),
+  "strings.accounts.wizard.cancel_signin": str("accounts", "Wizard: cancel the sign-in", "Cancel"),
+  "strings.accounts.wizard.signin_cancelled": str(
+    "accounts",
+    "Wizard: sign-in cancelled",
+    "Sign-in cancelled. Sign in again when you are ready.",
+  ),
   "strings.accounts.wizard.next": str("accounts", "Wizard: next", "Next"),
   "strings.accounts.wizard.skip": str("accounts", "Wizard: skip", "Skip"),
   "strings.accounts.wizard.done": str("accounts", "Wizard: done", "Done"),
@@ -5227,9 +5233,14 @@ export const settingsSchema = {
   "strings.accounts.google.api": str(
     "accounts",
     "Google step: API",
-    "Enable the Gmail API in that project.",
+    "Enable the Gmail API and the Google Calendar API in that project.",
   ),
   "strings.accounts.google.api_action": str("accounts", "Google action: API", "Enable Gmail API"),
+  "strings.accounts.google.calendar_api_action": str(
+    "accounts",
+    "Google action: Calendar API",
+    "Enable Calendar API",
+  ),
   "strings.accounts.google.consent": str(
     "accounts",
     "Google step: consent screen",
@@ -5290,7 +5301,7 @@ export const settingsSchema = {
   "strings.accounts.google.signin": str(
     "accounts",
     "Google step: sign in",
-    "Sign in with Google and allow monday to read and send your mail.",
+    "Sign in with Google and allow monday to read and send your mail, and to read and change your calendar.",
   ),
   "strings.accounts.microsoft.title": str(
     "accounts",
@@ -5346,12 +5357,12 @@ export const settingsSchema = {
   "strings.accounts.microsoft.signin": str(
     "accounts",
     "Microsoft step: sign in",
-    "Sign in with Microsoft and accept the permissions.",
+    "Sign in with Microsoft and accept the permissions: your mail, and reading and changing your calendar.",
   ),
   "strings.accounts.microsoft.consent_note": str(
     "accounts",
     "Microsoft note: admin consent",
-    "A work tenant may ask an administrator to approve Mail.ReadWrite.",
+    "A work tenant may ask an administrator to approve Mail.ReadWrite and Calendars.ReadWrite.",
   ),
   "strings.oauth_apps.title": str(
     "accounts",
