@@ -23,9 +23,10 @@ import { KEY_PROVIDERS } from "@monday/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
+import { AssistDisabledError } from "../intelligence/compose-assist.ts";
 import type { Intelligence } from "../intelligence/index.ts";
 import { isMonth, monthOf } from "../intelligence/meter.ts";
-import { AiOffError, NoJudgeError } from "../intelligence/runtime/index.ts";
+import { AiOffError, NoJudgeError, NoProviderKeyError } from "../intelligence/runtime/index.ts";
 import { parseBody } from "./validate.ts";
 
 const provider = z.enum(KEY_PROVIDERS);
@@ -36,6 +37,26 @@ const briefBody = z.object({
   trigger: z.enum(["sync", "open", "user"]).default("user"),
 });
 const person = z.object({ name: z.string().max(200), email: z.string().max(320) });
+const assistBody = z.object({
+  workspace: z.string().min(1),
+  action: z.enum([
+    "shorter",
+    "clearer",
+    "friendlier",
+    "formal",
+    "grammar",
+    "translate",
+    "continue",
+    "instruction",
+  ]),
+  text: z.string().max(200_000),
+  selection: z.boolean().optional(),
+  instruction: z.string().max(2000).optional(),
+  language: z.string().max(60).optional(),
+  subject: z.string().max(2000).optional(),
+  to: z.array(z.string().max(320)).max(100).optional(),
+  draftId: z.string().min(1).optional(),
+});
 const intentBody = z.object({
   workspace: z.string().min(1),
   text: z.string().trim().min(1).max(500),
@@ -128,6 +149,28 @@ export function intelligenceRoutes(
   app.delete("/threads/:id/brief", async (c) => {
     await intelligence.briefs.remove(c.req.param("id"));
     return c.body(null, 204);
+  });
+
+  // The composer's writing assist: whether it can answer, and one answer.
+  app.get("/assist/draft", async (c) => {
+    const workspace = c.req.query("workspace");
+    if (!workspace) return c.json({ error: "workspace_required" }, 400);
+    return c.json(await intelligence.composeAssist.available(workspace));
+  });
+
+  app.post("/assist/draft", async (c) => {
+    const body = await parseBody(c, assistBody);
+    if (!body.ok) return body.response;
+    try {
+      return c.json(await intelligence.composeAssist.run(body.data));
+    } catch (error) {
+      if (error instanceof AiOffError) return c.json({ error: "ai_off" }, 409);
+      if (error instanceof AssistDisabledError) return c.json({ error: "assist_off" }, 409);
+      if (error instanceof NoProviderKeyError) {
+        return c.json({ error: "no_shared_key", provider: error.provider }, 409);
+      }
+      throw error;
+    }
   });
 
   app.post("/judge/intent", async (c) => {

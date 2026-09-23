@@ -10,6 +10,8 @@ import type {
   Capabilities,
   ChangesPage,
   Draft,
+  DraftAssistRequest,
+  DraftAssistResult,
   DraftIntent,
   Id,
   Intent,
@@ -84,6 +86,10 @@ export interface ContentTransport {
     workspaceId: Id,
     threadIds: readonly Id[],
   ): Promise<Array<{ threadId: Id; rules: Record<string, number> }>>;
+  /** The composer's writing assist; absent on a Server without the route. */
+  draftAssist?(request: DraftAssistRequest): Promise<DraftAssistResult>;
+  /** Whether the assist can answer now. */
+  draftAssistAvailable?(workspaceId: Id): Promise<boolean>;
   uploadBlob(
     workspaceId: Id,
     file: { name: string; mediaType: string; bytes: Uint8Array },
@@ -174,6 +180,9 @@ export function apiContent(api: Api): ContentTransport {
       api.briefs.compute(workspaceId, threadId, trigger),
     sectionJudgments: (workspaceId, threadIds) =>
       api.routing.sectionJudgments(workspaceId, threadIds),
+    draftAssist: (request) => api.drafts.assist(request),
+    draftAssistAvailable: async (workspaceId) =>
+      (await api.drafts.assistAvailable(workspaceId)).available,
     async uploadBlob(workspaceId, file, onProgress) {
       const started = await api.blobs.start(workspaceId, {
         name: file.name,
