@@ -464,3 +464,68 @@ describe("sync engine over the fake Provider", () => {
     await engine.unwatch(account.id);
   });
 });
+
+describe("a large Inbox's newest bodies keep pace with its header pages", () => {
+  let db: TestDatabase;
+  let engine: SyncEngine;
+  const trace: string[] = [];
+
+  beforeAll(async () => {
+    db = await testDatabase();
+    const keys = createKeys(db.handle.db);
+    await keys.unlock(randomKey());
+    const store = createMailstore(db.handle.db, keys);
+    const credentials = createCredentialStore(db.handle.db, store);
+    const fake = createFakeProvider(fixture);
+    // Records the order of header pages and body fetches the engine asks for.
+    const traced = {
+      kind: fake.kind,
+      async connect(c: Parameters<typeof fake.connect>[0]) {
+        const s = await fake.connect(c);
+        return new Proxy(s, {
+          get(target, prop, receiver) {
+            const value = Reflect.get(target, prop, receiver);
+            if (prop === "syncMailbox") {
+              return (mailboxId: string, ...rest: unknown[]) => {
+                trace.push(`page:${mailboxId}`);
+                return (value as (...a: unknown[]) => unknown).call(target, mailboxId, ...rest);
+              };
+            }
+            if (prop === "fetchMessage") {
+              return (...args: unknown[]) => {
+                trace.push("body");
+                return (value as (...a: unknown[]) => unknown).apply(target, args);
+              };
+            }
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      },
+    };
+    const workspace = await store.createWorkspace(account);
+    await credentials.store(workspace.id, account.id, fakeCredentials());
+    engine = createSyncEngine({
+      db: db.handle.db,
+      mailstore: store,
+      providers: createProviderRegistry({ overrides: { imap: traced as never } }),
+      credentials,
+      settings: async () => ({ ...defaultSyncSettings(), batchSize: 5 }),
+      now: () => NOW,
+      watchDebounceMs: 50,
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await engine.close();
+    await db.drop();
+  });
+
+  test("bodies are fetched between Inbox pages, before its last header arrives", async () => {
+    await engine.syncAccount(account.id);
+    const inboxPages = trace.flatMap((t, i) => (t === "page:INBOX" ? [i] : []));
+    expect(inboxPages.length).toBeGreaterThan(2);
+    const firstBody = trace.indexOf("body");
+    expect(firstBody).toBeGreaterThan(-1);
+    expect(firstBody).toBeLessThan(inboxPages[inboxPages.length - 1] ?? -1);
+  });
+});

@@ -819,6 +819,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     report: SyncReport,
     batch: number,
     deadline: number | undefined,
+    /** Runs between pages while the pass is incomplete (the Inbox's newest bodies). */
+    afterPage?: () => Promise<void>,
   ): Promise<{ complete: boolean }> {
     const state = await loadState(acct);
     let token: string | null = state.mailboxStates[mailbox.id] ?? null;
@@ -845,6 +847,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         }
       }
       if (!sawState || complete) break;
+      if (deadline !== undefined && Date.now() >= deadline) break;
+      if (afterPage) await afterPage();
       if (deadline !== undefined && Date.now() >= deadline) break;
     }
     return { complete };
@@ -1157,6 +1161,22 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
               report.more = true;
               break;
             }
+            // A large Inbox pages its headers for hours at the Provider's
+            // quota; its newest bodies keep pace page by page rather than
+            // waiting for the last header, so what the user sees first reads.
+            const interleave =
+              mailbox.role === "inbox" && !opts.headersOnly
+                ? async () => {
+                    await fetchBodies(
+                      acct,
+                      s,
+                      settingsNow.bodyWindowDays,
+                      deadline,
+                      report,
+                      mailbox.id,
+                    );
+                  }
+                : undefined;
             const { complete } = await syncOneMailbox(
               acct,
               s,
@@ -1165,6 +1185,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
               report,
               settingsNow.batchSize,
               deadline,
+              interleave,
             );
             if (!complete) {
               report.more = true;
