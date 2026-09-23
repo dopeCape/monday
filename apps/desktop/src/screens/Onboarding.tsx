@@ -324,24 +324,13 @@ function OnboardingBody({
               <h1>{s["strings.onboarding.chat_title"]}</h1>
               <p>{s["strings.onboarding.chat_intro"]}</p>
               <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
-                {!finished ? (
-                  <div className="onboarding-chips">
-                    {chips.map((c) => (
-                      <Chip key={c} onClick={() => void agent.send(c)}>
-                        {c}
-                      </Chip>
-                    ))}
-                    <Chip onClick={() => void agent.send(s["strings.onboarding.skip"])}>
-                      {s["strings.onboarding.skip"]}
-                    </Chip>
-                  </div>
-                ) : null}
                 <Composer
                   agent={agent}
                   mode="right"
                   runtime={runtimeText}
                   strings={agentStrings}
                   suggestions={[]}
+                  replies={finished ? [] : [...chips, s["strings.onboarding.skip"]]}
                   now={now}
                   placeholder={s["strings.agent.placeholder_open"]}
                   text={text}

@@ -494,7 +494,7 @@ const addExample: ToolDefinition<{
         apply: async () => {
           const { previous } = await seam.recordExample(thread.id, group.id, input.belongs);
           return {
-            text: `Example recorded: "${thread.subject}" ${word} ${group.name}. New mail like it is routed with it; organize_existing on ${group.name} re-runs routing on the mail already there.`,
+            text: `Example recorded: "${thread.subject}" ${word} ${group.name}. New mail like it is routed with it; sorting ${group.name} again applies it to the mail already there.`,
             data: {
               threadId: thread.id,
               subject: thread.subject,

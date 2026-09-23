@@ -103,8 +103,18 @@ function toolVerb(call: ToolCall): string {
       return done ? "Changed layout" : "Change layout";
     case "undo":
       return "Undid";
-    default:
-      return call.tool.replaceAll("_", " ");
+    case "onboarding_context":
+      return "Read your setup";
+    case "create_group":
+      return done ? "Created group" : "Create group";
+    case "create_section":
+      return done ? "Created section" : "Create section";
+    case "organize_existing":
+      return done ? "Sorted existing mail" : "Sort existing mail";
+    default: {
+      const words = call.tool.replaceAll("_", " ");
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    }
   }
 }
 
@@ -130,8 +140,35 @@ export function statusLabel(call: ToolCall, s: AgentStrings): string {
   if (call.status === "failed") return s["strings.agent.failed"];
   if (call.declined) return s["strings.agent.declined"];
   if (call.undoneAt) return s["strings.agent.undone"];
-  if (call.tier === "read-only") return call.result ?? s["strings.agent.applied"];
+  if (call.tier === "read-only") return resultLine(call.result) ?? s["strings.agent.applied"];
   return s["strings.agent.applied"];
+}
+
+/**
+ * A read tool's result as one short line. A tool that answered with JSON
+ * reads as counts ("3 sections, 5 groups"), never the raw text; anything else
+ * is its first line, cut to fit a row.
+ */
+export function resultLine(result: string | null | undefined): string | null {
+  const text = result?.trim();
+  if (!text) return null;
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (Array.isArray(value))
+        return `${value.length} ${value.length === 1 ? "result" : "results"}`;
+      if (value && typeof value === "object") {
+        const counts = Object.entries(value as Record<string, unknown>)
+          .filter(([, v]) => Array.isArray(v))
+          .map(([k, v]) => `${(v as unknown[]).length} ${k.replaceAll("_", " ")}`);
+        return counts.length > 0 ? counts.join(", ") : null;
+      }
+    } catch {
+      // Not JSON after all: fall through to the first line.
+    }
+  }
+  const line = text.split("\n")[0] ?? "";
+  return line.length > 60 ? `${line.slice(0, 59)}…` : line;
 }
 
 /** The buttons under a card, the first primary. */

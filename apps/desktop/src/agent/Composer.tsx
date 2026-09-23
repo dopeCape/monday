@@ -46,6 +46,11 @@ export interface ComposerProps {
   onOpenThread?: ((threadId: string) => void) | undefined;
   /** A chip with layout knobs is applied by the screen; every chip is also sent as a turn. */
   onSuggest?: ((suggestion: Suggestion) => void) | undefined;
+  /**
+   * Quick replies shown right above the input for the whole conversation, not
+   * only while it is empty (the onboarding questions' chips). A click sends it.
+   */
+  replies?: readonly string[] | undefined;
   /** One conversation only: no new, history or Developer mode (the onboarding conversation). */
   plain?: boolean | undefined;
   /** Clicking the header's runtime line opens Settings, AI and agent. */
@@ -83,6 +88,7 @@ function ComposerBody({
   runtime,
   strings,
   suggestions,
+  replies,
   open = true,
   onOpenChange,
   placeholder,
@@ -161,7 +167,13 @@ function ComposerBody({
     thread
   );
   const chips =
-    agent.events.length === 0 && !historyOpen && !card ? (
+    replies && replies.length > 0 && !historyOpen ? (
+      <Suggestions
+        suggestions={replies.map((label) => ({ label }))}
+        onSuggest={onSuggest}
+        onOpenSession={openSession}
+      />
+    ) : agent.events.length === 0 && !historyOpen && !card ? (
       <Suggestions suggestions={suggestions} onSuggest={onSuggest} onOpenSession={openSession} />
     ) : null;
   const labels = {

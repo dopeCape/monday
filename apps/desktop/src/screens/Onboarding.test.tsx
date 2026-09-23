@@ -446,7 +446,7 @@ describe("onboarding: the conversation", () => {
     });
     expect(text()).toContain("Who are you and what do you do?");
     // Question 1: no chips but Skip; the user types.
-    expect(qa(".onboarding-chips .chip").map((c) => c.textContent)).toEqual(["Skip"]);
+    expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual(["Skip"]);
     const input = q<HTMLTextAreaElement>(".agent-bar textarea");
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     await act(async () => {
@@ -461,7 +461,7 @@ describe("onboarding: the conversation", () => {
     await settle();
     expect(client.sent[1]?.text).toBe("I run a small studio");
     // Question 2: the top senders already synced, plus lots of mail, plus Skip.
-    expect(qa(".onboarding-chips .chip").map((c) => c.textContent)).toEqual([
+    expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual([
       "Aoife Byrne",
       "Mateo Silva",
       "Priya Raman",
@@ -471,7 +471,7 @@ describe("onboarding: the conversation", () => {
     await clickText("Aoife Byrne", q(".onboarding-chips") ?? document);
     expect(client.sent[2]?.text).toBe("Aoife Byrne");
     // Question 3: the tools.
-    expect(qa(".onboarding-chips .chip").map((c) => c.textContent)).toEqual([
+    expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual([
       "Slack",
       "Notion",
       "Drive",
@@ -480,7 +480,11 @@ describe("onboarding: the conversation", () => {
     ]);
     await clickText("Drive", q(".onboarding-chips") ?? document);
     // Question 4: Skip sends Skip.
-    expect(qa(".onboarding-chips .chip").map((c) => c.textContent)).toEqual(["Yes", "No", "Skip"]);
+    expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual([
+      "Yes",
+      "No",
+      "Skip",
+    ]);
     await clickText("Skip", q(".onboarding-chips") ?? document);
     expect(client.sent[4]?.text).toBe("Skip");
     await clickText("Yes", q(".onboarding-chips") ?? document);
@@ -494,7 +498,7 @@ describe("onboarding: the conversation", () => {
       { sessionId: client.sessions[0]?.id ?? "", activityId: "c-groups", decision: "approved" },
     ]);
     // The keymap landed: Done shows and finishes with the state completed.
-    expect(text()).toContain("propose groups Applied");
+    expect(text()).toContain("Propose groups Applied");
     await clickText("Done");
     expect(done).toEqual(["done"]);
     expect(captured?.settings["onboarding.state"]?.["acct-1"]?.status).toBe("completed");

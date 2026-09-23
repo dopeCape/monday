@@ -1864,6 +1864,7 @@ form.agent-bar :where(.mk) {
   grid-area: t;
   font-weight: 400;
   color: var(--fg-muted);
+  white-space: nowrap;
 }
 .tool.step :where(.d) {
   grid-area: d;
@@ -1875,6 +1876,15 @@ form.agent-bar :where(.mk) {
 }
 .tool.step .st {
   grid-area: st;
+  display: block;
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool.step .st i {
+  vertical-align: -0.15em;
+  margin-right: 4px;
 }
 .tool.stopped .st {
   color: var(--fg-faint);
@@ -5799,9 +5809,6 @@ button.prov {
   gap: 20px;
   animation: fade-in var(--t-slow) var(--ease);
 }
-.onboarding-chips .chip {
-  animation: fade-in var(--t-med) var(--ease);
-}
 .onboarding h1 {
   font-size: var(--fs-2xl);
   font-weight: 600;
@@ -5841,12 +5848,6 @@ button.prov {
 .onboarding-chat .agent-col {
   flex: 1;
   border: 0;
-}
-.onboarding-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 12px 4px;
 }
 
 /* Keyboard focus on the agent, routing, workflows, calendar and onboarding surfaces. */

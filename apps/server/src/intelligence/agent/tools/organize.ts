@@ -642,8 +642,8 @@ const createGroup: ToolDefinition<GroupFields & { name: string; parent?: string 
       kind: "action",
       preview: text(
         `Create ${parentId ? `sub-group "${input.parent} / ${input.name}"` : `group "${input.name}"`}${
-          patch.sentence ? `: ${patch.sentence}` : ""
-        }. Nothing moves yet; organize_existing routes the mail already there.`,
+          patch.sentence ? `: ${patch.sentence.trim().replace(/[.\s]+$/, "")}` : ""
+        }. New mail is sorted into it; the mail already here moves only when you sort it.`,
       ),
       count: 1,
       apply: async () => {

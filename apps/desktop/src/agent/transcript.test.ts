@@ -9,7 +9,14 @@ import { readEvents } from "../platform/api.ts";
 import { toolEvent } from "./client.ts";
 import { desiredRuntime, runtimeLine, sameRuntime } from "./runtimeLine.ts";
 import { suggestionsFor } from "./suggestions.ts";
-import { applyEvents, cardActions, statusLabel, toolTitle, waitingCalls } from "./transcript.ts";
+import {
+  applyEvents,
+  cardActions,
+  resultLine,
+  statusLabel,
+  toolTitle,
+  waitingCalls,
+} from "./transcript.ts";
 
 const strings = defaultSettings();
 
@@ -85,7 +92,15 @@ describe("transcript", () => {
     ).toBe("12 threads");
     expect(toolTitle(call({ tool: "search_threads", status: "running" }))).toBe("Searching mail");
     expect(toolTitle(call({ tool: "archive_threads" }))).toBe("Archived");
-    expect(toolTitle(call({ tool: "make_tea" }))).toBe("make tea");
+    expect(toolTitle(call({ tool: "make_tea" }))).toBe("Make tea");
+    // A read tool that answered with JSON reads as counts, never the raw text.
+    expect(resultLine('{"sections":[{"id":"a"},{"id":"b"}],"groups":[]}')).toBe(
+      "2 sections, 0 groups",
+    );
+    expect(resultLine("[1,2,3]")).toBe("3 results");
+    expect(resultLine("40 threads")).toBe("40 threads");
+    expect(resultLine(`${"x".repeat(80)}`)?.length).toBe(60);
+    expect(resultLine("")).toBeNull();
     // An external caller's card names the caller (slice 19).
     expect(
       toolTitle(call({ tool: "archive_threads", status: "waiting", actorName: "ops bot" })),
