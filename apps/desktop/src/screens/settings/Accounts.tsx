@@ -23,6 +23,7 @@ import { useShell } from "../../shell/Shell.tsx";
 import { AddAccount, type AddAccountView } from "./AddAccount.tsx";
 import { Disclosure } from "./disclosure.tsx";
 import { CalDavLink, VoiceCard } from "./panels.tsx";
+import { SignInAppsPanel } from "./SignInApps.tsx";
 import {
   Card,
   DangerAction,
@@ -282,6 +283,24 @@ export function AccountsPanel(_: PanelProps) {
     </div>
   );
 }
+// The app-level half of Accounts: the Google and Microsoft sign-in apps every
+// Account of that provider signs in through (SignInApps.tsx).
+registerPanel("accounts", "Sign-in apps", SignInAppsPanel, {
+  title: "strings.oauth_apps.title",
+  description: "strings.oauth_apps.intro",
+  searchTerms: [
+    "sign-in",
+    "oauth",
+    "client id",
+    "client secret",
+    "google cloud",
+    "azure",
+    "app registration",
+    "tenant",
+    "pub/sub",
+  ],
+});
+
 registerPanel("accounts", "Your accounts", AccountsPanel, {
   title: "strings.accounts.connect.title",
   description: "strings.accounts.connect.intro",

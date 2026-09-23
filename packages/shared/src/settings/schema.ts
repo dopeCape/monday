@@ -3554,6 +3554,36 @@ export const settingsSchema = {
     "Cloud group intro",
     "Deploy a Cloud server, copy your mail into its database, then connect this device to it.",
   ),
+  "strings.settings.intro.accounts.sign-in-apps": str(
+    "accounts",
+    "Sign-in apps group intro",
+    "For the whole app, not one account: Google and Microsoft accounts sign in through an app you register once.",
+  ),
+  "strings.settings.intro.accounts.for-every-account": str(
+    "accounts",
+    "Shared account settings intro",
+    "Used by every account, unless an account sets its own in its card above.",
+  ),
+  "strings.settings.intro.routing.sorting": str(
+    "routing",
+    "Sorting group intro",
+    "How new mail finds its Group, and when mail already sorted is looked at again.",
+  ),
+  "strings.settings.intro.routing.confidence": str(
+    "routing",
+    "Confidence group intro",
+    "How sure monday must be before it moves a thread on its own, and when it asks you instead.",
+  ),
+  "strings.settings.intro.ai.runtime": str(
+    "ai",
+    "Runtime group intro",
+    "What answers the agent: a command-line agent on this computer, or a provider you reach with an API key.",
+  ),
+  "strings.settings.intro.ai.permissions": str(
+    "ai",
+    "Permissions group intro",
+    "What the agent may do without asking. Anything that leaves the mailbox always asks first.",
+  ),
   "strings.settings.advanced": str("appearance", "Advanced disclosure", "Advanced"),
   /* Disclosure: More in place, folded groups, the page's Advanced (docs/spec/settings.md) */
   "strings.settings.more": str("appearance", "More disclosure", "More settings ({n})"),
@@ -5749,7 +5779,7 @@ function providerGroup(provider: HostedProvider): GroupMeta {
 export const SETTING_GROUP_META: Readonly<
   Partial<Record<SettingSection, Readonly<Record<string, GroupMeta>>>>
 > = {
-  accounts: { "Your accounts": { panelRenders: true } },
+  accounts: { "Your accounts": { panelRenders: true }, "Sign-in apps": { collapsed: true } },
   ai: {
     TypeSafe: { ownAdvanced: true },
     Anthropic: providerGroup("anthropic"),

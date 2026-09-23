@@ -146,6 +146,8 @@ function scriptedApi(
         throw new Error("no upgrade scripted");
       },
     },
+    // No sign-in app saved yet.
+    oauth: { ...base.oauth, app: async () => ({ app: null }) },
     // Each Account's card asks whether its calendar is a CalDAV link.
     calendar: {
       ...base.calendar,
