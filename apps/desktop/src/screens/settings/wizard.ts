@@ -4,6 +4,10 @@
 // validation, the sign-in outcome) arrives as an action, so every transition
 // is testable without a DOM or a server. Elapsed time is kept here so the 15
 // and 10 minute targets can be measured by hand from the debug log.
+//
+// The OAuth app is app level (one per provider, saved on the Server the
+// moment the live check passes): with one saved, the wizard is only the
+// sign-in; a failed sign-in, Back or a closed window never loses it.
 
 import type { ValidationField, ValidationResult } from "../../platform/api.ts";
 
@@ -68,9 +72,25 @@ export type SignIn =
   | { status: "done"; address: string }
   | { status: "error"; message: string };
 
+/** The non-secret part of a saved sign-in app, as the Server answers it. */
+export interface SavedApp {
+  clientId: string;
+  tenant: string | null;
+  accountType: "personal" | "work" | null;
+  projectId: string | null;
+  pubsubTopic: string | null;
+}
+
+/** The window event a change to a saved sign-in app raises, so an open wizard reads it again. */
+export const OAUTH_APP_CHANGED = "monday:oauth-app-changed";
+
 export interface WizardState {
   provider: WizardProvider;
   step: WizardStep;
+  /** The Server holds a sign-in app for the provider (read, or saved by the paste step). */
+  appSaved: boolean;
+  /** Opened with the app already saved: the wizard is the sign-in alone. */
+  fromSaved: boolean;
   fields: WizardFields;
   validation: Validation;
   signIn: SignIn;
@@ -93,7 +113,8 @@ export type WizardAction =
   | { type: "signin.done"; address: string; at: number }
   | { type: "signin.failed"; message: string }
   | { type: "signin.retry" }
-  | { type: "escape" };
+  | { type: "escape" }
+  | { type: "app.loaded"; app: SavedApp | null };
 
 export function stepsOf(provider: WizardProvider): readonly WizardStep[] {
   return provider === "google" ? GOOGLE_STEPS : MICROSOFT_STEPS;
@@ -111,6 +132,8 @@ export function initialWizard(provider: WizardProvider, now: number): WizardStat
       accountType: "personal",
       pubsubTopic: "",
     },
+    appSaved: false,
+    fromSaved: false,
     validation: { status: "idle" },
     signIn: { status: "idle" },
     startedAt: now,
@@ -159,6 +182,7 @@ export function canSkip(state: WizardState): boolean {
 }
 
 export function stepIndex(state: WizardState): { n: number; total: number } {
+  if (state.fromSaved) return { n: 1, total: 1 };
   const steps = stepsOf(state.provider);
   // "done" is the outcome, not a step to count.
   return { n: steps.indexOf(state.step) + 1, total: steps.length - 1 };
@@ -177,7 +201,9 @@ export function reduceWizard(state: WizardState, action: WizardAction): WizardSt
     case "next":
       return canAdvance(state) ? move(state, 1) : state;
     case "back": {
-      if (state.step === "done" || state.signIn.status === "waiting") return state;
+      if (state.step === "done" || state.signIn.status === "waiting" || state.fromSaved) {
+        return state;
+      }
       return move(state, -1);
     }
     case "skip":
@@ -201,6 +227,8 @@ export function reduceWizard(state: WizardState, action: WizardAction): WizardSt
         validation: action.result.ok
           ? { status: "ok", detail: action.result.detail }
           : { status: "error", field: action.result.field, reason: action.result.reason },
+        // The paste step saves on the Server as it validates.
+        appSaved: state.appSaved || action.result.ok,
       };
     }
     case "signin.start":
@@ -220,6 +248,41 @@ export function reduceWizard(state: WizardState, action: WizardAction): WizardSt
       return { ...state, signIn: { status: "idle" } };
     case "escape":
       return { ...state, escaped: true };
+    case "app.loaded": {
+      // A sign-in under way or finished is never pulled out from under the user.
+      if (state.signIn.status === "waiting" || state.step === "done") return state;
+      // Saved by this wizard's own paste step: the setup carries on to its next steps.
+      if (action.app && state.appSaved && !state.fromSaved) return state;
+      if (action.app) {
+        const a = action.app;
+        return {
+          ...state,
+          step: "signin",
+          appSaved: true,
+          fromSaved: true,
+          signIn: state.signIn.status === "starting" ? state.signIn : { status: "idle" },
+          fields: {
+            ...state.fields,
+            clientId: a.clientId,
+            clientSecret: "",
+            tenant: a.tenant && a.tenant !== "consumers" ? a.tenant : "",
+            accountType: a.accountType ?? state.fields.accountType,
+            projectId: a.projectId ?? state.fields.projectId,
+            pubsubTopic: a.pubsubTopic ?? "",
+          },
+        };
+      }
+      // Forgotten (Remove): a wizard that relied on it starts the setup again.
+      if (!state.appSaved) return state;
+      return {
+        ...state,
+        step: stepsOf(state.provider)[0] as WizardStep,
+        appSaved: false,
+        fromSaved: false,
+        validation: { status: "idle" },
+        signIn: { status: "idle" },
+      };
+    }
   }
 }
 

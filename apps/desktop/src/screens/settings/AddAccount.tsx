@@ -5,7 +5,9 @@
 // creating their own client registration: one sentence and one action per
 // step, deep links into the consoles, a live-validated paste box, then a
 // sign-in that waits on the Sidecar's loopback listener. The state machine is
-// wizard.ts; this file only renders it and talks to the server.
+// wizard.ts; this file only renders it and talks to the server. The client
+// registration is app level: the paste step saves it on the Server as it
+// validates, and a wizard opened with one saved is the sign-in alone.
 
 import { Btn, Input, Tag } from "@monday/ui";
 import {
@@ -49,6 +51,7 @@ import {
   formatElapsed,
   GMAIL_PUBLISHER,
   initialWizard,
+  OAUTH_APP_CHANGED,
   reduceWizard,
   stepIndex,
   suggestedTopic,
@@ -233,7 +236,11 @@ export function AddAccount(props: AddAccountProps) {
       log={props.log ?? ((line) => console.debug(line))}
       onAdded={props.onAdded}
       onBack={back}
-      onDone={finish}
+      onDone={() => {
+        // The next account of this provider starts a fresh wizard (the saved app makes it the sign-in alone).
+        setWizards((w) => ({ ...w, [view]: initialWizard(view, now()) }));
+        finish();
+      }}
       onEscape={() => {
         // The escape is consumed: coming back to this wizard later starts where it left off.
         setWizards((w) => ({ ...w, [view]: { ...w[view], escaped: false } }));
@@ -582,7 +589,27 @@ export function Wizard(props: WizardProps) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Live validation: debounce after the last keystroke, drop stale answers.
+  // The saved sign-in app: read on open and whenever the Sign-in apps block changes it.
+  useEffect(() => {
+    let live = true;
+    const read = () => {
+      api.oauth
+        .app(provider)
+        .then(({ app }) => {
+          if (live) dispatch({ type: "app.loaded", app });
+        })
+        .catch(() => {});
+    };
+    read();
+    window.addEventListener(OAUTH_APP_CHANGED, read);
+    return () => {
+      live = false;
+      window.removeEventListener(OAUTH_APP_CHANGED, read);
+    };
+  }, [api, provider, dispatch]);
+
+  // Live validation, which saves the app on the Server when it passes:
+  // debounce after the last keystroke, drop stale answers.
   const key = validationKey(state);
   const validatable = state.step === "paste" && canValidate(state);
   useEffect(() => {
@@ -590,16 +617,23 @@ export function Wizard(props: WizardProps) {
     const timer = setTimeout(async () => {
       dispatch({ type: "validate.start", key });
       const current = stateRef.current;
-      const params =
+      const f = current.fields;
+      const body =
         provider === "google"
           ? {
-              clientId: current.fields.clientId.trim(),
-              clientSecret: current.fields.clientSecret.trim(),
+              clientId: f.clientId.trim(),
+              clientSecret: f.clientSecret.trim(),
+              projectId: f.projectId.trim() || null,
             }
-          : { clientId: current.fields.clientId.trim(), tenant: effectiveTenant(current) };
+          : {
+              clientId: f.clientId.trim(),
+              tenant: effectiveTenant(current),
+              accountType: f.accountType,
+            };
       try {
-        const result = await api.oauth.validate(provider, params);
+        const { result } = await api.oauth.saveApp(provider, body);
         dispatch({ type: "validate.result", key, result });
+        if (result.ok) window.dispatchEvent(new Event(OAUTH_APP_CHANGED));
       } catch (error) {
         dispatch({
           type: "validate.result",
@@ -638,13 +672,12 @@ export function Wizard(props: WizardProps) {
   const signIn = async () => {
     dispatch({ type: "signin.start" });
     try {
-      const f = state.fields;
-      const started = await api.oauth.start(provider, {
-        clientId: f.clientId.trim(),
-        ...(provider === "google" ? { clientSecret: f.clientSecret.trim() } : {}),
-        ...(provider === "microsoft" ? { tenant: effectiveTenant(state) } : {}),
-        pubsubTopic: provider === "google" && f.pubsubTopic.trim() ? f.pubsubTopic.trim() : null,
-      });
+      // The Server signs in through the saved app; nothing secret leaves this page again.
+      const topic = state.fields.pubsubTopic.trim();
+      const started = await api.oauth.start(
+        provider,
+        provider === "google" && topic ? { pubsubTopic: topic } : {},
+      );
       dispatch({ type: "signin.opened", state: started.state, url: started.url });
       await props.openExternal(started.url);
       for (;;) {
@@ -675,10 +708,23 @@ export function Wizard(props: WizardProps) {
     }
   };
 
-  const link = deepLink(state);
+  // Leaving the Pub/Sub step with a topic saves it with the app.
+  const next = () => {
+    if (state.step === "pubsub") {
+      const topic = state.fields.pubsubTopic.trim();
+      void api.oauth
+        .updateApp(provider, { pubsubTopic: topic || null })
+        .then(() => window.dispatchEvent(new Event(OAUTH_APP_CHANGED)))
+        .catch(() => {});
+    }
+    dispatch({ type: "next" });
+  };
+
+  const link = state.fromSaved ? null : deepLink(state);
   const { n, total } = stepIndex(state);
-  const title =
-    provider === "google"
+  const title = state.fromSaved
+    ? s[`strings.oauth_apps.wizard.title.${provider}`]
+    : provider === "google"
       ? s["strings.accounts.google.title"]
       : s["strings.accounts.microsoft.title"];
 
@@ -686,7 +732,7 @@ export function Wizard(props: WizardProps) {
     <div className="wizard" data-step={state.step}>
       <div className="wizard-head">
         <h1 className="wizard-title">{title}</h1>
-        {!finished ? (
+        {!finished && !state.fromSaved ? (
           <span className="wizard-progress">
             {fill(s["strings.accounts.wizard.step_of"], { n, total })}
           </span>
@@ -747,7 +793,7 @@ export function Wizard(props: WizardProps) {
               {s["strings.accounts.wizard.done"]}
             </Btn>
           ) : state.step === "signin" ? null : (
-            <Btn primary disabled={!canAdvance(state)} onClick={() => dispatch({ type: "next" })}>
+            <Btn primary disabled={!canAdvance(state)} onClick={next}>
               {s["strings.accounts.wizard.next"]}
             </Btn>
           )}
@@ -760,6 +806,9 @@ export function Wizard(props: WizardProps) {
 type Strings = ReturnType<typeof useShell>["settings"];
 
 function sentenceFor(state: WizardState, s: Strings): string {
+  if (state.fromSaved && state.step === "signin") {
+    return s[`strings.oauth_apps.wizard.ready.${state.provider}`];
+  }
   if (state.provider === "google") {
     switch (state.step) {
       case "project":
@@ -903,6 +952,11 @@ function StepBody({
             </Field>
           ) : null}
           {check}
+          {state.validation.status === "ok" && state.appSaved ? (
+            <div className="note" data-saved="app">
+              {s["strings.oauth_apps.wizard.saved"]}
+            </div>
+          ) : null}
         </div>
       );
     case "pubsub": {

@@ -812,6 +812,26 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           method: "POST",
           body: JSON.stringify({ state, code }),
         }),
+      /** The provider's saved sign-in app, app level; null when none is set up. */
+      app: (provider: OAuthProvider) =>
+        request<{ app: OAuthAppView | null }>(`/oauth/${provider}/app`),
+      /** Checks the registration live and saves it only when it passes. */
+      saveApp: (provider: OAuthProvider, body: OAuthAppBody) =>
+        request<{ result: ValidationResult; app: OAuthAppView | null }>(`/oauth/${provider}/app`, {
+          method: "PUT",
+          body: JSON.stringify(body),
+        }),
+      /** The extras a later wizard step fills in (the Pub/Sub topic, the project id). */
+      updateApp: (
+        provider: OAuthProvider,
+        patch: { projectId?: string | null; pubsubTopic?: string | null },
+      ) =>
+        request<{ app: OAuthAppView }>(`/oauth/${provider}/app`, {
+          method: "PATCH",
+          body: JSON.stringify(patch),
+        }),
+      removeApp: (provider: OAuthProvider) =>
+        request<unknown>(`/oauth/${provider}/app`, { method: "DELETE" }),
     },
   };
 }
@@ -915,8 +935,30 @@ export type ValidationResult =
   | { ok: true; detail: string }
   | { ok: false; field: ValidationField; reason: string };
 
-export interface OAuthStartBody {
+/** The saved sign-in app of a provider, app level; the secret is never sent back, only whether one is kept. */
+export interface OAuthAppView {
+  provider: OAuthProvider;
   clientId: string;
+  hasSecret: boolean;
+  tenant: string | null;
+  accountType: "personal" | "work" | null;
+  projectId: string | null;
+  pubsubTopic: string | null;
+  updatedAt: string;
+}
+
+export interface OAuthAppBody {
+  clientId: string;
+  clientSecret?: string | null;
+  tenant?: string | null;
+  accountType?: "personal" | "work" | null;
+  projectId?: string | null;
+  pubsubTopic?: string | null;
+}
+
+export interface OAuthStartBody {
+  /** Absent: the Server signs in through the saved app. */
+  clientId?: string;
   clientSecret?: string;
   tenant?: string;
   path?: "api" | "imap";

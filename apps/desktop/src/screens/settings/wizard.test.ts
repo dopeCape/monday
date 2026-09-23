@@ -266,3 +266,61 @@ describe("helpers", () => {
     expect(formatElapsed(0)).toBe("0m 00s");
   });
 });
+
+describe("the saved sign-in app", () => {
+  const saved = {
+    clientId: "1234-abc.apps.googleusercontent.com",
+    tenant: null,
+    accountType: null,
+    projectId: "p",
+    pubsubTopic: "projects/p/topics/t",
+  };
+
+  test("a saved app makes the wizard the sign-in alone, and Back stays put", () => {
+    const s = run(initialWizard("google", 0), { type: "app.loaded", app: saved });
+    expect(s.step).toBe("signin");
+    expect(s.fromSaved).toBe(true);
+    expect(stepIndex(s)).toEqual({ n: 1, total: 1 });
+    expect(s.fields.pubsubTopic).toBe("projects/p/topics/t");
+    expect(run(s, { type: "back" }).step).toBe("signin");
+  });
+
+  test("a passing check marks the app saved; the wizard's own save does not skip its steps", () => {
+    let s = run(
+      initialWizard("google", 0),
+      { type: "next" },
+      { type: "next" },
+      { type: "next" },
+      { type: "next" },
+      { type: "field", name: "clientId", value: "1234-abc.apps.googleusercontent.com" },
+      { type: "field", name: "clientSecret", value: "x" },
+    );
+    const key = validationKey(s);
+    s = run(
+      s,
+      { type: "validate.start", key },
+      { type: "validate.result", key, result: { ok: true, detail: "ok" } },
+    );
+    expect(s.appSaved).toBe(true);
+    const after = run(s, { type: "app.loaded", app: saved });
+    expect(after.step).toBe("paste");
+    expect(after.fromSaved).toBe(false);
+  });
+
+  test("a forgotten app starts the setup again; a sign-in under way is left alone", () => {
+    const s = run(initialWizard("microsoft", 0), {
+      type: "app.loaded",
+      app: { ...saved, tenant: "consumers" },
+    });
+    expect(run(s, { type: "app.loaded", app: null }).step).toBe("register");
+    const waiting = run(
+      s,
+      { type: "signin.start" },
+      { type: "signin.opened", state: "st", url: "u" },
+    );
+    expect(run(waiting, { type: "app.loaded", app: null }).step).toBe("signin");
+    // Never having had one, a null answer changes nothing.
+    const fresh = initialWizard("google", 0);
+    expect(run(fresh, { type: "app.loaded", app: null })).toEqual(fresh);
+  });
+});
