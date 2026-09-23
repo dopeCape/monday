@@ -264,6 +264,29 @@ export function createGmailProvider(options: GmailProviderOptions = {}): Provide
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
+  // Google counts quota per user and project, however many Sessions spend it:
+  // the sync, the reconcile, the watcher, the Draft mirror and the reader's
+  // on-demand bodies each open one. They share one bucket per user and
+  // sign-in app, or together they overspend, get refused, and crawl.
+  const buckets = new Map<string, Promise<TokenBucket | undefined>>();
+  const bucketFor = (key: string) => {
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = (async () =>
+        options.unitsPerMinute
+          ? gmailQuotaBucket({
+              unitsPerMinute: await options.unitsPerMinute(),
+              ...(options.now ? { now: options.now } : {}),
+              ...(options.sleep ? { sleep: options.sleep } : {}),
+            })
+          : gmailQuotaBucket({
+              ...(options.now ? { now: options.now } : {}),
+              ...(options.sleep ? { sleep: options.sleep } : {}),
+            }))();
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  };
   return {
     kind: "gmail",
     async connect(credentials) {
@@ -273,13 +296,9 @@ export function createGmailProvider(options: GmailProviderOptions = {}): Provide
       const topic = credentials.endpoint.kind === "gmail" ? credentials.endpoint.pubsubTopic : null;
       const quota =
         options.quota?.() ??
-        (options.unitsPerMinute
-          ? gmailQuotaBucket({
-              unitsPerMinute: await options.unitsPerMinute(),
-              ...(options.now ? { now: options.now } : {}),
-              ...(options.sleep ? { sleep: options.sleep } : {}),
-            })
-          : undefined);
+        (await bucketFor(
+          `${credentials.auth.client?.id ?? ""}:${credentials.address.toLowerCase()}`,
+        ));
       const client = new GmailClient({
         auth: credentials.auth,
         tokens,

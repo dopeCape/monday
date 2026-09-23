@@ -235,6 +235,29 @@ describe("Gmail adapter", () => {
     expect(GMAIL_COST["messages.get"]).toBe(20);
   });
 
+  test("every Session of one user spends one quota; another user has their own", async () => {
+    const server = createGmailServer(fixture);
+    const clock = virtualClock();
+    const provider = createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    const sync = (await provider.connect(credentialsFor(server))) as GmailSession;
+    const reader = (await provider.connect(credentialsFor(server))) as GmailSession;
+    expect(reader.client.quota).toBe(sync.client.quota);
+    // A refusal seen by one slows them all, since Google counted them together.
+    sync.client.quota.penalize();
+    expect(reader.pacing()).toBe(true);
+    const other = (await provider.connect({
+      ...credentialsFor(server),
+      address: "someone.else@gmail.test",
+    })) as GmailSession;
+    expect(other.client.quota).not.toBe(sync.client.quota);
+    expect(other.pacing()).toBe(false);
+  });
+
   test("the token bucket serves takes in order and never overdraws", async () => {
     const clock = virtualClock();
     const bucket = createTokenBucket({

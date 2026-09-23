@@ -1186,6 +1186,9 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
                   );
                 }
               : undefined;
+          // Each pass opens with the newest Inbox bodies, so they arrive even
+          // when a paced header page outlasts the Job's budget.
+          if (interleave && pending.has(mailbox.id)) await interleave();
           const { complete } = await syncOneMailbox(
             acct,
             s,
