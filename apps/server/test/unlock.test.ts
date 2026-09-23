@@ -154,6 +154,7 @@ describe("key provisioning over HTTP", () => {
       text: "Thursday works for me.",
       html: null,
       snippet: "Thursday works",
+      bodyState: "fetched",
       display: { html: "<p>Thursday works for me.</p>", quoted: false, blockedImages: 0 },
     });
     const subject = await app.request(`/threads/${threadId}/subject`, auth());

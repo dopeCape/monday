@@ -4173,6 +4173,19 @@ button.prov {
   gap: 6px;
   margin-top: 10px;
 }
+/* an HTML body renders in its own sandboxed document (html-body.tsx), as wide as the reader:
+   newsletters lay themselves out at 600px and more */
+.msg-body.msg-html {
+  max-width: none;
+}
+.msg-frame {
+  display: block;
+  width: 100%;
+  /* one line until the document loads and the frame fits its content */
+  height: 1.65em;
+  border: 0;
+  background: transparent;
+}
 
 /* compose over real Drafts: the editor, its toolbar, recipients and uploads */
 .c-editor {

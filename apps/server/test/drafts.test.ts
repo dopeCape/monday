@@ -832,5 +832,80 @@ describe("drafts and scheduled sends", () => {
     const again = fake.calls.fetchMessage ?? 0;
     await request(`/messages/${pending.messageId}/body`);
     expect(fake.calls.fetchMessage ?? 0).toBe(again);
+    const answered = (await (await request(`/messages/${pending.messageId}/body`)).json()) as {
+      bodyState: string;
+    };
+    expect(answered.bodyState).toBe("fetched");
+  });
+
+  /** Delivers one Message and syncs its headers only; returns its Message id. */
+  const headersOnly = async (threadKey: string, html: string | null, text: string) => {
+    const providerId = fake.deliver({
+      mailbox: "inbox",
+      threadKey,
+      from: { name: "Aoife", email: "aoife@northlight.dev" },
+      to: [fixture.owner],
+      cc: [],
+      subject: threadKey,
+      date: clock.now().toISOString(),
+      messageId: `${threadKey}@fixture.monday.test`,
+      inReplyTo: null,
+      references: [],
+      seen: false,
+      flagged: false,
+      answered: false,
+      headers: {},
+      text,
+      html,
+      attachments: [],
+    });
+    let report = await engine.syncAccount(account.id, { headersOnly: true });
+    for (let i = 0; i < 50 && report.more; i++) {
+      report = await engine.syncAccount(account.id, { headersOnly: true });
+    }
+    const row = await db.handle.db.query.syncMessages.findFirst({
+      where: (t, { eq: is }) => is(t.providerId, providerId),
+    });
+    if (!row) throw new Error("the delivered message was not synced");
+    return { providerId, messageId: row.messageId };
+  };
+
+  test("a body the on-demand fetch could not get answers pending, so the client does not keep the empty stand-in", async () => {
+    // The user's case: the Provider refused (quota, a dropped connection) and
+    // the route used to answer the header-only sync's empty body as if it
+    // were the Message's, which the desktop Cache then kept for good.
+    const { providerId, messageId } = await headersOnly("refused", null, "Never fetched.");
+    fake.destroy(providerId);
+    const res = await request(`/messages/${messageId}/body`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { text: string; bodyState: string };
+    expect(json.bodyState).toBe("pending");
+    expect(json.text).toBe("");
+  });
+
+  test("GET /messages/bodies marks bodies the sync has not fetched and sends the reader's sanitised html", async () => {
+    const pending = await headersOnly("bulk-pending", null, "Not yet.");
+    const rich = await headersOnly(
+      "bulk-rich",
+      `<p onclick="alert(1)">Rich <img src="https://cdn.example.com/a.png"></p><script>alert(1)</script>`,
+      "Rich",
+    );
+    const fetched = await request(`/messages/${rich.messageId}/body`);
+    expect(((await fetched.json()) as { bodyState: string }).bodyState).toBe("fetched");
+    const res = await request(`/messages/bodies?workspace=${workspaceId}&limit=1000`);
+    expect(res.status).toBe(200);
+    const page = (await res.json()) as {
+      bodies: { id: string; html: string | null; text: string; bodyState: string }[];
+    };
+    expect(page.bodies.find((b) => b.id === pending.messageId)).toMatchObject({
+      bodyState: "pending",
+      text: "",
+      html: null,
+    });
+    const body = page.bodies.find((b) => b.id === rich.messageId);
+    expect(body?.bodyState).toBe("fetched");
+    expect(body?.html).toBe(
+      `<p>Rich <img data-src="https://cdn.example.com/a.png" data-blocked="" /></p>`,
+    );
   });
 });

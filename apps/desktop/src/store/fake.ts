@@ -57,6 +57,8 @@ export interface FakeServer {
   threads: Map<Id, ServerThread>;
   changes: Change[];
   briefs: Map<Id, ServerBrief>;
+  /** Message ids whose body the Server has not fetched from the Provider yet: the body route answers pending. */
+  pendingBodies: Set<Id>;
   /** Brief requests that arrived (the reader on open, the user by hand), in order. */
   briefRequests: Array<{ threadId: Id; trigger: BriefTrigger }>;
   /**
@@ -196,6 +198,7 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
     changes,
     briefs: briefsById,
     briefRequests: [],
+    pendingBodies: new Set(),
     onBriefRequest: null,
     received: [],
     receivedDrafts: [],
@@ -564,10 +567,21 @@ export function fakeContent(server: FakeServer, seed: SeedData | null): ContentT
       if (server.offline) throw offline();
       const m = messages.find((x) => x.id === messageId);
       if (!m) throw new ApiError(404, "not found");
+      if (server.pendingBodies.has(messageId)) {
+        // The header-only stand-in, as the Server answers before the Provider hands the body over.
+        return {
+          text: "",
+          html: null,
+          snippet: "",
+          bodyState: "pending",
+          display: { html: "", quoted: false, blockedImages: 0 },
+        };
+      }
       return {
         text: m.bodyText ?? "",
         html: m.bodyHtml ?? null,
         snippet: (m.bodyText ?? "").slice(0, 200),
+        bodyState: "fetched",
         display: { html: m.bodyHtml ?? "", quoted: false, blockedImages: 0 },
       };
     },

@@ -190,6 +190,66 @@ export async function createStoreInbox(
     for (const l of [...w.listeners]) l();
   };
 
+  /** Threads with a body the Server has not fetched yet: asked again after each pull. */
+  const waiting = new Set<string>();
+  const refetching = new Set<string>();
+
+  /**
+   * Asks for each body and caches the ones the Server has. A body it has not
+   * fetched yet (bodyState pending or deferred: the Provider refused or the
+   * pass has not come round) is the empty stand-in a header-only sync keeps,
+   * never cached, so the reader keeps its Loading line and the Thread waits
+   * for the next pull instead of holding an empty body for good.
+   */
+  const fetchBodies = async (threadId: string, ids: readonly string[]) => {
+    const content = options.content;
+    if (!content) return;
+    let why: BodyUnavailable | null = null;
+    let pending = false;
+    for (const id of ids) {
+      try {
+        const body = await content.body(id, { images: options.remoteImages?.() ?? false });
+        if (body.bodyState !== undefined && body.bodyState !== "fetched") {
+          pending = true;
+          continue;
+        }
+        await store.cacheBody(id, { text: body.text, html: body.display.html });
+      } catch (error) {
+        why ??= classify(error);
+        log(`body ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (pending) waiting.add(threadId);
+    else waiting.delete(threadId);
+    setUnavailable(threadId, why);
+  };
+
+  /** The Messages of a Thread the Cache holds no body for. */
+  const missingBodies = async (threadId: string): Promise<string[]> => {
+    const rows = await store.query<{ id: string }>(
+      "select id from messages where thread_id = ? and body_text is null",
+      [threadId],
+    );
+    return rows.map((r) => r.id);
+  };
+
+  // A pull brings the Server's news, a body the sync just fetched among it:
+  // an open Thread still waiting asks again for what it lacks.
+  const stopStatus = store.onStatus((status) => {
+    if (status === "syncing") return;
+    for (const threadId of waiting) {
+      if (!watched.has(threadId) || refetching.has(threadId)) continue;
+      refetching.add(threadId);
+      void missingBodies(threadId)
+        .then(async (ids) => {
+          if (ids.length > 0) await fetchBodies(threadId, ids);
+          else waiting.delete(threadId);
+        })
+        .catch((error) => log(`refetch ${threadId}: ${error}`))
+        .finally(() => refetching.delete(threadId));
+    }
+  });
+
   /** Headers and attachments from the Server, then every body the Cache lacks. */
   const fetchThread = async (threadId: string) => {
     const content = options.content;
@@ -202,24 +262,32 @@ export async function createStoreInbox(
       throw error;
     }
     await store.cacheMessages(headers);
-    const cached = await store.query<{ id: string; body_text: string | null }>(
-      "select id, body_text from messages where thread_id = ?",
-      [threadId],
-    );
-    const have = new Set(cached.filter((r) => r.body_text !== null).map((r) => r.id));
-    let why: BodyUnavailable | null = null;
-    // A pending body is asked for too: the Server fetches it on demand.
-    for (const m of headers) {
-      if (have.has(m.id)) continue;
-      try {
-        const body = await content.body(m.id, { images: options.remoteImages?.() ?? false });
-        await store.cacheBody(m.id, { text: body.text, html: body.display.html });
-      } catch (error) {
-        why ??= classify(error);
-        log(`body ${m.id}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    // An empty text with no html is what earlier builds cached for a Message
+    // the Server had not fetched yet (and what the pre-warm used to mark a
+    // gap with). It is not a body: cleared, so the reader shows Loading and
+    // the Server is asked again.
+    const cached = await store.query<{
+      id: string;
+      body_text: string | null;
+      body_html: string | null;
+    }>("select id, body_text, body_html from messages where thread_id = ?", [threadId]);
+    const empty = cached.filter((r) => r.body_text === "" && !r.body_html).map((r) => r.id);
+    if (empty.length > 0) {
+      await store.write([
+        {
+          sql: `update messages set body_text = null, body_html = null, body_at = null where id in (${empty.map(() => "?").join(", ")})`,
+          params: empty,
+        },
+      ]);
     }
-    setUnavailable(threadId, why);
+    const have = new Set(
+      cached.filter((r) => r.body_text !== null && !empty.includes(r.id)).map((r) => r.id),
+    );
+    // A pending body is asked for too: the Server fetches it on demand.
+    await fetchBodies(
+      threadId,
+      headers.map((m) => m.id).filter((id) => !have.has(id)),
+    );
   };
 
   /** The judged answers per Thread, filled through the transport; the Server keeps them too. */
@@ -456,6 +524,7 @@ export async function createStoreInbox(
           w.live.close();
           w.briefLive.close();
           watched.delete(threadId);
+          waiting.delete(threadId);
         }
       };
     },
@@ -526,6 +595,8 @@ export async function createStoreInbox(
     close() {
       if (judgeTimer !== null) clearTimeout(judgeTimer);
       judgeTimer = null;
+      stopStatus();
+      waiting.clear();
       live.close();
       groupsLive.close();
       tagsLive.close();

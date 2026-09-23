@@ -2,10 +2,11 @@
 // route and the platform's network and power readings.
 
 import { describe, expect, test } from "bun:test";
-import type { MessageBodiesPage } from "@monday/shared";
+import type { Change, MessageBodiesPage } from "@monday/shared";
 import type { NetworkInfo, PowerInfo } from "../platform/tauri.ts";
 import { bunDriver } from "../store/bun-driver.ts";
 import { createFakeStore } from "../store/fake.ts";
+import { changeStatements } from "../store/store.ts";
 import { generateMailbox, mailboxStatements } from "./fixture.ts";
 import { bodyBytes, createPrewarm, evictToCap, type PrewarmSettings } from "./prewarm.ts";
 
@@ -200,6 +201,74 @@ describe("pre-warm", () => {
     expect(prewarm.status().last?.kind).toBe("done");
     stop();
     expect(prewarm.status().running).toBe(false);
+  });
+
+  test("a body the Server has not fetched yet is never cached as empty; the loop moves past it and a message change lets it try again", async () => {
+    const { fake, full, fetchBodies } = await setup(20);
+    const newest = [...full.messages].sort((x, y) => y.date.localeCompare(x.date))[0];
+    if (!newest) throw new Error("empty mailbox");
+    // The Server holds the newest Message's headers only: its sync has not fetched the body.
+    const pending: typeof fetchBodies = async (w, range) => {
+      const page = await fetchBodies(w, range);
+      return {
+        ...page,
+        bodies: page.bodies.map((b) =>
+          b.id === newest.id ? { ...b, text: "", bodyState: "pending" as const } : b,
+        ),
+      };
+    };
+    const prewarm = createPrewarm({
+      store: fake.store,
+      fetchBodies: pending,
+      conditions: conditions(),
+      settings: () => settings({ windowDays: 2_000 }),
+      now: () => NOW,
+    });
+    const steps = await drain(prewarm);
+    expect(steps[steps.length - 1]?.kind).toBe("done");
+    const [row] = await fake.store.query<{ body_text: string | null; body_at: string | null }>(
+      "select body_text, body_at from messages where id = ?",
+      [newest.id],
+    );
+    // Missing, not empty: the reader shows Loading and asks the Server on open.
+    expect(row?.body_text).toBeNull();
+    expect(row?.body_at).not.toBeNull();
+    const [held] = await fake.store.query<{ n: number }>(
+      "select count(*) as n from messages where body_text is not null",
+    );
+    expect(Number(held?.n)).toBe(full.messages.length - 1);
+    // The Server's news about the Message clears the mark; the next pass fetches it.
+    await fake.store.write(
+      changeStatements({
+        seq: 1,
+        workspaceId: "ws",
+        kind: "message",
+        entityId: newest.id,
+        at: NOW.toISOString(),
+        payload: {
+          id: newest.id,
+          threadId: newest.threadId,
+          from: newest.from,
+          to: newest.to,
+          cc: newest.cc,
+          date: newest.date,
+          hasAttachments: false,
+        },
+      } as Change),
+    );
+    const again = createPrewarm({
+      store: fake.store,
+      fetchBodies,
+      conditions: conditions(),
+      settings: () => settings({ windowDays: 2_000 }),
+      now: () => NOW,
+    });
+    await drain(again);
+    const [after] = await fake.store.query<{ body_text: string | null }>(
+      "select body_text from messages where id = ?",
+      [newest.id],
+    );
+    expect(after?.body_text).toBe(newest.bodyText ?? "");
   });
 });
 

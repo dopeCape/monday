@@ -173,6 +173,17 @@ const SCHEMA_VERSION_KEY = "schema_version";
  */
 export const SCHEMA_VERSION = 4;
 
+const BODY_FORMAT_KEY = "body_format";
+/**
+ * What a cached body is, bumped when that changes without the table changing
+ * shape. Format 2: `body_html` is always the Server's sanitised display HTML
+ * (sanitize-html, a scoped <style> block, remote images set aside), and an
+ * empty body is never a stand-in for one the Server had not fetched. Before
+ * it the pre-warm cached the raw HTML part and empty stand-ins, which is why
+ * mail rendered wrong or not at all; such bodies are dropped once.
+ */
+export const BODY_FORMAT = 2;
+
 const REBUILD_SQL = `
   drop trigger if exists threads_fts_ai;
   drop trigger if exists threads_fts_ad;
@@ -213,6 +224,18 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
     [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
   );
+  const formatRows = await driver.query("select value from meta where key = ?", [BODY_FORMAT_KEY]);
+  if (Number(formatRows[0]?.value ?? 0) < BODY_FORMAT) {
+    // Bodies cached under an older format are dropped, headers kept; the
+    // reader and the pre-warm fetch them again in the current one.
+    await driver.exec(
+      "update messages set body_text = null, body_html = null, body_at = null where body_text is not null or body_at is not null",
+    );
+    await driver.exec(
+      "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+      [BODY_FORMAT_KEY, String(BODY_FORMAT)],
+    );
+  }
 }
 
 /**
@@ -475,6 +498,12 @@ export function changeStatements(change: Change): Statement[] {
                   thread_id = excluded.thread_id, sender = excluded.sender, recipients = excluded.recipients,
                   cc = excluded.cc, date = excluded.date, has_attachments = excluded.has_attachments`,
           params: [m.id, m.threadId, m.from, m.to, m.cc, m.date, m.hasAttachments],
+        },
+        {
+          // A pre-warm that found no body yet marked the row tried; the Server's
+          // news about the Message (its body fetched, among others) lets it try again.
+          sql: "update messages set body_at = null where id = ? and body_text is null and body_at is not null",
+          params: [m.id],
         },
       ];
     }
@@ -1366,7 +1395,10 @@ export async function createStore(options: StoreOptions): Promise<Store> {
           )
         ).map((r) => String(r.id)),
       );
-      const landing = bodies.filter((b) => known.has(b.id));
+      // A body the Server has not fetched yet is its empty stand-in, not a body: never cached.
+      const landing = bodies.filter(
+        (b) => known.has(b.id) && (b.bodyState === undefined || b.bodyState === "fetched"),
+      );
       await write(landing.flatMap((b) => bodyStatements(b, at)));
       if (landing.length > 0) await driver.exec(FTS_MERGE_SQL);
       return landing.length;

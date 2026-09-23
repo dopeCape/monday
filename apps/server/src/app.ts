@@ -418,9 +418,13 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         ? { fetchBody: (id) => options.sync?.fetchBody(id) ?? Promise.resolve() }
         : {}),
       placement,
+      remoteImages: async () =>
+        (await readGlobalSettings(db, ["reader.load_remote_images"] as const))[
+          "reader.load_remote_images"
+        ],
       // A user's move is a correction routing learns from (ADR 0005: it beats automation).
       onMove: (intent, previous) => intelligence.routing.observeMove(intent, previous),
-      log: (m) => console.warn(`[routing] ${m}`),
+      log: (m) => console.warn(`[mail] ${m}`),
     }),
   );
   app.route("/", draftsRoutes(drafts, mailstore));

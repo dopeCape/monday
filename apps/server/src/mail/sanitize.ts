@@ -1,25 +1,50 @@
-// A strict allowlist HTML sanitizer for message bodies. Mail HTML is untrusted
-// (ADR 0002 says as much about the shell; the webview is no different), so the
-// reader only ever sees what this file re-serialises: a fixed set of tags, a
-// fixed set of attributes per tag, a fixed set of CSS properties, http, https
-// and mailto links, and images that are either inline parts (cid:, resolved
-// to /attachments/:id) or blocked until the user asks. Everything else is
-// dropped, including the contents of script, style, iframe and friends.
+// Message HTML made safe for the reader. Mail HTML is untrusted (ADR 0002
+// says as much about the shell; the webview is no different), so the reader
+// only ever sees what sanitize-html re-serialises: a fixed set of tags, a
+// fixed set of attributes, http, https and mailto links, and images that are
+// inline parts (cid:, resolved to /attachments/:id), small data: images, or
+// remote images blocked until the user asks. Every text node and attribute
+// value is escaped again on the way out.
 //
-// The tokenizer is htmlparser2; nothing from the input reaches the output as
-// bytes, every text node and attribute value is escaped again on the way out,
-// so a parse ambiguity in the input cannot become one in the output.
+// Real mail lays itself out with tables, their presentational attributes,
+// inline styles and a <style> block, so those survive: the table attributes
+// newsletters use (width, align, valign, bgcolor, background, cellpadding,
+// cellspacing, border), <center> and <font>, srcset, and the CSS in css.ts
+// (a property allowlist, remote url() under the same rule as <img>, and the
+// <style> block scoped to the element the reader renders into).
 //
-// Quoted history is marked, not removed: known quote containers (Gmail,
-// Apple Mail, Thunderbird, Yahoo, Outlook's reply separator) come out wrapped
-// in <div class="quoted"> so the reader can fold them.
+// Before sanitize-html runs, one pass over the parsed tree (htmlparser2)
+// does what an allowlist cannot: it lifts the <style> blocks out, drops the
+// subtrees whose content must never show (script, head, iframe, svg and
+// friends), removes the sender's own data-* attributes (the reader keys on
+// data-src and data-blocked), turns <body> into a <div> so its bgcolor and
+// style survive, and wraps quoted history in <div class="quoted"> so the
+// reader can fold it: known quote containers (Gmail, Apple Mail,
+// Thunderbird, Yahoo, Outlook's reply separator).
+//
+// Remote images, when blocked, move aside instead of disappearing: an
+// <img>'s src to data-src (and srcset to data-srcset), a background
+// attribute to data-background, a style declaration to data-blocked-style,
+// and a <style> rule into <style media="not all" data-blocked>. Each carries
+// data-blocked, and "Show images" puts them back without another request.
 
-import { Parser } from "htmlparser2";
+import { type ChildNode, Element, isTag, isText, type ParentNode } from "domhandler";
+import { DomUtils, parseDocument } from "htmlparser2";
+import sanitize from "sanitize-html";
+import {
+  type CssPolicy,
+  cleanInlineStyle,
+  cleanStylesheet,
+  stripControls,
+  type UrlVerdict,
+} from "./css.ts";
+
+export { MAIL_SCOPE } from "./css.ts";
 
 export interface SanitizeOptions {
   /** Content-ID (without angle brackets) to the URL that serves the part. */
   cidUrl?: (contentId: string) => string | null;
-  /** Load http(s) images. Off by default: the src moves to data-src and the reader offers to show them. */
+  /** Load http(s) images. Off by default: they move aside and the reader offers to show them. */
   allowRemoteImages?: boolean;
   /** Extra class names (beyond the built-in list) that mark a quoted-history container. */
   quoteClasses?: readonly string[];
@@ -29,17 +54,22 @@ export interface SanitizedHtml {
   html: string;
   /** True when a quoted-history container was found and wrapped. */
   quoted: boolean;
-  /** Remote images left unloaded. */
+  /** Remote images left unloaded (img, srcset, backgrounds, CSS url()). */
   blockedImages: number;
-  /** Tags dropped, for diagnostics. */
+  /** Subtrees dropped whole, for diagnostics. */
   dropped: number;
 }
 
-/** Tags kept with their (allowed) children. */
-const ALLOWED = new Set([
+/** Tags kept (their attributes filtered); anything else is unwrapped, its text kept. */
+const ALLOWED_TAGS = [
   "a",
   "abbr",
+  "address",
+  "article",
+  "aside",
   "b",
+  "bdi",
+  "bdo",
   "big",
   "blockquote",
   "br",
@@ -51,36 +81,45 @@ const ALLOWED = new Set([
   "colgroup",
   "dd",
   "del",
+  "details",
   "dfn",
   "div",
   "dl",
   "dt",
   "em",
+  "figcaption",
+  "figure",
   "font",
+  "footer",
   "h1",
   "h2",
   "h3",
   "h4",
   "h5",
   "h6",
+  "header",
   "hr",
   "i",
   "img",
   "ins",
   "kbd",
   "li",
+  "main",
   "mark",
+  "nav",
   "ol",
   "p",
   "pre",
   "q",
   "s",
   "samp",
+  "section",
   "small",
   "span",
   "strike",
   "strong",
   "sub",
+  "summary",
   "sup",
   "table",
   "tbody",
@@ -94,9 +133,9 @@ const ALLOWED = new Set([
   "ul",
   "var",
   "wbr",
-]);
+];
 
-/** Tags whose whole subtree is dropped. */
+/** Tags whose whole subtree is dropped: nothing inside them is mail the reader shows. */
 const DROPPED = new Set([
   "applet",
   "audio",
@@ -112,12 +151,15 @@ const DROPPED = new Set([
   "iframe",
   "input",
   "link",
+  "map",
   "math",
   "meta",
+  "noembed",
+  "noframes",
   "noscript",
   "object",
   "option",
-  "picture",
+  "plaintext",
   "script",
   "select",
   "slot",
@@ -130,84 +172,61 @@ const DROPPED = new Set([
   "track",
   "video",
   "xml",
+  "xmp",
 ]);
 
-const VOID = new Set(["br", "hr", "img", "wbr", "col"]);
+/** The attributes the reader itself sets; a sender's copies are removed before sanitising. */
+const STASH = ["data-src", "data-srcset", "data-background", "data-blocked-style", "data-blocked"];
 
-/** Tags renamed on the way out. */
-const RENAMED: Record<string, string> = {
-  font: "span",
-  center: "div",
-  strike: "s",
-  big: "span",
-  tt: "code",
-};
-
-const GLOBAL_ATTRS = new Set(["title", "dir", "lang", "style"]);
-const TAG_ATTRS: Record<string, Set<string>> = {
-  a: new Set(["href"]),
-  img: new Set(["src", "alt", "width", "height"]),
-  td: new Set(["colspan", "rowspan", "align", "valign", "width", "height"]),
-  th: new Set(["colspan", "rowspan", "align", "valign", "width", "height"]),
-  table: new Set(["width", "cellpadding", "cellspacing", "align"]),
-  col: new Set(["span", "width"]),
-  colgroup: new Set(["span"]),
-  ol: new Set(["start", "type"]),
-  ul: new Set(["type"]),
-  div: new Set(["align"]),
-  p: new Set(["align"]),
-  q: new Set(["cite"]),
-  blockquote: new Set(["type"]),
-};
-
-const CSS_PROPERTIES = new Set([
-  "background-color",
-  "border",
-  "border-bottom",
-  "border-collapse",
-  "border-color",
-  "border-left",
-  "border-radius",
-  "border-right",
-  "border-spacing",
-  "border-style",
-  "border-top",
-  "border-width",
-  "color",
-  "display",
-  "font",
-  "font-family",
-  "font-size",
-  "font-style",
-  "font-variant",
-  "font-weight",
-  "height",
-  "letter-spacing",
-  "line-height",
-  "list-style",
-  "list-style-type",
-  "margin",
-  "margin-bottom",
-  "margin-left",
-  "margin-right",
-  "margin-top",
-  "max-width",
-  "min-width",
-  "padding",
-  "padding-bottom",
-  "padding-left",
-  "padding-right",
-  "padding-top",
-  "text-align",
-  "text-decoration",
-  "text-indent",
-  "text-transform",
-  "vertical-align",
-  "white-space",
+const GLOBAL_ATTRS = [
+  "title",
+  "dir",
+  "lang",
+  "style",
+  "class",
+  "align",
+  "valign",
+  "bgcolor",
+  "background",
   "width",
-  "word-break",
-  "word-wrap",
+  "height",
+  "border",
+  ...STASH,
+];
+const TAG_ATTRS: Record<string, string[]> = {
+  a: ["href", "rel", "target"],
+  img: ["src", "srcset", "alt", "hspace", "vspace"],
+  td: ["colspan", "rowspan", "nowrap"],
+  th: ["colspan", "rowspan", "nowrap", "scope"],
+  table: ["cellpadding", "cellspacing"],
+  col: ["span"],
+  colgroup: ["span"],
+  ol: ["start", "type"],
+  ul: ["type"],
+  li: ["value"],
+  font: ["color", "face", "size"],
+  hr: ["size", "color", "noshade"],
+  q: ["cite"],
+  blockquote: ["type", "cite"],
+  details: ["open"],
+};
+
+const NUMERIC = new Set([
+  "width",
+  "height",
+  "border",
+  "cellpadding",
+  "cellspacing",
+  "colspan",
+  "rowspan",
+  "span",
+  "start",
+  "hspace",
+  "vspace",
+  "value",
 ]);
+const WORD = new Set(["align", "valign", "dir", "type", "scope", "lang"]);
+const COLOR = new Set(["bgcolor", "color"]);
 
 /** Class names mail clients put on the container that holds the quoted history. */
 const QUOTE_CLASSES = [
@@ -224,6 +243,9 @@ const QUOTE_CLASSES = [
 /** Element ids that mark where Outlook's reply separator begins; everything after it in the parent is quoted. */
 const OUTLOOK_SEPARATORS = new Set(["divrplyfwdmsg", "appendonsend"]);
 
+/** The largest data: image kept inline. */
+const MAX_DATA_IMAGE = 2_000_000;
+
 const ENTITIES: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -231,17 +253,6 @@ const ENTITIES: Record<string, string> = {
   '"': "&quot;",
   "'": "&#39;",
 };
-
-/** Drops C0 controls and DEL, which browsers ignore inside a scheme ("java\tscript:"). */
-function stripControls(text: string): string {
-  let out = "";
-  for (const ch of text) {
-    const code = ch.charCodeAt(0);
-    if (code < 0x20 || code === 0x7f) continue;
-    out += ch;
-  }
-  return out;
-}
 
 export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ENTITIES[c] ?? c);
@@ -251,225 +262,273 @@ export function escapeHtml(text: string): string {
 export function safeHref(value: string): string | null {
   const trimmed = stripControls(value.trim());
   if (trimmed.length === 0 || trimmed.length > 4096) return null;
-  // Decode entity-ish and percent tricks only enough to read the scheme.
   const lower = trimmed.toLowerCase();
   if (/^https?:\/\//.test(lower)) return trimmed;
   if (/^mailto:[^\s]+/.test(lower)) return trimmed;
   return null;
 }
 
-/** A safe image source: a cid: resolved through the map, a small data: image, or a blocked remote. */
-function imageSource(
-  value: string,
-  options: SanitizeOptions,
-): { src: string } | { blocked: string } | null {
+/** Where an image may come from: a cid: part, a small data: image, or http(s) under the remote rule. */
+function imageVerdict(value: string, options: SanitizeOptions): UrlVerdict {
   const trimmed = stripControls(value.trim()).replace(/\s/g, "");
   const lower = trimmed.toLowerCase();
   if (lower.startsWith("cid:")) {
     const id = trimmed.slice(4).replace(/^<|>$/g, "");
-    const url = options.cidUrl?.(id) ?? null;
-    return url ? { src: url } : null;
+    let decoded = id;
+    try {
+      decoded = decodeURIComponent(id);
+    } catch {}
+    const url = options.cidUrl?.(decoded) ?? null;
+    return url ? { keep: url } : null;
   }
   if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=]+$/i.test(trimmed)) {
-    return trimmed.length <= 2_000_000 ? { src: trimmed } : null;
+    return trimmed.length <= MAX_DATA_IMAGE ? { keep: trimmed } : null;
   }
-  if (/^https?:\/\//.test(lower)) {
-    return options.allowRemoteImages ? { src: trimmed } : { blocked: trimmed };
+  if (/^https?:\/\/[^/]/.test(lower) && trimmed.length <= 4096) {
+    return options.allowRemoteImages ? { keep: trimmed } : { block: trimmed };
   }
   return null;
 }
 
-/** Keeps the declarations whose property is on the list and whose value carries no escape hatch. */
-export function sanitizeStyle(style: string): string {
+/** A srcset whose candidates all pass the image rule; blocked when any is remote and images are off. */
+function srcsetVerdict(value: string, options: SanitizeOptions): UrlVerdict {
   const out: string[] = [];
-  for (const declaration of style.split(";")) {
-    const colon = declaration.indexOf(":");
-    if (colon < 1) continue;
-    const property = declaration.slice(0, colon).trim().toLowerCase();
-    const value = declaration.slice(colon + 1).trim();
-    if (!CSS_PROPERTIES.has(property)) continue;
-    if (value.length === 0 || value.length > 200) continue;
-    const lower = value.toLowerCase().replace(/\s+/g, "");
-    if (/url\(|expression\(|javascript|@import|\\|\/\*|<|>|&#|behavior|-moz-binding/.test(lower)) {
-      continue;
-    }
-    if (!/^[\w\s#%.,()'"!/:-]*$/.test(value)) continue;
-    out.push(`${property}: ${value.replace(/"/g, "'")}`);
+  let blocked = false;
+  for (const candidate of value.split(/,(?=\s)|,$/)) {
+    const [url, ...descriptor] = candidate.trim().split(/\s+/);
+    if (!url) continue;
+    const d = descriptor.join(" ");
+    if (d && !/^\d+(\.\d+)?[wx]$/.test(d)) return null;
+    const verdict = imageVerdict(url, options);
+    if (!verdict) return null;
+    if ("block" in verdict) blocked = true;
+    const target = "block" in verdict ? verdict.block : verdict.keep;
+    if (/[\s,]/.test(target)) return null;
+    out.push(d ? `${target} ${d}` : target);
   }
-  return out.join("; ");
+  if (out.length === 0) return null;
+  const joined = out.join(", ");
+  return blocked ? { block: joined } : { keep: joined };
 }
 
-function isQuoteContainer(name: string, attrs: Record<string, string>, extra: readonly string[]) {
-  const classes = (attrs.class ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-  if (classes.some((c) => QUOTE_CLASSES.includes(c) || extra.includes(c))) return true;
-  if (name === "blockquote" && (attrs.type ?? "").toLowerCase() === "cite") return true;
-  return false;
+function classesOf(el: Element): string[] {
+  return (el.attribs.class ?? "").toLowerCase().split(/\s+/).filter(Boolean);
 }
 
-function isOutlookSeparator(attrs: Record<string, string>): boolean {
-  const id = (attrs.id ?? "").toLowerCase();
-  return OUTLOOK_SEPARATORS.has(id);
+function isQuoteContainer(el: Element, extra: readonly string[]): boolean {
+  if (classesOf(el).some((c) => QUOTE_CLASSES.includes(c) || extra.includes(c))) return true;
+  return el.name === "blockquote" && (el.attribs.type ?? "").toLowerCase() === "cite";
 }
 
-interface Frame {
-  /** The output tag name, or null when the tag itself is stripped (children kept). */
-  out: string | null;
-  /** True while inside a dropped subtree; children are skipped. */
-  dropping: boolean;
-  /** This frame opened a <div class="quoted"> that closes with it. */
-  quoteWrapper: boolean;
-  /** A quoted wrapper opened by an Outlook separator among this frame's children, closed when this frame closes. */
-  trailingQuote: boolean;
+function isOutlookSeparator(el: Element): boolean {
+  return OUTLOOK_SEPARATORS.has((el.attribs.id ?? "").toLowerCase());
+}
+
+interface Prepared {
+  html: string;
+  styles: string[];
+  quoted: boolean;
+  dropped: number;
+}
+
+/** The tree pass before sanitising: styles lifted, dead subtrees dropped, quotes wrapped. */
+function prepare(input: string, extraQuoteClasses: readonly string[]): Prepared {
+  const doc = parseDocument(input, { decodeEntities: true, lowerCaseTags: true });
+  const styles = DomUtils.getElementsByTagName("style", doc, true).map((s) =>
+    DomUtils.textContent(s),
+  );
+  let quoted = false;
+  let dropped = 0;
+
+  const wrapQuoted = (nodes: ChildNode[]) => {
+    const first = nodes[0];
+    if (!first) return;
+    const wrapper = new Element("div", { class: "quoted" });
+    DomUtils.prepend(first, wrapper);
+    for (const n of nodes) DomUtils.appendChild(wrapper, n);
+    quoted = true;
+  };
+
+  const walk = (parent: ParentNode, insideQuote: boolean) => {
+    const children = [...parent.children];
+    for (let i = 0; i < children.length; i++) {
+      const node = children[i] as ChildNode;
+      if (isText(node)) continue;
+      if (!isTag(node)) {
+        // Comments, doctypes, processing instructions, CDATA.
+        DomUtils.removeElement(node);
+        continue;
+      }
+      if (DROPPED.has(node.name)) {
+        if (node.name !== "style" && node.name !== "head") dropped += 1;
+        DomUtils.removeElement(node);
+        continue;
+      }
+      for (const key of Object.keys(node.attribs)) {
+        if (key.startsWith("data-")) delete node.attribs[key];
+      }
+      // A body's bgcolor and style are the message's backdrop: kept on a div. A bare body is unwrapped.
+      if (node.name === "body" && Object.keys(node.attribs).length > 0) node.name = "div";
+      if (!insideQuote && isOutlookSeparator(node)) {
+        // Everything from the separator to the end of its parent is the quoted history.
+        const rest = parent.children.slice(parent.children.indexOf(node));
+        wrapQuoted(rest);
+        for (const n of rest) if (isTag(n)) walk(n, true);
+        return;
+      }
+      if (!insideQuote && isQuoteContainer(node, extraQuoteClasses)) {
+        wrapQuoted([node]);
+        walk(node, true);
+        continue;
+      }
+      walk(node, insideQuote);
+    }
+  };
+  walk(doc, false);
+  return { html: DomUtils.getOuterHTML(doc), styles, quoted, dropped };
 }
 
 export function sanitizeHtml(input: string, options: SanitizeOptions = {}): SanitizedHtml {
-  const extraQuoteClasses = options.quoteClasses ?? [];
-  const parts: string[] = [];
-  const stack: Frame[] = [];
-  let dropDepth = 0;
-  let quoted = false;
+  const prepared = prepare(input, options.quoteClasses ?? []);
   let blockedImages = 0;
-  let dropped = 0;
+  const policy: CssPolicy = { url: (target) => imageVerdict(target, options) };
 
-  const emit = (s: string) => {
-    if (dropDepth === 0) parts.push(s);
-  };
-
-  const attributesFor = (name: string, attrs: Record<string, string>): string => {
-    const allowed = TAG_ATTRS[name];
-    const out: string[] = [];
-    for (const [rawKey, rawValue] of Object.entries(attrs)) {
-      const key = rawKey.toLowerCase();
-      const value = rawValue ?? "";
-      if (!(GLOBAL_ATTRS.has(key) || allowed?.has(key))) continue;
+  const transformAll = (tagName: string, attribs: sanitize.Attributes): sanitize.Tag => {
+    const out: sanitize.Attributes = {};
+    let blocked = false;
+    for (const [key, raw] of Object.entries(attribs)) {
+      const value = raw ?? "";
+      if (STASH.includes(key)) {
+        // Set by the tag transforms below, never by the sender (prepare removed theirs).
+        out[key] = value;
+        continue;
+      }
       if (key === "style") {
-        const style = sanitizeStyle(value);
-        if (style) out.push(`style="${escapeHtml(style)}"`);
-        continue;
-      }
-      if (key === "href") {
-        const href = safeHref(value);
-        if (href)
-          out.push(`href="${escapeHtml(href)}"`, 'rel="noopener noreferrer"', 'target="_blank"');
-        continue;
-      }
-      if (key === "src") {
-        const source = imageSource(value, options);
-        if (!source) continue;
-        if ("src" in source) out.push(`src="${escapeHtml(source.src)}"`);
-        else {
-          blockedImages += 1;
-          out.push(`data-src="${escapeHtml(source.blocked)}"`, 'data-blocked=""');
+        const clean = cleanInlineStyle(value, policy);
+        if (clean.style) out.style = clean.style;
+        if (clean.blocked) {
+          out["data-blocked-style"] = clean.blocked;
+          blockedImages += clean.blockedImages;
+          blocked = true;
         }
+        continue;
+      }
+      if (key === "background") {
+        const verdict = imageVerdict(value, options);
+        if (!verdict) continue;
+        if ("block" in verdict) {
+          out["data-background"] = verdict.block;
+          blockedImages += 1;
+          blocked = true;
+        } else out.background = verdict.keep;
+        continue;
+      }
+      if (key === "class") {
+        const classes = value.split(/\s+/).filter((c) => /^[\w-]{1,64}$/.test(c));
+        if (classes.length > 0) out.class = classes.slice(0, 20).join(" ");
+        continue;
+      }
+      if (NUMERIC.has(key)) {
+        if (/^\d{1,5}(\.\d+)?(%|px)?$/.test(value.trim())) out[key] = value.trim();
+        continue;
+      }
+      if (WORD.has(key)) {
+        if (/^[a-z-]{1,20}$/i.test(value.trim())) out[key] = value.trim().toLowerCase();
+        continue;
+      }
+      if (COLOR.has(key)) {
+        if (/^(#[0-9a-f]{3,8}|[a-z]{1,30})$/i.test(value.trim())) out[key] = value.trim();
+        continue;
+      }
+      if (key === "face") {
+        if (/^[\w\s,'-]{1,200}$/.test(value)) out.face = value;
+        continue;
+      }
+      if (key === "size" && tagName === "font") {
+        if (/^[+-]?[1-7]$/.test(value.trim())) out.size = value.trim();
         continue;
       }
       if (key === "cite") {
         const href = safeHref(value);
-        if (href) out.push(`cite="${escapeHtml(href)}"`);
+        if (href) out.cite = href;
         continue;
       }
-      if (
-        [
-          "width",
-          "height",
-          "colspan",
-          "rowspan",
-          "span",
-          "start",
-          "cellpadding",
-          "cellspacing",
-        ].includes(key)
-      ) {
-        if (/^\d{1,5}(%|px)?$/.test(value.trim())) out.push(`${key}="${escapeHtml(value.trim())}"`);
-        continue;
-      }
-      if (["align", "valign", "type", "dir"].includes(key)) {
-        if (/^[a-z-]{1,20}$/i.test(value.trim()))
-          out.push(`${key}="${escapeHtml(value.trim().toLowerCase())}"`);
-        continue;
-      }
-      if (value.length <= 1024) out.push(`${key}="${escapeHtml(value)}"`);
+      if (value.length <= 1024) out[key] = value;
     }
-    return out.length ? ` ${out.join(" ")}` : "";
+    if (blocked) out["data-blocked"] = "";
+    return { tagName, attribs: out };
   };
 
-  const parser = new Parser(
-    {
-      onopentag(rawName, attrs) {
-        const name = rawName.toLowerCase();
-        if (dropDepth > 0 || DROPPED.has(name)) {
-          if (DROPPED.has(name) && dropDepth === 0) dropped += 1;
-          dropDepth += 1;
-          stack.push({ out: null, dropping: true, quoteWrapper: false, trailingQuote: false });
-          return;
-        }
-        const frame: Frame = {
-          out: null,
-          dropping: false,
-          quoteWrapper: false,
-          trailingQuote: false,
-        };
-        if (isOutlookSeparator(attrs)) {
-          const parent = stack[stack.length - 1];
-          if (parent && !parent.trailingQuote) {
-            parent.trailingQuote = true;
-            quoted = true;
-            emit('<div class="quoted">');
-          }
-        }
-        if (isQuoteContainer(name, attrs, extraQuoteClasses)) {
-          frame.quoteWrapper = true;
-          quoted = true;
-          emit('<div class="quoted">');
-        }
-        if (ALLOWED.has(name)) {
-          const out = RENAMED[name] ?? name;
-          frame.out = VOID.has(name) ? null : out;
-          const rest = attributesFor(name, attrs);
-          if (name === "img") {
-            emit(`<img${rest}>`);
-          } else if (VOID.has(name)) {
-            emit(`<${out}${rest}>`);
-          } else {
-            emit(`<${out}${rest}>`);
-          }
-        } else {
-          dropped += name === "html" || name === "body" ? 0 : 1;
-        }
-        stack.push(frame);
+  // allowedEmptyAttributes is in sanitize-html 2.x but not yet in its published types.
+  const config: sanitize.IOptions & { allowedEmptyAttributes: string[] } = {
+    allowedTags: ALLOWED_TAGS,
+    allowedAttributes: { "*": GLOBAL_ATTRS, ...TAG_ATTRS },
+    allowedSchemes: ["http", "https", "mailto"],
+    allowedSchemesByTag: { img: ["http", "https", "data"] },
+    allowedSchemesAppliedToAttributes: ["href", "src", "cite", "background"],
+    allowProtocolRelative: false,
+    allowedEmptyAttributes: ["alt", "data-blocked"],
+    disallowedTagsMode: "discard",
+    nonTextTags: [...DROPPED],
+    parseStyleAttributes: false,
+    transformTags: {
+      a: (tagName, attribs) => {
+        const href = safeHref(attribs.href ?? "");
+        const out: sanitize.Attributes = { ...attribs };
+        delete out.href;
+        delete out.rel;
+        delete out.target;
+        if (href) Object.assign(out, { href, rel: "noopener noreferrer", target: "_blank" });
+        return { tagName, attribs: out };
       },
-      ontext(text) {
-        if (dropDepth > 0) return;
-        emit(escapeHtml(text));
-      },
-      onclosetag() {
-        const frame = stack.pop();
-        if (!frame) return;
-        if (frame.dropping) {
-          dropDepth = Math.max(0, dropDepth - 1);
-          return;
+      img: (tagName, attribs) => {
+        const out: sanitize.Attributes = { ...attribs };
+        delete out.src;
+        delete out.srcset;
+        let blocked = false;
+        const src = attribs.src ? imageVerdict(attribs.src, options) : null;
+        if (src && "keep" in src) out.src = src.keep;
+        else if (src) {
+          out["data-src"] = src.block;
+          blocked = true;
         }
-        if (frame.out) emit(`</${frame.out}>`);
-        if (frame.trailingQuote) emit("</div>");
-        if (frame.quoteWrapper) emit("</div>");
+        const srcset = attribs.srcset ? srcsetVerdict(attribs.srcset, options) : null;
+        if (srcset && "keep" in srcset) out.srcset = srcset.keep;
+        else if (srcset) {
+          out["data-srcset"] = srcset.block;
+          blocked = true;
+        }
+        if (blocked) {
+          blockedImages += 1;
+          out["data-blocked"] = "";
+        }
+        return { tagName, attribs: out };
       },
+      "*": transformAll,
     },
-    {
-      decodeEntities: true,
-      lowerCaseTags: true,
-      lowerCaseAttributeNames: true,
-      recognizeSelfClosing: true,
-    },
-  );
-  parser.write(input);
-  parser.end();
-  // Anything left open (the parser closes implied tags at end, but be safe).
-  while (stack.length > 0) {
-    const frame = stack.pop();
-    if (!frame || frame.dropping) continue;
-    if (frame.out) parts.push(`</${frame.out}>`);
-    if (frame.trailingQuote) parts.push("</div>");
-    if (frame.quoteWrapper) parts.push("</div>");
+  };
+  const html = sanitize(prepared.html, config);
+
+  let css = "";
+  let blockedCss = "";
+  for (const style of prepared.styles) {
+    const sheet = cleanStylesheet(style, policy);
+    if (sheet.css) css += `${css ? "\n" : ""}${sheet.css}`;
+    if (sheet.blocked) blockedCss += `${blockedCss ? "\n" : ""}${sheet.blocked}`;
+    blockedImages += sheet.blockedImages;
   }
-  return { html: parts.join("").trim(), quoted, blockedImages, dropped };
+  const head =
+    (css ? `<style>${css}</style>` : "") +
+    (blockedCss ? `<style media="not all" data-blocked="">${blockedCss}</style>` : "");
+  return {
+    html: `${head}${html.trim()}`,
+    quoted: prepared.quoted,
+    blockedImages,
+    dropped: prepared.dropped,
+  };
+}
+
+/** The style attribute alone, for callers that only have a declaration list. */
+export function sanitizeStyle(style: string, options: SanitizeOptions = {}): string {
+  return cleanInlineStyle(style, { url: (target) => imageVerdict(target, options) }).style;
 }
