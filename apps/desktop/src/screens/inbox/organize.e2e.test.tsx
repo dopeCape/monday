@@ -433,7 +433,8 @@ describe("organizing mail by talking, end to end", () => {
   test("the nav model lists Reading with a count, and the stream keeps the newsletter out of the other Sections", async () => {
     await resection();
     const model = await nav();
-    expect(model.sections).toEqual([{ key: "section:reading", label: "Reading" }]);
+    // Every Section lives in the nav: the shipped four and Reading.
+    expect(model.sections).toContainEqual({ key: "section:reading", label: "Reading" });
     // The delivered newsletter and the fixture's own digest: both unread list mail.
     expect(model.counts["section:reading"]).toBeGreaterThanOrEqual(1);
     expect(model.rail.map((r) => r.key)).toContain("section:reading");
@@ -574,7 +575,12 @@ describe("organizing mail by talking, end to end", () => {
     expect(s["sections.order"]).toEqual(["needs-reply", "waiting", "fyi", "newsletters"]);
     await resection();
     const model = await nav();
-    expect(model.sections).toEqual([]);
+    expect(model.sections.map((x) => x.key)).toEqual([
+      "section:needs-reply",
+      "section:waiting",
+      "section:fyi",
+      "section:newsletters",
+    ]);
     expect(inbox.thread(newsletterId)?.section).toBe("newsletters");
     expect(customActionsFor(current.actions, inbox.thread(invoiceId) as Thread, {})).toEqual([]);
   });

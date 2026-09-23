@@ -1,6 +1,6 @@
 // The full navigation sidebar: workspace, search and compose, Mail folders,
-// the calendar, Groups with their Sub-groups, the Sections placed in the nav
-// (CONTEXT.md "Section rule"), Automation, and Settings.
+// the calendar, Groups with their Sub-groups, every Section (CONTEXT.md
+// "Section": they live in the nav, not the stream), Automation, and Settings.
 import type { Group } from "@monday/shared";
 import {
   CaretUpDownIcon,
@@ -35,7 +35,7 @@ export interface NavLabels {
   compose: string;
   mail: string;
   groups: string;
-  /** The heading over the Sections placed in the nav; absent means "Sections". */
+  /** The heading over the Sections; absent means "Sections". */
   sections?: string | undefined;
   automation: string;
   settings: string;
@@ -63,7 +63,7 @@ export interface NavSidebarProps {
   counts?: Readonly<Record<string, number>> | undefined;
   /** Icons for top-level Groups; Sub-groups never carry one. */
   groupIcon?: (group: Group) => IconComponent | undefined;
-  /** The Sections placed in the nav, under Groups; none hides the block. */
+  /** Every Section, under Groups; none hides the block. */
   sections?: readonly NavItem[] | undefined;
   automation: readonly NavItem[];
   /** The active folder key, Group id, or "calendar", "settings". */

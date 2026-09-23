@@ -182,6 +182,36 @@ describe("navModel", () => {
     expect("snoozed" in empty).toBe(false);
   });
 
+  test("every Section lives in the nav, whatever its placement, in Section order with its unread count; a hidden one is left out and an empty one has no count", () => {
+    const nav = navModel({
+      address: "a@b.c",
+      status: "online",
+      threads: [
+        thread("a", { section: "needs-reply" }),
+        thread("b", { section: "needs-reply" }),
+        thread("c", { section: "reading", unread: false }),
+      ],
+      groups: [],
+      sections: [
+        ...strings["sections.rules"],
+        { id: "reading", name: "Reading", when: { bulk: true }, placement: "stream" },
+        { id: "secret", name: "Secret", when: {}, placement: "nav", hidden: true },
+      ],
+      sectionOrder: [...strings["sections.order"], "reading", "secret"],
+      strings,
+    });
+    expect(nav.sections).toEqual([
+      { key: "section:needs-reply", label: "Needs your reply" },
+      { key: "section:waiting", label: "Waiting on you" },
+      { key: "section:fyi", label: "For your information" },
+      { key: "section:newsletters", label: "Newsletters" },
+      { key: "section:reading", label: "Reading" },
+    ]);
+    expect(nav.counts["section:needs-reply"]).toBe(2);
+    expect("section:reading" in nav.counts).toBe(false);
+    expect("section:fyi" in nav.counts).toBe(false);
+  });
+
   test("a Scheduled folder appears only while a send is scheduled", () => {
     const base = { address: "a@b.c", status: "online" as const, threads: [], groups: [], strings };
     expect(

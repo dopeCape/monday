@@ -199,7 +199,7 @@ function Root() {
 }
 
 /**
- * Picks the Workspace: the first connected Account's in the app, the design
+ * Picks the Workspace: the Account workspace.current names (else the first) in the app, the design
  * fixture's on the browser dev server (no Server there). In the app nothing
  * renders until the Sidecar (or the Cloud) answers, so the fixture Workspace
  * never opens a Cache there. With a Server and no Account yet, the Accounts
@@ -308,11 +308,11 @@ function WorkspaceGate() {
     </WorkspaceProvider>
   );
   // The fixture Workspace has no Server to read a first sync from.
-  if (!first) return app;
+  if (!picked) return app;
   return (
     <FirstSyncGate
-      key={first.id}
-      account={{ id: first.id, address: first.address, provider: first.provider }}
+      key={picked.id}
+      account={{ id: picked.id, address: picked.address, provider: picked.provider }}
       onOpen={() => {
         appOpen.current = true;
       }}

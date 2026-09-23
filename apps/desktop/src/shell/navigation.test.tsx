@@ -204,6 +204,28 @@ describe("the Mail folders", () => {
   });
 });
 
+describe("Sections in the nav", () => {
+  test("every Section is a nav entry under Groups; clicking one opens the Inbox's lens on it under its name", async () => {
+    const inbox = fixtureInbox();
+    await mount({ inbox });
+    const sections = qa(".nav .nav-item").filter((b) =>
+      ["Needs your reply", "Waiting on you", "For your information", "Newsletters"].includes(
+        b.querySelector("span")?.textContent ?? "",
+      ),
+    );
+    expect(sections).toHaveLength(4);
+    await click(navItem("Needs your reply"));
+    expect(listTitle()).toBe("Needs your reply");
+    expect(rowIds()).toEqual(
+      inbox
+        .threads()
+        .filter((t) => t.section === "needs-reply")
+        .map((t) => t.id),
+    );
+    expect(document.title).toBe("Needs your reply · monday");
+  });
+});
+
 describe("Drafts", () => {
   test("lists the open Drafts with their count, words what is missing, and opens the composer on one", async () => {
     await mount({ drafts: [draft, emptyDraft] });

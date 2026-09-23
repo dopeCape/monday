@@ -4,13 +4,14 @@
 // Settings, the unread counts per folder and per Group from the Inbox seam,
 // the rail's items (Inbox, the Mail folders, then the top-level Groups) and
 // its tail, the Drafts and Snoozed totals beside their folders, and every
-// Section placed in the nav with its count (docs/spec/inbox.md: a Section the
-// Agent created a moment ago appears without a reload, because the model is
-// recomputed from the Settings it came in with). Pure, so the App composes it
+// Section with its unread count (docs/spec/inbox.md: Sections live in the nav
+// only, shipped and user-defined alike, whatever their placement; a hidden
+// one is left out; a Section the Agent created a moment ago appears without a
+// reload, because the model is recomputed from the Settings it came in with). Pure, so the App composes it
 // in a memo and the tests read it without a DOM.
 
 import type { Group, SectionRuleSetting, Settings, Thread } from "@monday/shared";
-import { isSettingKey, orderedSectionRules, sectionInNav, sectionLabel } from "@monday/shared";
+import { isSettingKey, orderedSectionRules, sectionLabel } from "@monday/shared";
 import type { IconComponent, NavItem, NavLabels, NavWorkspace, RailItem } from "@monday/ui";
 import {
   AirplaneIcon,
@@ -106,7 +107,7 @@ export interface NavInput {
   folderCounts?: { drafts?: number | undefined; snoozed?: number | undefined } | undefined;
   /** Sends still scheduled; a Scheduled folder appears while there are any. */
   scheduled?: { count: number; label: string } | undefined;
-  /** The Section rules (sections.rules); those placed in the nav are listed under Groups. */
+  /** The Section rules (sections.rules); every one not hidden is listed under Groups. */
   sections?: readonly SectionRuleSetting[] | undefined;
   /** Their order (sections.order). */
   sectionOrder?: readonly string[] | undefined;
@@ -119,7 +120,7 @@ export interface NavModel {
   folders: NavItem[];
   calendar: NavItem;
   automation: NavItem[];
-  /** Every Section placed in the nav, in Section order, keyed "section:<id>". */
+  /** Every Section not hidden, in Section order, keyed "section:<id>". */
   sections: NavItem[];
   /** Unread counts by folder key, Group id or "section:<id>"; absent keys show no count. */
   counts: Record<string, number>;
@@ -181,14 +182,18 @@ export function unreadCounts(
   return counts;
 }
 
-/** The Sections placed in the nav as items, in Section order, labelled from the rule or the strings. */
+/**
+ * Every Section as a nav item, in Section order, labelled from the rule or
+ * the strings: the nav is where Sections live, so placement no longer
+ * decides; a hidden Section is left out.
+ */
 export function navSections(
   rules: readonly SectionRuleSetting[],
   order: readonly string[],
   strings: NavStrings,
 ): NavItem[] {
   return orderedSectionRules(rules, order)
-    .filter((r) => sectionInNav(r) && !r.hidden)
+    .filter((r) => !r.hidden)
     .map((r) => {
       const key = `strings.section.${r.id}`;
       const fromStrings = isSettingKey(key)
