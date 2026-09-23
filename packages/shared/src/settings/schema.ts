@@ -1869,6 +1869,26 @@ export const settingsSchema = {
     label: "First sync waits for",
     help: "What the screen after connecting an Account waits for before the app opens. Inbox bodies: every Inbox Message found and the bodies inside the body window fetched, so the first Threads you open render at once. Headers: every Inbox Message found; bodies keep filling in after the app opens.",
   }),
+  "sync.first_run_messages": setting({
+    type: z.int().min(0).max(1_000_000),
+    default: 1000,
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    advanced: true,
+    label: "First sync waits for this many recent emails",
+    help: "The screen after connecting an Account waits until your newest emails, up to this many, are in; older mail keeps arriving in the background after the app opens. Gmail lets an app read about 300 emails a minute, so waiting for a very large inbox could take hours. 0 waits for the whole inbox.",
+  }),
+  "sync.first_run_bodies": setting({
+    type: z.int().min(0).max(100_000),
+    default: 200,
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    advanced: true,
+    label: "Full text ready before the app opens",
+    help: "How many of your newest inbox emails have their full text before the app opens, so the first ones you open show at once. The rest fill in afterwards.",
+  }),
   "sync.first_run_poll_seconds": setting({
     type: z.int().min(1).max(30),
     default: 2,
@@ -5545,6 +5565,11 @@ export const settingsSchema = {
     "About {n} minutes left",
   ),
   "strings.first_sync.eta_hours": str("accounts", "First sync: hours left", "About {n} hours left"),
+  "strings.first_sync.later": str(
+    "accounts",
+    "First sync: older mail later",
+    "Your {count} older emails keep arriving in the background after monday opens.",
+  ),
   "strings.first_sync.pacing": str(
     "accounts",
     "First sync: provider pacing",

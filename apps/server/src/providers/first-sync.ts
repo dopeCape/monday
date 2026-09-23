@@ -11,9 +11,10 @@
 // also sets it.
 
 import type { FirstSyncErrorKind, FirstSyncProgress, Provider } from "@monday/shared";
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accounts, labels, syncMessages, syncState, workspaces } from "../db/schema.ts";
+import { readGlobalSettings } from "../settings/read.ts";
 import { readSyncSettings, type SyncEngine } from "./sync.ts";
 
 /** What the engine keeps under accounts.sync_state.firstSync. */
@@ -36,6 +37,11 @@ export interface FirstSyncReaderOptions {
   sync: SyncEngine;
   /** The body window; defaults to the stored Setting. */
   bodyWindowDays?: () => Promise<number>;
+  /**
+   * How many of the newest Inbox Messages the wait covers (headers, then
+   * bodies); 0 means the whole Inbox. Defaults to the stored Settings.
+   */
+  limits?: () => Promise<{ messages: number; bodies: number }>;
   now?: () => Date;
 }
 
@@ -50,6 +56,15 @@ export function createFirstSyncReader(options: FirstSyncReaderOptions): FirstSyn
   const now = options.now ?? (() => new Date());
   const windowDays =
     options.bodyWindowDays ?? (async () => (await readSyncSettings(db)).bodyWindowDays);
+  const limits =
+    options.limits ??
+    (async () => {
+      const s = await readGlobalSettings(db, [
+        "sync.first_run_messages",
+        "sync.first_run_bodies",
+      ] as const);
+      return { messages: s["sync.first_run_messages"], bodies: s["sync.first_run_bodies"] };
+    });
 
   async function latch(accountId: string, patch: FirstSyncRecord): Promise<void> {
     await db
@@ -89,6 +104,7 @@ export function createFirstSyncReader(options: FirstSyncReaderOptions): FirstSyn
       let found = 0;
       let bodiesTotal = 0;
       let bodiesDone = 0;
+      const lim = await limits();
       if (inboxId) {
         const inInbox = and(
           eq(syncMessages.workspaceId, row.workspaceId),
@@ -97,16 +113,18 @@ export function createFirstSyncReader(options: FirstSyncReaderOptions): FirstSyn
         );
         const since = new Date(now().getTime() - (await windowDays()) * 86_400_000);
         const [headers] = await db.select({ n: count() }).from(syncMessages).where(inInbox);
-        const [windowed] = await db
-          .select({
-            n: count(),
-            fetched: sql<number>`count(*) filter (where ${syncMessages.bodyState} = 'fetched')`,
-          })
-          .from(syncMessages)
-          .where(and(inInbox, gte(syncMessages.date, since)));
         found = Number(headers?.n ?? 0);
-        bodiesTotal = Number(windowed?.n ?? 0);
-        bodiesDone = Number(windowed?.fetched ?? 0);
+        // The bodies the wait covers: the newest Inbox Messages inside the body
+        // window, at most `bodies` of them (0: every one in the window).
+        const newest = db
+          .select({ bodyState: syncMessages.bodyState })
+          .from(syncMessages)
+          .where(and(inInbox, gte(syncMessages.date, since)))
+          .orderBy(desc(syncMessages.date))
+          .$dynamic();
+        const covered = lim.bodies > 0 ? await newest.limit(lim.bodies) : await newest;
+        bodiesTotal = covered.length;
+        bodiesDone = covered.filter((r) => r.bodyState === "fetched").length;
       }
 
       const fullPass = state?.lastFullSync != null;
@@ -116,7 +134,20 @@ export function createFirstSyncReader(options: FirstSyncReaderOptions): FirstSyn
         state !== undefined &&
         state.mailboxStates[inboxId] !== undefined &&
         !state.pending.includes(inboxId);
-      const headersComplete = record.headersAt !== undefined || fullPass || inboxPaged;
+      // The wait covers the newest `messages` Inbox Messages (0: all of them); the
+      // provider pages newest first, so once that many are in, they are the newest.
+      const inboxTotal = record.inboxTotal ?? null;
+      // Before the provider reports its total, the wait still ends once the
+      // newest `messages` are in: there are at least that many.
+      const target =
+        inboxTotal === null
+          ? null
+          : lim.messages > 0
+            ? Math.min(lim.messages, inboxTotal)
+            : inboxTotal;
+      const enough =
+        target !== null ? target > 0 && found >= target : lim.messages > 0 && found >= lim.messages;
+      const headersComplete = record.headersAt !== undefined || fullPass || inboxPaged || enough;
       const bodiesComplete =
         record.bodiesAt !== undefined || (headersComplete && bodiesDone >= bodiesTotal);
 
@@ -125,16 +156,17 @@ export function createFirstSyncReader(options: FirstSyncReaderOptions): FirstSyn
       if (bodiesComplete && record.bodiesAt === undefined) stamp.bodiesAt = now().toISOString();
       if (Object.keys(stamp).length > 0) await latch(row.id, stamp);
 
-      const total = record.inboxTotal ?? null;
+      const total = target;
       return {
         accountId: row.id,
         workspaceId: row.workspaceId,
         provider: row.provider as Provider,
         address: row.address,
         headers: {
-          done: headersComplete && total !== null ? Math.max(found, total) : found,
-          total: total === null ? null : Math.max(total, headersComplete ? found : 0),
+          done: total === null ? found : headersComplete ? total : Math.min(found, total),
+          total,
           complete: headersComplete,
+          ...(inboxTotal !== null && target !== null && inboxTotal > target ? { inboxTotal } : {}),
         },
         bodies: {
           done: bodiesComplete ? Math.max(bodiesDone, bodiesTotal) : bodiesDone,

@@ -117,6 +117,34 @@ describe("first sync progress", () => {
     if (p) expect(firstSyncComplete(p, "headers")).toBe(false);
   });
 
+  test("a large Inbox opens once its newest messages are in; the rest is reported for later", async () => {
+    // A 67,000 message Gmail Inbox would block for hours at Gmail's quota, so
+    // the wait covers the newest `sync.first_run_messages` only.
+    const windowed = accountOf("acct-window", "window@monday.test");
+    const ws = await store.createWorkspace(windowed);
+    await credentials.store(ws.id, windowed.id, fakeCredentials(windowed.address));
+    const limited = createFirstSyncReader({
+      db: db.handle.db,
+      sync: engine,
+      bodyWindowDays: async () => WINDOW_DAYS,
+      limits: async () => ({ messages: 10, bodies: 3 }),
+      now: () => NOW,
+    });
+    const inbox = inboxIds().length;
+    expect(inbox).toBeGreaterThan(10);
+    let p = await limited.read(windowed.id);
+    for (let i = 0; i < 50 && !p?.headers.complete; i++) {
+      await engine.syncAccount(windowed.id, { headersOnly: true });
+      p = await limited.read(windowed.id);
+    }
+    expect(p?.headers.complete).toBe(true);
+    expect(p?.headers.total).toBe(10);
+    expect(p?.headers.done).toBe(10);
+    expect(p?.headers.inboxTotal).toBe(inbox);
+    // Bodies: only the newest three inside the window are waited for.
+    expect(p?.bodies.total).toBeLessThanOrEqual(3);
+  });
+
   test("headers complete against the Provider's Inbox total once the Inbox finished paging", async () => {
     const inbox = inboxIds().length;
     expect(inbox).toBeGreaterThan(0);

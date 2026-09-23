@@ -2,10 +2,12 @@
 // in the inbox is fetched" means, in one place. The Server counts; this file
 // says when the count is enough for the app to open.
 //
-// Headers: every Message the Provider holds in the Inbox mailbox has a mirror
-// row (its first pass over the Inbox finished paging). Bodies: every Inbox
-// Message dated inside `sync.body_window_days` has its body, so the first
-// Threads the user opens render at once. Older bodies fill in afterwards.
+// Headers: the newest `sync.first_run_messages` Inbox Messages (0: all of
+// them) have a mirror row. Gmail reads about 300 Messages a minute, so a
+// 60,000 message Inbox would block for hours; the rest arrives after the app
+// opens. Bodies: the newest `sync.first_run_bodies` Inbox Messages inside
+// `sync.body_window_days` have their body, so the first Threads the user
+// opens render at once. Older bodies fill in afterwards.
 // `sync.first_run_wait` picks which of the two the screen waits for.
 //
 // Runtime-neutral: no Bun, no DOM.
@@ -21,8 +23,10 @@ export const FIRST_RUN_WAITS: readonly FirstRunWait[] = ["headers", "inbox_bodie
 export type FirstSyncErrorKind = "auth" | "network" | "other";
 
 export interface FirstSyncCount {
-  /** Messages counted so far. */
+  /** Messages counted so far, up to what the wait covers. */
   done: number;
+  /** The whole Inbox, when the wait covers only its newest part; the rest fills in after. */
+  inboxTotal?: number;
   /** What the Provider says there is; null when it does not say (Gmail before its first answer). */
   total: number | null;
   /** The phase is finished by the definition above; latched on the Server once true. */
