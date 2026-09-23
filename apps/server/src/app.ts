@@ -58,6 +58,7 @@ import {
 } from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
+import { createFirstSyncReader } from "./providers/first-sync.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
 import { ProviderError } from "./providers/types.ts";
@@ -454,7 +455,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   if (options.calendar) app.route("/", calendarRoutes(options.calendar));
   if (options.accounts) {
-    app.route("/", accountRoutes(options.accounts));
+    app.route(
+      "/",
+      accountRoutes({
+        ...(options.sync
+          ? { firstSync: createFirstSyncReader({ db: options.db, sync: options.sync }) }
+          : {}),
+        ...options.accounts,
+      }),
+    );
     if (options.oauth) {
       app.route("/", oauthRoutes({ ...options.oauth, accounts: options.accounts.accounts }));
     }

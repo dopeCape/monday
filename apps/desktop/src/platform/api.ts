@@ -28,6 +28,7 @@ import type {
   ExternalKeyCreated,
   ExternalKeyInput,
   ExternalPending,
+  FirstSyncProgress,
   GroupInput,
   GroupView,
   HeaderSearchPage,
@@ -792,6 +793,13 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         }),
       remove: (id: string) =>
         request<unknown>(`/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      /** The first sync's progress (docs/spec/onboarding.md, "First sync"). */
+      sync: (id: string) =>
+        request<{ progress: FirstSyncProgress }>(`/accounts/${encodeURIComponent(id)}/sync`),
+      /** Clears the last failure and asks for a pass now. */
+      retrySync: async (id: string): Promise<void> => {
+        await raw(`/accounts/${encodeURIComponent(id)}/sync`, { method: "POST" });
+      },
     },
     oauth: {
       /** The live check the wizard runs on every paste. */

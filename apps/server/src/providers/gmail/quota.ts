@@ -16,6 +16,7 @@ export const GMAIL_COST = {
   "drafts.send": 100,
   "threads.get": 40,
   "labels.list": 1,
+  "labels.get": 1,
   getProfile: 1,
   watch: 100,
   stop: 50,
@@ -49,6 +50,8 @@ export interface TokenBucket {
   penalize(): void;
   /** Units per minute the bucket refills at right now. */
   rate(): number;
+  /** Whether a penalty still holds the rate under the configured one. */
+  pacing?(): boolean;
 }
 
 /** The rate never drops below this share of the configured one after penalties. */
@@ -114,6 +117,9 @@ export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
     },
     rate() {
       return refillPerMs * 60_000;
+    },
+    pacing() {
+      return refillPerMs < full;
     },
   };
 }

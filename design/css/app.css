@@ -589,3 +589,27 @@ button.prov { text-align: left; background: transparent; font: inherit; color: i
 .onboarding-chat { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg); min-height: 420px; display: flex; flex-direction: column; overflow: hidden; }
 .onboarding-chat .agent-col { flex: 1; border: 0; }
 .onboarding-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 4px; }
+
+/* --- First sync (docs/spec/onboarding.md): the screen after connecting an Account --- */
+.first-sync { height: 100%; min-height: 0; overflow: auto; display: grid; justify-content: center; align-content: start; padding: 96px 40px 120px; grid-template-columns: min(560px, 100%); }
+.first-sync-in { min-width: 0; display: grid; gap: 20px; }
+.first-sync-account { display: grid; grid-template-columns: 32px 1fr; gap: 12px; align-items: center; }
+.first-sync-account .lg { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-size: 16px; background: var(--sunken); color: var(--fg); }
+.first-sync-account b { display: block; font-weight: 600; font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.first-sync-account span:not(.lg) { color: var(--fg-faint); font-size: var(--fs-xs); }
+.first-sync h1 { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -0.02em; margin: 8px 0 0; }
+.first-sync-in > p { margin: -8px 0 4px; color: var(--fg-muted); font-size: var(--fs-md); line-height: 1.5; }
+.first-sync-lines { display: grid; gap: 18px; }
+.first-sync-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.first-sync-label { font-size: var(--fs-md); color: var(--fg); }
+.first-sync-detail { font-size: var(--fs-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.first-sync-line[data-state="waiting"] .first-sync-label, .first-sync-line[data-state="waiting"] .first-sync-detail { color: var(--fg-faint); }
+.first-sync-bar { margin-top: 8px; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
+.first-sync-bar > span { display: block; height: 100%; background: var(--accent); transform-origin: left center; transform: scaleX(var(--p, 0)); }
+.first-sync-note { margin: 0; color: var(--fg-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.first-sync-error { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); font-size: var(--fs-sm); line-height: 1.5; }
+.first-sync-error > i { flex: none; margin-top: 2px; color: var(--warning); font-size: 16px; }
+.first-sync-error b { display: block; font-weight: 600; color: var(--fg); }
+.first-sync-error span { color: var(--fg-muted); }
+.first-sync .actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.first-sync .actions .sp { flex: 1; }

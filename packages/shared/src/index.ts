@@ -3,6 +3,7 @@ export * from "./calendar.ts";
 export * from "./config/index.ts";
 export * from "./deployment.ts";
 export * from "./domain.ts";
+export * from "./first-sync.ts";
 export * from "./intent.ts";
 export * from "./judge.ts";
 export * from "./routing/index.ts";

@@ -168,6 +168,11 @@ export interface SyncEngine {
   /** Runs `fn` with the Account's Session (cached, reconnected on auth or network failure). */
   withSession<T>(accountId: string, fn: (session: Session) => Promise<T>): Promise<T>;
   /**
+   * Whether the Account's open Session is pacing for Provider quota right now
+   * (Gmail after a rate-limit refusal). False with no open Session.
+   */
+  pacing(accountId: string): Promise<boolean>;
+  /**
    * Registers who turns Provider drafts into Server Drafts. The engine calls it
    * once per Draft it finds in the Drafts mailbox that `knownProviderIds` did
    * not list; the Drafts module owns the rest (ADR 0010).
@@ -791,6 +796,20 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       .onConflictDoUpdate({ target: syncState.workspaceId, set: { ...patch, updatedAt: now() } });
   }
 
+  /**
+   * The first sync screen's facts the mirror tables do not hold: the
+   * Provider's Inbox total and why the last pass failed. Merged into
+   * accounts.sync_state under `firstSync` so push cursors there stay put.
+   */
+  async function recordFirstSync(acct: AccountRow, patch: Record<string, unknown>): Promise<void> {
+    await db
+      .update(accounts)
+      .set({
+        syncState: sql`jsonb_set(coalesce(${accounts.syncState}, '{}'::jsonb), '{firstSync}', coalesce(${accounts.syncState} -> 'firstSync', '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb)`,
+      })
+      .where(eq(accounts.id, acct.id));
+  }
+
   async function syncOneMailbox(
     acct: AccountRow,
     s: Session,
@@ -866,6 +885,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     windowDays: number,
     deadline: number | undefined,
     report: SyncReport,
+    onlyMailbox: string | null = null,
   ): Promise<{ more: boolean }> {
     const since = new Date(now().getTime() - windowDays * 86_400_000);
     // Anything older than the window waits for the reader.
@@ -887,6 +907,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
           eq(syncMessages.workspaceId, acct.workspaceId),
           eq(syncMessages.bodyState, "pending"),
           eq(syncMessages.stale, false),
+          ...(onlyMailbox ? [sql`${onlyMailbox} = any(${syncMessages.mailboxIds})`] : []),
         ),
       )
       .orderBy(desc(syncMessages.date))
@@ -1114,6 +1135,10 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         await withSession(acct, async (s) => {
           const map = await syncMailboxList(acct.workspaceId, s);
           await saveState(acct, { tier: s.capabilities().syncTier });
+          const inbox = map.mailboxes.find((m) => m.role === "inbox") ?? null;
+          if (inbox && inbox.totalMessages !== null) {
+            await recordFirstSync(acct, { inboxTotal: inbox.totalMessages });
+          }
           const wanted = opts.mailboxIds ? new Set(opts.mailboxIds) : null;
           const state = await loadState(acct);
           const pending = new Set(state.pending);
@@ -1134,7 +1159,29 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
               settingsNow.batchSize,
               deadline,
             );
-            if (!complete) report.more = true;
+            if (!complete) {
+              report.more = true;
+              continue;
+            }
+            // The Inbox's window bodies follow its headers at once, before the
+            // other folders, so the first sync screen can let the app open.
+            if (mailbox.role === "inbox" && !opts.headersOnly) {
+              for (;;) {
+                if (outOfTime()) {
+                  report.more = true;
+                  break;
+                }
+                const inboxBodies = await fetchBodies(
+                  acct,
+                  s,
+                  settingsNow.bodyWindowDays,
+                  deadline,
+                  report,
+                  mailbox.id,
+                );
+                if (!inboxBodies.more) break;
+              }
+            }
           }
           if (!opts.headersOnly && !outOfTime()) {
             const bodies = await fetchBodies(acct, s, settingsNow.bodyWindowDays, deadline, report);
@@ -1154,6 +1201,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         await saveState(acct, {
           lastError: error instanceof Error ? error.message : String(error),
         });
+        const code = (error as Partial<ProviderError>).code ?? null;
+        await recordFirstSync(acct, { errorCode: code }).catch(() => {});
         throw error;
       }
       return report;
@@ -1175,6 +1224,13 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
     async withSession(accountId, fn) {
       return withSession(await account(accountId), fn);
+    },
+
+    async pacing(accountId) {
+      const pending = sessions.get(accountId);
+      if (!pending) return false;
+      const open = await pending.catch(() => null);
+      return open?.pacing?.() ?? false;
     },
 
     setArrivalHook(hook) {

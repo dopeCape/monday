@@ -6,8 +6,9 @@ import * as routing from "./screens/routing.js";
 import * as settings from "./screens/settings.js";
 import * as calendar from "./screens/calendar.js";
 import * as onboarding from "./screens/onboarding.js";
+import * as firstSync from "./screens/first-sync.js";
 
-const screens = { inbox, workflows, routing, settings, calendar, onboarding };
+const screens = { inbox, workflows, routing, settings, calendar, onboarding, "first-sync": firstSync };
 const q = new URLSearchParams(location.search);
 
 export const ui = {
@@ -31,9 +32,10 @@ function render() {
   const route = parseRoute();
   const root = document.getElementById("app");
   const parts = [], cols = [];
-  if (route.screen === "onboarding") {
+  // Onboarding and the first sync stand in for the whole app: no nav, no agent bar.
+  if (route.screen === "onboarding" || route.screen === "first-sync") {
     root.style.gridTemplateColumns = "minmax(0, 1fr)";
-    root.innerHTML = screens.onboarding.render(route, ui);
+    root.innerHTML = screens[route.screen].render(route, ui);
     return;
   }
   if (state.nav === "full") { parts.push(navSidebar(route)); cols.push("var(--nav-w)"); }

@@ -387,6 +387,12 @@ export interface Session {
    * then uses a linked CalDAV calendar or the Local calendar.
    */
   calendar?(): CalendarSession | null;
+  /**
+   * True while the adapter runs slower than its configured rate because the
+   * Provider refused calls for quota (Gmail's 429 and rate-limit 403s). The
+   * first sync screen says so instead of showing a frozen bar. Absent means never.
+   */
+  pacing?(): boolean;
   close(): Promise<void>;
 }
 
