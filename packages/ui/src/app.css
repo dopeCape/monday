@@ -185,6 +185,65 @@ i.ph-bold > svg {
   min-height: 0;
   overflow-y: auto;
 }
+/* the inline search in the list header: filters the stream in place */
+.list-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 200px;
+  height: 30px;
+  padding: 0 8px;
+  margin-right: 4px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-faint);
+  cursor: text;
+  transition:
+    border-color var(--t-fast),
+    width var(--t-med) var(--ease);
+}
+.list-search:focus-within,
+.list-search.on {
+  border-color: var(--border-strong);
+  width: 260px;
+}
+.list-search .search-ic {
+  font-size: 15px;
+  flex: none;
+}
+.list-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  padding: 0;
+}
+.list-search input::placeholder {
+  color: var(--fg-faint);
+}
+.list-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.list-search .search-clear {
+  display: inline-flex;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+.list-search .search-clear:hover {
+  color: var(--fg);
+}
+:root[data-list="split"] .list-search {
+  width: 140px;
+}
+:root[data-list="split"] .list-search:focus-within,
+:root[data-list="split"] .list-search.on {
+  width: 180px;
+}
 
 /* =========================== NAV =========================== */
 .nav {
@@ -674,8 +733,13 @@ i.ph-bold > svg {
   color: var(--fg-muted);
   font-weight: 500;
 }
-.sec:first-child {
+.sec:first-child,
+.vlist > .vstart:first-child + .sec {
   padding-top: 10px;
+}
+/* the virtual list: offsets are measured from its own box */
+.vlist {
+  position: relative;
 }
 .row {
   display: grid;
@@ -723,7 +787,7 @@ i.ph-bold > svg {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg);
+  color: var(--fg-muted);
 }
 .row .subj b {
   font-weight: 500;
@@ -736,8 +800,18 @@ i.ph-bold > svg {
   color: var(--fg);
   font-weight: 600;
 }
+.row.unread .subj {
+  color: var(--fg);
+}
 .row.unread .subj b {
   font-weight: 600;
+}
+/* what an inline search matched */
+.row mark {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
 }
 .row .meta {
   display: inline-flex;
@@ -3934,6 +4008,10 @@ button.prov {
 }
 .pop-item:focus {
   outline: 0;
+}
+/* the Filter menu sits under its button, left of the More button */
+.filter-pop {
+  right: calc(var(--pad) + 34px);
 }
 .pop-item .when {
   margin-left: auto;

@@ -90,8 +90,16 @@ export function messageList(route, ui) {
         <button class="btn icon" title="Ask about this">${mark("sm")}</button>
       </span>
     </div>`;
+  // The Filter menu (?filter=unread|starred|attachments|reply) narrows the Sections; ?overlay=filter opens it.
+  const filters = { unread: "Unread", starred: "Starred", attachments: "Has attachments", reply: "Needs a reply" };
+  const filter = filters[ui.filter] ? ui.filter : null;
+  const keeps = e => !filter
+    || (filter === "unread" && e.unread)
+    || (filter === "starred" && e.starred)
+    || (filter === "attachments" && e.att)
+    || (filter === "reply" && e.group === "needs-reply");
   const grouped = groups.map(g => {
-    const items = emails.filter(e => e.group === g.key);
+    const items = emails.filter(e => e.group === g.key && keeps(e));
     return items.length ? `<div class="sec">${g.label}</div>${items.map(row).join("")}` : "";
   }).join("");
   const stream = state.list === "stream";
@@ -101,9 +109,16 @@ export function messageList(route, ui) {
       ${state.nav === "hidden" ? `<button class="btn icon" data-act="cmdk" title="Search ⌘K">${ic("ph-magnifying-glass")}</button><button class="btn icon" data-act="compose" title="New message (C)">${ic("ph-pencil-simple-line")}</button><span class="vr"></span>` : ""}
       <h2>${title}</h2><span class="count">14</span>
       <span class="sp"></span>
-      ${stream ? `<button class="btn">${ic("ph-funnel-simple")} Filter</button>` : ""}
+      <label class="list-search">${ic("ph-magnifying-glass")}<input type="search" placeholder="Search mail" aria-label="Search mail"></label>
+      ${stream ? `<button class="btn filter-btn ${filter ? "on" : ""}" data-act="filter">${ic("ph-funnel-simple")} ${filter ? filters[filter] : "Filter"}</button>` : ""}
       <button class="btn icon" title="More">${ic(stream ? "ph-dots-three" : "ph-funnel-simple")}</button>
     </div>
+    ${ui.overlay === "filter" ? `
+    <div class="pop filter-pop" role="dialog" aria-label="Filter">
+      <div class="pop-h">Show only</div>
+      ${Object.values(filters).map((label, i) => `<button class="pop-item ${i === 0 ? "on" : ""}"><span>${label}</span></button>`).join("")}
+      ${filter ? `<button class="pop-item"><span>Clear</span></button>` : ""}
+    </div>` : ""}
     <div class="col-body">${grouped}</div>
   </section>`;
 }

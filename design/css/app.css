@@ -47,6 +47,20 @@ i.ph, i.ph-fill, i.ph-bold { font-size: var(--icon); line-height: 1; display: in
 .col-head { height: var(--head-h); flex: none; display: flex; align-items: center; gap: 4px; padding: 0 var(--pad); }
 .col-head h2 { font-size: var(--fs-lg); font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .col-head .count { color: var(--fg-faint); font-size: var(--fs-sm); margin-left: 8px; }
+/* the inline search in the list header: filters the stream in place */
+.list-search { display: flex; align-items: center; gap: 6px; width: 200px; height: 30px; padding: 0 8px; margin-right: 4px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--bg); color: var(--fg-faint); cursor: text; transition: border-color var(--t-fast), width var(--t-med) var(--ease); }
+.list-search:focus-within, .list-search.on { border-color: var(--border-strong); width: 260px; }
+.list-search i { font-size: 15px; flex: none; }
+.list-search input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; outline: 0; font-size: var(--fs-sm); color: var(--fg); padding: 0; }
+.list-search input::placeholder { color: var(--fg-faint); }
+.list-search input::-webkit-search-cancel-button { display: none; }
+.list-search .search-clear { display: inline-flex; color: var(--fg-faint); font-size: 13px; }
+/* a small popover under the list header: the Filter menu */
+.pop { position: absolute; top: calc(var(--head-h) + 6px); right: var(--pad); z-index: 30; min-width: 220px; padding: 6px; border-radius: var(--r-lg); background: var(--overlay); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); animation: rise var(--t-fast) var(--ease); }
+.pop-h { padding: 6px 10px; font-size: var(--fs-xs); color: var(--fg-muted); font-weight: 500; }
+.pop-item { display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 10px; border-radius: var(--r-sm); font-size: var(--fs-md); text-align: left; color: var(--fg); }
+.pop-item:hover, .pop-item.on { background: var(--hover); }
+.filter-pop { right: calc(var(--pad) + 34px); }
 .col-body { flex: 1; min-height: 0; overflow-y: auto; }
 
 /* =========================== NAV =========================== */
@@ -124,11 +138,13 @@ i.ph, i.ph-fill, i.ph-bold { font-size: var(--icon); line-height: 1; display: in
 .row.unread .dot { background: var(--accent); }
 .row .from { color: var(--fg-muted); font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .from .cnt { color: var(--fg-faint); font-size: var(--fs-xs); }
-.row .subj { min-width: 0; font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.row .subj { min-width: 0; font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
 .row .subj b { font-weight: 500; }
 .row .subj .snip { color: var(--fg-faint); margin-left: 8px; }
 .row.unread .from { color: var(--fg); font-weight: 600; }
+.row.unread .subj { color: var(--fg); }
 .row.unread .subj b { font-weight: 600; }
+.row mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
 .row .meta { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-faint); font-size: var(--fs-xs); white-space: nowrap; }
 .row .meta i { font-size: 14px; }
 .row .time { color: var(--fg-faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }

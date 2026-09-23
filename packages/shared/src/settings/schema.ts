@@ -2988,6 +2988,8 @@ export const settingsSchema = {
   "strings.inbox.more": str("routing", "More menu title", "More"),
   "strings.inbox.filter": str("routing", "Filter button", "Filter"),
   "strings.inbox.filter.title": str("routing", "Filter menu heading", "Show only"),
+  "strings.inbox.search.placeholder": str("routing", "Inline search placeholder", "Search mail"),
+  "strings.inbox.search.clear": str("routing", "Inline search clear button", "Clear search"),
   "strings.inbox.filter.unread": str("routing", "Filter: unread", "Unread"),
   "strings.inbox.filter.starred": str("routing", "Filter: starred", "Starred"),
   "strings.inbox.filter.attachments": str("routing", "Filter: attachments", "Has attachments"),

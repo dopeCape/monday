@@ -2,8 +2,8 @@
 // under :root[data-list="split"] reflows it into two lines.
 import type { Tag, Thread } from "@monday/shared";
 import { ArchiveIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
-import type { MouseEvent } from "react";
-import { cx, formatListTime, personName } from "../format.ts";
+import type { MouseEvent, ReactNode } from "react";
+import { cx, formatListTime, highlightParts, personName } from "../format.ts";
 import { Icon } from "./icon.tsx";
 import { Btn, Mark } from "./primitives.tsx";
 
@@ -23,6 +23,17 @@ export interface MessageRowProps {
   onSnooze?: ((threadId: string) => void) | undefined;
   onAsk?: ((threadId: string) => void) | undefined;
   className?: string | undefined;
+  /** Words a search matched, marked in the sender, subject and snippet. */
+  highlight?: readonly string[] | undefined;
+}
+
+/** Text with the matched words in <mark>. */
+function marked(text: string, terms: readonly string[] | undefined): ReactNode {
+  if (!terms?.length) return text;
+  return highlightParts(text, terms).map((p, i) =>
+    // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one string, in order
+    p.hit ? <mark key={i}>{p.text}</mark> : p.text,
+  );
 }
 
 export function MessageRow({
@@ -37,6 +48,7 @@ export function MessageRow({
   onSnooze,
   onAsk,
   className,
+  highlight,
 }: MessageRowProps) {
   const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
@@ -62,12 +74,12 @@ export function MessageRow({
         <span className="dot" />
       )}
       <span className="from">
-        {thread.messageCount > 1 ? `${from} ` : from}
+        {marked(thread.messageCount > 1 ? `${from} ` : from, highlight)}
         {thread.messageCount > 1 ? <span className="cnt">{thread.messageCount}</span> : null}
       </span>
       <span className="subj">
-        <b>{thread.subject}</b>
-        <span className="snip">{thread.snippet}</span>
+        <b>{marked(thread.subject, highlight)}</b>
+        <span className="snip">{marked(thread.snippet, highlight)}</span>
       </span>
       <span className="meta">
         {thread.hasAttachments ? <Icon icon={PaperclipIcon} /> : null}

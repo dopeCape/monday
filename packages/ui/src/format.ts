@@ -57,6 +57,34 @@ export function personName(person: NamedPerson | null | undefined, fallback = ""
   return local;
 }
 
+/**
+ * Splits text around the places any of `terms` occurs, ignoring case, so a
+ * row can mark what a search matched. Overlapping matches merge.
+ */
+export function highlightParts(
+  text: string,
+  terms: readonly string[] | undefined,
+): Array<{ text: string; hit: boolean }> {
+  const words = (terms ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (!text || words.length === 0) return [{ text, hit: false }];
+  const lower = text.toLowerCase();
+  const hits = new Array<boolean>(text.length).fill(false);
+  for (const w of words) {
+    for (let at = lower.indexOf(w); at >= 0; at = lower.indexOf(w, at + 1)) {
+      for (let i = at; i < at + w.length; i++) hits[i] = true;
+    }
+  }
+  const out: Array<{ text: string; hit: boolean }> = [];
+  for (let i = 0; i < text.length; ) {
+    const hit = hits[i] as boolean;
+    let j = i;
+    while (j < text.length && hits[j] === hit) j++;
+    out.push({ text: text.slice(i, j), hit });
+    i = j;
+  }
+  return out;
+}
+
 export function firstName(name: string): string {
   return name.split(/\s+/)[0] ?? name;
 }

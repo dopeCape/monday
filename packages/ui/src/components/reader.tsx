@@ -28,10 +28,10 @@ import {
 import {
   cx,
   firstName,
-  personName,
   formatSize,
   formatWhen,
   paragraphs,
+  personName,
   preview as previewOf,
   uniqueKeys,
 } from "../format.ts";

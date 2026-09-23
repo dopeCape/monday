@@ -144,7 +144,7 @@ describe("palette in the Inbox", () => {
     expect(document.querySelector(".toast")?.textContent).toContain("Archived");
   });
 
-  test("Go to navigates; a bare word offers a search and Enter on it opens the results", async () => {
+  test("Go to navigates; a bare word offers a search that runs inline in the list header", async () => {
     const { navigated, searched } = await mount();
     await press("k", { metaKey: true });
     await type("settings");
@@ -159,7 +159,9 @@ describe("palette in the Inbox", () => {
     );
     expect(search).not.toBeUndefined();
     await act(async () => search?.click());
-    expect(searched).toEqual(["zebra"]);
+    // The search runs in the Inbox's own field, not on a separate screen.
+    expect(searched).toEqual([]);
+    expect(document.querySelector<HTMLInputElement>(".list-search input")?.value).toBe("zebra");
   });
 
   test("an operator switches to search mode with Thread rows from the Cache", async () => {

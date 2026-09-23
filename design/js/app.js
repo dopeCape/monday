@@ -16,7 +16,8 @@ export const ui = {
   readerOpen: q.get("reader") === "1" || q.has("sel") || state.list === "split",
   agentOpen: q.get("open") === "1",
   thread: q.get("thread") || "default",
-  overlay: q.get("overlay") || null, // cmdk | compose
+  overlay: q.get("overlay") || null, // cmdk | compose | filter
+  filter: q.get("filter") || null, // unread | starred | attachments | reply
 };
 
 function parseRoute() {
