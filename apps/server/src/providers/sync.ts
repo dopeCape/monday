@@ -45,6 +45,7 @@ import type {
   SyncEvent,
   Watch,
 } from "./types.ts";
+import { isMirrorMessageId } from "./types.ts";
 
 export const SYNC_STEP = "provider.sync";
 export const WATCH_STEP = "provider.watch";
@@ -1000,7 +1001,11 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     if (!draftsBox) return 0;
     const known = await knownDraftIds(acct.workspaceId);
     const rows = await db
-      .select({ providerId: syncMessages.providerId, messageId: syncMessages.messageId })
+      .select({
+        providerId: syncMessages.providerId,
+        messageId: syncMessages.messageId,
+        rfcMessageId: syncMessages.rfcMessageId,
+      })
       .from(syncMessages)
       .where(
         and(
@@ -1014,6 +1019,8 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     let imported = 0;
     for (const row of rows) {
       if (known.has(row.providerId)) continue;
+      // monday's own mirror, under a Provider id the Draft row does not hold (a Gmail draft id).
+      if (isMirrorMessageId(row.rfcMessageId)) continue;
       const message = await db.query.messages.findFirst({ where: eq(messages.id, row.messageId) });
       if (!message) continue;
       const raw = await s.fetchMessage(row.providerId);

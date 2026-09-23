@@ -53,6 +53,7 @@ import {
   type ToolExtensions,
 } from "./agent/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
+import { type ComposeAssist, createComposeAssist } from "./compose-assist.ts";
 import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts";
 import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
@@ -227,6 +228,8 @@ export interface Intelligence {
   integrationSecrets: IntegrationSecretStore;
   /** The Voice profile builder the build_voice_profile tool acts through. */
   voice: VoiceSeam;
+  /** The composer's writing assist (rewrite, grammar, translate, continue, a free instruction). */
+  composeAssist: ComposeAssist;
   /** The guardrail on Thread text entering a turn (slice 27). */
   guard: GuardSeam;
   /** The Brief verifier (slice 27). */
@@ -622,6 +625,26 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       };
     },
   });
+  const composeAssist = createComposeAssist({
+    runtime,
+    drafts,
+    level,
+    hasKey: async (provider) => (await resolveKey(provider as KeyProvider)) !== null,
+    settings: async () => {
+      const s = await readGlobalSettings(db, [
+        "compose.assist",
+        "compose.assist_prompt",
+        "compose.assist_max_chars",
+        "compose.assist_voice",
+      ]);
+      return {
+        enabled: s["compose.assist"],
+        prompt: s["compose.assist_prompt"],
+        maxChars: s["compose.assist_max_chars"],
+        useVoice: s["compose.assist_voice"],
+      };
+    },
+  });
   // Filled once the Workflows module exists; the tool server reads it per call.
   const extensions: ToolExtensions = { integrations, mcp, voice, guard };
   const agent = createAgentHost({
@@ -726,6 +749,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     organize,
     integrationSecrets,
     voice,
+    composeAssist,
     guard,
     verify,
     intent: async (request) => judgeIntent(runtime, request, await intentSettings()),

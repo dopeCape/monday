@@ -437,6 +437,45 @@ export function createGraphServer(fixture: Fixture, options: GraphServerOptions 
       );
       return Response.json({ value: list.map((m) => ({ id: m.id })) });
     }
+    if (
+      path === "me/messages" &&
+      method === "POST" &&
+      headers.get("content-type")?.startsWith("text/plain")
+    ) {
+      // A MIME POST files the message in Drafts as a draft (the 4 MB request limit applies).
+      if (text.length > 4 * 1024 * 1024)
+        return odataError(413, "ErrorMessageSizeExceeded", "Request too large");
+      const raw = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+      const mime = new TextDecoder().decode(raw);
+      const head = (mime.split(/\r?\n\r?\n/)[0] ?? "").replace(/\r?\n[ \t]+/g, " ");
+      const header = (name: string) =>
+        new RegExp(`^${name}:\\s*(.*)$`, "im").exec(head)?.[1]?.trim() ?? "";
+      const recipients = (value: string) =>
+        value
+          .split(",")
+          .map((s) => /<([^>]+)>/.exec(s)?.[1] ?? s.trim())
+          .filter((email) => email !== "")
+          .map((email) => ({ emailAddress: { address: email } }));
+      counter += 1;
+      const draft = draftFrom(`draft-${counter}`, {
+        subject: header("subject"),
+        body: {
+          contentType: "text",
+          content: mime
+            .split(/\r?\n\r?\n/)
+            .slice(1)
+            .join("\n"),
+        },
+        toRecipients: recipients(header("to")),
+        ccRecipients: recipients(header("cc")),
+      });
+      const messageId = header("message-id");
+      if (messageId) draft.internetMessageId = messageId;
+      draft.raw = raw;
+      messages.set(draft.id, draft);
+      record(draft, false);
+      return Response.json(resource(draft), { status: 201 });
+    }
     if (path === "me/messages" && method === "POST") {
       const body = json();
       counter += 1;

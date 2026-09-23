@@ -16,7 +16,7 @@ import {
   type Store,
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
-import type { Composer, DraftSuggestion } from "./composer.ts";
+import type { AssistRequest, Composer, DraftSuggestion } from "./composer.ts";
 
 export interface StoreComposer extends Composer {
   close(): void;
@@ -147,6 +147,18 @@ export async function createStoreComposer(
       }
     },
     suggestion: (id) => options.suggestions?.[id] ?? null,
+    ...(content.draftAssist
+      ? {
+          assist: (request: AssistRequest) =>
+            (content.draftAssist as NonNullable<ContentTransport["draftAssist"]>)({
+              ...request,
+              workspace: store.workspaceId,
+            }),
+          // Asked once per window; a Server without the probe answers by trying.
+          assistAvailable: () =>
+            content.draftAssistAvailable?.(store.workspaceId) ?? Promise.resolve(true),
+        }
+      : {}),
     close() {
       draftsLive.close();
       sendsLive.close();

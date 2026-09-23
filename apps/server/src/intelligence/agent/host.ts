@@ -276,6 +276,23 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
       await drafts.remove(draftId, { actor: "user" });
     },
 
+    async updateDraft(draftId, content) {
+      if (!(await ownsDraft(draftId))) throw new NotFoundError("draft", draftId);
+      const saved = await drafts.save({
+        id: draftId,
+        workspaceId,
+        content,
+        updatedBy: "agent",
+        actor: "automation",
+      });
+      if (!saved.applied || !saved.draft) throw new Error(saved.reason ?? "draft not saved");
+      return saved.draft;
+    },
+
+    async listDrafts() {
+      return (await drafts.list(workspaceId)).filter((d) => d.status === "open");
+    },
+
     async readDraft(draftId) {
       if (!(await ownsDraft(draftId))) return null;
       try {

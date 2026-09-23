@@ -8,6 +8,7 @@
 import type {
   ActivityRecord,
   ApprovalDecision,
+  DraftOpen,
   Tier,
   ToolCall,
   ToolPreview,
@@ -81,10 +82,26 @@ export function resultLine(text: string): string {
   return first.replace(/:\s*$/, "").slice(0, 160);
 }
 
+/** The Draft a call's result names for the card's "Open draft", when it names one. */
+export function draftOpenOf(data: unknown): DraftOpen | null {
+  if (!data || typeof data !== "object") return null;
+  const open = (data as { open?: unknown }).open;
+  if (!open || typeof open !== "object") return null;
+  const o = open as { draftId?: unknown; threadId?: unknown; kind?: unknown };
+  if (typeof o.draftId !== "string") return null;
+  const kind = o.kind === "reply" || o.kind === "forward" ? o.kind : "new";
+  return {
+    draftId: o.draftId,
+    threadId: typeof o.threadId === "string" ? o.threadId : null,
+    kind,
+  };
+}
+
 /** The API projection: everything but the undo record and the raw result. */
 export function publicActivity(row: ActivityRow): ActivityRecord {
-  const { undo: _undo, resultText: _text, resultData: _data, ...rest } = row;
-  return rest;
+  const { undo: _undo, resultText: _text, resultData: data, ...rest } = row;
+  const open = draftOpenOf(data);
+  return open ? { ...rest, open } : rest;
 }
 
 type Row = typeof activity.$inferSelect;

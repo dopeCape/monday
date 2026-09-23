@@ -4,7 +4,18 @@
 // Undo all work offline. fixtureComposer() is the in-memory implementation
 // for tests and the fixture inbox; store-composer.ts is the Store's.
 
-import type { Draft, DraftAttachment, DraftContent, Person, ScheduledSend } from "@monday/shared";
+import type {
+  Draft,
+  DraftAssistRequest,
+  DraftAssistResult,
+  DraftAttachment,
+  DraftContent,
+  Person,
+  ScheduledSend,
+} from "@monday/shared";
+
+/** An assist request without the Workspace, which the Composer knows. */
+export type AssistRequest = Omit<DraftAssistRequest, "workspace">;
 
 export interface SendOptions {
   delaySeconds?: number | undefined;
@@ -51,6 +62,14 @@ export interface Composer {
   ensureContent(id: string): Promise<Draft | undefined>;
   /** The Agent's suggestion for a Draft, when it has one. */
   suggestion(id: string): DraftSuggestion | null;
+  /**
+   * The writing assist: rewrites, grammar, translation, continuation or a
+   * free instruction over some text, answered by the Server's model. Absent
+   * when no Server can answer; rejects with the Server's reason otherwise.
+   */
+  assist?(request: AssistRequest): Promise<DraftAssistResult>;
+  /** Whether the assist can answer now (a runtime is configured); asked once per window. */
+  assistAvailable?(): Promise<boolean>;
 }
 
 export interface FixtureComposerOptions {
@@ -61,11 +80,15 @@ export interface FixtureComposerOptions {
   suggestions?: Readonly<Record<string, DraftSuggestion>>;
   delaySeconds?: number;
   now?: () => Date;
+  /** The writing assist; absent means the composer offers none. */
+  assist?: ((request: AssistRequest) => Promise<DraftAssistResult>) | undefined;
 }
 
 export function fixtureComposer(options: FixtureComposerOptions = {}): Composer & {
   /** Runs every send whose run_at has passed. */
   runDue(now?: Date): number;
+  /** A save by the Agent (update_draft), as the feed would bring it. */
+  agentSave(id: string, content: DraftContent, at?: string): void;
 } {
   const workspaceId = options.workspaceId ?? "ws-genai";
   const address = options.address ?? "tejas@genai-labs.io";
@@ -177,6 +200,20 @@ export function fixtureComposer(options: FixtureComposerOptions = {}): Composer 
       return drafts.get(id);
     },
     suggestion: (id) => options.suggestions?.[id] ?? null,
+    ...(options.assist ? { assist: options.assist, assistAvailable: async () => true } : {}),
+    agentSave(id, content, at) {
+      const existing = drafts.get(id);
+      drafts.set(id, {
+        id,
+        workspaceId,
+        ...content,
+        attachmentBlobIds: content.attachments.map((a) => a.blobId),
+        status: existing?.status ?? "open",
+        updatedAt: at ?? new Date(now().getTime() + 1000).toISOString(),
+        updatedBy: "agent",
+      });
+      emit();
+    },
     runDue(at = now()) {
       let ran = 0;
       for (const send of [...sends.values()]) {

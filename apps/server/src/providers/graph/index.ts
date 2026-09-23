@@ -21,6 +21,7 @@ import {
   type CalendarSession,
   type Change,
   type ChangeTarget,
+  type DraftResult,
   type Flags,
   type Mailbox,
   type MailboxRole,
@@ -457,6 +458,58 @@ export class GraphSession implements Session {
 
   /** Draft plus upload sessions plus /send, for messages over the write limit. */
   private async sendLarge(mime: Uint8Array, options: SendOptions): Promise<SendResult> {
+    const draftId = await this.draftOf(mime);
+    await this.client.request(`me/messages/${encodeURIComponent(draftId)}/send`, {
+      method: "POST",
+      body: {},
+    });
+    if (options.draftId && options.draftId !== draftId) {
+      await this.client
+        .request(`me/messages/${encodeURIComponent(options.draftId)}`, { method: "DELETE" })
+        .catch(() => {});
+    }
+    return { messageId: draftId };
+  }
+
+  /**
+   * Mirrors a Server Draft into Drafts: the MIME posted as-is (Graph files a
+   * MIME POST to me/messages as a draft), or over the write limit a draft
+   * built from its parts with upload sessions for the attachments. Graph
+   * cannot replace a message's MIME, so an update is a new draft and the
+   * previous one removed.
+   */
+  async putDraft(mime: Uint8Array, previousId: string | null): Promise<DraftResult> {
+    if (mime.byteLength > GRAPH_MAX_SEND_BYTES) {
+      throw new ProviderError("draft exceeds the mailbox send limit", "too-large");
+    }
+    let id: string;
+    if (mime.byteLength <= SENDMAIL_MIME_LIMIT) {
+      const created = await this.client.request<{ id?: string }>("me/messages", {
+        method: "POST",
+        rawBody: base64(mime),
+        headers: { "content-type": "text/plain" },
+      });
+      if (!created?.id) throw new ProviderError("me/messages returned no id", "protocol");
+      id = created.id;
+    } else {
+      id = await this.draftOf(mime);
+    }
+    if (previousId && previousId !== id) await this.deleteDraft(previousId);
+    return { id };
+  }
+
+  /** Removes a mirrored draft; one already gone (404) is not an error. */
+  async deleteDraft(id: string): Promise<void> {
+    try {
+      await this.client.request(`me/messages/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch (error) {
+      if (error instanceof ProviderError && error.code === "not-found") return;
+      throw error;
+    }
+  }
+
+  /** A draft built from the MIME's parts: createReply for a reply, attachments by upload session. */
+  private async draftOf(mime: Uint8Array): Promise<string> {
     const parsed = await parseMime(mime);
     const flatten = (list: Address[] | undefined) =>
       peopleOf(list).map((p) => ({ emailAddress: { name: p.name, address: p.email } }));
@@ -552,16 +605,7 @@ export class GraphSession implements Session {
         }
       }
     }
-    await this.client.request(`me/messages/${encodeURIComponent(draftId)}/send`, {
-      method: "POST",
-      body: {},
-    });
-    if (options.draftId && options.draftId !== draftId) {
-      await this.client
-        .request(`me/messages/${encodeURIComponent(options.draftId)}`, { method: "DELETE" })
-        .catch(() => {});
-    }
-    return { messageId: draftId };
+    return draftId;
   }
 
   /* ------------------------------ Watch (poll fallback) ------------------------------ */

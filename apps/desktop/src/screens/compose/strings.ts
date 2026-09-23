@@ -21,7 +21,32 @@ export interface ComposeUiStrings {
     formatting: string;
     rewrite: string;
     close: string;
+    minimize: string;
+    discard: string;
+    assist: string;
+    bold: string;
+    italic: string;
+    link: string;
+    bullets: string;
+    numbered: string;
+    quote: string;
+    clearFormat: string;
   };
+  dock: {
+    label: string;
+    more: string;
+    restore: string;
+    close: string;
+    unsaved: string;
+    noRecipient: string;
+    replyOn: string;
+    noSubject: string;
+  };
+  discarded: string;
+  draftedByAgent: string;
+  draftedByYou: string;
+  openDraft: string;
+  assist: AssistStrings;
   laterIn: string;
   laterOne: string;
   discard: string;
@@ -44,6 +69,27 @@ export interface ComposeUiStrings {
   scheduled: { title: string; empty: string; cancel: string; to: string; noSubject: string };
 }
 
+export interface AssistStrings {
+  menu: string;
+  onSelection: string;
+  onBody: string;
+  shorter: string;
+  clearer: string;
+  friendlier: string;
+  formal: string;
+  grammar: string;
+  translate: string;
+  continueWriting: string;
+  instruction: string;
+  voice: string;
+  working: string;
+  failed: string;
+  noRuntime: string;
+  suggestion: string;
+  accept: string;
+  reject: string;
+}
+
 export function composeStrings(s: Settings): ComposeUiStrings {
   return {
     overlay: {
@@ -60,6 +106,50 @@ export function composeStrings(s: Settings): ComposeUiStrings {
       formatting: s["strings.compose.formatting"],
       rewrite: s["strings.compose.rewrite"],
       close: s["strings.compose.close"],
+      minimize: s["strings.compose.minimize"],
+      discard: s["strings.compose.discard"],
+      assist: s["strings.compose.assist"],
+      bold: s["strings.compose.bold"],
+      italic: s["strings.compose.italic"],
+      link: s["strings.compose.link"],
+      bullets: s["strings.compose.bullets"],
+      numbered: s["strings.compose.numbered"],
+      quote: s["strings.compose.quote"],
+      clearFormat: s["strings.compose.clear_format"],
+    },
+    dock: {
+      label: s["strings.compose.dock"],
+      more: s["strings.compose.dock_more"],
+      restore: s["strings.compose.restore"],
+      close: s["strings.compose.close_draft"],
+      unsaved: s["strings.compose.unsaved"],
+      noRecipient: s["strings.compose.no_recipient"],
+      replyOn: s["strings.compose.reply_on"],
+      noSubject: s["strings.compose.no_subject"],
+    },
+    discarded: s["strings.compose.discarded"],
+    draftedByAgent: s["strings.compose.drafted_by_agent"],
+    draftedByYou: s["strings.compose.drafted_by_you"],
+    openDraft: s["strings.compose.open_draft"],
+    assist: {
+      menu: s["strings.compose.assist"],
+      onSelection: s["strings.compose.assist_on_selection"],
+      onBody: s["strings.compose.assist_on_body"],
+      shorter: s["strings.compose.assist_shorter"],
+      clearer: s["strings.compose.assist_clearer"],
+      friendlier: s["strings.compose.assist_friendlier"],
+      formal: s["strings.compose.assist_formal"],
+      grammar: s["strings.compose.assist_grammar"],
+      translate: s["strings.compose.assist_translate"],
+      continueWriting: s["strings.compose.assist_continue"],
+      instruction: s["strings.compose.assist_instruction"],
+      voice: s["strings.compose.assist_voice"],
+      working: s["strings.compose.assist_working"],
+      failed: s["strings.compose.assist_failed"],
+      noRuntime: s["strings.compose.assist_no_runtime"],
+      suggestion: s["strings.compose.suggestion"],
+      accept: s["strings.compose.accept"],
+      reject: s["strings.compose.reject"],
     },
     laterIn: s["strings.compose.later_in"],
     laterOne: s["strings.compose.later_one"],
@@ -83,6 +173,7 @@ export function composeStrings(s: Settings): ComposeUiStrings {
       linkPrompt: s["strings.compose.link_prompt"],
       quote: s["strings.compose.quote"],
       code: s["strings.compose.code"],
+      clearFormat: s["strings.compose.clear_format"],
       quoted: s["strings.reader.show_quoted"],
     },
     reply: { wrote: s["strings.compose.wrote"], forwarded: s["strings.compose.forwarded"] },

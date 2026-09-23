@@ -121,6 +121,45 @@ export interface Draft {
   updatedBy: string;
 }
 
+/**
+ * The writing assist in the composer: a change to the selection or the whole
+ * body, answered as a suggestion the user accepts or rejects (never written
+ * into the Draft silently), metered as the draft-in-voice Task.
+ */
+export type DraftAssistAction =
+  | "shorter"
+  | "clearer"
+  | "friendlier"
+  | "formal"
+  | "grammar"
+  | "translate"
+  | "continue"
+  | "instruction";
+
+export interface DraftAssistRequest {
+  workspace: Id;
+  action: DraftAssistAction;
+  /** The selection, or the body without the quoted history. */
+  text: string;
+  /** True when `text` is a selection inside a longer message. */
+  selection?: boolean | undefined;
+  /** The free instruction ("make this sound less defensive"). */
+  instruction?: string | undefined;
+  /** Translate's target language. */
+  language?: string | undefined;
+  /** What the message is, so the model keeps to it. */
+  subject?: string | undefined;
+  to?: string[] | undefined;
+  /** The Draft, for the Meter row and the Activity trail. */
+  draftId?: Id | undefined;
+}
+
+export interface DraftAssistResult {
+  text: string;
+  /** The Voice profile shaped the answer. */
+  voice: boolean;
+}
+
 export type DraftStatus = "open" | "scheduled" | "sent";
 
 export type ScheduledSendStatus = "scheduled" | "cancelled" | "sent" | "failed";
@@ -456,6 +495,19 @@ export interface ToolCall {
   builtin?: boolean;
   /** The external credential that made the call (docs/spec/external-mcp.md); the card names it. */
   actorName?: string | null;
+  /**
+   * A Draft the call wrote, edited or asked to open (draft_message, update_draft,
+   * open_draft): the card's "Open draft" opens it in the composer, a new message
+   * in a window and a reply on its Thread.
+   */
+  open?: DraftOpen | null;
+}
+
+/** What "Open draft" on an Agent card opens. */
+export interface DraftOpen {
+  draftId: Id;
+  threadId: Id | null;
+  kind: DraftKind;
 }
 
 export interface ActivityEntry extends ToolCall {

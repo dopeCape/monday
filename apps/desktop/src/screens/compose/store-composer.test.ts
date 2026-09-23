@@ -218,4 +218,33 @@ describe("the Store reader", () => {
     inbox.close();
     await store.close();
   });
+
+  test("the writing assist goes to the Server with the Workspace, and is absent without the route", async () => {
+    const { store, content: transport } = await open();
+    const asked: unknown[] = [];
+    const composer = await createStoreComposer(
+      store,
+      {
+        ...transport,
+        draftAssist: async (request) => {
+          asked.push(request);
+          return { text: "Shorter.", voice: false };
+        },
+        draftAssistAvailable: async () => true,
+      },
+      { address: "tejas@genai-labs.io" },
+    );
+    expect(await composer.assistAvailable?.()).toBe(true);
+    const answer = await composer.assist?.({ action: "shorter", text: "A long text." });
+    expect(answer?.text).toBe("Shorter.");
+    expect(asked).toEqual([
+      { action: "shorter", text: "A long text.", workspace: store.workspaceId },
+    ]);
+    const { draftAssist: _a, draftAssistAvailable: _b, ...without } = transport;
+    const plain = await createStoreComposer(store, without, { address: "tejas@genai-labs.io" });
+    expect(plain.assist).toBeUndefined();
+    composer.close();
+    plain.close();
+    store.close();
+  });
 });

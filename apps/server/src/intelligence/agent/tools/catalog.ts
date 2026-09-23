@@ -19,6 +19,7 @@ import type {
 } from "@monday/shared";
 import { isSettingKey, PREVIEW_LIST_MAX, settingsSchema, validateSetting } from "@monday/shared";
 import { z } from "zod";
+import { COMPOSE_TOOLS } from "./compose.ts";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
 import { ORGANIZE_TOOLS } from "./organize.ts";
@@ -35,6 +36,10 @@ export interface ToolSettings {
 
 export interface ToolContext {
   host: ToolHost;
+  /** The Draft open in the composer on the calling Device, when the turn says so. */
+  openDraftId?: string | null | undefined;
+  /** Whether a Device follows this Session's events now (open_draft reaches it through them). */
+  deviceListening?: (() => boolean) | undefined;
   /** Setting keys the calling Device's Config file pins. */
   pinned: ReadonlySet<string>;
   settings: ToolSettings;
@@ -408,7 +413,20 @@ const draftMessage: ToolDefinition<{
         const draft = await ctx.host.createDraft(content);
         return {
           text: `Draft ${draft.id} saved: "${draft.subject}" to ${draft.to.map(personLine).join(", ") || "nobody yet"}.`,
-          data: { draftId: draft.id, subject: draft.subject, to: draft.to },
+          data: {
+            draftId: draft.id,
+            subject: draft.subject,
+            to: draft.to,
+            kind: draft.kind,
+            threadId: draft.threadId,
+            // The card's "Open draft": the composer on a new message, the Thread's inline reply otherwise.
+            open: {
+              action: "open_draft",
+              draftId: draft.id,
+              threadId: draft.threadId,
+              kind: draft.kind,
+            },
+          },
           undo: { kind: "draft", draftId: draft.id },
         };
       },
@@ -708,6 +726,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   ...ONBOARDING_TOOLS,
   ...ORGANIZE_TOOLS,
   ...TUNE_TOOLS,
+  ...COMPOSE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {

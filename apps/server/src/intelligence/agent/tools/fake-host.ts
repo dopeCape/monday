@@ -229,6 +229,27 @@ export function createFakeToolHost(
       return drafts.get(draftId) ?? null;
     },
 
+    async updateDraft(draftId, content) {
+      const draft = drafts.get(draftId);
+      if (!draft) throw new Error(`draft ${draftId} not found`);
+      if (draft.status !== "open") throw new Error(`draft ${draftId} is ${draft.status}`);
+      const next: Draft = {
+        ...draft,
+        ...content,
+        attachmentBlobIds: content.attachments.map((a) => a.blobId),
+        updatedAt: now().toISOString(),
+        updatedBy: "agent",
+      };
+      drafts.set(draftId, next);
+      return next;
+    },
+
+    async listDrafts() {
+      return [...drafts.values()]
+        .filter((d) => d.status === "open")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
+
     async scheduleSend(draftId) {
       const draft = drafts.get(draftId);
       if (!draft) throw new Error(`draft ${draftId} not found`);

@@ -18,6 +18,8 @@ import type {
   DeploymentMode,
   Device,
   Draft,
+  DraftAssistRequest,
+  DraftAssistResult,
   DraftContent,
   DraftIntent,
   DryRunPreview,
@@ -296,6 +298,14 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
       list: (workspaceId: Id) =>
         request<{ drafts: Draft[] }>(`/drafts?${new URLSearchParams({ workspace: workspaceId })}`),
       get: (draftId: Id) => request<Draft>(`/drafts/${encodeURIComponent(draftId)}`),
+      /** The composer's writing assist: one rewrite, translation, continuation or instruction. */
+      assist: (body: DraftAssistRequest) =>
+        request<DraftAssistResult>("/assist/draft", json("POST", body)),
+      /** Whether the writing assist can answer now (the AI level, the Setting, a runtime key). */
+      assistAvailable: (workspaceId: Id) =>
+        request<{ available: boolean; reason?: string }>(
+          `/assist/draft?${new URLSearchParams({ workspace: workspaceId })}`,
+        ),
       /** One Draft or send intent from the Outbox to its route. */
       intent: (workspaceId: Id, intent: DraftIntent): Promise<ScheduleResult> => {
         const path = `/drafts/${encodeURIComponent(intent.draftId)}`;

@@ -36,6 +36,10 @@ export interface DraftEditor {
   /** Saves, then schedules the send Job. Rejects with "no_recipients" when nobody is on it. */
   send(options?: SendOptions): Promise<{ sendId: string; runAt: string }>;
   discard(): Promise<void>;
+  /** Drops what is pending without saving it: the Draft is being thrown away. */
+  stop(): void;
+  /** Takes content saved elsewhere (the Agent's update_draft) without saving it again. */
+  replace(content: DraftContent): void;
   canSend: boolean;
 }
 
@@ -142,6 +146,12 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
     async discard() {
       autosave.cancel();
       await composer.discard(draftId);
+    },
+    stop: () => autosave.cancel(),
+    replace(next) {
+      autosave.cancel();
+      contentRef.current = next;
+      setContent(next);
     },
     canSend,
   };

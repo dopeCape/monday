@@ -86,6 +86,18 @@ export interface GmailServer {
     via: "simple" | "resumable";
   }[];
   uploadChunks: number[];
+  /** Gmail drafts: draft id to the id of its current message (DRAFT label). */
+  drafts: Map<string, string>;
+  /** Every drafts.create and drafts.update, in order. */
+  draftWrites: {
+    draftId: string;
+    raw: Uint8Array;
+    threadId: string | null;
+    via: "simple" | "resumable";
+    update: boolean;
+  }[];
+  /** Answer the next n Gmail calls with a 403 rateLimitExceeded (the per-user quota refusal). */
+  quotaRefuseNext: number;
   /** The code the fake authorization endpoint would hand back for `state`. */
   issueCode(redirectUri: string, challenge: string): string;
   /** Simulates another client. */
@@ -256,6 +268,9 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     acked: [],
     sent: [],
     uploadChunks: [],
+    drafts: new Map(),
+    draftWrites: [],
+    quotaRefuseNext: 0,
     get historyId() {
       return historyId;
     },
@@ -454,6 +469,39 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
       log(GMAIL_COST.stop);
       return new Response(null, { status: 204 });
     }
+    if (path === "drafts" && method === "POST") {
+      log(GMAIL_COST["drafts.create"]);
+      const message = body.message as { raw?: string; threadId?: string } | undefined;
+      if (!message?.raw) return err(400, "invalidArgument", "message.raw is required");
+      return Response.json(
+        writeDraft(decodeBase64url(message.raw), message.threadId ?? null, null, "simple"),
+      );
+    }
+    const draftMatch = /^drafts\/([^/]+)$/.exec(path);
+    if (draftMatch && draftMatch[1] !== "send") {
+      const id = decodeURIComponent(draftMatch[1] ?? "");
+      const held = server.drafts.get(id);
+      if (method === "PUT") {
+        log(GMAIL_COST["drafts.update"]);
+        if (!held) return err(404, "notFound", "Requested entity was not found.");
+        const message = body.message as { raw?: string; threadId?: string } | undefined;
+        if (!message?.raw) return err(400, "invalidArgument", "message.raw is required");
+        return Response.json(
+          writeDraft(decodeBase64url(message.raw), message.threadId ?? null, id, "simple"),
+        );
+      }
+      if (method === "DELETE") {
+        log(GMAIL_COST["drafts.delete"]);
+        if (!held) return err(404, "notFound", "Requested entity was not found.");
+        server.drafts.delete(id);
+        if (emails.has(held)) server.destroy(held);
+        return new Response(null, { status: 204 });
+      }
+      log(GMAIL_COST["drafts.get"]);
+      const e = held ? emails.get(held) : undefined;
+      if (!e) return err(404, "notFound", "Requested entity was not found.");
+      return Response.json({ id, message: await resource(e, "minimal") });
+    }
     return err(404, "notFound", `no route for ${method} ${path}`);
   }
 
@@ -463,16 +511,40 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     draftId: string | null,
     via: "simple" | "resumable",
   ) {
-    counter += 1;
-    const id = `sent-${counter}`;
     server.sent.push({ raw, threadId, draftId, via });
+    // drafts.send removes the draft and its message, like Gmail.
+    const held = draftId ? server.drafts.get(draftId) : undefined;
+    if (draftId && held) {
+      server.drafts.delete(draftId);
+      if (emails.has(held)) server.destroy(held);
+    }
+    const email = storeRaw(raw, threadId, ["SENT"], "sent");
+    return { id: email.id, threadId: email.threadId, labelIds: email.labelIds };
+  }
+
+  /** A message from raw MIME, stored under a fresh id with the given labels. */
+  function storeRaw(
+    raw: Uint8Array,
+    threadId: string | null,
+    labelIds: string[],
+    prefix: string,
+  ): Email {
+    counter += 1;
+    const id = `${prefix}-${counter}`;
     const text = new TextDecoder().decode(raw);
-    const subject = /^subject:\s*(.*)$/im.exec(text)?.[1] ?? "";
-    const messageId = /^message-id:\s*<([^>]+)>/im.exec(text)?.[1] ?? `${id}@fake`;
+    const head = (text.split(/\r?\n\r?\n/)[0] ?? "").replace(/\r?\n[ \t]+/g, " ");
+    const header = (name: string) => new RegExp(`^${name}:\\s*(.*)$`, "im").exec(head)?.[1];
+    const subject = header("subject") ?? "";
+    const messageId = /<([^>]+)>/.exec(header("message-id") ?? "")?.[1] ?? `${id}@fake`;
+    const optional: Record<string, string> = {};
+    for (const name of ["in-reply-to", "references"]) {
+      const value = header(name);
+      if (value) optional[name] = value;
+    }
     const email: Email = {
       id,
       threadId: threadId ?? `t-${id}`,
-      labelIds: ["SENT"],
+      labelIds,
       internalDate: Date.now(),
       historyId,
       headers: {
@@ -480,6 +552,7 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
         from: address,
         to: address,
         "message-id": `<${messageId}>`,
+        ...optional,
         date: new Date().toUTCString(),
       },
       from: { name: "", email: address },
@@ -496,7 +569,28 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     };
     emails.set(id, email);
     record(email, "messageAdded", email.labelIds, email.labelIds);
-    return { id, threadId: email.threadId, labelIds: email.labelIds };
+    return email;
+  }
+
+  /** drafts.create and drafts.update: the draft id stays, the message is new each time. */
+  function writeDraft(
+    raw: Uint8Array,
+    threadId: string | null,
+    draftId: string | null,
+    via: "simple" | "resumable",
+  ): Record<string, unknown> {
+    let id = draftId;
+    if (id) {
+      const previous = server.drafts.get(id);
+      if (previous && emails.has(previous)) server.destroy(previous);
+    } else {
+      counter += 1;
+      id = `r-${counter}`;
+    }
+    const email = storeRaw(raw, threadId, ["DRAFT"], "draft-msg");
+    server.drafts.set(id, email.id);
+    server.draftWrites.push({ draftId: id, raw, threadId, via, update: draftId !== null });
+    return { id, message: { id: email.id, threadId: email.threadId, labelIds: email.labelIds } };
   }
 
   async function handle(url: string, init?: RequestInit): Promise<Response> {
@@ -657,6 +751,20 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
         { status: 429 },
       );
     }
+    if (server.quotaRefuseNext > 0) {
+      server.quotaRefuseNext -= 1;
+      return Response.json(
+        {
+          error: {
+            code: 403,
+            message:
+              "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user'",
+            errors: [{ reason: "rateLimitExceeded" }],
+          },
+        },
+        { status: 403 },
+      );
+    }
 
     // Multipart batch.
     if (u.pathname === "/batch/gmail/v1") {
@@ -687,22 +795,37 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     }
 
     // Resumable upload.
-    const uploadStart = /^\/upload\/gmail\/v1\/users\/me\/(messages\/send|drafts\/send)$/.exec(
-      u.pathname,
-    );
+    const uploadStart =
+      /^\/upload\/gmail\/v1\/users\/me\/(messages\/send|drafts\/send|drafts(?:\/[^/]+)?)$/.exec(
+        u.pathname,
+      );
     if (uploadStart && u.searchParams.get("uploadType") === "resumable") {
+      const target = uploadStart[1] ?? "";
+      if (target.startsWith("drafts/") && target !== "drafts/send") {
+        if (method !== "PUT") return new Response("method", { status: 405 });
+        if (!server.drafts.has(decodeURIComponent(target.slice(7)))) {
+          return Response.json(
+            { error: { code: 404, message: "not found", errors: [{ reason: "notFound" }] } },
+            { status: 404 },
+          );
+        }
+      }
       counter += 1;
       const session = `https://gmail.googleapis.com/upload/session/${counter}`;
       uploads.set(session, {
         metadata: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {},
         received: [],
         total: Number(headers.get("x-upload-content-length") ?? 0),
-        path: uploadStart[1] ?? "",
+        path: target,
       });
       log(
-        uploadStart[1] === "messages/send"
+        target === "messages/send"
           ? GMAIL_COST["messages.send"]
-          : GMAIL_COST["drafts.send"],
+          : target === "drafts/send"
+            ? GMAIL_COST["drafts.send"]
+            : target === "drafts"
+              ? GMAIL_COST["drafts.create"]
+              : GMAIL_COST["drafts.update"],
       );
       return new Response(null, { status: 200, headers: { location: session } });
     }
@@ -728,6 +851,14 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
         (meta.threadId as string | undefined) ??
         (meta.message as { threadId?: string } | undefined)?.threadId ??
         null;
+      if (session.path === "drafts") {
+        return Response.json(writeDraft(all, threadId, null, "resumable"));
+      }
+      if (session.path.startsWith("drafts/") && session.path !== "drafts/send") {
+        return Response.json(
+          writeDraft(all, threadId, decodeURIComponent(session.path.slice(7)), "resumable"),
+        );
+      }
       const draftId = session.path === "drafts/send" ? String(meta.id) : null;
       return Response.json(recordSend(all, threadId, draftId, "resumable"));
     }

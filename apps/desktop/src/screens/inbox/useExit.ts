@@ -63,7 +63,14 @@ export function useExit(open: boolean, token: MotionToken = "--t-med", onLeft?: 
     return () => clearTimeout(timer);
   }, [open, token, finish]);
 
-  return { mounted: phase !== "gone", leaving: phase === "leaving", onEnd: finish };
+  // Shown the moment it is wanted, in the same render: waiting for the effect
+  // to move the phase would cost a painted frame (and a re-render of the
+  // screen that owns the overlay) before the thing appears.
+  return {
+    mounted: open || phase !== "gone",
+    leaving: !open && phase === "leaving",
+    onEnd: finish,
+  };
 }
 
 export interface HeldExit<T> extends Exit {

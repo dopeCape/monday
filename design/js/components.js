@@ -306,12 +306,22 @@ export function cmdk() {
 }
 
 export function compose() {
+  const tool = (icon, title, on = false) => `<button class="btn icon sm${on ? " on" : ""}" title="${title}">${ic(icon)}</button>`;
   return `
   <div class="scrim" data-act="close-overlay">
     <div class="compose" data-stop>
-      <div class="col-head"><h2>New message</h2><span class="sp"></span><button class="btn icon" data-act="close-overlay" title="Close">${ic("ph-x")}</button></div>
+      <div class="col-head"><h2>New message</h2><span class="sp"></span><button class="btn icon" title="Minimize">${ic("ph-minus")}</button><button class="btn icon" data-act="close-overlay" title="Close">${ic("ph-x")}</button></div>
       <div class="c-field"><label>To</label><span class="pill">Kenji Watanabe</span><input /><span class="cc"><span>Cc</span><span>Bcc</span></span></div>
       <div class="c-field"><label>Subject</label><input value="Re: Term sheet redline, v3" /></div>
+      <div class="c-tools" role="toolbar">
+        ${tool("ph-text-b", "Bold")}${tool("ph-text-italic", "Italic")}${tool("ph-link-simple", "Link")}
+        <span class="vr"></span>
+        ${tool("ph-list-bullets", "Bullets")}${tool("ph-list-numbers", "Numbered")}${tool("ph-quotes", "Quote")}
+        <span class="vr"></span>
+        ${tool("ph-text-t-slash", "Clear formatting")}
+        <span class="sp"></span>
+        <button class="btn sm c-assist">${mark("sm")} Assist ${ic("ph-caret-down")}</button>
+      </div>
       <div class="c-body">
         <p>Kenji,</p>
         <p>Thanks for turning v3 around quickly. The 1x pro-rata cap is fine with us.</p>
@@ -320,12 +330,32 @@ export function compose() {
       <div class="c-ai">${mark("sm")}<div>Ravi has not replied to Kenji yet. Cc him and mention he will confirm the board point? <button class="btn sm primary">Yes</button><button class="btn sm">No</button></div></div>
       <div class="c-foot">
         <button class="btn primary">Send</button>
-        <button class="btn">${ic("ph-clock")} Later</button>
+        <button class="btn">${ic("ph-clock")} Later ${ic("ph-caret-down")}</button>
+        <span class="c-status">Saved</span>
         <span class="sp"></span>
         <button class="btn icon" title="Attach">${ic("ph-paperclip")}</button>
-        <button class="btn icon" title="Formatting">${ic("ph-text-aa")}</button>
-        <button class="btn">${mark("sm")} Rewrite</button>
+        <button class="btn icon" title="Discard">${ic("ph-trash")}</button>
       </div>
     </div>
   </div>`;
+}
+
+/** The assist menu open under its button, and a suggestion waiting for Accept or Reject. */
+export function composeAssist() {
+  return compose()
+    .replace(
+      '<div class="c-ai">',
+      `<div class="c-suggestion"><div class="c-suggestion-h">${mark("sm")} Suggestion<span class="sp"></span><button class="btn sm primary">Accept</button><button class="btn sm">Reject</button></div><p>Kenji, thanks for the quick turn on v3. The 1x pro-rata cap works for us. On the observer seat, we would still like the full board seat, and can revisit it at the Series A.</p></div><div class="c-ai">`,
+    )
+    .replace(
+      '<div class="c-body">',
+      `<div class="pop c-assist-menu" style="position:absolute;right:calc(50% - 344px);top:calc(12vh + 190px)"><div class="pop-h">Change the message</div><button class="pop-item on">Shorter</button><button class="pop-item">Clearer</button><button class="pop-item">Friendlier</button><button class="pop-item">More formal</button><button class="pop-item">Fix grammar</button><button class="pop-item">Translate into English</button><button class="pop-item">Continue writing</button><div class="pop-pick"><input class="input" placeholder="Tell monday what to change" /></div></div><div class="c-body">`,
+    );
+}
+
+/** Three messages minimized into the dock along the bottom right. */
+export function composeDock() {
+  const chip = (subject, to, dirty = false) =>
+    `<div class="dock-chip"><button class="dock-open"><span class="s">${subject}</span><span class="to">${to}</span></button>${dirty ? '<span class="dot" title="Unsaved changes"></span>' : ""}<button class="btn icon sm" title="Close, keep the Draft">${ic("ph-x")}</button></div>`;
+  return `<div class="dock bottom-right">${chip("Re: Term sheet redline, v3", "Kenji Watanabe", true)}${chip("Offsite dates", "Aoife Brennan")}${chip("New message", "No recipient")}<button class="dock-chip more">+2</button></div>`;
 }

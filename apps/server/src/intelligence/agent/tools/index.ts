@@ -43,6 +43,8 @@ export interface ToolCallRequest {
   actor?: { kind: "external"; name: string } | undefined;
   /** A lower cap on search results than the Agent's Setting, for external callers. */
   searchLimit?: number | undefined;
+  /** The Draft open in the composer on the calling Device (the turn context). */
+  openDraftId?: string | null | undefined;
 }
 
 export interface ToolCallContext {
@@ -93,6 +95,8 @@ export interface ToolServerOptions {
    * the Agent host) can fill its slot later.
    */
   extensions?: ToolExtensions | undefined;
+  /** Whether a Device follows the Session's events now, so open_draft can reach it. */
+  listening?: ((sessionId: string | null) => boolean) | undefined;
 }
 
 /** JSON Schema for a tool input, in the object shape MCP requires. */
@@ -138,8 +142,11 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
     pinned: readonly string[],
     settings: ToolSettings,
     sessionId: string | null,
+    openDraftId: string | null = null,
   ): ToolContext => ({
     host,
+    openDraftId,
+    deviceListening: () => options.listening?.(sessionId) ?? false,
     pinned: new Set(pinned),
     settings,
     now,
@@ -296,7 +303,10 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
 
       let plan: Awaited<ReturnType<typeof tool.run>>;
       try {
-        plan = await tool.run(input, context(request.pinned ?? [], settings, request.sessionId));
+        plan = await tool.run(
+          input,
+          context(request.pinned ?? [], settings, request.sessionId, request.openDraftId ?? null),
+        );
       } catch (error) {
         return fail(row, error instanceof Error ? error.message : String(error));
       }
@@ -408,6 +418,11 @@ export async function replayUndo(
     case "draft":
       await host.deleteDraft(undo.draftId);
       return "Undone: the Draft was deleted.";
+    case "draft_content": {
+      if (!host.updateDraft) return "Cannot undo: Drafts cannot be edited from this host.";
+      await host.updateDraft(undo.draftId, undo.previous);
+      return "Undone: the Draft is back as it was.";
+    }
     case "send": {
       const result = await host.cancelSend(undo.sendId);
       return result.applied

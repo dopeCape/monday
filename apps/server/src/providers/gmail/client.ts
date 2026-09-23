@@ -288,10 +288,12 @@ export class GmailClient {
     bytes: Uint8Array,
     contentType: string,
     cost: number,
+    /** PUT updates an existing resource (drafts.update); POST creates or sends. */
+    method: "POST" | "PUT" = "POST",
   ): Promise<T> {
     await this.quota.take(cost);
     const start = await this.raw(`${GMAIL_UPLOAD_BASE}/${path}`, {
-      method: "POST",
+      method,
       query: { uploadType: "resumable" },
       body: metadata,
       headers: {

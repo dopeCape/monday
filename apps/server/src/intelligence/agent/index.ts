@@ -28,7 +28,7 @@ import type {
   TurnContext,
 } from "@monday/shared";
 import type { HostedRuntime } from "../runtime/index.ts";
-import { type ActivityLog, type ActivityRow, publicActivity } from "./activity.ts";
+import { type ActivityLog, type ActivityRow, draftOpenOf, publicActivity } from "./activity.ts";
 import {
   type AgentGraph,
   BudgetExceededError,
@@ -167,6 +167,8 @@ export interface LocalCall {
   actor?: { kind: "external"; name: string } | undefined;
   /** The external search cap, below the Agent's own Setting. */
   searchLimit?: number | undefined;
+  /** The Draft open in the composer on the Device, from its turn context. */
+  openDraftId?: string | null | undefined;
 }
 
 export interface AgentHost {
@@ -228,11 +230,13 @@ export function toolCallOf(row: ActivityRow): ToolCall {
     at: _t,
     undo: _u,
     resultText: _rt,
-    resultData: _r,
+    resultData: data,
     ...call
   } = row;
+  const open = draftOpenOf(data);
   return {
     ...call,
+    ...(open ? { open } : {}),
     approvedBy: decision === "approved" ? "user" : null,
     ...(decision === "declined" ? { declined: true } : {}),
   };
@@ -263,6 +267,8 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
    */
   const parked = new Set<string>();
   const listeners = new Map<string, Set<(event: AgentEvent) => void>>();
+  /** Sessions with a turn streaming to a Device right now. */
+  const turning = new Set<string>();
 
   const tools = (workspaceId: string): ToolServer => {
     let server = toolServers.get(workspaceId);
@@ -272,6 +278,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
         activity,
         now,
         extensions: options.extensions,
+        listening: (sessionId) =>
+          sessionId !== null &&
+          ((listeners.get(sessionId)?.size ?? 0) > 0 || turning.has(sessionId)),
         settings: async () => {
           const s = await options.settings();
           return {
@@ -469,7 +478,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       const session = await requireSession(sessionId);
       const agent = hostedFor(session);
       await agent.start(await startContext(session, context));
-      return agent.send(text, onEvent);
+      turning.add(session.id);
+      try {
+        return await agent.send(text, onEvent);
+      } finally {
+        turning.delete(session.id);
+      }
     },
 
     async resume(sessionId, activityId, decision, context, onEvent) {
@@ -479,7 +493,12 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
       }
       const agent = hostedFor(session);
       await agent.start(await startContext(session, context));
-      return agent.resume(activityId, decision, onEvent);
+      turning.add(session.id);
+      try {
+        return await agent.resume(activityId, decision, onEvent);
+      } finally {
+        turning.delete(session.id);
+      }
     },
 
     async switchRuntime(sessionId, next) {
@@ -539,6 +558,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
           pinned: input.pinned,
           actor: input.actor,
           searchLimit: input.searchLimit,
+          openDraftId: input.openDraftId ?? null,
         },
         {
           ask: (row) => {

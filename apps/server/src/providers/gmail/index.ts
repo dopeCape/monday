@@ -6,7 +6,9 @@
 // subscription held in this process (renewed daily by a Job), or a push
 // subscription to the Cloud webhook. Send is messages.send with raw MIME and
 // the threadId of the message being answered; large messages use the
-// resumable upload. Everything is paced by the per-user quota bucket.
+// resumable upload. A Server Draft is mirrored with drafts.create and
+// drafts.update (same threadId rule), and removed with drafts.delete.
+// Everything is paced by the per-user quota bucket.
 
 import type { Person } from "@monday/shared";
 import { addressParser, decodeWords } from "postal-mime";
@@ -18,6 +20,7 @@ import {
   type CalendarSession,
   type Change,
   type ChangeTarget,
+  type DraftResult,
   type Flags,
   type Mailbox,
   type MailboxRole,
@@ -628,6 +631,74 @@ export class GmailSession implements Session {
       );
     }
     return { messageId: sent.id ?? null };
+  }
+
+  /**
+   * Mirrors a Server Draft into Gmail's Drafts: drafts.create the first time,
+   * drafts.update after (Gmail keeps the draft id and mints a new message id
+   * on every update). The threadId of the message a reply answers keeps the
+   * Draft on its Thread. An update whose draft is gone (deleted in Gmail)
+   * creates it again. The id handed back is the draft id drafts.send needs.
+   */
+  async putDraft(mime: Uint8Array, previousId: string | null): Promise<DraftResult> {
+    if (mime.byteLength > GMAIL_MAX_SEND_BYTES) {
+      throw new ProviderError("draft exceeds Gmail's 25 MB limit", "too-large");
+    }
+    const threadId = await this.threadIdFor(mime);
+    if (previousId) {
+      try {
+        return await this.writeDraft(mime, threadId, previousId);
+      } catch (error) {
+        if (!(error instanceof ProviderError && error.code === "not-found")) throw error;
+      }
+    }
+    return this.writeDraft(mime, threadId, null);
+  }
+
+  private async writeDraft(
+    mime: Uint8Array,
+    threadId: string | null,
+    draftId: string | null,
+  ): Promise<DraftResult> {
+    const simpleLimit = this.options.simpleUploadLimit ?? SIMPLE_UPLOAD_LIMIT;
+    const path = draftId ? `drafts/${encodeURIComponent(draftId)}` : "drafts";
+    const cost = draftId ? GMAIL_COST["drafts.update"] : GMAIL_COST["drafts.create"];
+    const method = draftId ? "PUT" : "POST";
+    let draft: { id?: string };
+    if (mime.byteLength <= simpleLimit) {
+      const message = { raw: base64url(mime), ...(threadId ? { threadId } : {}) };
+      draft = await this.client.request<{ id?: string }>(path, {
+        method,
+        cost,
+        body: draftId ? { id: draftId, message } : { message },
+      });
+    } else {
+      const message = threadId ? { threadId } : {};
+      draft = await this.client.resumableUpload<{ id?: string }>(
+        path,
+        draftId ? { id: draftId, message } : { message },
+        mime,
+        "message/rfc822",
+        cost,
+        method,
+      );
+    }
+    const id = draft.id ?? draftId;
+    if (!id) throw new ProviderError("drafts.create returned no id", "protocol");
+    return { id };
+  }
+
+  /** drafts.delete; a draft already gone (404) is not an error. */
+  async deleteDraft(id: string): Promise<void> {
+    try {
+      await this.client.request(`drafts/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        cost: "drafts.delete",
+      });
+    } catch (error) {
+      if (error instanceof ProviderError && error.code === "not-found") return;
+      throw error;
+    }
   }
 
   /* ------------------------------ Push ------------------------------ */

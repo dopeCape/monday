@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type InputHTMLAttributes,
   type ReactNode,
+  type Ref,
   type RefObject,
   useEffect,
 } from "react";
@@ -128,6 +129,8 @@ export interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   primary?: boolean | undefined;
   outline?: boolean | undefined;
   on?: boolean | undefined;
+  /** React 19 passes a ref to a function component as a prop. */
+  ref?: Ref<HTMLButtonElement> | undefined;
 }
 
 export function Btn({ icon, sm, primary, outline, on, className, type, ...rest }: BtnProps) {

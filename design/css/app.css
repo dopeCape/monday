@@ -600,6 +600,25 @@ button.prov { text-align: left; background: transparent; font: inherit; color: i
 .c-ai .mk { margin-top: 2px; }
 .c-ai .btn { margin-left: 6px; vertical-align: middle; }
 .c-foot { display: flex; align-items: center; gap: 4px; padding: 10px var(--pad); border-top: 1px solid var(--border); }
+.compose .col-head .btn.icon + .btn.icon { margin-left: 2px; }
+.c-tools { display: flex; align-items: center; gap: 2px; padding: 6px calc(var(--pad) - 6px); border-bottom: 1px solid var(--border); }
+.c-tools .vr { height: 16px; margin: 0 4px; }
+.c-tools .btn.on { background: var(--active); }
+.c-assist { gap: 6px; }
+.c-status { color: var(--fg-faint); font-size: var(--fs-xs); padding: 0 8px; }
+.c-suggestion { margin: 0 var(--pad) 14px; padding: 10px 14px 12px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--sunken); font-size: var(--fs-md); line-height: 1.55; }
+.c-suggestion-h { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--fg-muted); font-weight: 500; margin-bottom: 6px; }
+.c-suggestion p { margin: 0; }
+.dock { position: absolute; bottom: 12px; z-index: 35; display: flex; align-items: flex-end; gap: 8px; }
+.dock.bottom-right { right: 16px; }
+.dock.bottom-left { left: 16px; }
+.dock.bottom-full { left: 16px; right: 16px; }
+.dock-chip { display: flex; align-items: center; gap: 4px; height: 40px; max-width: 260px; padding: 0 4px 0 12px; border-radius: 12px; background: var(--overlay); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); font-size: var(--fs-sm); color: var(--fg); }
+.dock-chip .dock-open { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; flex: 1; text-align: left; line-height: 1.25; }
+.dock-chip .s { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.dock-chip .to { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-faint); font-size: var(--fs-xs); }
+.dock-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.dock-chip.more { padding: 0 12px; font-weight: 500; }
 
 /* =========================== DESIGN TOOLBAR (mock only) =========================== */
 .dt { position: fixed; left: 70%; transform: translateX(-50%); top: 9px; z-index: 100; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 10px; background: var(--overlay); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); font-size: var(--fs-xs); color: var(--fg-muted); }

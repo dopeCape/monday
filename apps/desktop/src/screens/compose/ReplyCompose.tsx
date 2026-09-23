@@ -1,16 +1,24 @@
 // The inline reply below a Thread, over a real Draft: the mock's reply box
 // with the editor in place of the textarea, the recipients above it, the
 // reply-all toggle (remembered per Thread), the forward attachments checkbox,
-// autosave and Send (ADR 0010).
+// the writing toolbar and assist, autosave and Send (ADR 0010). A reply
+// Draft saved earlier (by the user or the Agent) opens here pre-filled, with
+// who wrote it; Minimize docks it with the other open messages.
 
 import type { DraftAttachment, DraftContent, Person } from "@monday/shared";
-import { ReplyBox } from "@monday/ui";
-import { type DragEvent, useCallback, useRef, useState } from "react";
+import { Btn, Icon, ReplyBox } from "@monday/ui";
+import { MinusIcon, TrashIcon } from "@phosphor-icons/react";
+import type { Editor as TiptapEditor } from "@tiptap/core";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { AssistMenu, SuggestionPanel, useAssist } from "./Assist.tsx";
 import { Attachments } from "./Attachments.tsx";
+import { useAgentEdits } from "./agent-edits.ts";
 import type { Composer } from "./composer.ts";
 import { Editor } from "./Editor.tsx";
+import { linkOf } from "./link.ts";
 import { Recipients } from "./Recipients.tsx";
 import type { ComposeUiStrings } from "./strings.ts";
+import { Toolbar } from "./Toolbar.tsx";
 import { useDraftEditor } from "./useDraftEditor.ts";
 
 export interface ReplyComposeProps {
@@ -50,11 +58,47 @@ export function ReplyCompose({
   onSent,
   onError,
 }: ReplyComposeProps) {
+  const link = linkOf(composer);
   const editor = useDraftEditor({ composer, draftId, initial, idleMs });
-  const [formatting, setFormatting] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [tiptap, setTiptap] = useState<TiptapEditor | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { content } = editor;
+  const [author] = useState(() => link?.authorOf(draftId) ?? null);
+
+  // The controller reads the latest content when it docks or closes this reply.
+  const state = useRef({ content, saving: editor.saving, stop: editor.stop });
+  state.current = { content, saving: editor.saving, stop: editor.stop };
+  useEffect(
+    () =>
+      link?.register(draftId, {
+        read: () => ({ content: state.current.content, dirty: state.current.saving }),
+        stop: () => state.current.stop(),
+      }),
+    [link, draftId],
+  );
+
+  // The Agent's update_draft on this Draft shows here at once.
+  const tiptapRef = useRef<TiptapEditor | null>(null);
+  tiptapRef.current = tiptap;
+  useAgentEdits(composer, draftId, (next) => {
+    editor.replace(next);
+    tiptapRef.current?.commands.setContent(next.bodyHtml, { emitUpdate: false });
+  });
+
+  const assist = useAssist({
+    composer,
+    draftId,
+    editor: tiptap,
+    enabled: link?.assist ?? false,
+    subject: content.subject,
+    to: content.to.map((p) => p.email),
+    strings: strings.assist,
+  });
+  const attach = (files: File[]) => {
+    if (files.length) void editor.attach(files);
+  };
   const forward = content.kind === "forward";
   const includeOriginals =
     originalAttachments.length > 0 &&
@@ -83,8 +127,7 @@ export function ReplyCompose({
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDragging(false);
-    const files = Array.from(e.dataTransfer.files ?? []);
-    if (files.length) void editor.attach(files);
+    attach(Array.from(e.dataTransfer.files ?? []));
   };
 
   return (
@@ -123,17 +166,43 @@ export function ReplyCompose({
         status={
           <>
             <span className="c-status">{editor.saving ? strings.saving : strings.saved}</span>
-            <button
-              type="button"
-              className={`btn sm${formatting ? " on" : ""}`}
-              onClick={() => setFormatting((f) => !f)}
-            >
-              {strings.overlay.formatting}
-            </button>
+            {link ? (
+              <>
+                <Btn
+                  icon
+                  sm
+                  title={strings.overlay.minimize}
+                  onClick={() =>
+                    link.minimize(draftId, {
+                      content: state.current.content,
+                      dirty: editor.saving,
+                    })
+                  }
+                >
+                  <Icon icon={MinusIcon} />
+                </Btn>
+                <Btn
+                  icon
+                  sm
+                  title={strings.overlay.discard}
+                  onClick={() => {
+                    editor.stop();
+                    link.discard(draftId, state.current.content);
+                  }}
+                >
+                  <Icon icon={TrashIcon} />
+                </Btn>
+              </>
+            ) : null}
           </>
         }
         editor={
           <>
+            {author ? (
+              <div className="c-byline" data-author={author}>
+                {author === "agent" ? strings.draftedByAgent : strings.draftedByYou}
+              </div>
+            ) : null}
             <div className="reply-meta">
               <span>{strings.overlay.to}</span>
               <Recipients
@@ -167,7 +236,7 @@ export function ReplyCompose({
               ) : null}
             </div>
             <Editor
-              initialHtml={content.bodyHtml}
+              initialHtml={initial.bodyHtml}
               placeholder={strings.replyTo.replace(
                 "{name}",
                 recipient.split(/\s+/)[0] ?? recipient,
@@ -176,7 +245,30 @@ export function ReplyCompose({
               onBlur={() => void editor.flush()}
               autofocus
               strings={strings.editor}
-              toolbar={formatting}
+              onReady={setTiptap}
+              onLink={() => setLinkOpen(true)}
+              onFiles={attach}
+            />
+            <Toolbar
+              editor={tiptap}
+              strings={{ ...strings.editor, formatting: strings.overlay.formatting }}
+              hidden={link ? !link.toolbar : false}
+              linkOpen={linkOpen}
+              onLinkOpen={setLinkOpen}
+              assist={
+                <AssistMenu
+                  assist={assist}
+                  strings={strings.assist}
+                  editor={tiptap}
+                  translateTo={link?.translateTo ?? "English"}
+                />
+              }
+            />
+            <SuggestionPanel
+              suggestion={assist.suggestion}
+              strings={strings.assist}
+              onAccept={assist.accept}
+              onReject={assist.reject}
             />
           </>
         }
@@ -199,7 +291,7 @@ export function ReplyCompose({
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
           e.target.value = "";
-          if (files.length) void editor.attach(files);
+          attach(files);
         }}
       />
     </div>

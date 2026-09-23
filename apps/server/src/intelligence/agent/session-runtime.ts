@@ -57,6 +57,25 @@ export class TurnBusyError extends Error {
   }
 }
 
+/**
+ * What the Device has open, told to the model with each turn: the Thread the
+ * reader shows and the Draft in the composer, so "this thread" and "make this
+ * shorter" have something to point at.
+ */
+export function openLines(ctx: {
+  threadId?: string | null | undefined;
+  draftId?: string | null | undefined;
+}): string {
+  const lines: string[] = [];
+  if (ctx.threadId) lines.push(`The reader shows Thread ${ctx.threadId}.`);
+  if (ctx.draftId) {
+    lines.push(
+      `The composer has Draft ${ctx.draftId} open. When the user says "this", "this draft" or "the message" about writing, they mean it: read it with read_draft and change it with update_draft.`,
+    );
+  }
+  return lines.length ? `\n${lines.join("\n")}` : "";
+}
+
 /** The graph thread a Session runs on: its id, suffixed once it switched Runtime. */
 export function graphThreadId(sessionId: string, epoch: number): string {
   return epoch === 0 ? sessionId : `${sessionId}#${epoch}`;
@@ -87,8 +106,9 @@ export function createHostedSession(options: HostedSessionOptions): AgentSession
     const unbind = options.bind(threadId(), {
       workspaceId: session.workspaceId,
       sessionId: session.id,
-      system: `${settings.systemPrompt}${ctx.onboarding && settings.onboardingPrompt ? `\n\n${settings.onboardingPrompt}` : ""}\n\nWorkspace: ${ctx.address}. Today is ${options.now().toISOString()}.`,
+      system: `${settings.systemPrompt}${ctx.onboarding && settings.onboardingPrompt ? `\n\n${settings.onboardingPrompt}` : ""}\n\nWorkspace: ${ctx.address}. Today is ${options.now().toISOString()}.${openLines(ctx)}`,
       pinned: ctx.pinned ?? [],
+      openDraftId: ctx.draftId ?? null,
       maxSteps: settings.maxSteps,
       tools,
       onText: (delta) => onEvent({ kind: "delta", id: textId, text: delta }),
