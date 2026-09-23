@@ -21,7 +21,16 @@ import {
   sectionInStream,
   sectionLabel,
 } from "@monday/shared";
-import { Btn, ColHead, Kbd, MessageRow, SectionLabel, type Suggestion, ToolCard } from "@monday/ui";
+import {
+  Btn,
+  ColHead,
+  Kbd,
+  MessageRow,
+  personName,
+  SectionLabel,
+  type Suggestion,
+  ToolCard,
+} from "@monday/ui";
 import { DotsThreeIcon, FunnelSimpleIcon } from "@phosphor-icons/react";
 import {
   Fragment,
@@ -59,6 +68,7 @@ import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/a
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
 import { createCustomActionRunner, customActionTier } from "./inbox/custom-actions.ts";
+import { useHeldSections } from "./inbox/held-sections.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import {
   contactsOf,
@@ -263,7 +273,23 @@ export function Inbox({
 
   /* ------------------------------ Data ------------------------------ */
 
-  const allThreads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  const liveThreads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  // A row stays in the Section it was rendered in until the stream is rebuilt
+  // (inbox/held-sections.ts): opening a Thread reads it, and reading must not
+  // move it under the cursor. The rows under the cursor survive even a rebuild.
+  const cursor = useRef<{ focus: string | null; open: string | null; selection: string[] }>({
+    focus: null,
+    open: null,
+    selection: [],
+  });
+  const allThreads = useHeldSections(
+    liveThreads,
+    [inbox, group, section, settings["sections.rules"], settings["sections.order"]],
+    () => {
+      const c = cursor.current;
+      return new Set([c.focus, c.open, ...c.selection].filter((id): id is string => id !== null));
+    },
+  );
   const groups = useSyncExternalStore(inbox.subscribe, inbox.groups, inbox.groups);
   const tags = useSyncExternalStore(inbox.subscribe, inbox.tags, inbox.tags);
   const lens = group ? groups.find((g) => g.id === group) : undefined;
@@ -372,6 +398,7 @@ export function Inbox({
   const thread = focus ? inbox.thread(focus) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
+  cursor.current = { focus, open: openThreadId, selection };
   // The sheet slides out over the Thread it showed, so that Thread's rows are
   // held until the leave ends; the split reader never leaves.
   const readerExit = useExitValue(showReader && thread ? thread : null);
@@ -1349,11 +1376,9 @@ export function Inbox({
                 composer={composer}
                 draftId={compose.reply.draftId}
                 initial={compose.reply.initial}
-                recipient={
-                  messages[messages.length - 1]?.from.name ??
-                  shownThread.participants[0]?.name ??
-                  ""
-                }
+                recipient={personName(
+                  messages[messages.length - 1]?.from ?? shownThread.participants[0],
+                )}
                 strings={cs}
                 idleMs={compose.idleMs}
                 delaySeconds={compose.delaySeconds}

@@ -3,7 +3,7 @@
 import type { Tag, Thread } from "@monday/shared";
 import { ArchiveIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
 import type { MouseEvent } from "react";
-import { cx, formatListTime } from "../format.ts";
+import { cx, formatListTime, personName } from "../format.ts";
 import { Icon } from "./icon.tsx";
 import { Btn, Mark } from "./primitives.tsx";
 
@@ -38,7 +38,7 @@ export function MessageRow({
   onAsk,
   className,
 }: MessageRowProps) {
-  const from = thread.participants[0]?.name ?? "";
+  const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
   const act = (fn: ((id: string) => void) | undefined) => (e: MouseEvent) => {
     e.stopPropagation();

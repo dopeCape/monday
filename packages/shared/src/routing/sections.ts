@@ -141,8 +141,9 @@ export const DEFAULT_JUDGED_THRESHOLD = 0.6;
  * The shipped defaults, matching the mock's four Sections in their order:
  * rows like any other, placed in the stream. Each pairs a header rule (what
  * decides before the judge answers) with a judged condition (what decides
- * once it has): Needs your reply is unread mail someone else wrote last, or
- * a Thread judged to need a reply; Waiting is an ongoing exchange someone
+ * once it has): Needs your reply is mail someone else wrote last, read or
+ * not (reading a Thread does not answer it), or a Thread judged to need a
+ * reply; Waiting is an ongoing exchange someone
  * else wrote last, or one judged waiting; Newsletters is list mail, or a
  * Thread judged a newsletter; For your information is the rest.
  */
@@ -151,7 +152,6 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
     id: "needs-reply",
     when: {
       lastFrom: "others",
-      unread: true,
       bulk: false,
       needs_reply_at_least: DEFAULT_JUDGED_THRESHOLD,
     },

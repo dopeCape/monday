@@ -23,6 +23,40 @@ export function avatarColor(name: string): string {
   return `var(--tag-${1 + (h % 5)})`;
 }
 
+/** Who a person is, as far as a row knows: a name that may be empty, an address that may be missing. */
+export interface NamedPerson {
+  name?: string | null | undefined;
+  email?: string | null | undefined;
+}
+
+const NAME_PART = /^\p{L}[\p{L}'’]*$/u;
+
+/**
+ * The name to show for a person, never empty while there is anything to
+ * show: their own name; else the address's local part, prettified when it
+ * reads like a name ("aoife.byrne@x.dev" is "Aoife Byrne") and as written
+ * when it does not ("noreply", "j2"); else the full address. A name that is
+ * just the address again counts as none. `fallback` covers a person with
+ * neither.
+ */
+export function personName(person: NamedPerson | null | undefined, fallback = ""): string {
+  const email = person?.email?.trim() ?? "";
+  const name =
+    person?.name
+      ?.trim()
+      .replace(/^["']+|["']+$/g, "")
+      .trim() ?? "";
+  if (name && name.toLowerCase() !== email.toLowerCase()) return name;
+  const at = email.lastIndexOf("@");
+  const local = (at >= 0 ? email.slice(0, at) : email).trim();
+  if (!local) return email || fallback;
+  const parts = local.replace(/\+.*$/, "").split(/[._-]+/);
+  if (parts.length >= 2 && parts.every((w) => NAME_PART.test(w))) {
+    return parts.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+  }
+  return local;
+}
+
 export function firstName(name: string): string {
   return name.split(/\s+/)[0] ?? name;
 }
