@@ -40,6 +40,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { type AnimationEvent, type ReactNode, useState } from "react";
+import { useShownThread } from "../compose/bus.ts";
 import { Picker } from "./Picker.tsx";
 import { useExit } from "./useExit.ts";
 
@@ -156,6 +157,9 @@ export function Reader({
   leaving,
   onLeft,
 }: ReaderProps) {
+  // The compose controller learns which Thread shows, so a reply Draft saved on
+  // it (the user's or the Agent's) opens as the inline reply, ready to continue.
+  useShownThread(leaving ? null : thread.id);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [more, setMore] = useState(false);
   const moreExit = useExit(more, "--t-fast");
