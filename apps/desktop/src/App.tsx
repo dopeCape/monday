@@ -515,8 +515,8 @@ export function App({
       }
       queueMicrotask(() =>
         document
-          .querySelector<HTMLInputElement>(
-            column ? ".agent-col .agent-bar input" : ".agent-dock .agent-bar input",
+          .querySelector<HTMLTextAreaElement>(
+            column ? ".agent-col .agent-bar textarea" : ".agent-dock .agent-bar textarea",
           )
           ?.focus(),
       );

@@ -350,7 +350,7 @@ describe("search and the agent stay where the user is", () => {
     await click(navItem("Calendar"));
     expect(document.title).toBe("Calendar · monday");
     expect(q(".agent-panel")).toBeNull();
-    const input = q<HTMLInputElement>(".agent-dock .agent-bar input");
+    const input = q<HTMLTextAreaElement>(".agent-dock .agent-bar textarea");
     await act(async () => input?.focus());
     await settle();
     expect(q(".agent-panel")).not.toBeNull();
