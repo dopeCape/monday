@@ -38,6 +38,8 @@ export interface DraftEditor {
   discard(): Promise<void>;
   /** Drops what is pending without saving it: the Draft is being thrown away. */
   stop(): void;
+  /** Takes content saved elsewhere (the Agent's update_draft) without saving it again. */
+  replace(content: DraftContent): void;
   canSend: boolean;
 }
 
@@ -146,6 +148,11 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
       await composer.discard(draftId);
     },
     stop: () => autosave.cancel(),
+    replace(next) {
+      autosave.cancel();
+      contentRef.current = next;
+      setContent(next);
+    },
     canSend,
   };
 }

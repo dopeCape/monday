@@ -4387,6 +4387,15 @@ button.prov {
   pointer-events: none;
 }
 /* minimize shrinks toward the dock; a restored window grows out of it */
+.compose.dock-bottom-right {
+  --dock-origin: bottom right;
+}
+.compose.dock-bottom-left {
+  --dock-origin: bottom left;
+}
+.compose.dock-bottom-full {
+  --dock-origin: bottom center;
+}
 .compose.from-dock {
   transform-origin: var(--dock-origin, bottom right);
   animation: from-dock var(--t-med) var(--ease);

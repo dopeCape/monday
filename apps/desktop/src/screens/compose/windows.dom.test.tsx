@@ -481,6 +481,34 @@ describe("Drafts you can find", () => {
   });
 });
 
+describe("the Agent edits the open Draft", () => {
+  test("update_draft's save shows in the open window at once", async () => {
+    const composer = fixtureComposer({ now: () => NOW });
+    const { render } = await mount({ composer, composeRequest: 0 });
+    await newWithSubject(render, 1, "Terms");
+    await press("Escape", {}, sheet()?.querySelector("#compose-subject"));
+    await until(() => composer.drafts().length === 1);
+    const id = composer.drafts()[0]?.id ?? "";
+    await click(document.querySelector(".dock-chip .dock-open"));
+    await until(() => sheet() !== null);
+    const saved = composer.draft(id);
+    if (!saved) throw new Error("no draft");
+    await act(async () => {
+      composer.agentSave(id, {
+        ...saved,
+        subject: "Terms, shorter",
+        bodyHtml: "<p>Short.</p>",
+        bodyText: "Short.",
+      });
+    });
+    await until(
+      () =>
+        sheet()?.querySelector<HTMLInputElement>("#compose-subject")?.value === "Terms, shorter",
+    );
+    expect(editorIn(sheet()).getText()).toBe("Short.");
+  });
+});
+
 describe("the writing assist", () => {
   test("a rewrite comes back as a suggestion; Accept writes it, Reject leaves the text", async () => {
     const asked: Array<Omit<DraftAssistRequest, "workspace">> = [];

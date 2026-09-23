@@ -87,6 +87,8 @@ export interface FixtureComposerOptions {
 export function fixtureComposer(options: FixtureComposerOptions = {}): Composer & {
   /** Runs every send whose run_at has passed. */
   runDue(now?: Date): number;
+  /** A save by the Agent (update_draft), as the feed would bring it. */
+  agentSave(id: string, content: DraftContent, at?: string): void;
 } {
   const workspaceId = options.workspaceId ?? "ws-genai";
   const address = options.address ?? "tejas@genai-labs.io";
@@ -199,6 +201,19 @@ export function fixtureComposer(options: FixtureComposerOptions = {}): Composer 
     },
     suggestion: (id) => options.suggestions?.[id] ?? null,
     ...(options.assist ? { assist: options.assist, assistAvailable: async () => true } : {}),
+    agentSave(id, content, at) {
+      const existing = drafts.get(id);
+      drafts.set(id, {
+        id,
+        workspaceId,
+        ...content,
+        attachmentBlobIds: content.attachments.map((a) => a.blobId),
+        status: existing?.status ?? "open",
+        updatedAt: at ?? new Date(now().getTime() + 1000).toISOString(),
+        updatedBy: "agent",
+      });
+      emit();
+    },
     runDue(at = now()) {
       let ran = 0;
       for (const send of [...sends.values()]) {

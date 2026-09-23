@@ -12,6 +12,7 @@ import type { Editor as TiptapEditor } from "@tiptap/core";
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AssistMenu, SuggestionPanel, useAssist } from "./Assist.tsx";
 import { Attachments } from "./Attachments.tsx";
+import { useAgentEdits } from "./agent-edits.ts";
 import type { Composer } from "./composer.ts";
 import { Editor } from "./Editor.tsx";
 import { linkOf } from "./link.ts";
@@ -77,6 +78,14 @@ export function ReplyCompose({
       }),
     [link, draftId],
   );
+
+  // The Agent's update_draft on this Draft shows here at once.
+  const tiptapRef = useRef<TiptapEditor | null>(null);
+  tiptapRef.current = tiptap;
+  useAgentEdits(composer, draftId, (next) => {
+    editor.replace(next);
+    tiptapRef.current?.commands.setContent(next.bodyHtml, { emitUpdate: false });
+  });
 
   const assist = useAssist({
     composer,
