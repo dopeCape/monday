@@ -18,7 +18,9 @@ Behaviors a tester can check. Every default is a Setting (ADR 0004) unless marke
 
 ## Sessions
 
-- Enter sends. Shift-Enter inserts a newline. The input clears and the message appears as the user turn.
+- Enter sends. Shift-Enter inserts a newline. The input clears and the message appears as the user turn. The input grows to `ai.composer.max_rows` lines.
+- Up in an empty input recalls what was sent earlier in the Session, newest first; Down steps back to the draft (`ai.composer.input_history`).
+- While a turn runs, Send becomes Stop. Stop drops the stream and ends a Local runtime's CLI; the thread keeps what arrived with a Stopped line, and a tool that already ran stays in the Activity log with its Undo.
 - A new Session starts with the plus button, with `/new`, or automatically after 24 hours of inactivity. History lists past Sessions by first message and date; opening one resumes it.
 - A Session is bound to one Workspace. Switching Workspace in the nav starts or resumes that Workspace's latest Session. An explicit "switch to my personal account" inside a Session shows a switch card and rebinds the Session.
 - Retention: Sessions are kept 90 days on the Server, then summarized to one line in the Activity log.
@@ -26,7 +28,8 @@ Behaviors a tester can check. Every default is a Setting (ADR 0004) unless marke
 
 ## Streaming and cards
 
-- Assistant text streams token by token. Tool calls render as cards in the order they happen, each with a title, a one-line detail and a status: running, done, failed, waiting.
+- Assistant text streams token by token and renders as Markdown (`ai.composer.markdown`): lists, tables, code blocks with Copy, inline code, and links that open in the system browser. Raw HTML in an answer is never rendered.
+- Tool calls render as cards in the order they happen, each with a title, a one-line detail and a status: running, done, failed, waiting. A turn's read-only steps (searches, reads, a Developer mode tool) group into one line that stays open while the Agent works and folds to a summary once the answer starts (`ai.composer.fold_activity`); a card that asks, or that can be undone, is never folded.
 - Search results, calendar events and drafts render inside the card in the same visual language as the rest of the app (thread rows, event rows), never as raw JSON.
 - A reversible action card shows Undo. An always-ask card shows the exact payload (recipients and text for send, the list of Threads for a batch, the event for an invite) and Approve, Edit, Cancel. Edit opens the payload in the right editor (compose, event form) and returns to the card.
 - A batch above 10 Threads shows the list first with a count and one Apply.

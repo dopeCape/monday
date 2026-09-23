@@ -176,24 +176,40 @@ export function toolCard(t) {
   </div>`;
 }
 
+/* A turn's read-only steps fold into one line once the answer starts (the app's AgentSteps). */
+function stepsHtml(steps) {
+  const titles = [...new Set(steps.map(s => s.t))].join(", ");
+  return `
+  <div class="agent-steps" data-state="closed">
+    <button class="head">${ic("ph-caret-right")}<span class="label">${titles}</span><span class="n">${steps.length === 1 ? "1 step" : `${steps.length} steps`}</span></button>
+  </div>`;
+}
+
 export function threadHtml(thread) {
   return thread.map(m => {
     if (m.u) return `<div class="u">${m.u}</div>`;
-    return `<div class="a">${m.a.map(part => {
-      if (part.p) return `<p>${part.p}</p>`;
-      if (part.tool) return toolCard(part.tool);
-      if (part.results) return `<div class="results">${part.results.map(r => `<div class="r"><b>${r.b}</b><span>${r.s}</span><span class="t">${r.t}</span></div>`).join("")}</div>`;
-      return "";
-    }).join("")}</div>`;
+    const out = [];
+    let steps = [];
+    const flush = () => { if (steps.length) out.push(stepsHtml(steps)); steps = []; };
+    for (const part of m.a) {
+      if (part.tool?.step) { steps.push(part.tool); continue; }
+      flush();
+      if (part.p) out.push(`<p>${part.p}</p>`);
+      else if (part.tool) out.push(toolCard(part.tool));
+      else if (part.results) out.push(`<div class="results">${part.results.map(r => `<div class="r"><b>${r.b}</b><span>${r.s}</span><span class="t">${r.t}</span></div>`).join("")}</div>`);
+    }
+    flush();
+    return `<div class="a">${out.join("")}</div>`;
   }).join("");
 }
 
+/* The composer: a textarea that grows, the mark, and a round Send (Stop while a turn runs). */
 export function agentBar(placeholder = "Ask or tell monday") {
   return `
   <div class="agent-bar">
     ${mark()}
-    <input data-act="agent-focus" placeholder="${placeholder}" />
-    <span class="kbd">↵</span>
+    <textarea rows="1" data-act="agent-focus" placeholder="${placeholder}"></textarea>
+    <button class="btn icon send" disabled title="Send">${ic("ph-arrow-up")}</button>
   </div>`;
 }
 

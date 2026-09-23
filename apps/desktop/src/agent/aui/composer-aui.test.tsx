@@ -273,6 +273,25 @@ describe("the composer on Assistant UI", () => {
     expect(card()?.querySelector(".st")?.textContent?.trim()).toBe("Undone");
   });
 
+  test("the plus button starts a new Session through the thread list; History resumes the old one", async () => {
+    const client = fakeAgentClient();
+    await mount(client);
+    await send("hello");
+    expect(client.sessions).toHaveLength(1);
+    await click(q('.agent-col button[title="New conversation"]'));
+    expect(client.sessions).toHaveLength(2);
+    expect(q(".agent-thread .u")).toBeNull();
+    await click(q('.agent-col button[title="History"]'));
+    const rows = qa(".agent-history .r");
+    expect(rows.map((r) => r.querySelector("b")?.textContent)).toEqual([
+      "New conversation",
+      "hello",
+    ]);
+    await click(rows[1]);
+    expect(q(".agent-history")).toBeNull();
+    expect(q(".agent-thread .u")?.textContent).toBe("hello");
+  });
+
   test("Up in the empty bar recalls what was sent, newest first; Down steps back to the draft", async () => {
     const client = fakeAgentClient();
     await mount(client);
