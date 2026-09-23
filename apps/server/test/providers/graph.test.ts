@@ -259,6 +259,61 @@ describe("Graph adapter", () => {
     });
   });
 
+  test("drafts: a MIME POST lands in Drafts, an update replaces it, delete removes it, large ones are built", async () => {
+    const server = createGraphServer(fixture);
+    const session = await createGraphProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+    }).connect(credentialsFor(server));
+    if (!session.putDraft || !session.deleteDraft) throw new Error("no draft calls");
+    const mime = (text: string) =>
+      composeMime({
+        from: { name: "Me", email: fixture.address },
+        to: [{ name: "Aoife", email: "aoife@northlight.dev" }],
+        subject: "Take-home review",
+        text,
+        html: `<p>${text}</p>`,
+      });
+    const first = await session.putDraft(await mime("First."), null);
+    const created = server.messages.get(first.id);
+    expect(created?.isDraft).toBe(true);
+    expect(created?.parentFolderId).toBe(server.folderId("drafts"));
+    expect(created?.subject).toBe("Take-home review");
+    expect(created?.to[0]?.email).toBe("aoife@northlight.dev");
+    const post = server.requests.findLast((r) => r.path.endsWith("/me/messages"));
+    expect(post?.headers["content-type"]).toBe("text/plain");
+
+    const second = await session.putDraft(await mime("Second."), first.id);
+    expect(second.id).not.toBe(first.id);
+    expect(server.messages.has(first.id)).toBe(false);
+    expect(server.messages.get(second.id)?.isDraft).toBe(true);
+
+    await session.deleteDraft(second.id);
+    expect(server.messages.has(second.id)).toBe(false);
+    // Gone already: not an error.
+    await session.deleteDraft(second.id);
+
+    const big = await composeMime({
+      from: { name: "Me", email: fixture.address },
+      to: [{ name: "", email: "aoife@northlight.dev" }],
+      subject: "Big draft",
+      text: "Attached.",
+      attachments: [
+        {
+          name: "big.bin",
+          mediaType: "application/octet-stream",
+          bytes: new Uint8Array(4 * 1024 * 1024),
+        },
+      ],
+    });
+    const large = await session.putDraft(big, null);
+    const built = server.messages.get(large.id);
+    expect(built?.isDraft).toBe(true);
+    expect(built?.attachments.map((a) => a.name)).toEqual(["big.bin"]);
+    // Built, not sent.
+    expect(server.sent.some((s) => s.draftId === large.id)).toBe(false);
+  });
+
   test("fetchMessage reads MIME from /$value", async () => {
     const server = createGraphServer(fixture);
     const session = await createGraphProvider({
