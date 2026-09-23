@@ -40,7 +40,7 @@ import {
   type Watch,
 } from "../types.ts";
 import { createGoogleCalendar } from "./calendar.ts";
-import { GmailApiError, GmailClient } from "./client.ts";
+import { BATCH_SIZE, GmailApiError, GmailClient } from "./client.ts";
 import {
   deleteSubscription,
   ensurePullSubscription,
@@ -49,7 +49,13 @@ import {
   type PushOidc,
   pullLoop,
 } from "./pubsub.ts";
-import { GMAIL_COST, gmailQuotaBucket, type TokenBucket } from "./quota.ts";
+import {
+  type BatchLane,
+  createBatchLane,
+  GMAIL_COST,
+  gmailQuotaBucket,
+  type TokenBucket,
+} from "./quota.ts";
 
 export { createGoogleCalendar, eventOfGoogle } from "./calendar.ts";
 export { GmailApiError, GmailClient } from "./client.ts";
@@ -252,6 +258,8 @@ export interface GmailProviderOptions {
   quota?: () => TokenBucket;
   /** The per-user per-minute ceiling the default bucket paces to (the sync.gmail_units_per_minute Setting). */
   unitsPerMinute?: () => Promise<number>;
+  /** The most requests in one batch (sync.gmail_batch_parts); the lane shrinks below it on refusals. */
+  batchParts?: () => Promise<number>;
   simpleUploadLimit?: number;
   /** Pause after a failed Pub/Sub pull. */
   pullRetryMs?: number;
@@ -269,6 +277,16 @@ export function createGmailProvider(options: GmailProviderOptions = {}): Provide
   // on-demand bodies each open one. They share one bucket per user and
   // sign-in app, or together they overspend, get refused, and crawl.
   const buckets = new Map<string, Promise<TokenBucket | undefined>>();
+  const lanes = new Map<string, Promise<BatchLane>>();
+  const laneFor = (key: string) => {
+    let lane = lanes.get(key);
+    if (!lane) {
+      lane = (async () =>
+        createBatchLane(options.batchParts ? await options.batchParts() : BATCH_SIZE))();
+      lanes.set(key, lane);
+    }
+    return lane;
+  };
   const bucketFor = (key: string) => {
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -294,16 +312,15 @@ export function createGmailProvider(options: GmailProviderOptions = {}): Provide
         throw new ProviderError("Gmail needs OAuth credentials", "auth");
       }
       const topic = credentials.endpoint.kind === "gmail" ? credentials.endpoint.pubsubTopic : null;
-      const quota =
-        options.quota?.() ??
-        (await bucketFor(
-          `${credentials.auth.client?.id ?? ""}:${credentials.address.toLowerCase()}`,
-        ));
+      const userKey = `${credentials.auth.client?.id ?? ""}:${credentials.address.toLowerCase()}`;
+      const quota = options.quota?.() ?? (await bucketFor(userKey));
+      const lane = await laneFor(userKey);
       const client = new GmailClient({
         auth: credentials.auth,
         tokens,
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(quota ? { quota } : {}),
+        lane,
         ...(options.sleep ? { sleep: options.sleep } : {}),
         ...(options.now ? { now: options.now } : {}),
         ...(options.random ? { random: options.random } : {}),

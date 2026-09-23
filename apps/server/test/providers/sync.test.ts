@@ -469,6 +469,8 @@ describe("a large Inbox's newest bodies keep pace with its header pages", () => 
   let db: TestDatabase;
   let engine: SyncEngine;
   const trace: string[] = [];
+  let inFlight = 0;
+  let mostInFlight = 0;
 
   beforeAll(async () => {
     db = await testDatabase();
@@ -492,9 +494,16 @@ describe("a large Inbox's newest bodies keep pace with its header pages", () => 
               };
             }
             if (prop === "fetchMessage") {
-              return (...args: unknown[]) => {
+              return async (...args: unknown[]) => {
                 trace.push("body");
-                return (value as (...a: unknown[]) => unknown).apply(target, args);
+                inFlight += 1;
+                mostInFlight = Math.max(mostInFlight, inFlight);
+                try {
+                  await Bun.sleep(2);
+                  return await (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
+                } finally {
+                  inFlight -= 1;
+                }
               };
             }
             return typeof value === "function" ? value.bind(target) : value;
@@ -527,5 +536,8 @@ describe("a large Inbox's newest bodies keep pace with its header pages", () => 
     const firstBody = trace.indexOf("body");
     expect(firstBody).toBeGreaterThan(-1);
     expect(firstBody).toBeLessThan(inboxPages[inboxPages.length - 1] ?? -1);
+    // Several bodies are fetched at once, never more than sync.body_concurrency.
+    expect(mostInFlight).toBeGreaterThan(1);
+    expect(mostInFlight).toBeLessThanOrEqual(defaultSyncSettings().bodyConcurrency);
   });
 });

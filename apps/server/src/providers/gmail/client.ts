@@ -7,15 +7,25 @@
 import type { FetchLike } from "../jmap/client.ts";
 import type { TokenBroker } from "../oauth/tokens.ts";
 import { type OAuthAuth, ProviderError } from "../types.ts";
-import { GMAIL_COST, type GmailMethod, gmailQuotaBucket, type TokenBucket } from "./quota.ts";
+import {
+  type BatchLane,
+  createBatchLane,
+  GMAIL_COST,
+  type GmailMethod,
+  gmailQuotaBucket,
+  isConcurrencyRefusal,
+  type TokenBucket,
+} from "./quota.ts";
 
 export const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 export const GMAIL_BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1";
 export const GMAIL_UPLOAD_BASE = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
 export const PUBSUB_BASE = "https://pubsub.googleapis.com/v1";
 
-/** Requests per batch; Google recommends no more than 50. */
-export const BATCH_SIZE = 50;
+/** Requests per batch when no lane is given; Google's ceiling is 50, its concurrency limit far lower. */
+export const BATCH_SIZE = 10;
+/** Pause before retrying parts refused for concurrency: they only need the others to finish. */
+export const CONCURRENCY_RETRY_MS = 750;
 /** Resumable upload chunks must be multiples of 256 KiB. */
 export const UPLOAD_CHUNK = 8 * 256 * 1024;
 export const MAX_BACKOFF_MS = 64_000;
@@ -25,6 +35,8 @@ export interface GmailClientOptions {
   tokens: TokenBroker;
   fetch?: FetchLike;
   quota?: TokenBucket;
+  /** The batch size this user may have in flight; shared by the user's Sessions. */
+  lane?: BatchLane;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   random?: () => number;
@@ -124,6 +136,7 @@ export function backoffMs(attempt: number, random: () => number): number {
 export class GmailClient {
   readonly fetch: FetchLike;
   readonly quota: TokenBucket;
+  readonly lane: BatchLane;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
   private readonly maxRetries: number;
@@ -136,6 +149,7 @@ export class GmailClient {
         ...(options.now ? { now: options.now } : {}),
         ...(options.sleep ? { sleep: options.sleep } : {}),
       });
+    this.lane = options.lane ?? createBatchLane(BATCH_SIZE);
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.random = options.random ?? Math.random;
     this.maxRetries = options.maxRetries ?? 5;
@@ -206,10 +220,13 @@ export class GmailClient {
   async batchGet<T>(
     paths: { id: string; path: string }[],
     unitCost: number,
+    /** Rounds of re-asking for refused parts so far; bounded by maxRetries. */
+    round = 0,
   ): Promise<Map<string, T>> {
     const out = new Map<string, T>();
-    for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-      const chunk = paths.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < paths.length; ) {
+      const chunk = paths.slice(i, i + this.lane.parts());
+      i += chunk.length;
       await this.quota.take(unitCost * chunk.length);
       const boundary = `monday_batch_${Math.floor(this.random() * 1e9).toString(16)}`;
       const body = chunk
@@ -249,6 +266,7 @@ export class GmailClient {
           response.headers.get("content-type") ?? "",
         );
         let rateLimited = false;
+        let crowded = false;
         for (const part of parts) {
           const index = Number(/item(\d+)/.exec(part.contentId)?.[1] ?? -1);
           const target = chunk[index];
@@ -259,19 +277,25 @@ export class GmailClient {
             part.status === 429 ||
             (part.status === 403 && isRateLimit(403, reasonOf(part.body)))
           ) {
-            rateLimited = true;
+            // Too many in flight shrinks the batch; only the minute's quota slows the pace.
+            if (isConcurrencyRefusal(part.body)) crowded = true;
+            else rateLimited = true;
           }
           if (part.status >= 200 && part.status < 300 && part.body) {
             out.set(target.id, JSON.parse(part.body) as T);
           }
         }
         if (rateLimited) this.quota.penalize();
-        if (rateLimited && attempt < this.maxRetries) {
+        if (crowded) this.lane.refused();
+        else if (!rateLimited) this.lane.clean();
+        if ((rateLimited || crowded) && round < this.maxRetries) {
           // Retry only what is still missing.
           const missing = chunk.filter((p) => !out.has(p.id));
           if (missing.length > 0) {
-            await this.sleep(backoffMs(attempt, this.random));
-            const more = await this.batchGet<T>(missing, unitCost);
+            await this.sleep(
+              rateLimited ? backoffMs(round, this.random) : CONCURRENCY_RETRY_MS * (round + 1),
+            );
+            const more = await this.batchGet<T>(missing, unitCost, round + 1);
             for (const [k, v] of more) out.set(k, v);
           }
         }

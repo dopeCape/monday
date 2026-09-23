@@ -93,6 +93,10 @@ export async function createServices(options: ServicesOptions): Promise<Services
         readGlobalSetting(db, "sync.gmail_units_per_minute").catch(
           () => settingsSchema["sync.gmail_units_per_minute"].default,
         ),
+      batchParts: () =>
+        readGlobalSetting(db, "sync.gmail_batch_parts").catch(
+          () => settingsSchema["sync.gmail_batch_parts"].default,
+        ),
     },
     graph: {
       pollMs: async () => {

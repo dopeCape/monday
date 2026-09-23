@@ -68,6 +68,8 @@ export interface SyncSettings {
   reconcileMinutes: number;
   hotFolders: number;
   batchSize: number;
+  /** Bodies fetched at once (sync.body_concurrency). */
+  bodyConcurrency: number;
 }
 
 export function defaultSyncSettings(): SyncSettings {
@@ -76,6 +78,7 @@ export function defaultSyncSettings(): SyncSettings {
     reconcileMinutes: settingsSchema["sync.reconcile_minutes"].default,
     hotFolders: settingsSchema["sync.hot_folders"].default,
     batchSize: settingsSchema["sync.batch_size"].default,
+    bodyConcurrency: settingsSchema["sync.body_concurrency"].default,
   };
 }
 
@@ -94,6 +97,7 @@ export async function readSyncSettings(db: Db): Promise<SyncSettings> {
   out.reconcileMinutes = num("sync.reconcile_minutes", out.reconcileMinutes);
   out.hotFolders = num("sync.hot_folders", out.hotFolders);
   out.batchSize = num("sync.batch_size", out.batchSize);
+  out.bodyConcurrency = num("sync.body_concurrency", out.bodyConcurrency);
   return out;
 }
 
@@ -918,11 +922,26 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       .orderBy(desc(syncMessages.date))
       .limit(BODIES_PER_PASS + 1);
     const batch = rows.slice(0, BODIES_PER_PASS);
-    for (const row of batch) {
-      if (deadline !== undefined && Date.now() >= deadline) return { more: true };
-      await storeBody(acct, s, row.providerId, row.messageId);
-      report.bodies += 1;
-    }
+    // A few at once, newest first: each waits its turn at the quota bucket,
+    // so this is as fast as the Provider allows rather than one round trip
+    // after another.
+    const width = Math.max(1, (await readSettings()).bodyConcurrency);
+    let next = 0;
+    let outOfTime = false;
+    const worker = async () => {
+      for (;;) {
+        if (deadline !== undefined && Date.now() >= deadline) {
+          outOfTime = true;
+          return;
+        }
+        const row = batch[next++];
+        if (!row) return;
+        await storeBody(acct, s, row.providerId, row.messageId);
+        report.bodies += 1;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(width, batch.length) }, worker));
+    if (outOfTime && next <= batch.length) return { more: true };
     return { more: rows.length > BODIES_PER_PASS };
   }
 

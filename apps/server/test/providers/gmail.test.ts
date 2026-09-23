@@ -235,6 +235,28 @@ describe("Gmail adapter", () => {
     expect(GMAIL_COST["messages.get"]).toBe(20);
   });
 
+  test("too many requests in flight shrinks the batch and retries soon, without slowing the pace", async () => {
+    const server = createGmailServer(fixture);
+    const clock = virtualClock();
+    const session = (await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+      now: clock.now,
+      sleep: clock.sleep,
+      random: () => 0,
+    }).connect(credentialsFor(server))) as GmailSession;
+    expect(session.client.lane.parts()).toBe(10);
+    server.concurrencyRefuseParts = 4;
+    const { events } = await syncAll(session, "INBOX", null, 500);
+    const inInbox = [...server.emails.values()].filter((e) => e.labelIds.includes("INBOX")).length;
+    expect(addedOf(events)).toHaveLength(inInbox);
+    // Every batch held at most ten parts, and the retries came quickly.
+    expect(Math.max(...server.batchSizes)).toBeLessThanOrEqual(10);
+    // The refusal halved the lane; the refused parts went again, then it grew back a part at a time.
+    expect(server.batchSizes.slice(0, 5)).toEqual([10, 4, 6, 7, 8]);
+    expect(session.pacing()).toBe(false);
+  });
+
   test("every Session of one user spends one quota; another user has their own", async () => {
     const server = createGmailServer(fixture);
     const clock = virtualClock();
@@ -247,6 +269,7 @@ describe("Gmail adapter", () => {
     const sync = (await provider.connect(credentialsFor(server))) as GmailSession;
     const reader = (await provider.connect(credentialsFor(server))) as GmailSession;
     expect(reader.client.quota).toBe(sync.client.quota);
+    expect(reader.client.lane).toBe(sync.client.lane);
     // A refusal seen by one slows them all, since Google counted them together.
     sync.client.quota.penalize();
     expect(reader.pacing()).toBe(true);

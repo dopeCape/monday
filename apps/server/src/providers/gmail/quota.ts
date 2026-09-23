@@ -148,6 +148,40 @@ export function createTokenBucket(options: TokenBucketOptions): TokenBucket {
   };
 }
 
+/**
+ * How many requests one Gmail user may have in flight in a batch. Gmail runs
+ * a batch's parts at once and refuses the excess with "Too many concurrent
+ * requests for user" (429), which says nothing about the minute's units. The
+ * lane halves on such a refusal and grows back one part per clean batch, up
+ * to the configured size. Shared by every Session of the user, like the bucket.
+ */
+export interface BatchLane {
+  parts(): number;
+  refused(): void;
+  clean(): void;
+}
+
+export const LANE_FLOOR = 2;
+
+export function createBatchLane(max: number): BatchLane {
+  const top = Math.max(1, Math.floor(max));
+  let size = top;
+  return {
+    parts: () => size,
+    refused() {
+      size = Math.max(Math.min(LANE_FLOOR, top), Math.floor(size / 2));
+    },
+    clean() {
+      size = Math.min(top, size + 1);
+    },
+  };
+}
+
+/** Gmail's refusal for too many requests in flight at once, as opposed to the minute's quota. */
+export function isConcurrencyRefusal(body: string | null | undefined): boolean {
+  return /concurrent requests/i.test(body ?? "");
+}
+
 /** The share of a minute's units the bucket may hold as a burst; the rest refills over the minute. */
 export const BURST_SHARE = 0.2;
 

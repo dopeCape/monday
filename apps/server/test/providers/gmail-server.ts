@@ -72,6 +72,10 @@ export interface GmailServer {
    * minute per user" comes back.
    */
   quotaRefuseParts: number;
+  /** Refuse the next n batch parts with Gmail's "Too many concurrent requests" 429. */
+  concurrencyRefuseParts: number;
+  /** The part count of every batch request, in order. */
+  batchSizes: number[];
   /** Answer 401 to the next n Gmail calls (an expired token). */
   expireNext: number;
   watches: { topicName: string; labelIds?: string[]; labelFilterBehavior?: string }[];
@@ -261,6 +265,8 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     refreshes: 0,
     rateLimitNext: 0,
     quotaRefuseParts: 0,
+    concurrencyRefuseParts: 0,
+    batchSizes: [],
     expireNext: 0,
     watches: [],
     subscriptions: new Map(),
@@ -771,11 +777,21 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
       const boundary = /boundary=([^;]+)/.exec(headers.get("content-type") ?? "")?.[1] ?? "";
       const text = String(init?.body ?? "");
       const responses: string[] = [];
+      server.batchSizes.push(
+        text.split(`--${boundary}`).filter((p) => /^(GET|POST) \S+ HTTP\/1\.1/m.test(p)).length,
+      );
       for (const part of text.split(`--${boundary}`)) {
         const request = /^(GET|POST) (\S+) HTTP\/1\.1/m.exec(part);
         if (!request) continue;
         const id = /Content-ID:\s*<([^>]+)>/i.exec(part)?.[1] ?? "";
         const inner = new URL(`https://gmail.googleapis.com${request[2]}`);
+        if (server.concurrencyRefuseParts > 0 && /\/messages\/[^/]+$/.test(inner.pathname)) {
+          server.concurrencyRefuseParts -= 1;
+          responses.push(
+            `--batch_out\r\nContent-Type: application/http\r\nContent-ID: <response-${id}>\r\n\r\nHTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ error: { code: 429, message: "Too many concurrent requests for user.", errors: [{ message: "Too many concurrent requests for user.", domain: "global", reason: "rateLimitExceeded" }], status: "RESOURCE_EXHAUSTED" } })}\r\n`,
+          );
+          continue;
+        }
         if (server.quotaRefuseParts > 0 && /\/messages\/[^/]+$/.test(inner.pathname)) {
           server.quotaRefuseParts -= 1;
           responses.push(
