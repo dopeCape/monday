@@ -5,7 +5,15 @@
 
 import type { AgentEvent, Settings, ToolCall } from "@monday/shared";
 
-export type TranscriptEvent = Exclude<AgentEvent, { kind: "delta" } | { kind: "done" }>;
+/** Where the user stopped a turn: the thread shows a Stopped line. Local to the composer. */
+export interface StoppedEvent {
+  kind: "stopped";
+  id: string;
+}
+
+export type TranscriptEvent =
+  | Exclude<AgentEvent, { kind: "delta" } | { kind: "done" }>
+  | StoppedEvent;
 
 function replaceAt<T>(list: readonly T[], at: number, item: T): T[] {
   const out = [...list];
@@ -16,7 +24,7 @@ function replaceAt<T>(list: readonly T[], at: number, item: T): T[] {
 /** Folds one streamed event into the transcript. */
 export function applyEvent(
   events: readonly TranscriptEvent[],
-  event: AgentEvent,
+  event: AgentEvent | StoppedEvent,
 ): TranscriptEvent[] {
   switch (event.kind) {
     case "done":

@@ -207,6 +207,8 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         },
       });
     } catch (error) {
+      // A request the caller stopped (the composer's Stop) says nothing about the Server.
+      if (init.signal?.aborted) throw error;
       options.onUnreachable?.(t);
       throw new ApiError(0, error instanceof Error ? error.message : String(error));
     }
@@ -738,16 +740,21 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         request<{ session: SessionSummary; events: AgentEvent[] }>(
           `/sessions/${encodeURIComponent(sessionId)}`,
         ),
-      /** Sends a turn and yields its events as they stream; resolves when the turn ends or pauses. */
+      /**
+       * Sends a turn and yields its events as they stream; resolves when the turn
+       * ends or pauses. The signal stops reading (the composer's Stop).
+       */
       turn: async (
         sessionId: Id,
         text: string,
         context: TurnContext,
         onEvent: (event: AgentEvent) => void,
+        signal?: AbortSignal,
       ) => {
         const res = await raw(`/sessions/${encodeURIComponent(sessionId)}/turns`, {
           ...json("POST", { text, context }),
           headers: { "content-type": "application/json" },
+          ...(signal ? { signal } : {}),
         });
         await readEvents(res, onEvent);
       },
@@ -757,12 +764,14 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         decision: ApprovalDecision,
         context: TurnContext,
         onEvent: (event: AgentEvent) => void,
+        signal?: AbortSignal,
       ) => {
         const res = await raw(
           `/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(activityId)}`,
           {
             ...json("POST", { decision, context }),
             headers: { "content-type": "application/json" },
+            ...(signal ? { signal } : {}),
           },
         );
         await readEvents(res, onEvent);

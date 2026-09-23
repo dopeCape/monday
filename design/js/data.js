@@ -304,7 +304,7 @@ export const agentThread = [
   { u: "find everything from aoife about the take-home and set up a call thursday 3pm" },
   { a: [
     { p: "Found 3 messages from Aoife Brennan about the take-home." },
-    { tool: { i: "ph-magnifying-glass", t: "Searched mail", d: "from:aoife \"take-home\" · 1,204 messages scanned", st: "ok", stt: "3 results" } },
+    { tool: { i: "ph-magnifying-glass", t: "Searched mail", d: "from:aoife \"take-home\" · 1,204 messages scanned", st: "ok", stt: "3 results", step: true } },
     { results: [
       { b: "Re: Senior Rust engineer role, take-home submitted", s: "Attached the repo link and a short write-up", t: "09:41" },
       { b: "Re: Senior Rust engineer role", s: "Thanks for sending the brief. I will have it back", t: "Mon" },

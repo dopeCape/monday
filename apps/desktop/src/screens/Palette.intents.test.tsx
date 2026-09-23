@@ -164,7 +164,7 @@ describe("typed sentences in the palette", () => {
     expect(card?.querySelector(".ev-who")?.textContent).toBe("Aoife Brennan");
     expect(card?.querySelector(".st")?.textContent).toContain("Needs approval");
     expect(document.querySelectorAll(".agent-thread .u")).toHaveLength(0);
-    expect(document.querySelector<HTMLInputElement>("input[name=ask]")?.value).toBe("");
+    expect(document.querySelector<HTMLTextAreaElement>("[name=ask]")?.value).toBe("");
     expect(calendar.events()).toHaveLength(0);
     // Approve: the Event goes on the calendar through the seam, with Aoife as an attendee; the card says Applied.
     const approve = [...(card?.querySelectorAll<HTMLButtonElement>(".acts button") ?? [])].find(

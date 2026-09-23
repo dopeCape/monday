@@ -3,6 +3,7 @@
 import type { Layout, Thread, ToolCall } from "@monday/shared";
 import {
   CaretDownIcon,
+  CaretRightIcon,
   CheckIcon,
   CircleNotchIcon,
   ClockCounterClockwiseIcon,
@@ -83,6 +84,53 @@ export function ToolCard({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------ AgentSteps ------------------------------ */
+
+export interface AgentStepsProps {
+  open: boolean;
+  onToggle?: (() => void) | undefined;
+  /** "Working" while the turn runs, then what the steps did: "Searched mail, Read thread". */
+  label: string;
+  /** "3 steps". */
+  count?: string | undefined;
+  /** The steps are still running: a spinner and a shimmer on the label. */
+  active?: boolean | undefined;
+  /** The step rows, compact ToolCards. */
+  children?: ReactNode | undefined;
+  className?: string | undefined;
+}
+
+/**
+ * A turn's read-only steps as one line that folds: open while the Agent works,
+ * folded to a summary once the answer starts. The rows stay mounted when folded,
+ * so the height animates and a reopened group keeps its place.
+ */
+export function AgentSteps({
+  open,
+  onToggle,
+  label,
+  count,
+  active,
+  children,
+  className,
+}: AgentStepsProps) {
+  return (
+    <div
+      className={cx("agent-steps", active && "active", className)}
+      data-state={open ? "open" : "closed"}
+    >
+      <button type="button" className="head" aria-expanded={open} onClick={onToggle}>
+        <Icon icon={active ? CircleNotchIcon : CaretRightIcon} className="caret" />
+        <span className="label">{label}</span>
+        {count ? <span className="n">{count}</span> : null}
+      </button>
+      <div className="body" inert={!open}>
+        <div className="rows">{children}</div>
+      </div>
     </div>
   );
 }

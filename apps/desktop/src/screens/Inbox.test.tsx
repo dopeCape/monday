@@ -306,7 +306,7 @@ describe("Inbox rendering", () => {
 
   test("offline changes the agent bar's line", async () => {
     await mount({ online: false });
-    expect(document.querySelector("input[name=ask]")?.getAttribute("placeholder")).toBe(
+    expect(document.querySelector("[name=ask]")?.getAttribute("placeholder")).toBe(
       "Offline, hosted work paused",
     );
   });
@@ -463,7 +463,7 @@ describe("keyboard triage", () => {
   test("keys are ignored while typing in an input", async () => {
     const { inbox, calls } = spy(fixtureInbox());
     await mount({ inbox });
-    const input = document.querySelector<HTMLInputElement>("input[name=ask]");
+    const input = document.querySelector<HTMLTextAreaElement>("[name=ask]");
     expect(input).not.toBeNull();
     await act(async () => input?.focus());
     await press("e", {}, input ?? window);
@@ -810,7 +810,7 @@ describe("the reader", () => {
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".reader .brief.chips .chip")?.click(),
     );
-    expect(document.querySelector<HTMLInputElement>(".agent-bar input")?.value).toBe(
+    expect(document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.value).toBe(
       "Set up a call with the sender of this thread",
     );
     // The Brief arrives: its own chips replace the judged ones.
