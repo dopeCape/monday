@@ -114,6 +114,110 @@ export interface OrganizeSeam {
   countSection(workspaceId: Id, rule: SectionRuleSetting, recent?: number): Promise<SectionCount>;
   /** Drops every cached answer for a rule (Undo of an organize pass, or a deleted rule). */
   forget(workspaceId: Id, ruleId: string): Promise<number>;
+  /**
+   * Everything sectionOf reads for these Threads under the current rules,
+   * with the cached answers to each judge statement as they would decide
+   * now, and the state a judge statement is asked with. The newest Threads
+   * when `threadIds` is a count. For explaining and testing (tune.ts).
+   */
+  sectionContext(workspaceId: Id, threadIds: readonly Id[] | number): Promise<SectionContext>;
+  /**
+   * Stores the owner's own answer to a Section's judge statement for one
+   * Thread (an Example), under the key the statement is asked with now.
+   */
+  pinAnswer(workspaceId: Id, threadId: Id, ruleId: string, holds: boolean): Promise<void>;
+}
+
+/** One Thread the user said belongs in a judged Section, or does not (the Setting sections.examples). */
+export interface SectionExample {
+  threadId: Id;
+  holds: boolean;
+  /** The newest sender's address. */
+  from: string | null;
+  subject: string;
+  at: string;
+}
+
+/** What sectionOf reads for a set of Threads, as the stream would decide now. */
+export interface SectionContext {
+  threads: Thread[];
+  facts: Map<Id, SectionFacts>;
+  rules: SectionRuleSetting[];
+  order: string[];
+  threshold: number;
+  /** The question each judged rule is asked with now, by rule id. */
+  questions: Map<string, { key: string; question: NoulQuestion }>;
+  examples: Record<string, SectionExample[]>;
+  examplesMax: number;
+  /** The state one Noul request reads for a Thread, as the judged Sections ask it. */
+  state(thread: Thread): Promise<JsonValue>;
+}
+
+const EXAMPLES_NOTE =
+  "The owner's own past decisions about similar threads; they outrank the statement.";
+
+/** A short stable fingerprint, so the cache key changes when the Examples do. */
+function fingerprint(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
+/**
+ * A Section's judge statement as the Judge is asked it: the statement alone,
+ * or with the owner's Examples (newest first, up to `max` of each answer)
+ * as past decisions, the way the routing Choice carries a Group's. The key
+ * is what the cache stores beside the answer: the statement, plus a
+ * fingerprint of the Examples when there are any, so new Examples ask again.
+ */
+export function sectionQuestion(
+  statement: string,
+  examples: readonly SectionExample[] | undefined,
+  max: number,
+): { key: string; question: NoulQuestion } {
+  const sorted = [...(examples ?? [])].sort((a, b) => b.at.localeCompare(a.at));
+  const used = [
+    ...sorted.filter((e) => e.holds).slice(0, max),
+    ...sorted.filter((e) => !e.holds).slice(0, max),
+  ];
+  if (used.length === 0)
+    return { key: statement, question: { type: "noul", instructions: statement } };
+  const shown: JsonValue[] = used.map((e) => ({
+    holds: e.holds,
+    from: e.from,
+    subject: e.subject,
+  }));
+  return {
+    key: `${statement}\n[examples ${fingerprint(JSON.stringify(shown))}]`,
+    question: {
+      type: "noul",
+      instructions: { statement, examples_note: EXAMPLES_NOTE, examples: shown },
+    },
+  };
+}
+
+/** The state one judge-statement request reads: headers, never a body. */
+export function sectionJudgeState(
+  thread: Thread,
+  subject: string,
+  lastSender: string | null,
+  groupNames: Record<string, string>,
+): JsonValue {
+  return {
+    subject,
+    from: lastSender ?? thread.participants[0]?.email ?? "",
+    participants: thread.participants.map((p) => (p.name ? `${p.name} <${p.email}>` : p.email)),
+    messages: thread.messageCount,
+    unread: thread.unread,
+    hasAttachments: thread.hasAttachments,
+    listMail: thread.bulk ?? false,
+    lastActivity: thread.lastActivity,
+    group: thread.group ? (groupNames[thread.group] ?? thread.group) : null,
+    subgroup: thread.subgroup ? (groupNames[thread.subgroup] ?? thread.subgroup) : null,
+  };
 }
 
 export interface OrganizeOptions {
@@ -133,13 +237,26 @@ const SETTING_KEYS = [
   "actions.custom",
   "actions.organize_recent",
   "actions.organize_preview_above",
+  "sections.examples",
+  "routing.examples_in_prompt",
 ] as const;
 
-/** A judged rule as the Noul is built: the Section's or the action's statement. */
+/**
+ * A judged rule as the Noul is built: the Section's or the action's
+ * statement. `statement` is the cache key (sectionQuestion); `question` is
+ * what the Judge is asked.
+ */
 interface JudgedRule {
   id: string;
   statement: string;
+  question: NoulQuestion;
 }
+
+const plainRule = (id: string, statement: string): JudgedRule => ({
+  id,
+  statement,
+  question: { type: "noul", instructions: statement },
+});
 
 export function createOrganize(options: OrganizeOptions): OrganizeSeam {
   const { db, mailstore, runtime, routing } = options;
@@ -243,19 +360,21 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
     } catch (error) {
       if (!(error instanceof LockedError) && !(error instanceof NotFoundError)) throw error;
     }
-    return {
-      subject,
-      from: lastSender ?? thread.participants[0]?.email ?? "",
-      participants: thread.participants.map((p) => (p.name ? `${p.name} <${p.email}>` : p.email)),
-      messages: thread.messageCount,
-      unread: thread.unread,
-      hasAttachments: thread.hasAttachments,
-      listMail: thread.bulk ?? false,
-      lastActivity: thread.lastActivity,
-      group: thread.group ? (groupNames[thread.group] ?? thread.group) : null,
-      subgroup: thread.subgroup ? (groupNames[thread.subgroup] ?? thread.subgroup) : null,
-    };
+    return sectionJudgeState(thread, subject, lastSender, groupNames);
   };
+
+  /** The judged Sections as they are asked now: each statement with its Examples. */
+  const judgedSectionsOf = (s: Awaited<ReturnType<typeof readSettings>>): JudgedRule[] =>
+    s["sections.rules"].flatMap((r) => {
+      const statement = r.judge?.trim();
+      if (!statement) return [];
+      const asked = sectionQuestion(
+        statement,
+        s["sections.examples"][r.id],
+        s["routing.examples_in_prompt"],
+      );
+      return [{ id: r.id, statement: asked.key, question: asked.question }];
+    });
 
   /** Asks the Judge for `rules` over these Threads and stores every answer. Returns what it learned. */
   const ask = async (
@@ -270,7 +389,7 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       const rules = need.get(thread.id);
       if (!rules?.length) continue;
       const questions: Record<string, NoulQuestion> = Object.fromEntries(
-        rules.map((r) => [r.id, { type: "noul", instructions: r.statement }]),
+        rules.map((r) => [r.id, r.question]),
       );
       const state = await stateOf(thread, senders.get(thread.id) ?? null, groupNames);
       const result = await runtime.judge("judge.section", state, questions, { workspaceId });
@@ -381,11 +500,9 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       const rules = s["sections.rules"];
       const order = s["sections.order"];
       const threshold = s["sections.judge_threshold"];
-      const judgedSections: JudgedRule[] = rules.flatMap((r) =>
-        r.judge?.trim() ? [{ id: r.id, statement: r.judge.trim() }] : [],
-      );
+      const judgedSections = judgedSectionsOf(s);
       const judgedActions: JudgedRule[] = s["actions.custom"].flatMap((a) =>
-        a.on.judge?.trim() ? [{ id: a.id, statement: a.on.judge.trim() }] : [],
+        a.on.judge?.trim() ? [plainRule(a.id, a.on.judge.trim())] : [],
       );
       const all = [...judgedSections, ...judgedActions];
       if (all.length === 0) return [];
@@ -449,7 +566,15 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
         arrivalJudgments(threads.map((t) => t.id)),
       ]);
       const statement = rule.judge?.trim() ?? "";
-      const judgedRule: JudgedRule[] = statement ? [{ id: rule.id, statement }] : [];
+      const judgedRule: JudgedRule[] = [];
+      if (statement) {
+        const asked = sectionQuestion(
+          statement,
+          s["sections.examples"][rule.id],
+          s["routing.examples_in_prompt"],
+        );
+        judgedRule.push({ id: rule.id, statement: asked.key, question: asked.question });
+      }
       const known = await cached(
         workspaceId,
         threads.map((t) => t.id),
@@ -498,6 +623,67 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
         )
         .returning({ threadId: sectionJudgments.threadId });
       return rows.length;
+    },
+
+    async sectionContext(workspaceId, threadIds) {
+      const s = await readSettings();
+      const threshold = s["sections.judge_threshold"];
+      const threads =
+        typeof threadIds === "number"
+          ? await recentThreads(workspaceId, threadIds)
+          : await threadsById(workspaceId, threadIds);
+      const ids = threads.map((t) => t.id);
+      const judged = judgedSectionsOf(s);
+      const [senders, owner, groupNames, arrival, known] = await Promise.all([
+        lastSenders(ids),
+        ownerOf(workspaceId),
+        groupNamesOf(workspaceId),
+        arrivalJudgments(ids),
+        cached(workspaceId, ids, judged),
+      ]);
+      const facts = new Map<Id, SectionFacts>();
+      for (const t of threads) {
+        facts.set(
+          t.id,
+          factsFor(t, senders, owner, groupNames, known.get(t.id), threshold, arrival),
+        );
+      }
+      return {
+        threads,
+        facts,
+        rules: s["sections.rules"],
+        order: s["sections.order"],
+        threshold,
+        questions: new Map(judged.map((r) => [r.id, { key: r.statement, question: r.question }])),
+        examples: s["sections.examples"],
+        examplesMax: s["routing.examples_in_prompt"],
+        state: (thread) => stateOf(thread, senders.get(thread.id) ?? null, groupNames),
+      };
+    },
+
+    async pinAnswer(workspaceId, threadId, ruleId, holds) {
+      const s = await readSettings();
+      const rule = s["sections.rules"].find((r) => r.id === ruleId);
+      const statement = rule?.judge?.trim();
+      if (!statement) return;
+      const { key } = sectionQuestion(
+        statement,
+        s["sections.examples"][ruleId],
+        s["routing.examples_in_prompt"],
+      );
+      const values = {
+        statement: key,
+        probability: holds ? 1 : 0,
+        model: "owner",
+        judgedAt: now(),
+      };
+      await db
+        .insert(sectionJudgments)
+        .values({ workspaceId, threadId, ruleId, ...values })
+        .onConflictDoUpdate({
+          target: [sectionJudgments.threadId, sectionJudgments.ruleId],
+          set: values,
+        });
     },
   };
   return seam;

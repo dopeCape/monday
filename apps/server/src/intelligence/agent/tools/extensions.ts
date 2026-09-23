@@ -20,6 +20,7 @@ import type { McpCallResult } from "../../../workflows/mcp.ts";
 import type { GuardSeam } from "../../guard.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
 import type { OrganizeSeam } from "../../organize.ts";
+import type { TuneSeam } from "../../tune.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
@@ -87,6 +88,8 @@ export interface ToolExtensions {
   guard?: GuardSeam | undefined;
   /** Sections, Groups and custom actions from a sentence (slice 26). */
   organize?: OrganizeSeam | undefined;
+  /** Explaining, listing, testing and changing the judgments behind routing and Sections. */
+  tune?: TuneSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });

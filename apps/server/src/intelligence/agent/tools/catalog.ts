@@ -22,6 +22,7 @@ import { z } from "zod";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
 import { ORGANIZE_TOOLS } from "./organize.ts";
+import { TUNE_TOOLS } from "./tune.ts";
 
 export interface ToolSettings {
   /** A reversible batch above this many Threads previews first. */
@@ -43,6 +44,8 @@ export interface ToolContext {
   undoActivity(id: string): Promise<{ text: string }>;
   /** The integrations, MCP servers and Workflows seams, when this host has them (slice 16). */
   extensions?: ToolExtensions | undefined;
+  /** The Session the call is made in, when there is one: what a tool remembers per conversation. */
+  sessionId?: string | null | undefined;
 }
 
 export interface Applied {
@@ -704,6 +707,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   ...EXTENSION_TOOLS,
   ...ONBOARDING_TOOLS,
   ...ORGANIZE_TOOLS,
+  ...TUNE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {

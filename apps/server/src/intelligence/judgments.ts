@@ -123,6 +123,14 @@ export interface Judgments {
   threadReady(workspaceId: Id, threadId: Id): Promise<void>;
   /** Removes a Thread's Judgments and tells the feed; false when there were none. */
   remove(threadId: Id): Promise<boolean>;
+  /**
+   * What the arrival request reads about a Thread, exactly as judgeThread
+   * builds it, so a test of a reworded question asks with the same state.
+   * Decrypts, so it needs the root key.
+   */
+  facts(threadId: Id): Promise<JudgmentFacts>;
+  /** The questions and the snippet length as the Settings hold them now. */
+  settings(): Promise<JudgmentSettings>;
   registerSteps(jobs: Jobs): void;
 }
 
@@ -396,6 +404,12 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
         log(`judge hook ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
+
+    async facts(threadId) {
+      return (await readFacts(threadId)).facts;
+    },
+
+    settings: () => options.settings(),
 
     async remove(threadId) {
       const removed = await db

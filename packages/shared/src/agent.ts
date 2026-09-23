@@ -94,6 +94,15 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   create_group: "reversible",
   update_group: "reversible",
   organize_existing: "reversible",
+  // Tuning the judgments behind routing and Sections from the user's feedback
+  // (ADR 0012): explaining and listing read what is stored, a test re-asks the
+  // judge on recent Threads without changing anything, and an update or an
+  // Example is reversible; Undo puts the previous text, threshold or Example back.
+  explain_placement: "read",
+  list_judgments: "read",
+  test_judgment: "read",
+  update_judgment: "reversible",
+  add_example: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -183,7 +192,12 @@ export type UndoRecord =
    * Existing mail organized into a new Group or Section (slice 26): the moves
    * to put back, and the Section whose cached judgments Undo forgets.
    */
-  | { kind: "organize"; intents: (IntentArgs & { threadId: Id })[]; sectionId: string | null };
+  | { kind: "organize"; intents: (IntentArgs & { threadId: Id })[]; sectionId: string | null }
+  /**
+   * An Example the Agent recorded for a Group (add_example): Undo removes it,
+   * or puts back the Example the Thread already was for that Group.
+   */
+  | { kind: "example"; threadId: Id; groupId: Id; previous: { positive: boolean } | null };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

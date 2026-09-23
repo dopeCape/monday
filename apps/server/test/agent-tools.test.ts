@@ -151,6 +151,11 @@ describe("the tool catalog", () => {
       create_group: "reversible",
       update_group: "reversible",
       organize_existing: "reversible",
+      explain_placement: "read",
+      list_judgments: "read",
+      test_judgment: "read",
+      update_judgment: "reversible",
+      add_example: "reversible",
     });
     // The shared list the Settings screens render the Permissions tiers from matches the catalog.
     expect(tiers).toEqual(TOOL_TIERS);

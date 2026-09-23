@@ -134,6 +134,18 @@ export interface Scored {
 
 export interface RoutingCallOptions {
   jobId?: string | null;
+  /**
+   * A proposed wording or threshold in place of the Settings, for a test of
+   * a change before it is made (tune.ts). Only `classify` reads it; nothing
+   * scored with an override is ever applied.
+   */
+  override?: RoutingOverride | undefined;
+}
+
+/** What a judgment test may put in place of the routing Settings. */
+export interface RoutingOverride {
+  thresholds?: Partial<Thresholds> | undefined;
+  judge?: Partial<RoutingSettings["judge"]> | undefined;
 }
 
 export interface Routing {
@@ -174,6 +186,22 @@ export interface Routing {
   ): Promise<RoutingPreview>;
   /** Applies moves a preview proposed. */
   apply(workspaceId: Id, moves: readonly ProposedMove[]): Promise<RoutingApplied>;
+  /**
+   * Records a Thread as an Example for a Group, the way a correction does,
+   * without moving it or revising the Group's criteria. Returns what the
+   * Thread was for that Group before, so Undo can put it back.
+   */
+  recordExample(
+    threadId: Id,
+    groupId: GroupId,
+    positive: boolean,
+  ): Promise<{ previous: { positive: boolean } | null }>;
+  /** Removes an Example, or restores the one it replaced; false when the Group or Thread is gone. */
+  restoreExample(
+    threadId: Id,
+    groupId: GroupId,
+    previous: { positive: boolean } | null,
+  ): Promise<boolean>;
   registerSteps(jobs: Jobs): void;
 }
 
@@ -934,7 +962,14 @@ export function createRouting(options: RoutingOptions): Routing {
 
     async classify(threadId, opts = {}) {
       const row = await requireThread(threadId);
-      const settings = await options.settings();
+      const stored = await options.settings();
+      const settings: RoutingSettings = opts.override
+        ? {
+            ...stored,
+            thresholds: { ...stored.thresholds, ...opts.override.thresholds },
+            judge: { ...stored.judge, ...opts.override.judge },
+          }
+        : stored;
       const all = await groupTexts(row.workspaceId);
       const facts = await readFacts(row);
       return scoreThread(row, facts, all, settings, opts.jobId ?? null);
@@ -1154,6 +1189,32 @@ export function createRouting(options: RoutingOptions): Routing {
         else moved += 1;
       }
       return { moved, asked };
+    },
+
+    async recordExample(threadId, groupId, positive) {
+      const row = await requireThread(threadId);
+      const group = await requireGroup(groupId);
+      if (group.workspaceId !== row.workspaceId) throw new NotFoundError("group", groupId);
+      const existing = await db.query.examples.findFirst({
+        where: and(eq(examples.threadId, threadId), eq(examples.groupId, groupId)),
+        columns: { positive: true },
+      });
+      await upsertExample(row, groupId, positive, await newestSender(threadId));
+      return { previous: existing ? { positive: existing.positive } : null };
+    },
+
+    async restoreExample(threadId, groupId, previous) {
+      const group = await db.query.groups.findFirst({ where: eq(groups.id, groupId) });
+      const row = await db.query.threads.findFirst({ where: eq(threads.id, threadId) });
+      if (!group || !row) return false;
+      if (!previous) {
+        await db
+          .delete(examples)
+          .where(and(eq(examples.threadId, threadId), eq(examples.groupId, groupId)));
+        return true;
+      }
+      await upsertExample(row, groupId, previous.positive, await newestSender(threadId));
+      return true;
     },
 
     registerSteps(target) {
