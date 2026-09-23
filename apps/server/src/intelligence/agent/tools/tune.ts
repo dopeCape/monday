@@ -87,9 +87,14 @@ function explanationText(e: PlacementExplanation): string {
       ...(s.judge ? { judge: s.judge } : {}),
     })),
   };
-  return [`"${e.thread.subject}" (${e.thread.from ?? "?"})`, ...e.why, JSON.stringify(facts)].join(
-    "\n",
-  );
+  // The first line is the one a card shows alone: where it is and why, in brief.
+  const where =
+    [e.group?.name, e.section?.name].filter(Boolean).join(", ") || "no Group or Section";
+  return [
+    `"${e.thread.subject}" (${e.thread.from ?? "?"}) is in ${where}. ${e.why[0] ?? ""}`.trim(),
+    ...e.why.slice(1),
+    JSON.stringify(facts),
+  ].join("\n");
 }
 
 const explainPlacement: ToolDefinition<{ thread_id: string }> = {
@@ -402,10 +407,10 @@ const updateJudgment: ToolDefinition<ProposalInput> = {
         }
         return {
           text: [
-            `${entry.label} changed.`,
+            // The first line is the one a card shows alone.
+            `${entry.label} changed. ${tested ? tested.summary : `Not tested: ${untested ?? "no test ran"}`}`,
             `Before: ${sideText(planned.before)}`,
             `After: ${sideText(planned.after)}`,
-            tested ? tested.summary : `Not tested: ${untested ?? "no test ran"}`,
             followUp ?? "",
           ]
             .filter(Boolean)

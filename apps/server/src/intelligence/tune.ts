@@ -248,7 +248,7 @@ function staticEntries(): JudgmentEntry[] {
     }),
     entry("palette", "intent.act_above", "threshold", { untestable: NOT_ON_THREADS.palette }),
     entry("palette", "intent.ask_below", "threshold", { untestable: NOT_ON_THREADS.palette }),
-    entry("guard", "guard.question", "statement", {
+    entry("guard", "guard.question", "question", {
       question: "noul",
       threshold: "guard.threshold",
       untestable: NOT_ON_THREADS.guard,
