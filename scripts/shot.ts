@@ -55,6 +55,13 @@ const states: Array<{ name: string; app: string; mock: string }> = [
     app: "/?screen=onboarding&step=chat",
     mock: "/app.html?chrome=0#/onboarding/chat",
   },
+  // The first sync screen after connecting an Account: syncing, and stopped on an error.
+  { name: "first-sync", app: "/?screen=first-sync", mock: "/app.html?chrome=0#/first-sync" },
+  {
+    name: "first-sync-error",
+    app: "/?screen=first-sync&state=error",
+    mock: "/app.html?chrome=0#/first-sync/error",
+  },
 ];
 
 /**

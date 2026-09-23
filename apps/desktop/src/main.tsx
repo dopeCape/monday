@@ -7,6 +7,8 @@ import type { AccountView } from "./platform/api.ts";
 import { platform } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
+import { FirstSyncGate } from "./screens/FirstSync.tsx";
+import { FirstSyncFixture } from "./screens/first-sync/fixture.tsx";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
@@ -199,13 +201,17 @@ function Root() {
  * fixture's on the browser dev server (no Server there). In the app nothing
  * renders until the Sidecar (or the Cloud) answers, so the fixture Workspace
  * never opens a Cache there. With a Server and no Account yet, the Accounts
- * screen is the whole app until one is connected.
+ * screen is the whole app until one is connected. Once one is, the first sync
+ * screen stands in for the app until the Inbox is fetched (FirstSync.tsx);
+ * the Accounts keep being asked for meanwhile, so an Account removed from
+ * that screen's Settings takes the gate back to the Accounts screen.
  */
 function WorkspaceGate() {
   const shell = useShell();
   const [accounts, setAccounts] = useState<AccountView[] | null>(null);
   const server = shell.server;
   const pollMs = shell.settings["server.first_run_poll_seconds"] * 1000;
+  const appOpen = useRef(false);
   useEffect(() => {
     if (!server) return;
     let stopped = false;
@@ -216,7 +222,7 @@ function WorkspaceGate() {
         .then((r) => {
           if (stopped) return;
           setAccounts(r.accounts);
-          if (r.accounts.length === 0) timer = setTimeout(tick, pollMs);
+          if (r.accounts.length === 0 || !appOpen.current) timer = setTimeout(tick, pollMs);
         })
         .catch(() => {
           if (!stopped) timer = setTimeout(tick, pollMs);
@@ -229,11 +235,17 @@ function WorkspaceGate() {
     };
   }, [server, shell.api, pollMs]);
 
+  const first = accounts?.[0] ?? null;
+  const firstId = first?.id;
+  const firstWorkspace = first?.workspaceId;
+  const firstAddress = first?.address;
+  // Keyed on the values, so a poll that answers the same Account keeps the same object.
   const current = useMemo<CurrentWorkspace | null>(() => {
     if (shell.host === "browser" && !server) return FIXTURE_WORKSPACE;
-    const first = accounts?.[0];
-    return first ? { id: first.workspaceId, accountId: first.id, address: first.address } : null;
-  }, [shell.host, server, accounts]);
+    return firstId && firstWorkspace && firstAddress !== undefined
+      ? { id: firstWorkspace, accountId: firstId, address: firstAddress }
+      : null;
+  }, [shell.host, server, firstId, firstWorkspace, firstAddress]);
 
   // In the app a Sidecar that reported a failure, or a Server that has not
   // answered within one reachability check, shows the Server section (which
@@ -251,6 +263,11 @@ function WorkspaceGate() {
 
   // The host is unknown, the Sidecar is still starting, or the Accounts have not answered.
   if (shell.host === null || (server && accounts === null)) return null;
+  // The dev server's first sync screen over fixture progress (no Server to read).
+  if (shell.host === "browser" && !server) {
+    const q = new URLSearchParams(location.search);
+    if (q.get("screen") === "first-sync") return <FirstSyncFixture state={q.get("state")} />;
+  }
   if (shell.host === "tauri" && !server) {
     if (!waited && !shell.sidecarError) return null;
     return (
@@ -280,12 +297,25 @@ function WorkspaceGate() {
       </div>
     );
   }
-  return (
+  const app = (
     <WorkspaceProvider value={current}>
       <StoreProvider workspaceId={current.id}>
         <Root />
       </StoreProvider>
     </WorkspaceProvider>
+  );
+  // The fixture Workspace has no Server to read a first sync from.
+  if (!first) return app;
+  return (
+    <FirstSyncGate
+      key={first.id}
+      account={{ id: first.id, address: first.address, provider: first.provider }}
+      onOpen={() => {
+        appOpen.current = true;
+      }}
+    >
+      {app}
+    </FirstSyncGate>
   );
 }
 

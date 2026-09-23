@@ -1,0 +1,342 @@
+// The first sync (docs/spec/onboarding.md, "First sync"): the screen right
+// after the first Account is connected, and on any launch where the current
+// Workspace's first sync has not finished. It stands in for the whole app:
+// the gate mounts nothing behind it, so there is no nav, palette, agent bar
+// or keymap to reach. It reads the Server's progress (the engine's mirror and
+// body_state, never a client guess) every `sync.first_run_poll_seconds`, and
+// once the phase `sync.first_run_wait` names is complete it steps aside with
+// one slow beat of the motion tokens (none with transitions off).
+//
+// An error shows the reason in plain words with the only two ways out: Retry
+// (clears the failure and syncs now) and Open settings (the Accounts section,
+// where the Account can be reconnected or removed, with a way back here).
+
+import type { FirstSyncProgress, Provider, Settings as SettingsValues } from "@monday/shared";
+import { firstSyncComplete } from "@monday/shared";
+import { Btn, cx, motionMs } from "@monday/ui";
+import {
+  ArrowLeftIcon,
+  EnvelopeSimpleIcon,
+  GoogleLogoIcon,
+  WarningCircleIcon,
+  WindowsLogoIcon,
+} from "@phosphor-icons/react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { ApiError } from "../platform/api.ts";
+import { useShell } from "../shell/Shell.tsx";
+import {
+  emptyTracker,
+  etaSettings,
+  fill,
+  formatEta,
+  type PhaseLine,
+  phaseLines,
+  steadyEta,
+  type Tracker,
+  track,
+} from "./first-sync/model.ts";
+import { Settings } from "./Settings.tsx";
+
+/* ------------------------------ The view ------------------------------ */
+
+export interface FirstSyncViewProps {
+  address: string;
+  provider: Provider;
+  lines: readonly PhaseLine[];
+  /** The time remaining, already worded; null hides it. */
+  eta: string | null;
+  /** The Provider is pacing for quota. */
+  pacing: boolean;
+  /** The reason the sync stopped, in plain words; null while it runs. */
+  error: string | null;
+  /** Retry was pressed and the Server has not answered yet. */
+  retrying?: boolean | undefined;
+  /** The wait is over and the screen is stepping aside. */
+  leaving?: boolean | undefined;
+  onRetry: () => void;
+  onSettings: () => void;
+  s: SettingsValues;
+}
+
+export function providerName(provider: Provider, s: SettingsValues): string {
+  return s[`strings.first_sync.provider.${provider}`];
+}
+
+function ProviderMark({ provider }: { provider: Provider }) {
+  const Glyph =
+    provider === "gmail"
+      ? GoogleLogoIcon
+      : provider === "graph"
+        ? WindowsLogoIcon
+        : EnvelopeSimpleIcon;
+  return (
+    <span className="lg" aria-hidden="true">
+      <Glyph />
+    </span>
+  );
+}
+
+function Line({ line }: { line: PhaseLine }) {
+  const pct = line.fraction === null ? null : Math.round(line.fraction * 1000) / 10;
+  return (
+    <div className="first-sync-line" data-phase={line.phase} data-state={line.state}>
+      <div className="first-sync-row">
+        <span className="first-sync-label">{line.label}</span>
+        <span className="first-sync-detail">{line.detail}</span>
+      </div>
+      <div
+        className={cx("first-sync-bar", pct === null && "unknown")}
+        role="progressbar"
+        aria-label={line.label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        {...(pct === null ? {} : { "aria-valuenow": pct })}
+      >
+        <span style={{ "--p": String(line.fraction ?? 0) } as CSSProperties} />
+      </div>
+    </div>
+  );
+}
+
+/** The screen itself, over what the gate read. The dev server renders it on fixtures. */
+export function FirstSyncView(props: FirstSyncViewProps) {
+  const { s } = props;
+  const failed = props.error !== null;
+  return (
+    <div
+      className="main page"
+      data-screen="first-sync"
+      data-state={failed ? "error" : props.pacing ? "pacing" : "syncing"}
+      data-leaving={props.leaving ? "true" : undefined}
+    >
+      <div className="first-sync">
+        <div className="first-sync-in">
+          <div className="first-sync-account">
+            <ProviderMark provider={props.provider} />
+            <div>
+              <b>{props.address}</b>
+              <span>{providerName(props.provider, s)}</span>
+            </div>
+          </div>
+          <h1>{s["strings.first_sync.title"]}</h1>
+          <p>{s["strings.first_sync.why"]}</p>
+          <div className="first-sync-lines">
+            {props.lines.map((line) => (
+              <Line key={line.phase} line={line} />
+            ))}
+          </div>
+          {failed ? (
+            <div className="first-sync-error" role="alert">
+              <WarningCircleIcon />
+              <div>
+                <b>{s["strings.first_sync.error_title"]}</b>
+                <span>{props.error}</span>
+              </div>
+            </div>
+          ) : props.pacing ? (
+            <p className="first-sync-note" data-note="pacing">
+              {fill(s["strings.first_sync.pacing"], {
+                provider: providerName(props.provider, s),
+              })}
+            </p>
+          ) : props.eta ? (
+            <p className="first-sync-note" data-note="eta">
+              {props.eta}
+            </p>
+          ) : null}
+          {failed ? (
+            <div className="actions">
+              <span className="sp" />
+              <Btn onClick={props.onSettings}>{s["strings.first_sync.settings"]}</Btn>
+              {/* The screen's own controls take focus; there is nothing else to reach. */}
+              <Btn primary autoFocus disabled={props.retrying} onClick={props.onRetry}>
+                {s["strings.first_sync.retry"]}
+              </Btn>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ The gate ------------------------------ */
+
+export interface FirstSyncAccount {
+  id: string;
+  address: string;
+  provider: Provider;
+}
+
+/**
+ * Per Account, what the screen has shown, kept across remounts so a reopened
+ * screen never draws less than before and the rate keeps its history.
+ */
+const trackers = new Map<string, Tracker>();
+
+/** For tests: forget what every screen has shown. */
+export function resetFirstSyncMemory(): void {
+  trackers.clear();
+}
+
+function errorText(
+  progress: FirstSyncProgress | null,
+  unreachable: boolean,
+  s: SettingsValues,
+): string | null {
+  if (progress?.error) {
+    const vars = {
+      provider: providerName(progress.provider, s),
+      address: progress.address,
+      message: progress.error.message,
+    };
+    return fill(s[`strings.first_sync.error.${progress.error.kind}`], vars);
+  }
+  if (unreachable) return s["strings.first_sync.error.server"];
+  return null;
+}
+
+type Stage = "checking" | "waiting" | "leaving" | "open";
+
+export interface FirstSyncGateProps {
+  account: FirstSyncAccount;
+  /** The app. Not mounted at all until the wait is over. */
+  children: ReactNode;
+  /** Told once when the app opens. */
+  onOpen?: (() => void) | undefined;
+  /** The client clock for the rate; tests pass a fake one. */
+  now?: (() => number) | undefined;
+}
+
+export function FirstSyncGate({ account, children, onOpen, now = Date.now }: FirstSyncGateProps) {
+  const shell = useShell();
+  const s = shell.settings;
+  const wait = s["sync.first_run_wait"];
+  const pollMs = s["sync.first_run_poll_seconds"] * 1000;
+  const [stage, setStage] = useState<Stage>("checking");
+  const [progress, setProgress] = useState<FirstSyncProgress | null>(null);
+  const [tracker, setTracker] = useState<Tracker>(() => trackers.get(account.id) ?? emptyTracker());
+  const [unreachable, setUnreachable] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+  const settingsRef = useRef(s);
+  settingsRef.current = s;
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+  const nowRef = useRef(now);
+  nowRef.current = now;
+  const [tick, setTick] = useState(0);
+
+  const open = useCallback(() => {
+    setStage("open");
+    onOpenRef.current?.();
+  }, []);
+
+  const polling = stage === "checking" || stage === "waiting";
+  // One read of the Server, then the next after the Setting's interval.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `tick` asks for a read now (Retry)
+  useEffect(() => {
+    if (!polling) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const read = async () => {
+      try {
+        const r = await shell.api.accounts.sync(account.id);
+        if (stopped) return;
+        const p = r.progress;
+        setUnreachable(false);
+        setProgress(p);
+        const next = track(
+          trackers.get(account.id) ?? emptyTracker(),
+          p,
+          wait,
+          nowRef.current(),
+          etaSettings(settingsRef.current),
+        );
+        trackers.set(account.id, next);
+        setTracker(next);
+        if (p.error === null) setRetrying(false);
+        if (firstSyncComplete(p, wait)) {
+          if (stageRef.current === "checking") {
+            open();
+          } else {
+            setStage("leaving");
+          }
+          return;
+        }
+        setStage("waiting");
+      } catch (error) {
+        if (stopped) return;
+        // A Server without the route (or an Account it no longer has) never blocks the app.
+        if (error instanceof ApiError && error.status === 404) {
+          open();
+          return;
+        }
+        setUnreachable(true);
+        setRetrying(false);
+        setStage("waiting");
+      }
+      if (!stopped) timer = setTimeout(read, pollMs);
+    };
+    void read();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [shell.api, account.id, wait, pollMs, open, polling, tick]);
+
+  // The calm exit: one slow beat of the motion tokens, none with transitions off.
+  useEffect(() => {
+    if (stage !== "leaving") return;
+    const timer = setTimeout(open, motionMs("--t-slow"));
+    return () => clearTimeout(timer);
+  }, [stage, open]);
+
+  const retry = useCallback(() => {
+    setRetrying(true);
+    const again = () => setTick((n) => n + 1);
+    shell.api.accounts.retrySync(account.id).then(again, again);
+  }, [shell.api, account.id]);
+
+  if (stage === "open") return <>{children}</>;
+  if (stage === "checking") return null;
+  if (settingsOpen) {
+    return (
+      <div className="app first-sync-settings" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+        <div className="first-sync-back">
+          <Btn onClick={() => setSettingsOpen(false)}>
+            <ArrowLeftIcon /> {s["strings.first_sync.back"]}
+          </Btn>
+        </div>
+        <Settings initialSection="accounts" />
+      </div>
+    );
+  }
+  const eta = steadyEta(tracker, etaSettings(s));
+  return (
+    <div className="app" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+      <FirstSyncView
+        address={progress?.address ?? account.address}
+        provider={progress?.provider ?? account.provider}
+        lines={progress ? phaseLines(progress, tracker, wait, s) : []}
+        eta={eta === null ? null : formatEta(eta, s)}
+        pacing={progress?.pacing ?? false}
+        error={errorText(progress, unreachable, s)}
+        retrying={retrying}
+        leaving={stage === "leaving"}
+        onRetry={retry}
+        onSettings={() => setSettingsOpen(true)}
+        s={s}
+      />
+    </div>
+  );
+}

@@ -67,6 +67,7 @@ function fakeApi(script: Script = {}) {
   const api: Api = {
     ...base,
     accounts: {
+      ...base.accounts,
       list: async () => ({ accounts: [] }),
       discover: async (address) => {
         calls.push({ name: "discover", args: [address] });
