@@ -62,6 +62,7 @@ import {
 import { type AccountView, ApiError } from "../../platform/api.ts";
 import { useShell } from "../../shell/Shell.tsx";
 import { ActionsBlock, SectionsBlock, sectionNameOf } from "../routing/OrganizeBlocks.tsx";
+import { Disclosure } from "./disclosure.tsx";
 import {
   AskInput,
   type ControlProps,
@@ -69,6 +70,8 @@ import {
   DangerAction,
   type DetectedCli,
   EnumPicker,
+  foldBadges,
+  foldLines,
   messageOf,
   optionLabel,
   type PanelProps,
@@ -984,6 +987,40 @@ function HostedProviderControl({ k }: ControlProps) {
 }
 controlKinds["hosted-provider"] = HostedProviderControl;
 
+/** A provider group's name back to its provider: "OpenRouter" is openrouter. */
+function providerNamed(group: string): HostedProvider | undefined {
+  return HOSTED_PROVIDERS.find((p) => PROVIDER_LABELS[p] === group);
+}
+
+/**
+ * The "Other providers" row: which of the folded providers hold a key, so a
+ * user sees at a glance whether anything is set up there without opening it.
+ */
+foldLines["Other providers"] = function OtherProvidersLine({ groups }) {
+  const s = useShell().settings;
+  const { onDevice, shared } = useKeyState();
+  const withKey = groups.filter((g) => {
+    const p = providerNamed(g);
+    return p !== undefined && (onDevice.has(p) || shared.has(p));
+  });
+  return withKey.length === 0
+    ? fill(s["strings.settings.fold.providers_none"], { names: groups.join(", ") })
+    : fill(s["strings.settings.fold.providers_keys"], { names: withKey.join(", ") });
+};
+
+/** Each folded provider's row carries its key state. */
+foldBadges["Other providers"] = function ProviderBadge({ group }) {
+  const s = useShell().settings;
+  const { onDevice, shared } = useKeyState();
+  const p = providerNamed(group);
+  const has = p !== undefined && (onDevice.has(p) || shared.has(p));
+  return (
+    <Tag kind={has ? "ok" : undefined}>
+      {has ? s["strings.settings.keys.set"] : s["strings.settings.keys.none"]}
+    </Tag>
+  );
+};
+
 function providerOf(k: SettingKey): KeyProvider {
   return k.split(".").at(-1) as KeyProvider;
 }
@@ -1257,10 +1294,9 @@ function TaskModelControl({ k }: ControlProps) {
   const { value, change, error, shell } = useSetting(k);
   const s = shell.settings;
   const tm = value as TaskModel;
-  const task = k.split(".").at(-1) ?? k;
   const model = useDraft(tm.model, (text) => change({ ...tm, model: text.trim() }));
   return (
-    <Row k={k} label={task} hint={null} error={error}>
+    <Row k={k} hint={null} error={error}>
       <span className="task-row">
         <Seg<Role>
           options={ROLES.map((r) => ({ value: r, label: optionLabel(r) }))}
@@ -1406,76 +1442,96 @@ function BindingsControl({ k }: ControlProps) {
   return (
     <Row k={k} block error={error}>
       {AREAS.map((area) => (
-        <div className="bindings" key={area.key}>
-          <h4>{s[`strings.settings.shortcuts.${area.key}` as SettingKey] as string}</h4>
-          {area.actions.map((action) => {
-            const chord = map[action];
-            const clash = clashes.find((c) => c.chord === chord);
-            const others = clash?.actions.filter((a) => a !== action) ?? [];
-            const overridden = action in overrides;
-            return (
-              <div
-                className={`binding ${others.length > 0 ? "clash" : ""}`}
-                key={action}
-                data-action={action}
-              >
-                <div className="l">
-                  <b>{actionLabel(s, action)}</b>
-                  {others.length > 0 ? (
-                    <span>
-                      {fill(s["strings.settings.shortcuts.conflict"], {
-                        action: others.map((a) => actionLabel(s, a)).join(", "),
-                      })}
-                    </span>
-                  ) : null}
+        // Each area folds; the first, and any with a clash, start open.
+        <Disclosure
+          key={area.key}
+          id={`shortcuts/area/${area.key}`}
+          byDefault={
+            area.key === AREAS[0]?.key ||
+            area.actions.some((a) => clashes.some((c) => c.actions.includes(a)))
+          }
+          className="bindings-area"
+          summary={
+            <>
+              <span className="g-name">
+                {s[`strings.settings.shortcuts.${area.key}` as SettingKey] as string}
+              </span>
+              <span className="g-line">
+                {fill(s["strings.settings.shortcuts.count"], { n: area.actions.length })}
+              </span>
+            </>
+          }
+        >
+          <div className="bindings">
+            {area.actions.map((action) => {
+              const chord = map[action];
+              const clash = clashes.find((c) => c.chord === chord);
+              const others = clash?.actions.filter((a) => a !== action) ?? [];
+              const overridden = action in overrides;
+              return (
+                <div
+                  className={`binding ${others.length > 0 ? "clash" : ""}`}
+                  key={action}
+                  data-action={action}
+                >
+                  <div className="l">
+                    <b>{actionLabel(s, action)}</b>
+                    {others.length > 0 ? (
+                      <span>
+                        {fill(s["strings.settings.shortcuts.conflict"], {
+                          action: others.map((a) => actionLabel(s, a)).join(", "),
+                        })}
+                      </span>
+                    ) : null}
+                  </div>
+                  {editing?.action === action ? (
+                    <Input
+                      className="chord"
+                      value={editing.chord}
+                      autoFocus
+                      spellCheck={false}
+                      placeholder={s["strings.settings.shortcuts.press"]}
+                      onChange={(e) => setEditing({ action, chord: e.target.value })}
+                      onBlur={commit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") return commit();
+                        if (e.key === "Escape") return setEditing(null);
+                        if (e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") return;
+                        // The key pressed is the chord: no need to spell "mod+shift+k".
+                        if (["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
+                        e.preventDefault();
+                        setEditing({ action, chord: chordOf(e) });
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="chord-btn"
+                      onClick={() => setEditing({ action, chord })}
+                    >
+                      <Kbd>{chordLabel(chord, mac)}</Kbd>
+                    </button>
+                  )}
+                  {overridden ? (
+                    <Btn
+                      sm
+                      icon
+                      aria-label={s["strings.settings.reset"]}
+                      onClick={() => {
+                        const { [action]: _gone, ...rest } = overrides;
+                        void change(rest);
+                      }}
+                    >
+                      <XIcon />
+                    </Btn>
+                  ) : (
+                    <span className="reset-slot" />
+                  )}
                 </div>
-                {editing?.action === action ? (
-                  <Input
-                    className="chord"
-                    value={editing.chord}
-                    autoFocus
-                    spellCheck={false}
-                    placeholder={s["strings.settings.shortcuts.press"]}
-                    onChange={(e) => setEditing({ action, chord: e.target.value })}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") return commit();
-                      if (e.key === "Escape") return setEditing(null);
-                      if (e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") return;
-                      // The key pressed is the chord: no need to spell "mod+shift+k".
-                      if (["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
-                      e.preventDefault();
-                      setEditing({ action, chord: chordOf(e) });
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className="chord-btn"
-                    onClick={() => setEditing({ action, chord })}
-                  >
-                    <Kbd>{chordLabel(chord, mac)}</Kbd>
-                  </button>
-                )}
-                {overridden ? (
-                  <Btn
-                    sm
-                    icon
-                    aria-label={s["strings.settings.reset"]}
-                    onClick={() => {
-                      const { [action]: _gone, ...rest } = overrides;
-                      void change(rest);
-                    }}
-                  >
-                    <XIcon />
-                  </Btn>
-                ) : (
-                  <span className="reset-slot" />
-                )}
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </Disclosure>
       ))}
     </Row>
   );

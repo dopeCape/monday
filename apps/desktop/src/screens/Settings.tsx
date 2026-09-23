@@ -11,13 +11,16 @@
 // calls a model.
 
 import {
+  isSettingKey,
+  keyConditions,
   SETTING_SECTIONS,
   type SettingKey,
   type SettingSection,
   type Settings as SettingValues,
   settingsSchema,
+  unmetConditions,
 } from "@monday/shared";
-import { Btn, EmptyState, Kbd, Toast } from "@monday/ui";
+import { Btn, cx, EmptyState, Kbd, Toast } from "@monday/ui";
 import {
   AtIcon,
   CloudIcon,
@@ -49,13 +52,19 @@ import { type SetResult, useShell } from "../shell/Shell.tsx";
 
 import "./settings/controls.tsx";
 import "./settings/panels.tsx";
+import "./settings/Accounts.tsx";
+import "./settings/overview.tsx";
+import { DisclosureProvider, useSessionDisclosures } from "./settings/disclosure.tsx";
+import { HiddenLine } from "./settings/hidden.tsx";
+import { type IndexEntry, pageLayout, revealGroup, revealKey } from "./settings/layout.ts";
 import {
   Card,
   groupId,
   Highlighted,
   HighlightProvider,
   KeyStateProvider,
-  pageGroups,
+  pageIndex,
+  panelAt,
   panelLevel,
   panels,
   type RuntimeDetection,
@@ -63,6 +72,8 @@ import {
   SettingsPage,
   type SettingsScreen,
   SettingsScreenProvider,
+  searchOnly,
+  usePageLayout,
 } from "./settings/render.tsx";
 import type { ServerProps } from "./settings/Server.tsx";
 import {
@@ -232,11 +243,23 @@ export function Settings({
     [shell, s],
   );
 
-  const navigate = useCallback((to: SettingSection, at?: string) => {
-    setQuery("");
-    setSection(to);
-    setTarget((t) => ({ section: to, target: at, seq: (t?.seq ?? 0) + 1 }));
-  }, []);
+  // Opening a section at a card or group first opens the disclosures it sits in
+  // (a group folded to its heading, "More", the providers' fold, Advanced).
+  const disclosures = useSessionDisclosures();
+  const navigate = useCallback(
+    (to: SettingSection, at?: string) => {
+      setQuery("");
+      setSection(to);
+      if (at) {
+        const level = s["ai.level"];
+        const layout = pageLayout(to, level, s as never, panelAt(to, level));
+        const path = isSettingKey(at) ? revealKey(layout, to, at) : revealGroup(layout, to, at);
+        if (path) disclosures.open(path);
+      }
+      setTarget((t) => ({ section: to, target: at, seq: (t?.seq ?? 0) + 1 }));
+    },
+    [s, disclosures],
+  );
 
   const screen = useMemo<SettingsScreen>(
     () => ({
@@ -341,103 +364,105 @@ export function Settings({
   }, [target, section, query, flashMs]);
 
   const expire = useCallback(() => setToast(null), []);
-  const level = s["ai.level"];
-  const groups = useMemo(() => pageGroups(section, level), [section, level]);
+  const layout = usePageLayout(section);
+  const index = useMemo(() => pageIndex(layout), [layout]);
   const searching = queryWords(query).length > 0;
 
   return (
     <SettingsScreenProvider value={screen}>
-      <KeyStateProvider>
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: the undo and search chords are page-level shortcuts */}
-        <div className="main page" onKeyDown={onKeyDown}>
-          <div className="settings">
-            <nav className="settings-nav">
-              <h4>{s["strings.settings.title"]}</h4>
-              {SETTING_SECTIONS.map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  className={`nav-item ${section === n && !searching ? "on" : ""}`}
-                  onClick={() => navigate(n)}
-                >
-                  {ICONS[n]}
-                  <span>{s[`strings.settings.section.${n}`]}</span>
-                </button>
-              ))}
-            </nav>
-            <div className="settings-body" ref={bodyRef} data-index={wide ? "shown" : "hidden"}>
-              <div className="settings-in" data-section={section} data-searching={searching}>
-                <div className="settings-search">
-                  <label className="settings-search-box">
-                    <span className="search-ic" aria-hidden="true">
-                      <MagnifyingGlassIcon />
-                    </span>
-                    <input
-                      ref={searchRef}
-                      type="search"
-                      value={query}
-                      placeholder={s["strings.settings.search.placeholder"]}
-                      aria-label={s["strings.settings.search.label"]}
-                      spellCheck={false}
-                      autoComplete="off"
-                      onChange={(e) => setQuery(e.target.value)}
-                    />
-                    {query ? (
-                      <Btn
-                        sm
-                        icon
-                        aria-label={s["strings.settings.search.clear"]}
-                        onClick={() => {
-                          setQuery("");
-                          searchRef.current?.focus();
-                        }}
-                      >
-                        <XIcon />
-                      </Btn>
-                    ) : (
-                      <Kbd className="search-key">{chordLabel(searchChord, mac)}</Kbd>
-                    )}
-                  </label>
-                </div>
-                <div className="settings-cols">
-                  {searching ? (
-                    <SearchResults
-                      ref={resultsRef}
-                      query={query}
-                      section={section}
-                      onOpen={navigate}
-                    />
-                  ) : (
-                    <>
-                      <div className="settings-content">
-                        <SettingsPage section={section} />
-                      </div>
-                      <PageIndex
-                        key={section}
-                        groups={groups.map((g) => g.name)}
-                        scroller={bodyRef}
-                        onJump={(name) => navigate(section, name)}
+      <DisclosureProvider store={disclosures}>
+        <KeyStateProvider>
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: the undo and search chords are page-level shortcuts */}
+          <div className="main page" onKeyDown={onKeyDown}>
+            <div className="settings">
+              <nav className="settings-nav">
+                <h4>{s["strings.settings.title"]}</h4>
+                {SETTING_SECTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    className={`nav-item ${section === n && !searching ? "on" : ""}`}
+                    onClick={() => navigate(n)}
+                  >
+                    {ICONS[n]}
+                    <span>{s[`strings.settings.section.${n}`]}</span>
+                  </button>
+                ))}
+              </nav>
+              <div className="settings-body" ref={bodyRef} data-index={wide ? "shown" : "hidden"}>
+                <div className="settings-in" data-section={section} data-searching={searching}>
+                  <div className="settings-search">
+                    <label className="settings-search-box">
+                      <span className="search-ic" aria-hidden="true">
+                        <MagnifyingGlassIcon />
+                      </span>
+                      <input
+                        ref={searchRef}
+                        type="search"
+                        value={query}
+                        placeholder={s["strings.settings.search.placeholder"]}
+                        aria-label={s["strings.settings.search.label"]}
+                        spellCheck={false}
+                        autoComplete="off"
+                        onChange={(e) => setQuery(e.target.value)}
                       />
-                    </>
-                  )}
+                      {query ? (
+                        <Btn
+                          sm
+                          icon
+                          aria-label={s["strings.settings.search.clear"]}
+                          onClick={() => {
+                            setQuery("");
+                            searchRef.current?.focus();
+                          }}
+                        >
+                          <XIcon />
+                        </Btn>
+                      ) : (
+                        <Kbd className="search-key">{chordLabel(searchChord, mac)}</Kbd>
+                      )}
+                    </label>
+                  </div>
+                  <div className="settings-cols">
+                    {searching ? (
+                      <SearchResults
+                        ref={resultsRef}
+                        query={query}
+                        section={section}
+                        onOpen={navigate}
+                      />
+                    ) : (
+                      <>
+                        <div className="settings-content">
+                          <SettingsPage section={section} />
+                        </div>
+                        <PageIndex
+                          key={section}
+                          entries={index}
+                          scroller={bodyRef}
+                          onJump={(name) => navigate(section, name)}
+                        />
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
+            {toast ? (
+              <Toast
+                key={toast.id}
+                text={toast.text}
+                undoLabel={s["strings.settings.undo"]}
+                undoKey={chordLabel(undoChord, mac)}
+                ms={s["inbox.undo_toast_ms"]}
+                onUndo={toast.text === s["strings.settings.undone"] ? undefined : toast.undo}
+                onExpire={expire}
+              />
+            ) : null}
+            {agent}
           </div>
-          {toast ? (
-            <Toast
-              key={toast.id}
-              text={toast.text}
-              undoLabel={s["strings.settings.undo"]}
-              undoKey={chordLabel(undoChord, mac)}
-              ms={s["inbox.undo_toast_ms"]}
-              onUndo={toast.text === s["strings.settings.undone"] ? undefined : toast.undo}
-              onExpire={expire}
-            />
-          ) : null}
-          {agent}
-        </div>
-      </KeyStateProvider>
+        </KeyStateProvider>
+      </DisclosureProvider>
     </SettingsScreenProvider>
   );
 }
@@ -453,16 +478,18 @@ export function Settings({
  * holds it active while the scroll settles.
  */
 export function PageIndex({
-  groups,
+  entries,
   scroller,
   onJump,
 }: {
-  groups: readonly string[];
+  /** The page's groups, folds and Advanced in order; a folded one is marked and opens on a click. */
+  entries: readonly IndexEntry[];
   scroller: React.RefObject<HTMLElement | null>;
   onJump: (group: string) => void;
 }) {
   const s = useShell().settings;
   const holdMs = s["settings.index_hold_ms"];
+  const groups = entries.map((e) => e.name);
   const [active, setActive] = useState<string | null>(groups[0] ?? null);
   const holdUntil = useRef(0);
   const key = groups.join("\n");
@@ -499,24 +526,26 @@ export function PageIndex({
       root.removeEventListener("scroll", read);
     };
   }, [key, scroller]);
-  if (groups.length < 2) return <aside className="settings-index" aria-hidden="true" />;
+  if (entries.length < 2) return <aside className="settings-index" aria-hidden="true" />;
   return (
     <aside className="settings-index" aria-label={s["strings.settings.index.title"]}>
       <h5>{s["strings.settings.index.title"]}</h5>
-      {groups.map((g) => (
+      {entries.map(({ name, collapsed }) => (
         <a
-          key={g}
-          href={`#${groupId(g)}`}
-          className={active === g ? "on" : ""}
-          data-index-group={g}
+          key={name}
+          href={`#${groupId(name)}`}
+          className={cx(active === name && "on", collapsed && "folded")}
+          data-index-group={name}
+          data-folded={collapsed ? "true" : undefined}
+          title={collapsed ? s["strings.settings.index.folded"] : undefined}
           onClick={(e) => {
             e.preventDefault();
             holdUntil.current = Date.now() + holdMs;
-            setActive(g);
-            onJump(g);
+            setActive(name);
+            onJump(name);
           }}
         >
-          {g}
+          {name}
         </a>
       ))}
     </aside>
@@ -539,6 +568,17 @@ function panelIndex(s: ReturnType<typeof useShell>["settings"]): PanelIndexEntry
         level: panelLevel(section, group),
       });
     }
+  }
+  // Panels that render inside another (the CalDAV link, the Voice profile in each Account's card).
+  for (const { section, group, search } of searchOnly) {
+    out.push({
+      section,
+      group,
+      label: String(s[search.title]),
+      help: search.description ? String(s[search.description]) : "",
+      terms: search.searchTerms,
+      level: panelLevel(section, group),
+    });
   }
   return out;
 }
@@ -593,7 +633,9 @@ function SearchResults({
   useEffect(() => setActive(0), [query]);
   const flat = useMemo(() => grouped.flatMap((g) => g.hits), [grouped]);
   const keyOf = (h: SearchHit) =>
-    h.entry.kind === "setting" ? h.entry.key : `${h.entry.section}:${h.entry.group}`;
+    h.entry.kind === "setting"
+      ? h.entry.key
+      : `${h.entry.section}:${h.entry.group}:${h.entry.label}`;
 
   useImperativeHandle(
     ref,
@@ -663,15 +705,26 @@ function SearchResults({
                         group={h.entry.group}
                       />
                     )}
+                    {h.entry.kind === "setting" ? (
+                      <HiddenLine
+                        k={h.entry.key}
+                        onShow={(parent) => onOpen(settingsSchema[parent].section, parent)}
+                      />
+                    ) : null}
                     <button
                       type="button"
                       className="link show-in"
-                      onClick={() =>
-                        onOpen(
-                          h.entry.section,
-                          h.entry.kind === "setting" ? h.entry.key : h.entry.group,
-                        )
-                      }
+                      onClick={() => {
+                        const entry = h.entry;
+                        if (entry.kind !== "setting") return onOpen(entry.section, entry.group);
+                        // A card a choice keeps off the page: show the choice instead.
+                        const unmet = unmetConditions(keyConditions(entry.key), s);
+                        const parent = unmet[0]?.key;
+                        if (parent && isSettingKey(parent)) {
+                          return onOpen(settingsSchema[parent].section, parent);
+                        }
+                        onOpen(entry.section, entry.key);
+                      }}
                     >
                       {s["strings.settings.search.show"]}
                       <span className="crumb">

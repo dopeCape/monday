@@ -15,7 +15,6 @@ import {
   type AiLevel,
   type ControlShape,
   describeSetting,
-  groupsInSectionAt,
   indexLines,
   isSettingKey,
   levelAtLeast,
@@ -24,6 +23,7 @@ import {
   type SettingGroup,
   type SettingKey,
   type SettingSection,
+  type SettingValues,
   settingsSchema,
   splitKey,
   validateSetting,
@@ -41,6 +41,15 @@ import {
 } from "react";
 import type { DeviceProviderKeys } from "../../platform/providerKeys.ts";
 import { type SetResult, type ShellState, useShell } from "../../shell/Shell.tsx";
+import { Disclosure } from "./disclosure.tsx";
+import {
+  ADVANCED_ANCHOR,
+  disclosureId,
+  type GroupLayout,
+  type IndexEntry,
+  type PageLayout,
+  pageLayout,
+} from "./layout.ts";
 import type { ServerProps } from "./Server.tsx";
 import { fill } from "./wizard.ts";
 
@@ -250,7 +259,12 @@ export function registerPanel(
  * Accounts list, the Groups tree (hand-made Groups stay), the Server ones.
  */
 const PANEL_LEVELS: Partial<Record<SettingSection, Record<string, AiLevel>>> = {
-  ai: { Meter: "assist", "Activity log": "assist", "External MCP": "assist" },
+  ai: {
+    TypeSafe: "assist",
+    Meter: "assist",
+    "Activity log": "assist",
+    "External access": "assist",
+  },
   workflows: { "MCP servers": "automate" },
 };
 
@@ -258,14 +272,43 @@ export function panelLevel(section: SettingSection, group: string): AiLevel {
   return PANEL_LEVELS[section]?.[group] ?? "off";
 }
 
-/** The groups a section page shows at an AI level: with keys, or with a panel the level allows. */
-export function pageGroups(section: SettingSection, level: AiLevel): SettingGroup[] {
-  return groupsInSectionAt(section, level).filter(
-    (g) =>
-      g.keys.length > 0 ||
-      g.advanced.length > 0 ||
-      (panels[section]?.[g.name] !== undefined && levelAtLeast(level, panelLevel(section, g.name))),
+/** Whether a group of a section has a panel the level allows. */
+export function panelAt(section: SettingSection, level: AiLevel): (group: string) => boolean {
+  return (group) =>
+    panels[section]?.[group] !== undefined && levelAtLeast(level, panelLevel(section, group));
+}
+
+/**
+ * Search entries for panels that render inside another (the CalDAV link and
+ * the Voice profile sit in each Account's card): what they are searchable by,
+ * and the group "Show in section" opens.
+ */
+export const searchOnly: Array<{ section: SettingSection; group: string; search: PanelSearch }> =
+  [];
+
+export function registerSearchEntry(section: SettingSection, group: string, search: PanelSearch) {
+  searchOnly.push({ section, group, search });
+}
+
+/** The page of a section over the resolved Settings: groups, folds and the Advanced keys. */
+export function usePageLayout(section: SettingSection): PageLayout {
+  const s = useShell().settings;
+  const level = s["ai.level"];
+  return useMemo(
+    () => pageLayout(section, level, s as unknown as SettingValues, panelAt(section, level)),
+    [section, level, s],
   );
+}
+
+/** The "On this page" entries: every group and fold in order, then Advanced; each says if it starts folded. */
+export function pageIndex(layout: PageLayout): IndexEntry[] {
+  const out: IndexEntry[] = layout.items.map((item) =>
+    item.kind === "group"
+      ? { name: item.group.name, collapsed: item.group.collapsed }
+      : { name: item.into, collapsed: true },
+  );
+  if (layout.advanced.length > 0) out.push({ name: ADVANCED_ANCHOR, collapsed: true });
+  return out;
 }
 
 /** The DOM id of a group's anchor on its page. */
@@ -273,20 +316,40 @@ export function groupId(group: string): string {
   return `group-${group.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`;
 }
 
+/** A section's summary card at the top of its page; registered by overview.tsx. */
+export const overviews: Partial<
+  Record<SettingSection, (props: { section: SettingSection }) => ReactNode>
+> = {};
+
+/**
+ * What a fold's row says about the groups folded into it (which providers
+ * hold a key), and the tag each folded group's own row carries. Registered
+ * by controls.tsx for "Other providers".
+ */
+export const foldLines: Record<string, (props: { groups: readonly string[] }) => ReactNode> = {};
+export const foldBadges: Record<string, (props: { group: string }) => ReactNode> = {};
+
 export function SettingsPage({ section }: { section: SettingSection }) {
-  const shell = useShell();
-  const s = shell.settings;
-  const level = s["ai.level"];
-  const groups = useMemo(() => pageGroups(section, level), [section, level]);
+  const s = useShell().settings;
+  const layout = usePageLayout(section);
+  const Overview = overviews[section];
   return (
     <>
       <header className="settings-head">
         <h1>{s[`strings.settings.section.${section}`]}</h1>
         <p>{s[`strings.settings.intro.${section}`]}</p>
       </header>
-      {groups.map((group) => (
-        <Group key={group.name} section={section} group={group} />
-      ))}
+      {Overview ? <Overview section={section} /> : null}
+      {layout.items.map((item) =>
+        item.kind === "group" ? (
+          <Group key={item.group.name} section={section} group={item.group} />
+        ) : (
+          <Fold key={item.into} section={section} into={item.into} groups={item.groups} />
+        ),
+      )}
+      {layout.advanced.length > 0 ? (
+        <SectionAdvanced section={section} entries={layout.advanced} />
+      ) : null}
     </>
   );
 }
@@ -297,35 +360,209 @@ function introKey(section: SettingSection, group: string): SettingKey | null {
   return isSettingKey(key) ? key : null;
 }
 
-function Group({ section, group }: { section: SettingSection; group: SettingGroup }) {
+/** A group in the shape the panels receive. */
+function asGroup(g: GroupLayout): SettingGroup {
+  return {
+    name: g.name,
+    keys: [...g.primary, ...g.more],
+    primary: g.primary,
+    more: g.more,
+    advanced: g.advanced,
+  };
+}
+
+function Rows({ keys }: { keys: readonly SettingKey[] }) {
+  return (
+    <>
+      {keys.map((k) => (
+        <SettingControl key={k} k={k} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * A group's contents: its panel and primary keys, then "More" in place (or
+ * every tier at once inside a group that was itself folded), then its own
+ * Advanced when it keeps one.
+ */
+function GroupBody({
+  section,
+  group,
+  all,
+}: {
+  section: SettingSection;
+  group: GroupLayout;
+  /** The group was opened from its heading: show "More" without a second click. */
+  all: boolean;
+}) {
   const s = useShell().settings;
-  const registered = panels[section]?.[group.name];
-  const Panel = registered?.component;
-  const showHeading = group.keys.length > 0 || group.advanced.length > 0 || Panel;
-  if (!showHeading) return null;
+  const Panel = group.panel ? panels[section]?.[group.name]?.component : undefined;
+  return (
+    <div className="stack">
+      {Panel ? <Panel section={section} group={asGroup(group)} /> : null}
+      <Rows keys={group.primary} />
+      {all ? (
+        <Rows keys={group.more} />
+      ) : group.more.length > 0 ? (
+        <Disclosure
+          id={disclosureId.more(section, group.name)}
+          className="more"
+          summary={fill(s["strings.settings.more"], { n: group.more.length })}
+        >
+          <div className="stack">
+            <Rows keys={group.more} />
+          </div>
+        </Disclosure>
+      ) : null}
+      {group.advanced.length > 0 ? (
+        <Disclosure
+          id={disclosureId.ownAdvanced(section, group.name)}
+          className="more own-advanced"
+          summary={fill(s["strings.settings.advanced.count"], { n: group.advanced.length })}
+        >
+          <p className="advanced-warning">{s["strings.settings.advanced.warning"]}</p>
+          <div className="stack">
+            <Rows keys={group.advanced} />
+          </div>
+        </Disclosure>
+      ) : null}
+    </div>
+  );
+}
+
+/** "4 settings", or the group's intro when it has one: the line under a folded heading. */
+function groupLine(
+  s: ReturnType<typeof useShell>["settings"],
+  section: SettingSection,
+  g: GroupLayout,
+) {
+  const intro = introKey(section, g.name);
+  if (intro) return String(s[intro]);
+  const n = g.primary.length + g.more.length + g.advanced.length;
+  return n === 1 ? s["strings.settings.group.one"] : fill(s["strings.settings.group.count"], { n });
+}
+
+function Group({ section, group }: { section: SettingSection; group: GroupLayout }) {
+  const s = useShell().settings;
   const intro = introKey(section, group.name);
-  // A group named like its section (Accounts, About) is the page itself: no second heading.
+  if (group.collapsed) {
+    return (
+      <section className="sgroup folded-group" id={groupId(group.name)} data-group={group.name}>
+        <Disclosure
+          id={disclosureId.group(section, group.name)}
+          className="group-toggle"
+          heading
+          summary={
+            <>
+              <span className="g-name">{group.name}</span>
+              <span className="g-line">{groupLine(s, section, group)}</span>
+            </>
+          }
+        >
+          <GroupBody section={section} group={group} all />
+        </Disclosure>
+      </section>
+    );
+  }
+  // A group named like its section (About) is the page itself: no second heading.
   const own = group.name === s[`strings.settings.section.${section}`];
   return (
     <section className="sgroup" id={groupId(group.name)} data-group={group.name}>
       {own ? null : <h3>{group.name}</h3>}
       {intro ? <p>{String(s[intro])}</p> : null}
-      <div className="stack">
-        {Panel ? <Panel section={section} group={group} /> : null}
-        {group.keys.map((k) => (
-          <SettingControl key={k} k={k} />
-        ))}
-        {group.advanced.length > 0 ? (
-          <details className="advanced">
-            <summary>{s["strings.settings.advanced"]}</summary>
+      <GroupBody section={section} group={group} all={false} />
+    </section>
+  );
+}
+
+/**
+ * Groups folded into one row (the providers other than the chosen one): the
+ * row lists them, and each opens on its own with everything it holds.
+ */
+function Fold({
+  section,
+  into,
+  groups,
+}: {
+  section: SettingSection;
+  into: string;
+  groups: readonly GroupLayout[];
+}) {
+  const Line = foldLines[into];
+  const Badge = foldBadges[into];
+  const names = groups.map((g) => g.name);
+  return (
+    <section className="sgroup folded-group fold" id={groupId(into)} data-group={into}>
+      <Disclosure
+        id={disclosureId.fold(section, into)}
+        className="group-toggle"
+        heading
+        summary={
+          <>
+            <span className="g-name">{into}</span>
+            <span className="g-line">{Line ? <Line groups={names} /> : names.join(", ")}</span>
+          </>
+        }
+      >
+        <div className="fold-list">
+          {groups.map((g) => (
+            <Disclosure
+              key={g.name}
+              id={disclosureId.folded(section, into, g.name)}
+              className="folded"
+              attrs={{ "data-folded": g.name }}
+              summary={
+                <>
+                  <span className="g-name">{g.name}</span>
+                  {Badge ? <Badge group={g.name} /> : null}
+                </>
+              }
+            >
+              <GroupBody section={section} group={g} all />
+            </Disclosure>
+          ))}
+        </div>
+      </Disclosure>
+    </section>
+  );
+}
+
+/** The page's Advanced: one disclosure at the bottom, a warning line, the keys under their group names. */
+function SectionAdvanced({
+  section,
+  entries,
+}: {
+  section: SettingSection;
+  entries: PageLayout["advanced"];
+}) {
+  const s = useShell().settings;
+  return (
+    <section
+      className="sgroup folded-group sadvanced"
+      id={groupId(ADVANCED_ANCHOR)}
+      data-group={ADVANCED_ANCHOR}
+    >
+      <Disclosure
+        id={disclosureId.advanced(section)}
+        className="group-toggle"
+        heading
+        summary={
+          <>
+            <span className="g-name">{s["strings.settings.advanced"]}</span>
+            <span className="g-line">{s["strings.settings.advanced.warning"]}</span>
+          </>
+        }
+      >
+        {entries.map((e) => (
+          <div className="sadvanced-group" key={e.group} data-advanced-group={e.group}>
+            <h4>{e.group}</h4>
             <div className="stack">
-              {group.advanced.map((k) => (
-                <SettingControl key={k} k={k} />
-              ))}
+              <Rows keys={e.keys} />
             </div>
-          </details>
-        ) : null}
-      </div>
+          </div>
+        ))}
+      </Disclosure>
     </section>
   );
 }
@@ -374,6 +611,8 @@ export interface CardProps {
   className?: string | undefined;
   /** data-* attributes and an id for the coverage test and the page index. */
   attrs?: Record<string, string | undefined> | undefined;
+  /** Content under the main row, above the footer: an Account's own settings. */
+  below?: ReactNode | undefined;
   children?: ReactNode | undefined;
 }
 
@@ -382,7 +621,17 @@ export interface CardProps {
  * below when wide), and a footer for the secondary line. Panels use it for
  * their own rows so every row on the page reads the same.
  */
-export function Card({ title, hint, block, danger, foot, className, attrs, children }: CardProps) {
+export function Card({
+  title,
+  hint,
+  block,
+  danger,
+  foot,
+  className,
+  attrs,
+  below,
+  children,
+}: CardProps) {
   return (
     <div
       className={cx("scard", block && "block", danger && "danger", className)}
@@ -397,6 +646,7 @@ export function Card({ title, hint, block, danger, foot, className, attrs, child
           <div className="scard-ctl">{children}</div>
         ) : null}
       </div>
+      {below ? <div className="scard-below">{below}</div> : null}
       {foot ? <div className="scard-foot">{foot}</div> : null}
     </div>
   );

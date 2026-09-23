@@ -2854,26 +2854,222 @@ select.select {
   opacity: 0.5;
   pointer-events: none;
 }
-details.advanced {
-  margin-top: 2px;
-}
-details.advanced > summary {
+/* settings disclosure: More in place, folded groups, the providers' fold, the page's Advanced */
+.disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
+}
+.disclosure-toggle:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.disclosure-caret {
+  flex: none;
+  font-size: 12px;
+  color: var(--fg-faint);
+  transition: transform var(--t-fast) var(--ease);
+}
+.disclosure.open > .disclosure-toggle > .disclosure-caret,
+.disclosure.open > .disclosure-heading > .disclosure-toggle > .disclosure-caret {
+  transform: rotate(90deg);
+}
+.disclosure-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.disclosure-body {
+  animation: settings-reveal var(--t-med) var(--ease);
+}
+/* the lighter selectors first, so the specific ones below win in order */
+.account-more > .disclosure-body {
+  margin-top: 12px;
+}
+.bindings-area > .disclosure-toggle {
+  padding: 8px 0;
+}
+.bindings-area .g-name {
+  font-weight: 600;
+}
+.bindings-area .g-line {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.disclosure.folded > .disclosure-toggle {
+  padding: 12px 18px;
+}
+@keyframes settings-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* "More settings (3)" and a group's own Advanced: a quiet line under the cards */
+.disclosure.more > .disclosure-toggle {
+  width: auto;
   font-size: var(--fs-sm);
   color: var(--fg-muted);
-  padding: 6px 0;
-  list-style: none;
-  user-select: none;
+  padding: 4px 0;
 }
-details.advanced[open] > summary {
-  margin-bottom: 12px;
+.disclosure.more > .disclosure-toggle:hover {
+  color: var(--fg);
 }
-details.advanced > summary::before {
-  content: "+ ";
-  color: var(--fg-faint);
+.disclosure.more > .disclosure-body {
+  margin-top: 12px;
 }
-details.advanced[open] > summary::before {
-  content: "- ";
+.advanced-warning {
+  margin: 0 0 12px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  max-width: 64ch;
+}
+/* a group folded to its heading: one bordered row with the name and a line */
+.folded-group > .disclosure > .disclosure-heading {
+  margin: 0;
+  font: inherit;
+}
+.folded-group > .disclosure > .disclosure-heading > .disclosure-toggle {
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  transition:
+    border-color var(--t-fast),
+    background-color var(--t-fast);
+}
+.folded-group > .disclosure > .disclosure-heading > .disclosure-toggle:hover {
+  border-color: var(--border-strong);
+}
+.folded-group > .disclosure.open > .disclosure-heading > .disclosure-toggle {
+  background: transparent;
+  border-color: transparent;
+  padding-left: 0;
+}
+.folded-group .g-name {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.folded-group .g-line {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.folded-group > .disclosure > .disclosure-body {
+  margin-top: 6px;
+}
+/* the providers' fold: each folded group is a row that opens on its own */
+.fold-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.disclosure.folded {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+}
+.disclosure.folded .g-name {
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+.disclosure.folded .tag {
+  margin-left: auto;
+}
+.disclosure.folded > .disclosure-body {
+  padding: 0 14px 14px;
+}
+/* the page's Advanced: the groups' fine-tuning under their names */
+.sadvanced-group + .sadvanced-group {
+  margin-top: 24px;
+}
+.sadvanced-group > h4 {
+  margin: 12px 0 10px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+/* the overview at the top of each section */
+.soverview {
+  margin: -12px 0 36px;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--sunken);
+}
+.soverview > p {
+  margin: 0;
+  line-height: 1.55;
+  max-width: 70ch;
+}
+.soverview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.soverview > .soverview-actions > .btn.sm {
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+/* a folded group in the index: a small dot says it opens on a click */
+.settings-index a.folded::after {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  vertical-align: middle;
+}
+/* a search result a choice keeps off its page */
+.hidden-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 0 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.hidden-line .link {
+  background: none;
+  padding: 0;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+/* an Account's own settings inside its card */
+.scard-below {
+  padding: 0 22px 16px;
+}
+/* the binding table: each area folds */
+.bindings-area + .bindings-area {
+  margin-top: 8px;
 }
 .set-list {
   display: flex;
@@ -5269,4 +5465,13 @@ button.prov {
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+/* sign-in apps */
+.sign-in-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.scard-foot .mono {
+  font-family: var(--font-mono);
 }

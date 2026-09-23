@@ -30,13 +30,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { AccountView, PendingPairings, StorageInfo } from "../../platform/api.ts";
 import { platform } from "../../platform/tauri.ts";
 import { useShell } from "../../shell/Shell.tsx";
-import "./Accounts.tsx";
 import {
   Card,
   DangerAction,
   messageOf,
   type PanelProps,
   registerPanel,
+  registerSearchEntry,
   useSettingsScreen,
 } from "./render.tsx";
 import { Server } from "./Server.tsx";
@@ -51,35 +51,31 @@ function failed(s: Strings, e: unknown): string {
 /* ------------------------------ Accounts: CalDAV and the Voice profile ------------------------------ */
 
 /**
- * The CalDAV calendar link (slice 18): for each Account without a calendar
- * API, a form that links a CalDAV calendar (URL, user, app password) through
- * PUT /accounts/:id/caldav, which proves the link before storing it under the
- * credential envelope; a linked Account shows that and can unlink.
+ * One Account's CalDAV calendar link (slice 18), inside that Account's card:
+ * an Account without a calendar API links a CalDAV calendar (URL, user, app
+ * password) through PUT /accounts/:id/caldav, which proves the link before
+ * storing it under the credential envelope; a linked Account shows that and
+ * can unlink.
  */
-export function CalDavPanel(_: PanelProps) {
+export function CalDavLink({ account }: { account: AccountView }) {
   const shell = useShell();
   const s = shell.settings;
-  const [accounts, setAccounts] = useState<AccountView[]>([]);
-  const [linked, setLinked] = useState<Record<string, string | true>>({});
-  const [busy, setBusy] = useState<string | null>(null);
+  const [linked, setLinked] = useState<string | true | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    shell.api.accounts
-      .list()
-      .then((r) => setAccounts(r.accounts.filter((a) => !a.capabilities.calendar)))
-      .catch(() => setAccounts([]));
-  }, [shell.api]);
-  useEffect(() => {
-    for (const a of accounts) {
-      shell.api.calendar
-        .info(a.workspaceId)
-        .then((info) => {
-          if (info.source === "caldav") setLinked((l) => ({ ...l, [a.id]: true }));
-        })
-        .catch(() => {});
-    }
-  }, [accounts, shell.api]);
-  const submit = async (account: AccountView, form: HTMLFormElement) => {
+    let live = true;
+    shell.api.calendar
+      .info(account.workspaceId)
+      .then((info) => {
+        if (live && info.source === "caldav") setLinked(true);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [account.workspaceId, shell.api]);
+  const submit = async (form: HTMLFormElement) => {
     const data = new FormData(form);
     const link = {
       url: String(data.get("url") ?? "").trim(),
@@ -87,31 +83,28 @@ export function CalDavPanel(_: PanelProps) {
       password: String(data.get("password") ?? ""),
     };
     if (!link.url || !link.user || !link.password) return;
-    setBusy(account.id);
+    setBusy(true);
     setError(null);
     try {
       await shell.api.calendar.linkCalDav(account.id, link);
-      setLinked((l) => ({ ...l, [account.id]: link.url }));
+      setLinked(link.url);
       form.reset();
     } catch (err) {
       setError(fill(s["strings.settings.caldav.failed"], { message: messageOf(err) }));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
-  const unlink = async (account: AccountView) => {
-    setBusy(account.id);
+  const unlink = async () => {
+    setBusy(true);
     setError(null);
     try {
       await shell.api.calendar.linkCalDav(account.id, null);
-      setLinked((l) => {
-        const { [account.id]: _gone, ...rest } = l;
-        return rest;
-      });
+      setLinked(null);
     } catch (err) {
       setError(fill(s["strings.settings.caldav.failed"], { message: messageOf(err) }));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
   return (
@@ -119,69 +112,55 @@ export function CalDavPanel(_: PanelProps) {
       title={s["strings.settings.caldav.title"]}
       hint={s["strings.settings.caldav.soon"]}
       block
-      attrs={{ "data-panel": "caldav" }}
+      attrs={{ "data-panel": "caldav", "data-account": account.id }}
       foot={error ? <span className="err">{error}</span> : undefined}
     >
-      {accounts.length > 0 ? (
-        <div className="caldav">
-          {accounts.map((a) => {
-            const link = linked[a.id];
-            return (
-              <div key={a.id} className="caldav-account" data-account={a.id}>
-                <div className="caldav-address">{a.address}</div>
-                {link ? (
-                  <div className="caldav-linked">
-                    <span>
-                      {link === true
-                        ? s["strings.settings.caldav.linked_line"]
-                        : fill(s["strings.settings.caldav.linked"], { url: link })}
-                    </span>
-                    <Btn sm disabled={busy === a.id} onClick={() => void unlink(a)}>
-                      {s["strings.settings.caldav.unlink"]}
-                    </Btn>
-                  </div>
-                ) : (
-                  <form
-                    className="caldav-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void submit(a, e.currentTarget);
-                    }}
-                  >
-                    <Input
-                      name="url"
-                      type="url"
-                      placeholder={s["strings.settings.caldav.url"]}
-                      required
-                    />
-                    <Input name="user" placeholder={s["strings.settings.caldav.user"]} required />
-                    <Input
-                      name="password"
-                      type="password"
-                      placeholder={s["strings.settings.caldav.password"]}
-                      required
-                    />
-                    <Btn sm type="submit" disabled={busy === a.id}>
-                      {s["strings.settings.caldav.link"]}
-                    </Btn>
-                  </form>
-                )}
-              </div>
-            );
-          })}
+      {linked ? (
+        <div className="caldav-linked">
+          <span>
+            {linked === true
+              ? s["strings.settings.caldav.linked_line"]
+              : fill(s["strings.settings.caldav.linked"], { url: linked })}
+          </span>
+          <Btn sm disabled={busy} onClick={() => void unlink()}>
+            {s["strings.settings.caldav.unlink"]}
+          </Btn>
         </div>
-      ) : null}
+      ) : (
+        <form
+          className="caldav-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit(e.currentTarget);
+          }}
+        >
+          <Input name="url" type="url" placeholder={s["strings.settings.caldav.url"]} required />
+          <Input name="user" placeholder={s["strings.settings.caldav.user"]} required />
+          <Input
+            name="password"
+            type="password"
+            placeholder={s["strings.settings.caldav.password"]}
+            required
+          />
+          <Btn sm type="submit" disabled={busy}>
+            {s["strings.settings.caldav.link"]}
+          </Btn>
+        </form>
+      )}
     </Card>
   );
 }
-registerPanel("accounts", "Meetings", CalDavPanel, {
+registerSearchEntry("accounts", "Your accounts", {
   title: "strings.settings.caldav.title",
   description: "strings.settings.caldav.soon",
   searchTerms: ["caldav", "calendar", "icloud", "nextcloud", "fastmail", "link", "app password"],
 });
 
-/** The Voice profile: on or off, view and edit the description, rebuild from sent mail by asking. */
-export function VoicePanel(_: PanelProps) {
+/**
+ * One Account's Voice profile, inside its card: on or off, view and edit the
+ * description, rebuild from sent mail by asking.
+ */
+export function VoiceCard({ workspaceId }: { workspaceId: string }) {
   const shell = useShell();
   const screen = useSettingsScreen();
   const s = shell.settings;
@@ -190,17 +169,17 @@ export function VoicePanel(_: PanelProps) {
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
     shell.api.voice
-      .get(screen.workspaceId)
+      .get(workspaceId)
       .then(setProfile)
       .catch(() => setProfile(null));
-  }, [shell.api, screen.workspaceId]);
+  }, [shell.api, workspaceId]);
   useEffect(() => {
     refresh();
   }, [refresh]);
   const put = (patch: Partial<Pick<VoiceProfile, "description" | "excerpts" | "enabled">>) => {
     setError(null);
     return shell.api.voice
-      .put(screen.workspaceId, patch)
+      .put(workspaceId, patch)
       .then(setProfile)
       .catch((e) => setError(failed(s, e)));
   };
@@ -284,7 +263,7 @@ export function VoicePanel(_: PanelProps) {
     </Card>
   );
 }
-registerPanel("accounts", "Voice profile", VoicePanel, {
+registerSearchEntry("accounts", "Your accounts", {
   title: "strings.settings.voice.title",
   description: "strings.settings.voice.intro",
   searchTerms: ["voice", "tone", "style", "sent mail", "rebuild", "match my voice", "drafts"],

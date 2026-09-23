@@ -59,6 +59,8 @@ import {
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import { createFirstSyncReader } from "./providers/first-sync.ts";
+import { createCredentialStore as createAccountCredentialStore } from "./providers/credentials.ts";
+import { createOAuthAppStore, legacyFromAccounts } from "./providers/oauth/apps.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
 import { ProviderError } from "./providers/types.ts";
@@ -469,7 +471,18 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       }),
     );
     if (options.oauth) {
-      app.route("/", oauthRoutes({ ...options.oauth, accounts: options.accounts.accounts }));
+      app.route(
+        "/",
+        oauthRoutes({
+          apps: createOAuthAppStore({
+            db,
+            keys,
+            legacy: legacyFromAccounts(db, createAccountCredentialStore(db, mailstore)),
+          }),
+          ...options.oauth,
+          accounts: options.accounts.accounts,
+        }),
+      );
     }
   }
   if (options.push) app.route("/", webhookRoutes(options.push));

@@ -1,22 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { PRESETS } from "../domain.ts";
 import {
+  conditionHolds,
+  conditionsOf,
   defaultSettings,
   describeSetting,
+  groupMeta,
   groupsInSection,
   isSettingKey,
   isStringKey,
+  keyConditions,
   keysInSection,
   SETTING_GROUPS,
   SETTING_SECTIONS,
   type SettingEntry,
   type SettingKey,
+  satisfyingValue,
   settingGroup,
   settingKeys,
   settingScope,
   settingSection,
   settingsSchema,
+  settingTier,
+  settingVisible,
   TASKS,
+  unmetConditions,
   validateSetting,
 } from "./index.ts";
 
@@ -159,12 +167,101 @@ describe("settings screen metadata (slice 17)", () => {
     expect(settingGroup("keyboard.keymap")).toBe("Keymap");
   });
 
-  test("advanced keys fold under their group and a panel group may hold no keys", () => {
+  test("keys sort into their group's tiers, more by default, and a panel group may hold no keys", () => {
     const briefs = groupsInSection("routing").find((g) => g.name === "Briefs");
-    expect(briefs?.keys).toContain("briefs.policy");
+    expect(briefs?.primary).toEqual(["briefs.policy_mode", "briefs.background"]);
+    expect(briefs?.more).toContain("briefs.policy");
+    expect(briefs?.keys).toEqual([...(briefs?.primary ?? []), ...(briefs?.more ?? [])]);
     expect(briefs?.advanced).toContain("briefs.bullets_max");
+    expect(settingTier("briefs.policy")).toBe("more");
+    expect(settingTier("appearance.mode")).toBe("primary");
     const meter = groupsInSection("ai").find((g) => g.name === "Meter");
-    expect(meter).toEqual({ name: "Meter", keys: [], advanced: [] });
+    expect(meter).toEqual({ name: "Meter", keys: [], primary: [], more: [], advanced: [] });
+  });
+
+  test("a section opens with at most seven primary controls, on a fresh install and on the Hosted runtime", () => {
+    for (const over of [{}, { "ai.mode": "hosted" }]) {
+      const values = { ...defaultSettings(), ...over };
+      for (const section of SETTING_SECTIONS) {
+        const counted = groupsInSection(section)
+          .flatMap((g) => g.primary)
+          .filter((k) => settingVisible(k, values))
+          // The providers other than the chosen one fold to one row.
+          .filter((k) => !/^ai\.(share_key|roles)\.(gemini|openai|kimi|openrouter)$/.test(k));
+        expect(counted.length, `${section}: ${counted.join(", ")}`).toBeLessThanOrEqual(7);
+      }
+    }
+  });
+});
+
+describe("dependencies (visibleWhen)", () => {
+  const values = (over: Record<string, unknown> = {}) => ({ ...defaultSettings(), ...over });
+
+  test("each test of a condition: equals, in, truthy and matches", () => {
+    expect(conditionHolds({ key: "k", equals: "custom" }, "custom")).toBe(true);
+    expect(conditionHolds({ key: "k", equals: "custom" }, "none")).toBe(false);
+    expect(conditionHolds({ key: "k", in: ["rule", "judge"] }, "judge")).toBe(true);
+    expect(conditionHolds({ key: "k", in: ["rule", "judge"] }, "model")).toBe(false);
+    expect(conditionHolds({ key: "k", truthy: true }, "https://x")).toBe(true);
+    expect(conditionHolds({ key: "k", truthy: true }, "")).toBe(false);
+    expect(conditionHolds({ key: "k", truthy: true }, [])).toBe(false);
+    expect(conditionHolds({ key: "k", truthy: false }, false)).toBe(true);
+    expect(conditionHolds({ key: "k", matches: "[/.~]" }, "~/p.toml")).toBe(true);
+    expect(conditionHolds({ key: "k", matches: "[/.~]" }, "graphite")).toBe(false);
+  });
+
+  test("a child follows its parent's choice, and a chain is followed to the root", () => {
+    expect(settingVisible("calendar.custom_link", values())).toBe(false);
+    expect(
+      settingVisible("calendar.custom_link", values({ "calendar.meeting_link": "custom" })),
+    ).toBe(true);
+    // The chosen CLI's model shows only under the Local runtime and for that CLI.
+    expect(settingVisible("ai.local.model.claude-code", values())).toBe(true);
+    expect(settingVisible("ai.local.model.codex", values())).toBe(false);
+    const hosted = values({ "ai.mode": "hosted", "ai.local.cli": "codex" });
+    expect(settingVisible("ai.local.model.codex", hosted)).toBe(false);
+    expect(unmetConditions(keyConditions("ai.local.model.codex"), hosted)).toEqual([
+      { key: "ai.mode", equals: "local" },
+    ]);
+    // A provider's keys follow the group's condition: the Hosted runtime.
+    expect(keyConditions("ai.pricing.gemini")).toContainEqual({ key: "ai.mode", equals: "hosted" });
+    expect(settingVisible("ai.share_key.gemini", values())).toBe(false);
+    expect(settingVisible("ai.share_key.gemini", hosted)).toBe(true);
+    // Brief thresholds only in judge mode; the prompt only in model mode.
+    expect(settingVisible("briefs.judge.always_at_least", values())).toBe(true);
+    expect(settingVisible("briefs.prompt", values())).toBe(false);
+    expect(settingVisible("briefs.prompt", values({ "briefs.policy_mode": "model" }))).toBe(true);
+    expect(settingVisible("routing.threshold.route", values({ "routing.on_arrival": false }))).toBe(
+      false,
+    );
+  });
+
+  test("every dependency names a real key and can be satisfied", () => {
+    for (const key of settingKeys) {
+      for (const c of keyConditions(key)) {
+        expect(isSettingKey(c.key), `${key} depends on ${c.key}`).toBe(true);
+        expect(c.key === key, key).toBe(false);
+        const v = satisfyingValue(c);
+        if (v) {
+          expect(conditionHolds(c, v.value), `${key}: ${JSON.stringify(c)}`).toBe(true);
+          expect(validateSetting(c.key as SettingKey, v.value).ok, `${key}: ${c.key}`).toBe(true);
+        } else {
+          // A free value (a URL, a palette path): the test's own example must pass the schema.
+          expect(["server.url", "appearance.palette"], key).toContain(c.key);
+        }
+      }
+    }
+  });
+
+  test("the Hosted providers fold into Other providers unless chosen, and keep their Advanced", () => {
+    const meta = groupMeta("ai", "Gemini");
+    expect(meta.fold?.into).toBe("Other providers");
+    expect(meta.ownAdvanced).toBe(true);
+    expect(conditionsOf(meta.fold?.openWhen)).toEqual([
+      { key: "ai.hosted.provider", equals: "gemini" },
+    ]);
+    expect(groupMeta("ai", "TypeSafe").ownAdvanced).toBe(true);
+    expect(groupMeta("appearance", "Theme")).toEqual({});
   });
 
   test("describeSetting reads the control shape out of the zod type", () => {

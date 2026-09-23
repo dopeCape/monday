@@ -2,7 +2,8 @@
 // The add-account paths through the DOM with happy-dom: the picker, every
 // step of both wizards, the live validation states, the IMAP escape hatch and
 // the redirect from IMAP to a wizard, the JMAP token paste. The server is a
-// scripted Api; the browser opener is a spy.
+// scripted Api that keeps the saved sign-in app per provider as the real one
+// does; the browser opener is a spy.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { dom } from "@monday/ui/test-dom";
@@ -13,6 +14,8 @@ import {
   type Api,
   createApi,
   type Discovery,
+  type OAuthAppView,
+  type OAuthProvider,
   type OAuthStatus,
   type ValidationResult,
 } from "../../platform/api.ts";
@@ -54,7 +57,9 @@ const account = (overrides: Partial<AccountView> = {}): AccountView => ({
 });
 
 interface Script {
-  validate?: (provider: string, params: Record<string, string>) => ValidationResult;
+  validate?: (provider: string, params: Record<string, unknown>) => ValidationResult;
+  /** Sign-in apps already saved on the Server. */
+  saved?: Partial<Record<OAuthProvider, OAuthAppView>>;
   status?: OAuthStatus[];
   discover?: (address: string) => Discovery;
 }
@@ -63,6 +68,9 @@ interface Script {
 function fakeApi(script: Script = {}) {
   const calls: { name: string; args: unknown[] }[] = [];
   const statuses = [...(script.status ?? [])];
+  const saved = new Map<OAuthProvider, OAuthAppView>(
+    Object.entries(script.saved ?? {}) as Array<[OAuthProvider, OAuthAppView]>,
+  );
   const base = createApi(() => null);
   const api: Api = {
     ...base,
@@ -100,9 +108,61 @@ function fakeApi(script: Script = {}) {
         return statuses.shift() ?? { status: "pending" };
       },
       finish: async () => ({ account: account() }),
+      app: async (provider) => {
+        calls.push({ name: "app", args: [provider] });
+        return { app: saved.get(provider) ?? null };
+      },
+      // Checks, and saves only what passes, as the Server does.
+      saveApp: async (provider, body) => {
+        calls.push({ name: "saveApp", args: [provider, body] });
+        const result = script.validate?.(provider, { ...body }) ?? {
+          ok: true,
+          detail: "recognized",
+        };
+        if (!result.ok) return { result, app: null };
+        const view = appView(provider, {
+          clientId: body.clientId,
+          hasSecret: Boolean(body.clientSecret),
+          tenant: body.tenant ?? null,
+          accountType: body.accountType ?? null,
+          projectId: body.projectId ?? null,
+        });
+        saved.set(provider, view);
+        return { result, app: view };
+      },
+      updateApp: async (provider, patch) => {
+        calls.push({ name: "updateApp", args: [provider, patch] });
+        const current = saved.get(provider);
+        if (!current) throw new Error("no app");
+        const next = { ...current, pubsubTopic: patch.pubsubTopic ?? current.pubsubTopic };
+        saved.set(provider, next);
+        return { app: next };
+      },
+      removeApp: async (provider) => {
+        calls.push({ name: "removeApp", args: [provider] });
+        saved.delete(provider);
+        return {};
+      },
     },
   };
-  return { api, calls };
+  return { api, calls, saved };
+}
+
+export function appView(provider: OAuthProvider, over: Partial<OAuthAppView> = {}): OAuthAppView {
+  return {
+    provider,
+    clientId:
+      provider === "google"
+        ? "1234-abc.apps.googleusercontent.com"
+        : "12345678-1234-1234-1234-123456789abc",
+    hasSecret: provider === "google",
+    tenant: provider === "microsoft" ? "consumers" : null,
+    accountType: provider === "microsoft" ? "personal" : null,
+    projectId: null,
+    pubsubTopic: null,
+    updatedAt: "2026-09-23T10:00:00Z",
+    ...over,
+  };
 }
 
 async function mount(props: Partial<AddAccountProps> = {}) {
@@ -238,13 +298,17 @@ describe("Add account: the Google wizard", () => {
     await type(".wizard-field:nth-child(1) input", "1234-abc.apps.googleusercontent.com");
     // Nothing runs until both boxes have something.
     await settle();
-    expect(calls.filter((c) => c.name === "validate")).toHaveLength(0);
+    expect(calls.filter((c) => c.name === "saveApp")).toHaveLength(0);
     await type(".wizard-field:nth-child(2) input", "GOCSPX-wrong");
     await settle();
-    expect(calls.filter((c) => c.name === "validate")).toHaveLength(1);
-    expect(calls[0]?.args).toEqual([
+    expect(calls.filter((c) => c.name === "saveApp")).toHaveLength(1);
+    expect(calls.find((c) => c.name === "saveApp")?.args).toEqual([
       "google",
-      { clientId: "1234-abc.apps.googleusercontent.com", clientSecret: "GOCSPX-wrong" },
+      {
+        clientId: "1234-abc.apps.googleusercontent.com",
+        clientSecret: "GOCSPX-wrong",
+        projectId: null,
+      },
     ]);
     expect(q('[role="alert"]')?.textContent).toContain("Google rejected the client secret.");
     expect(inputs()[1]?.className).toContain("bad");
@@ -253,6 +317,7 @@ describe("Add account: the Google wizard", () => {
     await type(".wizard-field:nth-child(2) input", "GOCSPX-right");
     await settle();
     expect(q('[role="status"]')?.textContent).toContain("Looks right");
+    expect(q('[data-saved="app"]')?.textContent).toContain("Saved on your server");
     expect(inputs()[0]?.className).toContain("ok");
     expect(q<HTMLButtonElement>(".wizard-foot .btn.primary")?.disabled).toBe(false);
     await clickText("Next");
@@ -288,14 +353,15 @@ describe("Add account: the Google wizard", () => {
     advance(12 * 60_000 + 3_000);
     await clickText("Sign in");
     await act(async () => Bun.sleep(30));
+    // The Server signs in through the saved app; the secret is not sent again.
     const start = calls.find((c) => c.name === "start");
     expect(start?.args).toEqual([
       "google",
-      {
-        clientId: "1234-abc.apps.googleusercontent.com",
-        clientSecret: "GOCSPX-secret",
-        pubsubTopic: "projects/monday-1/topics/monday-gmail",
-      },
+      { pubsubTopic: "projects/monday-1/topics/monday-gmail" },
+    ]);
+    expect(calls.find((c) => c.name === "updateApp")?.args).toEqual([
+      "google",
+      { pubsubTopic: "projects/monday-1/topics/monday-gmail" },
     ]);
     expect(opened.at(-1)).toBe("https://auth.example/google?state=st-1");
     expect(calls.filter((c) => c.name === "status").length).toBeGreaterThanOrEqual(2);
@@ -373,9 +439,9 @@ describe("Add account: the Microsoft wizard", () => {
     await type(".wizard-field:nth-child(2) input", "nowhere");
     await settle();
     expect(q('[role="alert"]')?.textContent).toContain('Microsoft has no tenant "nowhere".');
-    expect(calls.find((c) => c.name === "validate")?.args).toEqual([
+    expect(calls.find((c) => c.name === "saveApp")?.args).toEqual([
       "microsoft",
-      { clientId: "12345678-1234-1234-1234-123456789abc", tenant: "nowhere" },
+      { clientId: "12345678-1234-1234-1234-123456789abc", tenant: "nowhere", accountType: "work" },
     ]);
     // Back to personal: the tenant box goes away and consumers is used.
     await clickText("Back");
@@ -391,14 +457,7 @@ describe("Add account: the Microsoft wizard", () => {
     expect(step()).toBe("signin");
     await clickText("Sign in");
     await act(async () => Bun.sleep(20));
-    expect(calls.find((c) => c.name === "start")?.args).toEqual([
-      "microsoft",
-      {
-        clientId: "12345678-1234-1234-1234-123456789abc",
-        tenant: "consumers",
-        pubsubTopic: null,
-      },
-    ]);
+    expect(calls.find((c) => c.name === "start")?.args).toEqual(["microsoft", {}]);
     expect(step()).toBe("done");
     expect(text()).toContain("me@outlook.com is connected and syncing.");
     expect(logs[0]).toContain("[wizard] microsoft completed in");
@@ -481,5 +540,75 @@ describe("Add account: IMAP and JMAP", () => {
       auth: { kind: "token", token: "fmu1-token" },
       endpoint: { kind: "jmap", sessionUrl: "https://api.fastmail.com/jmap/session" },
     });
+  });
+});
+
+describe("Add account: the sign-in app is app level", () => {
+  async function unmount() {
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    host = null;
+  }
+
+  test("validated credentials survive a failed sign-in and a remount", async () => {
+    const { api, calls } = fakeApi({ status: [{ status: "error", message: "access_denied" }] });
+    await mount({ initial: "google", api });
+    for (let i = 0; i < 4; i++) await clickText("Next");
+    await type(".wizard-field:nth-child(1) input", "1234-abc.apps.googleusercontent.com");
+    await type(".wizard-field:nth-child(2) input", "GOCSPX-secret");
+    await settle();
+    await clickText("Next");
+    await clickText("Skip");
+    await clickText("Sign in");
+    await act(async () => Bun.sleep(20));
+    expect(text()).toContain("Sign-in failed: access_denied");
+    // Closed and opened again: straight to the sign-in, nothing to paste.
+    await unmount();
+    await mount({ initial: "google", api });
+    await settle();
+    expect(step()).toBe("signin");
+    expect(text()).toContain("Add a Google account");
+    expect(sentence()).toContain("Google sign-in is set up");
+    expect(text()).not.toContain("Step ");
+    expect(document.querySelectorAll(".wizard-field input")).toHaveLength(0);
+    expect(calls.filter((c) => c.name === "saveApp")).toHaveLength(1);
+  });
+
+  test("a second Google Account uses the saved app with no fields; Back leaves the wizard", async () => {
+    const { api, calls } = fakeApi({
+      saved: { google: appView("google") },
+      status: [{ status: "done", account: account({ address: "second@gmail.com" }) }],
+    });
+    const { added } = await mount({ initial: "google", api });
+    await settle();
+    expect(step()).toBe("signin");
+    expect(
+      [...document.querySelectorAll(".wizard-foot button")].map((b) => b.textContent?.trim()),
+    ).toEqual(["Back"]);
+    await clickText("Sign in");
+    await act(async () => Bun.sleep(20));
+    expect(calls.find((c) => c.name === "start")?.args).toEqual(["google", {}]);
+    expect(added.map((a) => a.address)).toEqual(["second@gmail.com"]);
+    await clickText("Done");
+    await click(".prov:nth-child(3)");
+    await settle();
+    expect(step()).toBe("signin");
+    await clickText("Back");
+    expect(text()).toContain("Add an account");
+  });
+
+  test("Remove forgets the app and an open wizard asks for it again", async () => {
+    const { api, saved } = fakeApi({ saved: { microsoft: appView("microsoft") } });
+    await mount({ initial: "microsoft", api });
+    await settle();
+    expect(step()).toBe("signin");
+    saved.delete("microsoft");
+    await act(async () => {
+      window.dispatchEvent(new Event("monday:oauth-app-changed"));
+    });
+    await settle();
+    expect(step()).toBe("register");
+    expect(text()).toContain("Step 1 of 5");
   });
 });

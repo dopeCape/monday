@@ -12,12 +12,23 @@ Behaviors a tester can check. The settings schema lives in `packages/shared` and
 - A search field at the top of the page finds Settings and panels by label, help, key, option labels and section or group names; results are the same cards grouped by section, with "Show in section" to jump to the card. `settings.search_key` focuses it; Escape clears it.
 - The right-hand "On this page" index lists the current section's groups and follows the scroll position; it hides under `settings.index_min_width`.
 
+## Disclosure
+
+Show what the user's current choices make relevant; everything else is one deliberate click away, never gone.
+
+- Every key has a tier in the schema: `primary` shows when its group shows; `more` (the default) sits behind the group's "More settings (n)" in place; `advanced` sits in one Advanced row at the bottom of the section, with a one-line warning. A group whose keys are all `more` folds to its heading with a one-line summary.
+- A key may depend on other Settings (`visibleWhen`: equals, in, truthy, matches; the chain is followed). A key whose choice excludes it is not on the page. Groups may depend too (the Hosted providers need the Hosted runtime), fold (the providers other than the chosen one sit in one "Other providers" row that says which have a key, each expandable) or keep their own Advanced (each provider, TypeSafe).
+- Each section opens with an overview card: its state in plain words and the two or three common actions. AI and agent at `off` is the level cards and nothing else.
+- Search still finds every key. A result a choice keeps off the page says which choice brings it back, with one click to make that choice. "Show in section" and the index open whatever a target sits in; the index lists only what is on the page and marks what is folded.
+- Disclosures open and close with the motion tokens and remember their state per section for the session.
+
 ## Sections
 
 ### Accounts
 - List of Accounts with provider, sync state, last sync, native versus emulated actions (inbox spec), and a Remove that asks and explains what is deleted.
 - Add account: Fastmail or JMAP (token paste), IMAP (autoconfig, then SRV, then guess, then manual), Gmail and Microsoft (the credential wizard from ADR 0008).
-- Per Account: signature, default meeting link type, linked CalDAV calendar, Voice profile (view, edit, rebuild from sent mail, off by default).
+- Per Account, inside that Account's card: its own signature, meeting link, linked CalDAV calendar, Voice profile (view, edit, rebuild from sent mail, off by default).
+- Sign-in apps, for the whole app: the Google and Microsoft OAuth app every Account of that provider signs in through, saved as soon as it validates.
 
 ### Appearance
 - Mode: system, light, dark. Palette swatches for the seven shipped palettes plus Custom from file (token TOML or base16).
