@@ -14,6 +14,6 @@ Read `docs/spec/README.md` before any work. It indexes the glossary (`CONTEXT.md
 - Every product behavior is a Setting with a default in the schema, never a constant (ADR 0004).
 - Anything that leaves the mailbox asks first; approvals live inside tools (ADR 0002).
 - The config file is the user's; the app never writes it unasked (ADR 0001).
-- No Tailwind, no component library, no CSS-in-JS. Phosphor icons only. No em-dashes in user-facing strings.
+- No Tailwind, no component library, no CSS-in-JS, with one exception: the agent composer and its activity views use Assistant UI's headless primitives (`@assistant-ui/react`, markdown via `@assistant-ui/react-streamdown`), styled with monday's own CSS tokens. Phosphor icons only. No em-dashes in user-facing strings.
 - Tests: each module through its interface with fakes at the seam (`bun test`). Typecheck with `bun run typecheck`.
 - Commits end with the Co-Authored-By trailer given by the harness.
