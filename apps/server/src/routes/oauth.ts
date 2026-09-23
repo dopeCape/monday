@@ -6,6 +6,14 @@
 //   POST /oauth/:provider/finish  {state, code}   exchanges the code, creates the Account
 //   GET  /oauth/:provider/status?state=           pending | done {account} | error {message},
 //                                 long-polled by the wizard while the browser is open
+//   GET    /oauth/:provider/app   {app}  the saved app, never its secret (hasSecret says one is kept)
+//   PUT    /oauth/:provider/app   {clientId, clientSecret?, tenant?, accountType?, projectId?, pubsubTopic?}
+//                                 checks the registration live and saves it only when it passes:
+//                                 {result, app}; app is null when the check failed
+//   PATCH  /oauth/:provider/app   {projectId?, pubsubTopic?}  the extras a later step fills in
+//   DELETE /oauth/:provider/app
+// The app is app level: every Account of the provider signs in through it, so
+// /start without a clientId uses the saved one.
 // :provider is the issuer, google or microsoft. `path` picks the API adapter
 // (gmail, graph) or the IMAP adapter with XOAUTH2.
 
@@ -15,10 +23,11 @@ import type { AccountService, AccountView } from "../accounts.ts";
 import type { AppEnv } from "../auth/middleware.ts";
 import { OAUTH_ENDPOINTS } from "../providers/autoconfig.ts";
 import type { FetchLike } from "../providers/jmap/client.ts";
+import { createMemoryOAuthAppStore, type OAuthAppStore } from "../providers/oauth/apps.ts";
 import type { Finished, OAuthFlow, StartInput } from "../providers/oauth/flow.ts";
 import type { OAuthIssuerName } from "../providers/oauth/issuers.ts";
 import { validateGoogleClient, validateMicrosoftClient } from "../providers/oauth/validate.ts";
-import type { Credentials } from "../providers/types.ts";
+import type { Credentials, OAuthClient } from "../providers/types.ts";
 import { parseBody } from "./validate.ts";
 
 /**
@@ -42,6 +51,8 @@ export interface OAuthRoutesOptions {
   fetch?: FetchLike;
   /** How long /status waits before answering pending. */
   statusWaitMs?: number;
+  /** The saved OAuth app per provider; an in-memory one when absent. */
+  apps?: OAuthAppStore;
 }
 
 type Outcome =
@@ -50,13 +61,28 @@ type Outcome =
   | { status: "error"; message: string };
 
 const startBody = z.object({
-  clientId: z.string().min(1),
+  /** Absent: sign in through the saved app. */
+  clientId: z.string().min(1).optional(),
   clientSecret: z.string().optional(),
   tenant: z.string().optional(),
   path: z.enum(["api", "imap"]).default("api"),
   pubsubTopic: z.string().nullable().optional(),
   /** Only when no loopback listener runs (a client that catches the redirect itself). */
   redirectUri: z.string().url().optional(),
+});
+
+const appBody = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().nullable().optional(),
+  tenant: z.string().nullable().optional(),
+  accountType: z.enum(["personal", "work"]).nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  pubsubTopic: z.string().nullable().optional(),
+});
+
+const appPatchBody = z.object({
+  projectId: z.string().nullable().optional(),
+  pubsubTopic: z.string().nullable().optional(),
 });
 
 const finishBody = z.object({ state: z.string().min(1), code: z.string().min(1) });
@@ -98,6 +124,7 @@ export function credentialsOf(finished: Finished): {
 
 export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
   const { flow, accounts } = options;
+  const apps = options.apps ?? createMemoryOAuthAppStore();
   const statusWait = options.statusWaitMs ?? 20_000;
   const outcomes = new Map<string, Outcome>();
   const waiters = new Map<string, Set<() => void>>();
@@ -137,11 +164,22 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
     const body = await parseBody(c, startBody);
     if (!body.ok) return body.response;
     const input = body.data;
-    const client = {
-      id: input.clientId.trim(),
-      ...(input.clientSecret?.trim() ? { secret: input.clientSecret.trim() } : {}),
-      ...(input.tenant?.trim() ? { tenant: input.tenant.trim() } : {}),
-    };
+    let client: OAuthClient;
+    let pubsubTopic = input.pubsubTopic ?? null;
+    if (input.clientId?.trim()) {
+      client = {
+        id: input.clientId.trim(),
+        ...(input.clientSecret?.trim() ? { secret: input.clientSecret.trim() } : {}),
+        ...(input.tenant?.trim() ? { tenant: input.tenant.trim() } : {}),
+      };
+    } else {
+      const saved = await apps.load(provider);
+      if (!saved) {
+        return c.json({ error: "no_app", message: `no ${provider} sign-in app is saved` }, 400);
+      }
+      client = saved.client;
+      if (input.pubsubTopic === undefined) pubsubTopic = saved.pubsubTopic;
+    }
     const listener = options.loopback ? await options.loopback.open(provider) : null;
     const redirectUri = listener?.redirectUri ?? input.redirectUri;
     if (!redirectUri) {
@@ -155,7 +193,7 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
       client,
       path: input.path,
       redirectUri,
-      pubsubTopic: input.pubsubTopic ?? null,
+      pubsubTopic,
     } satisfies StartInput);
     outcomes.set(started.state, { status: "pending" });
     if (listener) {
@@ -197,6 +235,51 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
         .finally(() => listener.close());
     }
     return c.json({ state: started.state, url: started.url, redirectUri });
+  });
+
+  app.get("/oauth/:provider/app", async (c) => {
+    const provider = providerOf(c.req.param("provider"));
+    if (!provider) return c.json({ error: "unknown_provider" }, 404);
+    return c.json({ app: await apps.get(provider) });
+  });
+
+  app.put("/oauth/:provider/app", async (c) => {
+    const provider = providerOf(c.req.param("provider"));
+    if (!provider) return c.json({ error: "unknown_provider" }, 404);
+    const body = await parseBody(c, appBody);
+    if (!body.ok) return body.response;
+    const input = body.data;
+    const deps = options.fetch ? { fetch: options.fetch } : {};
+    const clientId = input.clientId.trim();
+    const result =
+      provider === "google"
+        ? await validateGoogleClient({ clientId, clientSecret: input.clientSecret ?? null }, deps)
+        : await validateMicrosoftClient({ clientId, tenant: input.tenant ?? null }, deps);
+    if (!result.ok) return c.json({ result, app: null });
+    const saved = await apps.put(provider, {
+      clientId,
+      clientSecret: provider === "google" ? (input.clientSecret ?? null) : null,
+      tenant: provider === "microsoft" ? (input.tenant ?? null) : null,
+      accountType: provider === "microsoft" ? (input.accountType ?? null) : null,
+      projectId: input.projectId ?? null,
+      pubsubTopic: provider === "google" ? (input.pubsubTopic ?? null) : null,
+    });
+    return c.json({ result, app: saved });
+  });
+
+  app.patch("/oauth/:provider/app", async (c) => {
+    const provider = providerOf(c.req.param("provider"));
+    if (!provider) return c.json({ error: "unknown_provider" }, 404);
+    const body = await parseBody(c, appPatchBody);
+    if (!body.ok) return body.response;
+    const saved = await apps.update(provider, body.data);
+    return saved ? c.json({ app: saved }) : c.json({ error: "not_found" }, 404);
+  });
+
+  app.delete("/oauth/:provider/app", async (c) => {
+    const provider = providerOf(c.req.param("provider"));
+    if (!provider) return c.json({ error: "unknown_provider" }, 404);
+    return (await apps.remove(provider)) ? c.body(null, 204) : c.json({ error: "not_found" }, 404);
   });
 
   app.post("/oauth/:provider/finish", async (c) => {
