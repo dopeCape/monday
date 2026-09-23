@@ -5427,6 +5427,17 @@ button.prov {
 .wizard-check.checking {
   color: var(--fg-faint);
 }
+.wizard-check[data-state="cancelled"] {
+  color: var(--fg-muted);
+}
+/* Waiting on the browser: the line, and Cancel beside it. */
+.wizard-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .wizard-copy {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -6244,6 +6255,7 @@ button.prov {
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
 /* sign-in apps */
 .sign-in-foot {
   display: flex;
