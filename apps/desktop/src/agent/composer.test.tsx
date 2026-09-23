@@ -121,12 +121,12 @@ const settle = () =>
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
-const bar = () => document.querySelector<HTMLInputElement>(".agent-bar input");
+const bar = () => document.querySelector<HTMLTextAreaElement>(".agent-bar textarea");
 
 async function typeInBar(text: string) {
   const el = bar();
   if (!el) throw new Error("no agent bar");
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
   await act(async () => {
     el.focus();
     el.dispatchEvent(new Event("focus", { bubbles: true }));

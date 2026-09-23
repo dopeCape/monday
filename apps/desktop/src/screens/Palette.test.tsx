@@ -187,7 +187,7 @@ describe("palette in the Inbox", () => {
     await type("from:kenji pro-rata");
     await press("Tab", {}, input() ?? window);
     expect(document.querySelector(".cmdk")).toBeNull();
-    const bar = document.querySelector<HTMLInputElement>("input[name=ask]");
+    const bar = document.querySelector<HTMLTextAreaElement>("[name=ask]");
     expect(bar?.value).toBe("from:kenji pro-rata");
     expect(document.querySelector(".agent-panel")).not.toBeNull();
   });
@@ -206,7 +206,7 @@ describe("palette in the Inbox", () => {
     ]);
     const first = document.querySelector<HTMLElement>(".cmdk-item");
     await act(async () => first?.click());
-    const bar = document.querySelector<HTMLInputElement>("input[name=ask]");
+    const bar = document.querySelector<HTMLTextAreaElement>("[name=ask]");
     expect(bar?.value).toBe("Reply to the 3 threads waiting on me");
   });
 

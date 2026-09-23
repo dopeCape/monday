@@ -51,6 +51,12 @@ export interface AgentSession {
   developerMode: boolean;
   setDeveloperMode(on: boolean): void;
   send(text: string): Promise<void>;
+  /**
+   * Stops the turn in flight (the composer's Stop): the stream is dropped, a
+   * Local runtime's CLI ends, and the thread keeps what already arrived with a
+   * Stopped line. Tools that already ran stay in the Activity log with Undo.
+   */
+  stop(): Promise<void>;
   /** Sends the last text again, after a turn the Server or the CLI refused; nothing when none was sent. */
   retry(): Promise<void>;
   approve(activityId: string): Promise<void>;
@@ -78,6 +84,7 @@ export const NULL_SESSION: AgentSession = {
   developerMode: false,
   setDeveloperMode: () => {},
   send: async () => {},
+  stop: async () => {},
   retry: async () => {},
   approve: async () => {},
   decline: async () => {},
@@ -116,6 +123,10 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   settingsChangedRef.current = options.onSettingsChanged;
   const sessionRef = useRef<SessionSummary | null>(null);
   sessionRef.current = session;
+
+  /** The run in flight: its token and the signal Stop aborts. Events of an older run are dropped. */
+  const runRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const runSeq = useRef(0);
 
   const onEvent = useCallback((event: AgentEvent) => {
     setEvents((current) => applyEvent(current, event));
@@ -198,7 +209,13 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   }, [client, workspaceId, newAfterHours, now]);
 
   const run = useCallback(
-    async (work: (s: SessionSummary) => Promise<void>) => {
+    async (
+      work: (
+        s: SessionSummary,
+        onEvent: (event: AgentEvent) => void,
+        signal: AbortSignal,
+      ) => Promise<void>,
+    ) => {
       if (!client) {
         setError(NO_CLIENT);
         return;
@@ -207,23 +224,55 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       busyRef.current = true;
       setBusy(true);
       setError(null);
+      const controller = new AbortController();
+      const id = ++runSeq.current;
+      runRef.current = { id, controller };
+      const current = () => runRef.current?.id === id;
+      const live = (event: AgentEvent) => {
+        if (current()) onEvent(event);
+      };
       try {
         const s = await ensureRuntime(await ensureSession());
-        await work(s);
+        await work(s, live, controller.signal);
+        if (!current()) return;
         setRuntimeInfo(client.runtimeOf(s.id));
         void refreshHistory();
       } catch (e) {
+        if (controller.signal.aborted || !current()) return;
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        busyRef.current = false;
-        setBusy(false);
+        if (current()) {
+          runRef.current = null;
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
     },
-    [client, ensureSession, ensureRuntime, refreshHistory],
+    [client, ensureSession, ensureRuntime, refreshHistory, onEvent],
   );
+
+  const stop = useCallback(async () => {
+    const current = runRef.current;
+    if (!current) return;
+    runRef.current = null;
+    current.controller.abort();
+    busyRef.current = false;
+    setBusy(false);
+    setEvents((list) => applyEvent(list, { kind: "stopped", id: `stopped-${current.id}` }));
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  /** A Session switch leaves a turn in flight to finish on the Server, but its events no longer land here. */
+  const detachRun = useCallback(() => {
+    if (!runRef.current) return;
+    runRef.current = null;
+    busyRef.current = false;
+    setBusy(false);
+  }, []);
 
   const newSession = useCallback(async () => {
     if (!client) return;
+    detachRun();
     setSession(null);
     sessionRef.current = null;
     setEvents([]);
@@ -238,7 +287,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [client, workspaceId, refreshHistory, options.developerModeDefault]);
+  }, [client, workspaceId, refreshHistory, options.developerModeDefault, detachRun]);
 
   /** The last text sent, for Retry after a refused turn. */
   const lastTextRef = useRef<string | null>(null);
@@ -248,9 +297,12 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       if (!trimmed) return Promise.resolve();
       if (trimmed === "/new") return newSession();
       lastTextRef.current = trimmed;
-      return run((s) => client?.turn(s.id, trimmed, turnContext(), onEvent) ?? Promise.resolve());
+      return run(
+        (s, live, signal) =>
+          client?.turn(s.id, trimmed, turnContext(), live, signal) ?? Promise.resolve(),
+      );
     },
-    [client, run, onEvent, newSession, turnContext],
+    [client, run, newSession, turnContext],
   );
   const retry = useCallback(() => {
     const text = lastTextRef.current;
@@ -260,21 +312,21 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const approve = useCallback(
     (activityId: string) =>
       run(
-        (s) =>
-          client?.approve(s.id, activityId, "approved", turnContext(), onEvent) ??
+        (s, live, signal) =>
+          client?.approve(s.id, activityId, "approved", turnContext(), live, signal) ??
           Promise.resolve(),
       ),
-    [client, run, onEvent, turnContext],
+    [client, run, turnContext],
   );
 
   const decline = useCallback(
     (activityId: string) =>
       run(
-        (s) =>
-          client?.approve(s.id, activityId, "declined", turnContext(), onEvent) ??
+        (s, live, signal) =>
+          client?.approve(s.id, activityId, "declined", turnContext(), live, signal) ??
           Promise.resolve(),
       ),
-    [client, run, onEvent, turnContext],
+    [client, run, turnContext],
   );
 
   /** Undos in flight, so a second click on the same card is a no-op. */
@@ -307,6 +359,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const openSession = useCallback(
     async (id: string) => {
       if (!client) return;
+      detachRun();
       try {
         const loaded = await client.load(id);
         setSession(loaded.session);
@@ -320,7 +373,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [client, options.developerModeDefault],
+    [client, options.developerModeDefault, detachRun],
   );
 
   const waiting = useMemo(() => waitingCalls(events), [events]);
@@ -352,6 +405,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     developerMode,
     setDeveloperMode,
     send,
+    stop,
     retry,
     approve,
     decline,

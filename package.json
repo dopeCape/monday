@@ -32,5 +32,10 @@
     "@embedded-postgres/linux-arm64",
     "@embedded-postgres/linux-x64",
     "@embedded-postgres/windows-x64"
-  ]
+  ],
+  "overrides": {
+    "@assistant-ui/core": "0.2.19",
+    "@assistant-ui/store": "0.2.19",
+    "@assistant-ui/tap": "0.9.3"
+  }
 }

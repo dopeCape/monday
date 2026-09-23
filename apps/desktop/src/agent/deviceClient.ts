@@ -155,10 +155,14 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
             : (session.runtime.model ?? null),
       };
     },
-    async turn(sessionId, text, context, onEvent) {
+    async turn(sessionId, text, context, onEvent, signal) {
       const session = await sessionOf(sessionId);
-      if (session.runtime.kind === "hosted") return hosted.turn(sessionId, text, context, onEvent);
+      if (session.runtime.kind === "hosted") {
+        return hosted.turn(sessionId, text, context, onEvent, signal);
+      }
       const adapter = adapterFor(session);
+      // Stop ends the CLI; the next turn spawns it again with the transcript handed over.
+      signal?.addEventListener("abort", () => void dropLocal(sessionId), { once: true });
       try {
         await adapter.start(await startContext(session, context));
       } catch (error) {
@@ -166,16 +170,17 @@ export function deviceAgentClient(options: DeviceAgentClientOptions): AgentClien
       }
       await adapter.send(text, onEvent);
     },
-    async approve(sessionId, activityId, decision, context, onEvent) {
+    async approve(sessionId, activityId, decision, context, onEvent, signal) {
       const session = await sessionOf(sessionId);
       if (session.runtime.kind === "hosted") {
-        return hosted.approve(sessionId, activityId, decision, context, onEvent);
+        return hosted.approve(sessionId, activityId, decision, context, onEvent, signal);
       }
       const adapter = local.get(sessionId);
       if (!adapter) {
         // The CLI is gone (the app restarted); the Server answers the card on its own.
-        return hosted.approve(sessionId, activityId, decision, context, onEvent);
+        return hosted.approve(sessionId, activityId, decision, context, onEvent, signal);
       }
+      signal?.addEventListener("abort", () => void dropLocal(sessionId), { once: true });
       await adapter.resume(activityId, decision, onEvent);
     },
     undo: (activityId, sessionId) => hosted.undo(activityId, sessionId),

@@ -27,12 +27,18 @@ export interface AgentClient {
   switchRuntime(sessionId: Id, runtime: Runtime): Promise<AgentEvent>;
   /** Which Runtime and model answers the Session now, once known. */
   runtimeOf(sessionId: Id): RuntimeInfo | null;
-  /** Streams the turn's events; resolves when the turn ends or pauses for an approval. */
+  /**
+   * Streams the turn's events; resolves when the turn ends or pauses for an
+   * approval. Aborting the signal is the composer's Stop: the stream is
+   * dropped and a Local runtime's CLI is stopped; what already ran stays in
+   * the Activity log.
+   */
   turn(
     sessionId: Id,
     text: string,
     context: TurnContext,
     onEvent: (event: AgentEvent) => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   approve(
     sessionId: Id,
@@ -40,6 +46,7 @@ export interface AgentClient {
     decision: ApprovalDecision,
     context: TurnContext,
     onEvent: (event: AgentEvent) => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   undo(activityId: Id, sessionId: Id | null): Promise<ActivityRecord>;
 }
@@ -51,9 +58,10 @@ export function apiAgentClient(api: Api): AgentClient {
     load: (sessionId) => api.agent.session(sessionId),
     switchRuntime: (sessionId, runtime) => api.agent.switchRuntime(sessionId, runtime),
     runtimeOf: () => null,
-    turn: (sessionId, text, context, onEvent) => api.agent.turn(sessionId, text, context, onEvent),
-    approve: (sessionId, activityId, decision, context, onEvent) =>
-      api.agent.approve(sessionId, activityId, decision, context, onEvent),
+    turn: (sessionId, text, context, onEvent, signal) =>
+      api.agent.turn(sessionId, text, context, onEvent, signal),
+    approve: (sessionId, activityId, decision, context, onEvent, signal) =>
+      api.agent.approve(sessionId, activityId, decision, context, onEvent, signal),
     undo: (activityId, sessionId) => api.agent.undo(activityId, sessionId),
   };
 }

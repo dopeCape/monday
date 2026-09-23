@@ -447,8 +447,8 @@ describe("onboarding: the conversation", () => {
     expect(text()).toContain("Who are you and what do you do?");
     // Question 1: no chips but Skip; the user types.
     expect(qa(".onboarding-chips .chip").map((c) => c.textContent)).toEqual(["Skip"]);
-    const input = q<HTMLInputElement>(".agent-bar input");
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    const input = q<HTMLTextAreaElement>(".agent-bar textarea");
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
     await act(async () => {
       setter?.call(input, "I run a small studio");
       input?.dispatchEvent(new Event("input", { bubbles: true }));
