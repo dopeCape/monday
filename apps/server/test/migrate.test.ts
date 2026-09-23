@@ -45,6 +45,7 @@ describe("migrations", () => {
       "labels",
       "messages",
       "meter",
+      "oauth_apps",
       "oauth_clients",
       "oauth_codes",
       "oauth_refresh_tokens",

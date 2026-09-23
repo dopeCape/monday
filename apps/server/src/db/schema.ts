@@ -702,6 +702,26 @@ export const providerKeys = pgTable("provider_keys", {
 });
 
 /**
+ * The self-hoster's own OAuth app per sign-in provider (ADR 0008), app level
+ * so any number of Accounts sign in through it: Google's client id, secret
+ * and optional Pub/Sub topic, Microsoft's client id, account type and tenant.
+ * Saved the moment the wizard's live check passes, before any Account exists,
+ * so it cannot sit under a Workspace key: the secret is sealed under the root
+ * key with the provider bound as associated data. Everything else is not a
+ * secret and stays readable while the Server is locked.
+ */
+export const oauthApps = pgTable("oauth_apps", {
+  provider: text("provider").$type<"google" | "microsoft">().primaryKey(),
+  clientId: text("client_id").notNull(),
+  secretEnc: bytea("secret_enc"),
+  tenant: text("tenant"),
+  accountType: text("account_type").$type<"personal" | "work">(),
+  projectId: text("project_id"),
+  pubsubTopic: text("pubsub_topic"),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+
+/**
  * A Workflow integration's secret (the Slack token or webhook URL, the Notion
  * or Drive token, the webhook bearer): one row per integration under the
  * envelope as an "integration" object, wrapped under the K_ws of whichever
