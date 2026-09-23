@@ -154,6 +154,7 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       return { text: outcome.text };
     },
     extensions: options.extensions,
+    sessionId,
   });
 
   const finish = async (
@@ -485,6 +486,15 @@ export async function replayUndo(
         return `Undone: ${plural(forgot, "judgment")} forgotten for ${undo.sectionId}; the section fills again as the judge answers.`;
       }
       return `Undone: ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
+    }
+    case "example": {
+      const tune = extensions?.tune;
+      if (!tune) return "Cannot undo: Examples cannot be changed from this host.";
+      const done = await tune.restoreExample(undo.threadId, undo.groupId, undo.previous);
+      if (!done) return "Nothing to undo: the Group or the thread is gone.";
+      return undo.previous
+        ? `Undone: the Example is back to ${undo.previous.positive ? "belongs" : "does not belong"}.`
+        : "Undone: the Example was removed.";
     }
   }
 }

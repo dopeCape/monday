@@ -72,6 +72,7 @@ import {
 } from "./runtime/index.ts";
 import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
+import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
@@ -704,6 +705,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.onboarding = onboarding;
   const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
   extensions.organize = organize;
+  extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
 
   return {
     attachCalendar(seam) {

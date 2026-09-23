@@ -158,8 +158,15 @@ export interface FakeJudge {
   calls: Array<{ state: unknown; questions: string[] }>;
   /** Scripts an answer by question id; unscripted questions get the neutral default. */
   answer(id: string, answer: FakeJudgeAnswer): void;
-  /** Scripts by a predicate over the state, for tests that judge many Threads. */
-  when(match: (state: unknown) => boolean, answers: Record<string, FakeJudgeAnswer>): void;
+  /**
+   * Scripts by a predicate over the state, for tests that judge many Threads.
+   * The predicate also sees the questions, so a test can answer a reworded
+   * question differently from the original. The first matching rule answers.
+   */
+  when(
+    match: (state: unknown, questions: JudgeQuestions) => boolean,
+    answers: Record<string, FakeJudgeAnswer>,
+  ): void;
 }
 
 /** The neutral answer: the first option at 1, a Noul at 0.5, a Score at 0. */
@@ -209,7 +216,7 @@ function shapeAnswer(q: JudgeQuestion, scripted: FakeJudgeAnswer): JudgeAnswer {
 export function createFakeJudge(initial: Record<string, FakeJudgeAnswer> = {}): FakeJudge {
   const byId = new Map<string, FakeJudgeAnswer>(Object.entries(initial));
   const rules: Array<{
-    match: (state: unknown) => boolean;
+    match: (state: unknown, questions: JudgeQuestions) => boolean;
     answers: Record<string, FakeJudgeAnswer>;
   }> = [];
   const calls: FakeJudge["calls"] = [];
@@ -219,7 +226,7 @@ export function createFakeJudge(initial: Record<string, FakeJudgeAnswer> = {}): 
     questions: Q;
   }) => {
     calls.push({ state: call.state, questions: Object.keys(call.questions) });
-    const rule = rules.find((r) => r.match(call.state));
+    const rule = rules.find((r) => r.match(call.state, call.questions));
     const answers = Object.fromEntries(
       Object.entries(call.questions).map(([id, q]) => {
         const scripted = rule?.answers[id] ?? byId.get(id);
