@@ -275,12 +275,12 @@ describe("Section rules in the Store", () => {
     const section = (id: string) => inbox.thread(id)?.section;
     // e1: unread, Aoife wrote last.
     expect(section("e1")).toBe("needs-reply");
-    // e4: read, five Messages, Mateus wrote last.
-    expect(section("e4")).toBe("waiting");
+    // e4: read, five Messages, Mateus wrote last: reading it did not answer it.
+    expect(section("e4")).toBe("needs-reply");
     // e10: list mail.
     expect(section("e10")).toBe("newsletters");
-    // e7: read, one Message: for your information.
-    expect(section("e7")).toBe("fyi");
+    // e7: read, one Message, someone else wrote last: still waiting for the owner's reply.
+    expect(section("e7")).toBe("needs-reply");
     // e2 kept the Section the seed gave it.
     expect(section("e2")).toBe(threads.find((t) => t.id === "e2")?.section);
     inbox.close();
@@ -288,14 +288,16 @@ describe("Section rules in the Store", () => {
 
   test("a judgments row on the feed lands in the Cache, moves the Thread by the judged rule, and reaches the reader seam; a deleted row takes it back", async () => {
     const seed = fixtureSeed();
-    // e7: read, one Message, someone else wrote last: For your information by the headers.
-    seed.threads = seed.threads.map((t) => (t.id === "e7" ? { ...t, section: null } : t));
+    // e7 as list mail: Newsletters by the headers, until the judge says otherwise.
+    seed.threads = seed.threads.map((t) =>
+      t.id === "e7" ? { ...t, section: null, bulk: true } : t,
+    );
     const fake = await createFakeStore({ driver: bunDriver(), seed });
     const { inbox, server, store } = {
       ...fake,
       inbox: await createStoreInbox(fake.store, { sections: { rules, order, owner } }),
     };
-    expect(inbox.thread("e7")?.section).toBe("fyi");
+    expect(inbox.thread("e7")?.section).toBe("newsletters");
     expect(inbox.judgments?.("e7")).toBeUndefined();
     const judged = {
       threadId: "e7",

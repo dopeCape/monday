@@ -31,6 +31,7 @@ import {
   formatSize,
   formatWhen,
   paragraphs,
+  personName,
   preview as previewOf,
   uniqueKeys,
 } from "../format.ts";
@@ -346,20 +347,20 @@ export function Message({
         onClick={() => onExpand?.(message.id)}
       >
         <div className="msg-head">
-          <b>{message.from.name}</b>
+          <b>{personName(message.from)}</b>
           <span className="prev">{previewOf(message.bodyText)}</span>
           <span className="when">{when}</span>
         </div>
       </button>
     );
   }
-  const to = message.to.map((p) => firstName(p.name)).join(", ");
+  const to = message.to.map((p) => firstName(personName(p))).join(", ");
   return (
     <div className={cx("msg", className)}>
       <div className="msg-head">
-        <Avatar name={message.from.name} />
+        <Avatar name={personName(message.from)} />
         <div className="who">
-          <b>{message.from.name}</b>
+          <b>{personName(message.from)}</b>
           {to ? <span>{`to ${to}`}</span> : null}
         </div>
         <span className="when">{when}</span>

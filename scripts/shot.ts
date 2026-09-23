@@ -37,6 +37,8 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   { name: "palette", app: "/?overlay=cmdk", mock: "/app.html?chrome=0&overlay=cmdk" },
   // The workspace switcher open under the nav's workspace button.
   { name: "switcher", app: "/?overlay=ws", mock: "/app.html?chrome=0&overlay=ws" },
+  // The list header's Filter menu, open over the stream.
+  { name: "inbox-filter", app: "/?overlay=filter", mock: "/app.html?chrome=0&overlay=filter" },
   // Slice 8: the reader over a real body (the fixture Cache in the dev server) and compose.
   { name: "reader-body", app: "/?sel=e2", mock: "/app.html?chrome=0&sel=e2" },
   { name: "compose", app: "/?compose=d1", mock: "/app.html?chrome=0&overlay=compose" },

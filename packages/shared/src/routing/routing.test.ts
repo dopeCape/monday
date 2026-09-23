@@ -155,9 +155,20 @@ describe("Section rules", () => {
     const at = (t: Thread, lastSender: string | null) =>
       sectionOf(t, { lastSender, owner: me }, DEFAULT_SECTION_RULES, order);
     expect(at(thread(), "aoife@northwind.test")).toBe("needs-reply");
-    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("waiting");
-    expect(at(thread({ unread: false }), "mateus@x.test")).toBe("fyi");
+    // Reading a Thread does not answer it: read, someone else wrote last, it still needs a reply.
+    expect(at(thread({ unread: false }), "mateus@x.test")).toBe("needs-reply");
+    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("needs-reply");
+    // Before the judge answers, Waiting on you catches the ongoing exchanges it is ordered ahead of.
+    expect(
+      sectionOf(
+        thread({ unread: false, messageCount: 5 }),
+        { lastSender: "mateus@x.test", owner: me },
+        DEFAULT_SECTION_RULES,
+        ["waiting", "needs-reply", "fyi", "newsletters"],
+      ),
+    ).toBe("waiting");
     expect(at(thread({ unread: true }), me)).toBe("fyi");
+    expect(at(thread({ unread: false }), me)).toBe("fyi");
     expect(at(thread({ bulk: true }), "digest@theweekly.test")).toBe("newsletters");
     expect(at(thread({ unread: true }), null)).toBe("fyi");
   });
@@ -173,11 +184,15 @@ describe("Section rules", () => {
     });
     const at = (t: Thread, lastSender: string | null, judgments: SectionJudgments | null) =>
       sectionOf(t, { lastSender, owner: me, judgments }, DEFAULT_SECTION_RULES, order);
-    // Read, one message, someone else wrote last: fyi by the headers, Needs your reply once judged.
+    // Read, someone else wrote last: Needs your reply by the headers; the judge keeps it
+    // there or lets it go to For your information.
     const read = thread({ unread: false });
-    expect(at(read, "aoife@northwind.test", null)).toBe("fyi");
+    expect(at(read, "aoife@northwind.test", null)).toBe("needs-reply");
     expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.64 }))).toBe("needs-reply");
     expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.58 }))).toBe("fyi");
+    // The owner wrote last: For your information by the headers, Needs your reply once judged.
+    expect(at(read, me, null)).toBe("fyi");
+    expect(at(read, me, judged({ needsReply: 0.7 }))).toBe("needs-reply");
     // The owner wrote last and waits: the headers say fyi, the judge says waiting.
     expect(at(thread({ messageCount: 3 }), me, judged({ waitingOnOthers: 0.8 }))).toBe("waiting");
     // List headers put a Thread in Newsletters; so does the judge without them, and a

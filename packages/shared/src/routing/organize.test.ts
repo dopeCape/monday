@@ -57,15 +57,17 @@ describe("orderedSectionRules", () => {
     ]);
   });
 
-  test("the shipped four are rows like any other, placed in the stream", () => {
+  test("the shipped four are rows like any other, and none is a heading in the Inbox", () => {
     expect(DEFAULT_SECTION_RULES.every((r) => r.createdBy === "shipped")).toBe(true);
-    expect(DEFAULT_SECTION_RULES.every((r) => sectionInStream(r) && !sectionInNav(r))).toBe(true);
+    expect(DEFAULT_SECTION_RULES.some((r) => sectionInStream(r))).toBe(false);
   });
 
-  test("placement and labels", () => {
+  test("no placement puts a heading in the Inbox; nav placements read as written; labels", () => {
+    for (const placement of ["nav", "both", "stream", undefined] as const) {
+      expect(sectionInStream({ id: "x", when: {}, placement })).toBe(false);
+    }
     expect(sectionInNav({ id: "x", when: {}, placement: "nav" })).toBe(true);
-    expect(sectionInStream({ id: "x", when: {}, placement: "nav" })).toBe(false);
-    expect(sectionInStream({ id: "x", when: {}, placement: "both" })).toBe(true);
+    expect(sectionInNav({ id: "x", when: {}, placement: "stream" })).toBe(false);
     expect(sectionLabel({ id: "needs-reply", when: {} }, "Needs your reply")).toBe(
       "Needs your reply",
     );

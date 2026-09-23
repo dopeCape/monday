@@ -4,6 +4,7 @@
 // suggestions. The classes are the mock's (.pill inside .c-field).
 
 import type { Person } from "@monday/shared";
+import { personName } from "@monday/ui";
 import { type KeyboardEvent, useId, useMemo, useState } from "react";
 import { parseRecipient } from "./reply.ts";
 
@@ -108,7 +109,7 @@ export function Recipients({
     <div className="to">
       {value.map((p) => (
         <span key={p.email} className="pill" title={p.email}>
-          {p.name || p.email}
+          {personName(p)}
           <button
             type="button"
             className="x"
@@ -149,8 +150,8 @@ export function Recipients({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => add(p)}
             >
-              <span>{p.name || p.email}</span>
-              {p.name ? <span>{p.email}</span> : null}
+              <span>{personName(p)}</span>
+              {p.name.trim() ? <span>{p.email}</span> : null}
             </button>
           ))}
         </div>

@@ -16,7 +16,8 @@ export const ui = {
   readerOpen: q.get("reader") === "1" || q.has("sel") || state.list === "split",
   agentOpen: q.get("open") === "1",
   thread: q.get("thread") || "default",
-  overlay: q.get("overlay") || null, // cmdk | compose | ws (the workspace switcher)
+  overlay: q.get("overlay") || null, // cmdk | compose | filter | ws (the workspace switcher)
+  filter: q.get("filter") || null, // unread | starred | attachments | reply
 };
 
 function parseRoute() {

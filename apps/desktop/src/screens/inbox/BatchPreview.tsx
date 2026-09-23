@@ -2,7 +2,7 @@
 // (ADR 0002). Enter applies, Escape cancels.
 
 import type { Thread } from "@monday/shared";
-import { Btn, Scrim } from "@monday/ui";
+import { Btn, personName, Scrim } from "@monday/ui";
 import { useEffect } from "react";
 
 export interface BatchPreviewProps {
@@ -54,7 +54,7 @@ export function BatchPreview({
         <div className="batch-list">
           {threads.map((t) => (
             <div key={t.id} className="batch-row">
-              <span className="from">{t.participants[0]?.name ?? ""}</span>
+              <span className="from">{personName(t.participants[0])}</span>
               <span>{t.subject}</span>
             </div>
           ))}

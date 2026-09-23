@@ -6,7 +6,7 @@
 import type { Draft } from "@monday/shared";
 import { ClockIcon, PaperclipIcon, TextAaIcon, XIcon } from "@phosphor-icons/react";
 import type { ChangeEvent, ReactNode } from "react";
-import { cx, paragraphs } from "../format.ts";
+import { cx, paragraphs, personName } from "../format.ts";
 import { Scrim } from "./command-palette.tsx";
 import { Icon } from "./icon.tsx";
 import { Btn, ColHead, Kbd, Mark } from "./primitives.tsx";
@@ -132,14 +132,14 @@ export function Compose({
             <>
               {draft.to.map((p) => (
                 <span key={p.email} className="pill" title={p.email}>
-                  {p.name}
+                  {personName(p)}
                 </span>
               ))}
               <input id="compose-to" aria-label={strings.to} />
               <span className="cc">
                 {draft.cc.length ? (
                   <span>
-                    {strings.cc} {draft.cc.map((p) => p.name).join(", ")}
+                    {strings.cc} {draft.cc.map((p) => personName(p)).join(", ")}
                   </span>
                 ) : (
                   <span>{strings.cc}</span>

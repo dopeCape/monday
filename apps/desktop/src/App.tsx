@@ -859,7 +859,9 @@ export function App({
       />
     ) : (
       <Inbox
-        key={folderLens ? `folder-${folderLens}` : "screen"}
+        // Each view (the Inbox, a folder, a Group, a Section) is its own list: switching
+        // remounts it, so rows outside the new view never linger as leaving rows.
+        key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}`}
         inbox={inbox}
         composer={composer}
         online={online}

@@ -30,6 +30,7 @@ import {
   motionMs,
   PageHead,
   PreviewCard,
+  personName,
   SampleRow,
   Seg,
   SideCard,
@@ -93,7 +94,7 @@ function routingStrings(settings: Settings): Strings {
 
 /** The first name in "Name <email>" style, for an avatar. */
 const nameOf = (p: { name: string; email: string } | null | undefined) =>
-  p ? p.name || p.email : "?";
+  p ? personName(p, "?") : "?";
 
 const list = (values: readonly string[] | undefined) => (values ?? []).join(", ");
 const split = (value: string) =>

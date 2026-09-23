@@ -26,6 +26,7 @@ import {
   Mark,
   Message,
   type MessageStrings,
+  personName,
   ReplyBox,
 } from "@monday/ui";
 import {
@@ -170,7 +171,7 @@ export function Reader({
       ? strings.message
       : strings.messages.replace("{n}", String(thread.messageCount));
   const title = (label: string, key: string) => `${label} (${key})`;
-  const recipient = last?.from.name ?? thread.participants[0]?.name ?? "";
+  const recipient = personName(last?.from ?? thread.participants[0]);
 
   // The custom actions as chips, after the model's in the same row, each with its Tier.
   const customChips = actions?.length
@@ -264,7 +265,7 @@ export function Reader({
             {thread.starred ? <StarIcon weight="fill" aria-label={strings.star} /> : null}
           </h1>
           <div className="subline">
-            {thread.participants[0]?.name} · {count}
+            {personName(thread.participants[0])} · {count}
             {tags.length ? ` · ${tags.map((t) => t.name).join(", ")}` : ""}
           </div>
           {brief ? (

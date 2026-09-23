@@ -74,7 +74,10 @@ export interface SectionWhen extends JudgedWhen {
   ungrouped?: boolean | undefined;
 }
 
-/** Where a Section shows: as a heading in the stream, as an entry in the nav, or both (CONTEXT.md "Section rule"). */
+/**
+ * Where a Section showed before the Inbox became one list. Kept so config
+ * files that set it still parse; every value now means the nav.
+ */
 export type SectionPlacement = "stream" | "nav" | "both";
 
 /** Who made a Section: the user or the Agent from a sentence, or monday's shipped defaults. */
@@ -141,8 +144,9 @@ export const DEFAULT_JUDGED_THRESHOLD = 0.6;
  * The shipped defaults, matching the mock's four Sections in their order:
  * rows like any other, placed in the stream. Each pairs a header rule (what
  * decides before the judge answers) with a judged condition (what decides
- * once it has): Needs your reply is unread mail someone else wrote last, or
- * a Thread judged to need a reply; Waiting is an ongoing exchange someone
+ * once it has): Needs your reply is mail someone else wrote last, read or
+ * not (reading a Thread does not answer it), or a Thread judged to need a
+ * reply; Waiting is an ongoing exchange someone
  * else wrote last, or one judged waiting; Newsletters is list mail, or a
  * Thread judged a newsletter; For your information is the rest.
  */
@@ -151,7 +155,6 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
     id: "needs-reply",
     when: {
       lastFrom: "others",
-      unread: true,
       bulk: false,
       needs_reply_at_least: DEFAULT_JUDGED_THRESHOLD,
     },
@@ -186,12 +189,20 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
 /** The judge threshold when a caller passes none; the Setting sections.judge_threshold is the real default. */
 export const DEFAULT_SECTION_JUDGE_THRESHOLD = 0.7;
 
-/** Whether a Section shows as a heading in the stream. */
-export function sectionInStream(rule: SectionRuleSetting): boolean {
-  return (rule.placement ?? "stream") !== "nav";
+/**
+ * Whether a Section shows as a heading in the stream: never. The Inbox is
+ * one plain list (docs/spec/inbox.md, Stream); `placement` stays in the
+ * schema so older config files still parse, and any value means the nav.
+ */
+export function sectionInStream(_rule: SectionRuleSetting): boolean {
+  return false;
 }
 
-/** Whether a Section shows as an entry in the nav. */
+/**
+ * Whether a Section was placed in the nav explicitly (`nav` or `both`). The
+ * nav owns the decision to list every Section (docs/spec/inbox.md); this
+ * reads only what the rule says.
+ */
 export function sectionInNav(rule: SectionRuleSetting): boolean {
   return rule.placement === "nav" || rule.placement === "both";
 }
