@@ -173,6 +173,17 @@ const SCHEMA_VERSION_KEY = "schema_version";
  */
 export const SCHEMA_VERSION = 4;
 
+const BODY_FORMAT_KEY = "body_format";
+/**
+ * What a cached body is, bumped when that changes without the table changing
+ * shape. Format 2: `body_html` is always the Server's sanitised display HTML
+ * (sanitize-html, a scoped <style> block, remote images set aside), and an
+ * empty body is never a stand-in for one the Server had not fetched. Before
+ * it the pre-warm cached the raw HTML part and empty stand-ins, which is why
+ * mail rendered wrong or not at all; such bodies are dropped once.
+ */
+export const BODY_FORMAT = 2;
+
 const REBUILD_SQL = `
   drop trigger if exists threads_fts_ai;
   drop trigger if exists threads_fts_ad;
@@ -213,6 +224,18 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
     [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
   );
+  const formatRows = await driver.query("select value from meta where key = ?", [BODY_FORMAT_KEY]);
+  if (Number(formatRows[0]?.value ?? 0) < BODY_FORMAT) {
+    // Bodies cached under an older format are dropped, headers kept; the
+    // reader and the pre-warm fetch them again in the current one.
+    await driver.exec(
+      "update messages set body_text = null, body_html = null, body_at = null where body_text is not null or body_at is not null",
+    );
+    await driver.exec(
+      "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+      [BODY_FORMAT_KEY, String(BODY_FORMAT)],
+    );
+  }
 }
 
 /**

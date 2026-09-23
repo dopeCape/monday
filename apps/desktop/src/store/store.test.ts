@@ -10,6 +10,7 @@ import { INBOX_THREADS_SQL, rowToThread, THREAD_BY_ID_SQL } from "./queries.ts";
 import { fixtureSeed } from "./seed.ts";
 import {
   applySchema,
+  BODY_FORMAT,
   localStatements,
   SCHEMA_VERSION,
   tablesRead,
@@ -100,6 +101,31 @@ describe("schema", () => {
     await applySchema(driver);
     expect(await driver.query("select value from meta where key = 'cursor'")).toEqual([
       { value: "7" },
+    ]);
+  });
+
+  test("bodies cached under an older body format are dropped once, headers kept", async () => {
+    const driver = bunDriver();
+    await applySchema(driver);
+    await driver.batch([
+      {
+        sql: "insert into messages (id, thread_id, sender, date, body_text, body_html, body_at) values ('m1', 't1', '{}', '2026-09-01T00:00:00Z', 'raw', '<html><style>body{}</style><p>raw</p></html>', '2026-09-01T00:00:00Z'), ('m2', 't1', '{}', '2026-09-01T00:00:00Z', '', null, '2026-09-01T00:00:00Z')",
+      },
+      // The bodies were written by a build before the current format.
+      { sql: "update meta set value = ? where key = 'body_format'", params: [BODY_FORMAT - 1] },
+    ]);
+    await applySchema(driver);
+    expect(
+      await driver.query("select id, body_text, body_html, body_at from messages order by id"),
+    ).toEqual([
+      { id: "m1", body_text: null, body_html: null, body_at: null },
+      { id: "m2", body_text: null, body_html: null, body_at: null },
+    ]);
+    // The current format leaves bodies alone.
+    await driver.exec("update messages set body_text = 'kept' where id = 'm1'");
+    await applySchema(driver);
+    expect(await driver.query("select body_text from messages where id = 'm1'")).toEqual([
+      { body_text: "kept" },
     ]);
   });
 
