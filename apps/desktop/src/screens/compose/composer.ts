@@ -4,7 +4,18 @@
 // Undo all work offline. fixtureComposer() is the in-memory implementation
 // for tests and the fixture inbox; store-composer.ts is the Store's.
 
-import type { Draft, DraftAttachment, DraftContent, Person, ScheduledSend } from "@monday/shared";
+import type {
+  Draft,
+  DraftAssistRequest,
+  DraftAssistResult,
+  DraftAttachment,
+  DraftContent,
+  Person,
+  ScheduledSend,
+} from "@monday/shared";
+
+/** An assist request without the Workspace, which the Composer knows. */
+export type AssistRequest = Omit<DraftAssistRequest, "workspace">;
 
 export interface SendOptions {
   delaySeconds?: number | undefined;
@@ -51,6 +62,14 @@ export interface Composer {
   ensureContent(id: string): Promise<Draft | undefined>;
   /** The Agent's suggestion for a Draft, when it has one. */
   suggestion(id: string): DraftSuggestion | null;
+  /**
+   * The writing assist: rewrites, grammar, translation, continuation or a
+   * free instruction over some text, answered by the Server's model. Absent
+   * when no Server can answer; rejects with the Server's reason otherwise.
+   */
+  assist?(request: AssistRequest): Promise<DraftAssistResult>;
+  /** Whether the assist can answer now (a runtime is configured); asked once per window. */
+  assistAvailable?(): Promise<boolean>;
 }
 
 export interface FixtureComposerOptions {
@@ -61,6 +80,8 @@ export interface FixtureComposerOptions {
   suggestions?: Readonly<Record<string, DraftSuggestion>>;
   delaySeconds?: number;
   now?: () => Date;
+  /** The writing assist; absent means the composer offers none. */
+  assist?: ((request: AssistRequest) => Promise<DraftAssistResult>) | undefined;
 }
 
 export function fixtureComposer(options: FixtureComposerOptions = {}): Composer & {
@@ -177,6 +198,7 @@ export function fixtureComposer(options: FixtureComposerOptions = {}): Composer 
       return drafts.get(id);
     },
     suggestion: (id) => options.suggestions?.[id] ?? null,
+    ...(options.assist ? { assist: options.assist, assistAvailable: async () => true } : {}),
     runDue(at = now()) {
       let ran = 0;
       for (const send of [...sends.values()]) {

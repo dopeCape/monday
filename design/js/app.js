@@ -1,5 +1,5 @@
 import { apply, mountToolbar, set, state } from "./theme.js";
-import { navSidebar, rail, agentColumn, cmdk, compose } from "./components.js";
+import { navSidebar, rail, agentColumn, cmdk, compose, composeAssist, composeDock } from "./components.js";
 import * as inbox from "./screens/inbox.js";
 import * as workflows from "./screens/workflows.js";
 import * as routing from "./screens/routing.js";
@@ -46,7 +46,7 @@ function render() {
   parts.push(screens[route.screen].render(route, ui)); cols.push("minmax(0, 1fr)");
   if (state.agent === "right") { parts.push(agentColumn("right")); cols.push("var(--agent-w)"); }
   root.style.gridTemplateColumns = cols.join(" ");
-  root.innerHTML = parts.join("") + (ui.overlay === "cmdk" ? cmdk() : ui.overlay === "compose" ? compose() : "");
+  root.innerHTML = parts.join("") + (ui.overlay === "cmdk" ? cmdk() : ui.overlay === "compose" ? compose() : ui.overlay === "compose-assist" ? composeAssist() : ui.overlay === "dock" ? composeDock() : "");
   root.querySelector("[autofocus]")?.focus();
 }
 

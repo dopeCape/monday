@@ -3773,7 +3773,7 @@ button.prov {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: rise var(--t-med) var(--ease);
+  animation: rise var(--t-fast) var(--ease);
   display: flex;
   flex-direction: column;
   max-height: 78vh;
@@ -4270,12 +4270,246 @@ button.prov {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 6px var(--pad);
-  border-top: 1px solid var(--border);
+  padding: 6px calc(var(--pad) - 6px);
+  border-bottom: 1px solid var(--border);
+}
+.c-tools .vr {
+  height: 16px;
+  margin: 0 4px;
 }
 .reply .c-tools {
   padding: 6px 0 0;
-  border-top: 0;
+  border-bottom: 0;
+}
+.c-assist {
+  gap: 6px;
+}
+.c-assist.on {
+  background: var(--active);
+}
+/* an assist result: shown beside the text, never written into it until Accept */
+.c-suggestion {
+  margin: 0 var(--pad) 14px;
+  padding: 10px 14px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--sunken);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.reply .c-suggestion {
+  margin: 10px 0 0;
+}
+.c-suggestion-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.c-suggestion p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+.c-suggestion p:last-child {
+  margin-bottom: 0;
+}
+.c-suggestion.working {
+  color: var(--fg-muted);
+}
+.c-byline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 8px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.compose .col-head .btn.icon + .btn.icon {
+  margin-left: 2px;
+}
+
+/* a popover anchored to its button, above every scrim (the Later and Assist menus) */
+.pop.anchored {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  z-index: 70;
+  max-height: min(420px, calc(100vh - 24px));
+  overflow-y: auto;
+}
+.pop.anchored.above {
+  animation-name: rise-up;
+}
+@keyframes rise-up {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+}
+.pop-pick .input {
+  min-width: 0;
+}
+
+/* the compose window styles (compose.window_style) */
+.scrim.is-fullscreen {
+  padding: 24px;
+  place-items: stretch;
+}
+.compose.is-fullscreen {
+  width: auto;
+  max-width: none;
+  max-height: none;
+  height: calc(100vh - 48px);
+}
+.compose.is-docked,
+.compose.is-bare {
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  height: min(620px, calc(100vh - 120px));
+  max-height: none;
+  border-radius: 14px 14px 12px 12px;
+}
+.compose.is-docked {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 45;
+}
+.compose.is-docked.leaving,
+.compose.is-bare.leaving {
+  animation: sink var(--t-med) var(--ease-in) forwards;
+  pointer-events: none;
+}
+/* minimize shrinks toward the dock; a restored window grows out of it */
+.compose.from-dock {
+  transform-origin: var(--dock-origin, bottom right);
+  animation: from-dock var(--t-med) var(--ease);
+}
+.scrim.leaving > .compose.to-dock,
+.compose.to-dock.leaving {
+  transform-origin: var(--dock-origin, bottom right);
+  animation: to-dock var(--t-med) var(--ease-in) forwards;
+}
+@keyframes from-dock {
+  from {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+}
+@keyframes to-dock {
+  to {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+}
+
+/* minimized messages, docked along the bottom edge above the agent bar */
+.dock {
+  position: fixed;
+  bottom: calc(var(--bar-h) + 30px);
+  z-index: 44;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.dock > * {
+  pointer-events: auto;
+}
+.dock.bottom-right {
+  right: 16px;
+  flex-direction: row-reverse;
+  --dock-origin: bottom right;
+}
+.dock.bottom-left {
+  left: 16px;
+  --dock-origin: bottom left;
+}
+.dock.bottom-full {
+  left: 16px;
+  right: 16px;
+  --dock-origin: bottom center;
+}
+.dock-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  width: 240px;
+  padding: 0 4px 0 12px;
+  border-radius: 12px;
+  background: var(--overlay);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  animation: from-dock var(--t-med) var(--ease);
+}
+.dock.bottom-full .dock-chip {
+  flex: 0 1 240px;
+  min-width: 140px;
+}
+.dock-chip.on {
+  border-color: var(--fg-faint);
+}
+.dock-chip .dock-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  text-align: left;
+  line-height: 1.25;
+}
+.dock-chip .s,
+.dock-chip .to {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-chip .s {
+  font-weight: 500;
+}
+.dock-chip .to {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.dock-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.dock-chip.more {
+  width: auto;
+  padding: 0 14px;
+  font-weight: 500;
+}
+.dock .stacked {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.dock .stacked .compose.is-bare {
+  height: min(560px, calc(100vh - var(--bar-h) - 160px));
+}
+.dock-undo {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--bar-h) + 30px);
+  z-index: 46;
 }
 .c-tools .btn.on {
   background: var(--active);

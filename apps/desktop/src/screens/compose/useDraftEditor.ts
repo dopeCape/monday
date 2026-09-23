@@ -36,6 +36,8 @@ export interface DraftEditor {
   /** Saves, then schedules the send Job. Rejects with "no_recipients" when nobody is on it. */
   send(options?: SendOptions): Promise<{ sendId: string; runAt: string }>;
   discard(): Promise<void>;
+  /** Drops what is pending without saving it: the Draft is being thrown away. */
+  stop(): void;
   canSend: boolean;
 }
 
@@ -143,6 +145,7 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
       autosave.cancel();
       await composer.discard(draftId);
     },
+    stop: () => autosave.cancel(),
     canSend,
   };
 }

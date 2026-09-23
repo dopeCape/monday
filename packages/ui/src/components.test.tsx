@@ -442,7 +442,10 @@ describe("overlays", () => {
     expect(html).toContain("<p>Kenji,</p>");
     expect(html).toContain('class="ghost"');
     expect(html).toContain('class="c-ai"');
-    expect(html).toContain("Rewrite");
+    expect(html).toContain("c-tools");
+    expect(html).toContain("Assist");
+    expect(html).toContain('title="Minimize"');
+    expect(html).toContain('title="Discard"');
     expect(render(<Compose draft={fx.draft} />)).toContain(
       '<h2 data-tauri-drag-region="true">New message</h2>',
     );
