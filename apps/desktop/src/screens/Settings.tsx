@@ -92,6 +92,8 @@ export interface SettingsProps {
   initialSearch?: boolean | undefined;
   /** Routes an "Ask monday" text to the composer, prefilled. Inert when absent. */
   onAsk?: ((text: string) => void) | undefined;
+  /** The bottom agent the App owns, shown over the page once something was asked here. */
+  agent?: ReactNode | undefined;
   /** The Local runtime detection seam: what this Device found of the three CLIs. */
   runtimes?: RuntimeDetection | undefined;
   /** This Device's provider keys; defaults to the platform keychain. */
@@ -156,6 +158,7 @@ export function Settings({
   initialSection,
   initialSearch,
   onAsk,
+  agent,
   runtimes,
   keys: keysProp,
   serverProps,
@@ -432,6 +435,7 @@ export function Settings({
               onExpire={expire}
             />
           ) : null}
+          {agent}
         </div>
       </KeyStateProvider>
     </SettingsScreenProvider>

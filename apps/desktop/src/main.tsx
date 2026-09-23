@@ -26,8 +26,10 @@ import {
 import {
   type CurrentWorkspace,
   FIXTURE_WORKSPACE,
+  pickAccount,
   useWorkspace,
   WorkspaceProvider,
+  workspaceOf,
 } from "./workspace.tsx";
 
 /**
@@ -197,7 +199,7 @@ function Root() {
 }
 
 /**
- * Picks the Workspace: the first connected Account's in the app, the design
+ * Picks the Workspace: the Account workspace.current names (else the first) in the app, the design
  * fixture's on the browser dev server (no Server there). In the app nothing
  * renders until the Sidecar (or the Cloud) answers, so the fixture Workspace
  * never opens a Cache there. With a Server and no Account yet, the Accounts
@@ -235,17 +237,18 @@ function WorkspaceGate() {
     };
   }, [server, shell.api, pollMs]);
 
-  const first = accounts?.[0] ?? null;
-  const firstId = first?.id;
-  const firstWorkspace = first?.workspaceId;
-  const firstAddress = first?.address;
+  // The workspace switcher writes workspace.current; the Account it names opens here.
+  const picked = pickAccount(accounts, shell.settings["workspace.current"]);
+  const pickedId = picked?.id;
+  const pickedWorkspace = picked?.workspaceId;
+  const pickedAddress = picked?.address;
   // Keyed on the values, so a poll that answers the same Account keeps the same object.
   const current = useMemo<CurrentWorkspace | null>(() => {
     if (shell.host === "browser" && !server) return FIXTURE_WORKSPACE;
-    return firstId && firstWorkspace && firstAddress !== undefined
-      ? { id: firstWorkspace, accountId: firstId, address: firstAddress }
+    return pickedId && pickedWorkspace && pickedAddress !== undefined
+      ? workspaceOf({ id: pickedId, workspaceId: pickedWorkspace, address: pickedAddress })
       : null;
-  }, [shell.host, server, firstId, firstWorkspace, firstAddress]);
+  }, [shell.host, server, pickedId, pickedWorkspace, pickedAddress]);
 
   // In the app a Sidecar that reported a failure, or a Server that has not
   // answered within one reachability check, shows the Server section (which
@@ -298,18 +301,18 @@ function WorkspaceGate() {
     );
   }
   const app = (
-    <WorkspaceProvider value={current}>
+    <WorkspaceProvider key={current.id} value={current}>
       <StoreProvider workspaceId={current.id}>
         <Root />
       </StoreProvider>
     </WorkspaceProvider>
   );
   // The fixture Workspace has no Server to read a first sync from.
-  if (!first) return app;
+  if (!picked) return app;
   return (
     <FirstSyncGate
-      key={first.id}
-      account={{ id: first.id, address: first.address, provider: first.provider }}
+      key={picked.id}
+      account={{ id: picked.id, address: picked.address, provider: picked.provider }}
       onOpen={() => {
         appOpen.current = true;
       }}

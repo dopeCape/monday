@@ -174,8 +174,15 @@ export const nav = {
     { key: "press", label: "Press", icon: "ph-microphone", smart: true, color: "var(--tag-3)" },
   ],
   calendar: [{ key: "calendar", label: "Calendar", icon: "ph-calendar-blank" }],
-  // A Section the user defined and placed in the nav ("put newsletters I have read in Reading").
-  sections: [{ key: "reading", label: "Reading", icon: "ph-stack" }],
+  // Every Section lives in the nav (docs/spec/inbox.md): the shipped four with their unread
+  // counts, then one the user defined ("put newsletters I have read in Reading").
+  sections: [
+    { key: "needs-reply", label: "Needs your reply", icon: "ph-stack", n: 2 },
+    { key: "waiting", label: "Waiting on you", icon: "ph-stack" },
+    { key: "fyi", label: "For your information", icon: "ph-stack" },
+    { key: "newsletters", label: "Newsletters", icon: "ph-stack" },
+    { key: "reading", label: "Reading", icon: "ph-stack" },
+  ],
   automation: [
     { key: "workflows", label: "Workflows", icon: "ph-flow-arrow" },
     { key: "routing", label: "Routing", icon: "ph-git-branch" },

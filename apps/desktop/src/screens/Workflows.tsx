@@ -36,7 +36,7 @@ import {
   WorkflowCard,
 } from "@monday/ui";
 import { ClockCounterClockwiseIcon, FlaskIcon, PlayIcon, PlusIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { cliLabel } from "../agent/runtimes/index.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
@@ -55,6 +55,11 @@ export interface WorkflowsProps {
   /** Group ids to names, for the chain's "matches Hiring › Candidates". */
   groupName?: ((id: string) => string) | undefined;
   now?: Date | undefined;
+  /**
+   * The bottom agent the App owns, so asking here opens it here without
+   * leaving the page; absent, a bar that hands off to the Inbox's.
+   */
+  agent?: ReactNode | undefined;
 }
 
 type Strings = Record<string, string>;
@@ -102,6 +107,7 @@ export function Workflows({
   onNavigate,
   groupName,
   now: nowProp,
+  agent,
 }: WorkflowsProps) {
   const shell = useShell();
   const current = useWorkspace();
@@ -474,14 +480,16 @@ export function Workflows({
           </div>
         </div>
       </div>
-      {shell.layout.agent === "bottom" && !aiOff ? (
-        <AgentDock>
-          <AgentBar
-            placeholder={settings["strings.agent.placeholder"]}
-            onFocus={() => onNavigate?.("agent")}
-          />
-        </AgentDock>
-      ) : null}
+      {shell.layout.agent === "bottom" && !aiOff
+        ? (agent ?? (
+            <AgentDock>
+              <AgentBar
+                placeholder={settings["strings.agent.placeholder"]}
+                onFocus={() => onNavigate?.("agent")}
+              />
+            </AgentDock>
+          ))
+        : null}
     </div>
   );
 }

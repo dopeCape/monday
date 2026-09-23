@@ -188,6 +188,7 @@ i.ph-bold > svg {
 
 /* =========================== NAV =========================== */
 .nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -306,6 +307,7 @@ i.ph-bold > svg {
 }
 
 .rail {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -324,7 +326,7 @@ i.ph-bold > svg {
 .rail .gap {
   height: 10px;
 }
-.rail button {
+.rail > button {
   width: 36px;
   height: 36px;
   border-radius: var(--r-md);
@@ -336,13 +338,26 @@ i.ph-bold > svg {
     color var(--t-fast) var(--ease),
     transform var(--t-fast) var(--ease);
 }
-.rail button:hover {
+.rail > button:hover {
   background: var(--hover);
   color: var(--fg);
 }
-.rail button.on {
+.rail > button.on {
   background: var(--active);
   color: var(--fg);
+}
+/* the workspace avatar as the switcher's button: the avatar's own box, no hover plate */
+.rail > button.rail-ws {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 8px;
+  border-radius: 7px;
+}
+.rail > button.rail-ws:hover {
+  background: none;
+}
+.rail-ws .avatar {
+  margin-bottom: 0;
 }
 
 /* =========================== PRIMITIVES =========================== */
@@ -5044,4 +5059,124 @@ button.prov {
 }
 .first-sync-back {
   padding: 12px var(--pad) 0;
+}
+
+/* ------------------------------ The workspace switcher ------------------------------ */
+/* hangs under the nav's workspace button, or beside the rail's avatar */
+.pop.ws-menu {
+  top: 52px;
+  left: 10px;
+  right: 10px;
+  min-width: 0;
+  z-index: 40;
+}
+.rail .pop.ws-menu {
+  top: 10px;
+  left: calc(100% + 6px);
+  right: auto;
+  width: 300px;
+}
+.ws-menu .pop-item.ws-acct {
+  height: auto;
+  min-height: 44px;
+  padding: 6px 10px;
+}
+.ws-menu .lg {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--hover);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.ws-acct-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.ws-acct-text .addr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-acct-text .st {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.ws-acct-text .st-warn {
+  color: var(--warning);
+}
+.ws-menu .ws-check {
+  color: var(--fg-muted);
+}
+.pop-sep {
+  border: 0;
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+/* ------------------------------ Drafts ------------------------------ */
+.drafts-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.draft-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--pad) 0 0;
+  border-bottom: 1px solid var(--border);
+}
+.draft-row .btn {
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.draft-row:hover .btn,
+.draft-row:focus-within .btn {
+  opacity: 1;
+}
+.draft-open {
+  display: grid;
+  grid-template-columns: minmax(0, 14em) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 0 0 var(--pad);
+  font-size: var(--fs-md);
+  text-align: left;
+  color: var(--fg);
+}
+.draft-open:hover {
+  background: var(--hover);
+}
+.draft-open:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+.draft-open .to,
+.draft-open .subj {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.draft-open .to {
+  font-weight: 500;
+}
+.draft-open .none {
+  color: var(--fg-faint);
+  font-weight: 400;
+}
+.draft-open .when {
+  color: var(--fg-faint);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

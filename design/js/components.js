@@ -15,7 +15,29 @@ export function avatar(p, cls = "") {
 }
 
 /* ------------------------------ NAV ------------------------------ */
-export function navSidebar(route) {
+/* The workspace switcher: every connected Account, the current one checked, then Add and Settings. */
+export function wsMenu() {
+  const marks = ["ph-google-logo", "FM", "ph-envelope-simple"];
+  const states = ["Connected", "Synced Today 09:58", "Not synced yet"];
+  const accounts = workspace.accounts.map((a, i) => {
+    const m = marks[i] ?? "@";
+    const mark = m.startsWith("ph-") ? ic(m) : m;
+    return `<button class="pop-item ws-acct ${i === 0 ? "current" : ""}" role="menuitemradio" aria-checked="${i === 0}">
+      <span class="lg">${mark}</span>
+      <span class="ws-acct-text"><span class="addr">${a}</span><span class="st">${states[i] ?? ""}</span></span>
+      ${i === 0 ? ic("ph-check", "") : ""}
+    </button>`;
+  }).join("");
+  return `<div class="pop ws-menu" role="menu" aria-label="Switch account">
+    <div class="pop-h">Accounts</div>
+    ${accounts}
+    <hr class="pop-sep">
+    <button class="pop-item" role="menuitem" data-go="#/settings/accounts">${ic("ph-plus")}<span>Add an account</span></button>
+    <button class="pop-item" role="menuitem" data-go="#/settings/appearance">${ic("ph-gear-six")}<span>Settings</span></button>
+  </div>`;
+}
+
+export function navSidebar(route, switcher = false) {
   const item = (it, on, sub = false) => `
     <button class="nav-item ${on ? "on" : ""} ${sub ? "sub" : ""}" data-go="${it.href}">
       ${it.icon ? ic(it.icon) : ""}<span>${it.label}</span>
@@ -29,11 +51,12 @@ export function navSidebar(route) {
   const sections = (nav.sections ?? []).map(sec => item({ ...sec, href: `#/inbox/section/${sec.key}` }, route.folder === `section:${sec.key}`)).join("");
   return `
   <aside class="nav">
-    <button class="ws" title="Connected">
+    <button class="ws" title="Connected" data-act="ws" aria-haspopup="menu" aria-expanded="${switcher}">
       <span class="avatar sq" style="--c:var(--fg)">${workspace.initials}<span class="live"></span></span>
       <span class="ws-name">${workspace.name}</span>
       ${ic("ph-caret-up-down")}
     </button>
+    ${switcher ? wsMenu() : ""}
     <button class="nav-item" data-act="cmdk">${ic("ph-magnifying-glass")}<span>Search</span><span class="kbd">⌘K</span></button>
     <button class="nav-item" data-act="compose">${ic("ph-pencil-simple-line")}<span>New message</span><span class="kbd">C</span></button>
     <div class="nav-sec">Mail</div>
@@ -50,15 +73,21 @@ export function navSidebar(route) {
   </aside>`;
 }
 
-export function rail(route) {
+export function rail(route, switcher = false) {
   const b = (icon, href, on, title) => `<button class="${on ? "on" : ""}" data-go="${href}" title="${title}">${ic(icon)}</button>`;
   return `
   <nav class="rail">
-    <span class="avatar sq" style="--c:var(--fg)">${workspace.initials}</span>
+    <button class="rail-ws" data-act="ws" title="${workspace.name}" aria-haspopup="menu" aria-expanded="${switcher}"><span class="avatar sq" style="--c:var(--fg)">${workspace.initials}</span></button>
+    ${switcher ? wsMenu() : ""}
     ${b("ph-magnifying-glass", "#cmdk", false, "Search ⌘K")}
     ${b("ph-pencil-simple-line", "#compose", false, "New message")}
     <span class="gap"></span>
     ${b("ph-tray", "#/inbox", route.screen === "inbox" && !route.folder, "Inbox")}
+    ${b("ph-star", "#/inbox/starred", route.folder === "starred", "Starred")}
+    ${b("ph-clock", "#/inbox/snoozed", route.folder === "snoozed", "Snoozed")}
+    ${b("ph-note-pencil", "#/inbox/drafts", route.folder === "drafts", "Drafts")}
+    ${b("ph-paper-plane-tilt", "#/inbox/sent", route.folder === "sent", "Sent")}
+    ${b("ph-archive", "#/inbox/archive", route.folder === "archive", "Archive")}
     ${b("ph-users-three", "#/inbox/hiring", route.folder === "hiring", "Hiring")}
     ${b("ph-receipt", "#/inbox/finance", route.folder === "finance", "Finance")}
     ${b("ph-handshake", "#/inbox/investors", route.folder === "investors", "Investors")}

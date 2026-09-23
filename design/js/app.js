@@ -16,7 +16,7 @@ export const ui = {
   readerOpen: q.get("reader") === "1" || q.has("sel") || state.list === "split",
   agentOpen: q.get("open") === "1",
   thread: q.get("thread") || "default",
-  overlay: q.get("overlay") || null, // cmdk | compose
+  overlay: q.get("overlay") || null, // cmdk | compose | ws (the workspace switcher)
 };
 
 function parseRoute() {
@@ -38,8 +38,9 @@ function render() {
     root.innerHTML = screens[route.screen].render(route, ui);
     return;
   }
-  if (state.nav === "full") { parts.push(navSidebar(route)); cols.push("var(--nav-w)"); }
-  if (state.nav === "rail") { parts.push(rail(route)); cols.push("var(--rail-w)"); }
+  const switcher = ui.overlay === "ws";
+  if (state.nav === "full") { parts.push(navSidebar(route, switcher)); cols.push("var(--nav-w)"); }
+  if (state.nav === "rail") { parts.push(rail(route, switcher)); cols.push("var(--rail-w)"); }
   if (state.agent === "left") { parts.push(agentColumn("left")); cols.push("var(--agent-w)"); }
   parts.push(screens[route.screen].render(route, ui)); cols.push("minmax(0, 1fr)");
   if (state.agent === "right") { parts.push(agentColumn("right")); cols.push("var(--agent-w)"); }
@@ -62,6 +63,7 @@ document.addEventListener("click", e => {
     const href = go.dataset.go;
     if (href === "#cmdk") { ui.overlay = "cmdk"; return render(); }
     if (href === "#compose") { ui.overlay = "compose"; return render(); }
+    if (ui.overlay === "ws") ui.overlay = null;
     location.hash = href;
     return;
   }
@@ -69,6 +71,9 @@ document.addEventListener("click", e => {
   if (open && !e.target.closest(".actions")) { ui.selected = open.dataset.open; ui.readerOpen = true; return render(); }
 
   const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "ws") { ui.overlay = ui.overlay === "ws" ? null : "ws"; return render(); }
+  // A click outside the switcher closes it.
+  if (ui.overlay === "ws" && !e.target.closest(".ws-menu")) { ui.overlay = null; render(); }
   if (act === "cmdk") { ui.overlay = "cmdk"; return render(); }
   if (act === "compose") { ui.overlay = "compose"; return render(); }
   if (act === "close-overlay" && (e.target.classList.contains("scrim") || e.target.closest("button[data-act=close-overlay]"))) { ui.overlay = null; return render(); }

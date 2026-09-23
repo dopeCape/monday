@@ -35,6 +35,8 @@ const states: Array<{ name: string; app: string; mock: string }> = [
   // The mock has no multi-select; its equivalent is the inbox with the first row on.
   { name: "inbox-multi", app: "/?multi=e1,e2,e3", mock: "/app.html?chrome=0" },
   { name: "palette", app: "/?overlay=cmdk", mock: "/app.html?chrome=0&overlay=cmdk" },
+  // The workspace switcher open under the nav's workspace button.
+  { name: "switcher", app: "/?overlay=ws", mock: "/app.html?chrome=0&overlay=ws" },
   // Slice 8: the reader over a real body (the fixture Cache in the dev server) and compose.
   { name: "reader-body", app: "/?sel=e2", mock: "/app.html?chrome=0&sel=e2" },
   { name: "compose", app: "/?compose=d1", mock: "/app.html?chrome=0&overlay=compose" },

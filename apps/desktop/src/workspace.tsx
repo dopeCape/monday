@@ -1,7 +1,9 @@
-// The current Workspace (CONTEXT.md: one at a time). In the app it comes from
-// the first connected Account; the browser dev server and the tests run on the
-// design fixture's. Everything that names a Workspace or the owner's address
-// reads it here, never from the fixtures directly.
+// The current Workspace (CONTEXT.md: one at a time). In the app it is the
+// Account the `workspace.current` Setting names (per device), or the first
+// connected one; the browser dev server and the tests run on the design
+// fixture's. Everything that names a Workspace or the owner's address reads it
+// here, never from the fixtures directly. Switching is writing that Setting:
+// the gate picks the Account again and remounts the Store on its Cache file.
 
 import type { Id } from "@monday/shared";
 import { createContext, type ReactNode, useContext } from "react";
@@ -17,6 +19,30 @@ export interface CurrentWorkspace {
    * the app, where the screens read the real clock.
    */
   now?: Date | undefined;
+}
+
+/** What the gate needs of an Account to open its Workspace. */
+export interface WorkspaceAccount {
+  id: Id;
+  workspaceId: Id;
+  address: string;
+}
+
+/**
+ * The Account whose Workspace to show: the one `workspace.current` names
+ * when it is still connected, else the first; null with none.
+ */
+export function pickAccount<A extends WorkspaceAccount>(
+  accounts: readonly A[] | null | undefined,
+  currentId: string,
+): A | null {
+  if (!accounts || accounts.length === 0) return null;
+  return accounts.find((a) => a.id === currentId) ?? accounts[0] ?? null;
+}
+
+/** The CurrentWorkspace an Account opens. */
+export function workspaceOf(account: WorkspaceAccount): CurrentWorkspace {
+  return { id: account.workspaceId, accountId: account.id, address: account.address };
 }
 
 /**

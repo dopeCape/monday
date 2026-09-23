@@ -1,13 +1,32 @@
 // Composes the shell from the layout knobs (ADR 0009): nav full, rail or hidden;
-// agent bottom, left or right; then the active screen. The AI level
+// agent bottom, left or right; then the active screen: the Inbox, a Group,
+// Section or Mail folder lens on it (Starred, Snoozed, Sent, Archive), Drafts,
+// Scheduled, or a page. Search is inline in the stream. The bottom agent on a
+// page is the App's own, so asking from a page opens it there. The workspace
+// button opens the switcher, which writes `workspace.current`. The AI level
 // (CONTEXT.md) gates the agent here: at `off` no agent column or bar is
 // rendered, the layout falls back as if the agent knob were hidden (the
 // Setting keeps its value), and no Session is opened. Onboarding is offered
 // once per Account, after it is added, and again from "Set me up".
 
 import type { ExternalPending, Group } from "@monday/shared";
-import { NavSidebar, Rail } from "@monday/ui";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  formatWhen,
+  NavSidebar,
+  Rail,
+  type WorkspaceMenuAccount,
+  type WorkspaceSwitcher,
+} from "@monday/ui";
+import { EnvelopeSimpleIcon, GoogleLogoIcon, WindowsLogoIcon } from "@phosphor-icons/react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
 import { deviceAgentClient } from "./agent/deviceClient.ts";
@@ -24,8 +43,10 @@ import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
+import { Drafts, openDrafts } from "./screens/Drafts.tsx";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
+import { type FolderKey, isStreamFolder } from "./screens/inbox/folders.ts";
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import {
   ONBOARDING_FIXTURE_SENDERS,
@@ -33,7 +54,6 @@ import {
 } from "./screens/onboarding-fixture.ts";
 import { Routing } from "./screens/Routing.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
-import { Search } from "./screens/Search.tsx";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
 import { Workflows } from "./screens/Workflows.tsx";
@@ -41,6 +61,7 @@ import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
+import { useWindowTitle, windowTitle } from "./shell/title.ts";
 import { useWorkspace } from "./workspace.tsx";
 
 export interface AppProps {
@@ -112,6 +133,16 @@ function topSenders(
     .map((e) => e.name);
 }
 
+/** The provider's mark in the switcher, as Settings › Accounts shows it. */
+const PROVIDER_MARK: Record<string, ReactNode> = {
+  gmail: <GoogleLogoIcon />,
+  graph: <WindowsLogoIcon />,
+  jmap: "FM",
+  imap: <EnvelopeSimpleIcon />,
+};
+
+const NO_FOLDER: readonly unknown[] = [];
+
 const defaultComposer = fixtureComposer();
 const noSubscribe = () => () => {};
 const NO_GROUPS: readonly Group[] = [];
@@ -156,13 +187,20 @@ export function App({
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
   const [composeRequest, setComposeRequest] = useState(0);
-  const [searchQuery, setSearchQuery] = useState(
-    () => new URLSearchParams(location.search).get("q") ?? "",
-  );
-  /** A Thread the results screen asked to open; the inbox reads it on mount. */
+  /** Bumped by Search in the nav, the rail or the palette: the stream opens its inline search. */
+  const [searchRequest, setSearchRequest] = useState(0);
+  /** A Thread another screen asked to open; the inbox reads it on mount. */
   const [openThread, setOpenThread] = useState<string | null>(null);
-  /** Text the agent bar opens with after a palette handoff. */
-  const [agentText, setAgentText] = useState<string | undefined>(undefined);
+  /** A Draft the Drafts folder asked to open; the inbox opens the composer on it on mount. */
+  const [composeDraft, setComposeDraft] = useState<string | null>(null);
+  /** The workspace switcher under the workspace button. */
+  // `?overlay=ws` opens it on the dev server, as the mock's state does.
+  const [switcherOpen, setSwitcherOpen] = useState(
+    () => new URLSearchParams(location.search).get("overlay") === "ws",
+  );
+  /** The App's own bottom agent, on the pages that are not the stream: raised, and its text. */
+  const [bottomOpen, setBottomOpen] = useState(false);
+  const [bottomText, setBottomText] = useState("");
   /** The Settings section the palette or the URL asked for, and whether to open on the search field. */
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     () => new URLSearchParams(location.search).get("section") ?? undefined,
@@ -399,6 +437,15 @@ export function App({
   const sends = useSyncExternalStore(composer.subscribe, composer.sends, composer.sends);
   const pending = sends.filter((s) => s.status === "scheduled").length;
   const strings = composeStrings(shell.settings);
+  // Drafts and Snoozed carry their totals in the nav (none when empty).
+  const drafts = useSyncExternalStore(composer.subscribe, composer.drafts, composer.drafts);
+  const draftCount = useMemo(() => openDrafts(drafts).length, [drafts]);
+  const snoozedOf = useCallback(() => inbox?.folder?.("snoozed") ?? NO_FOLDER, [inbox]);
+  const snoozedCount = useSyncExternalStore(
+    inbox?.subscribe ?? noSubscribe,
+    snoozedOf,
+    snoozedOf,
+  ).length;
   const groupIcons = shell.settings["routing.group_icons"];
   const groupIcon = useMemo(() => groupIconFor(groupIcons), [groupIcons]);
   const nav = useMemo(
@@ -410,6 +457,7 @@ export function App({
         groups: navGroups,
         groupIcon,
         scheduled: { count: pending, label: strings.scheduled.title },
+        folderCounts: { drafts: draftCount, snoozed: snoozedCount },
         sections: shell.settings["sections.rules"],
         sectionOrder: shell.settings["sections.order"],
         strings: shell.settings,
@@ -424,12 +472,57 @@ export function App({
       pending,
       strings.scheduled.title,
       shell.settings,
+      draftCount,
+      snoozedCount,
     ],
   );
   const onCompose = () => {
     setActive("inbox");
     setComposeRequest((n) => n + 1);
   };
+
+  /** The stream is the Inbox and its lenses; everything else is a page with no stream under it. */
+  const onStream = (key: string) =>
+    key === "inbox" ||
+    isStreamFolder(key) ||
+    key.startsWith("section:") ||
+    navGroups.some((g) => g.id === key);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const onStreamRef = useRef(onStream);
+  onStreamRef.current = onStream;
+
+  /** Search is inline in the stream: the current lens keeps it, a page goes back to the Inbox. */
+  const openSearch = useCallback(() => {
+    if (!onStreamRef.current(activeRef.current)) setActive("inbox");
+    setSearchRequest((n) => n + 1);
+  }, []);
+
+  /**
+   * Opens the agent where the user is, with text when there is some: the
+   * column composer when the layout has one, else the App's bottom agent on a
+   * page. Never navigates.
+   */
+  const layoutAgent = shell.layout.agent;
+  const askHere = useCallback(
+    (text?: string) => {
+      const column = layoutAgent === "left" || layoutAgent === "right";
+      if (column) {
+        if (text !== undefined) setColumnText(text);
+      } else {
+        if (text !== undefined) setBottomText(text);
+        setBottomOpen(true);
+      }
+      queueMicrotask(() =>
+        document
+          .querySelector<HTMLInputElement>(
+            column ? ".agent-col .agent-bar input" : ".agent-dock .agent-bar input",
+          )
+          ?.focus(),
+      );
+    },
+    [layoutAgent],
+  );
 
   /** The palette's "Go to" targets, from any screen. */
   const navigate = useCallback(
@@ -450,7 +543,8 @@ export function App({
       } else if (target === "settings" || target.startsWith("settings:")) {
         if (target.startsWith("settings:")) setSettingsSection(target.slice("settings:".length));
         setActive("settings");
-      } else if (target === "search") setActive("search");
+      } else if (target === "search") openSearch();
+      else if (target === "agent") askHere();
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
       else if (target === "calendar") setActive("calendar");
@@ -466,13 +560,126 @@ export function App({
       else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
       else setActive("inbox");
     },
-    [shell, openOnboarding],
+    [shell, openOnboarding, openSearch, askHere],
   );
 
-  const openSearch = useCallback((query: string) => {
-    setSearchQuery(query);
-    setActive("search");
-  }, []);
+  // A page's bottom agent and the switcher close when the screen changes.
+  const shownScreen = useRef(active);
+  useEffect(() => {
+    if (shownScreen.current === active) return;
+    shownScreen.current = active;
+    setBottomOpen(false);
+    setSwitcherOpen(false);
+  }, [active]);
+
+  // The composer opened on a Draft once; a later visit to the Inbox opens nothing.
+  useEffect(() => {
+    if (composeDraft !== null && active === "inbox") setComposeDraft(null);
+  }, [composeDraft, active]);
+
+  /* ------------------------------ The workspace switcher ------------------------------ */
+
+  const switchAccounts = useMemo<WorkspaceMenuAccount[]>(() => {
+    const s = shell.settings;
+    const list: readonly AccountView[] = found ?? [];
+    const live = !online
+      ? s["strings.nav.status.offline"]
+      : syncing
+        ? s["strings.nav.status.syncing"]
+        : s["strings.nav.status.online"];
+    const rows = list.map((a): WorkspaceMenuAccount => {
+      const current = a.id === ws.accountId;
+      const state = a.lastError
+        ? s["strings.switcher.error"]
+        : !a.connected
+          ? s["strings.switcher.disconnected"]
+          : current
+            ? live
+            : a.lastSync
+              ? s["strings.settings.accounts.last_sync"].replaceAll(
+                  "{when}",
+                  formatWhen(a.lastSync, now),
+                )
+              : s["strings.settings.accounts.never"];
+      return {
+        id: a.id,
+        address: a.address,
+        mark: PROVIDER_MARK[a.provider] ?? "@",
+        state,
+        tone: a.lastError ? "warn" : !a.connected ? "off" : "ok",
+        current,
+      };
+    });
+    // Before the Server answers (and on the dev server) the current Workspace is still listed.
+    if (!rows.some((r) => r.current)) {
+      rows.unshift({
+        id: ws.accountId,
+        address: ws.address,
+        mark: "@",
+        state: live,
+        tone: online ? "ok" : "off",
+        current: true,
+      });
+    }
+    return rows;
+  }, [found, ws.accountId, ws.address, online, syncing, shell.settings, now]);
+
+  const toggleSwitcher = useCallback(() => {
+    setSwitcherOpen((open) => {
+      // Opening asks the Server again, so the sync states are fresh.
+      if (!open && accountsSource) {
+        accountsSource
+          .list()
+          .then((r) => setFound(r.accounts))
+          .catch(() => {});
+      }
+      return !open;
+    });
+  }, [accountsSource]);
+
+  const switcher: WorkspaceSwitcher = {
+    open: switcherOpen,
+    accounts: switchAccounts,
+    labels: {
+      label: shell.settings["strings.switcher.label"],
+      title: shell.settings["strings.switcher.title"],
+      add: shell.settings["strings.switcher.add"],
+      settings: shell.settings["strings.switcher.settings"],
+    },
+    onPick: (accountId) => {
+      setSwitcherOpen(false);
+      // One Workspace per Account: the gate opens the one this names on its own Cache file.
+      if (accountId !== ws.accountId) void shell.set("workspace.current", accountId);
+    },
+    onAdd: () => {
+      setSwitcherOpen(false);
+      navigate("settings:accounts");
+    },
+    onSettings: () => {
+      setSwitcherOpen(false);
+      navigate("settings");
+    },
+    onClose: () => setSwitcherOpen(false),
+  };
+
+  /* ------------------------------ The window title ------------------------------ */
+
+  const screenName = (() => {
+    const s = shell.settings;
+    if (active === "onboarding") return s["strings.palette.nav.onboarding"];
+    const folder = nav.folders.find((f) => f.key === active);
+    if (folder) return folder.label;
+    const group = navGroups.find((g) => g.id === active);
+    if (group) return group.name;
+    const placed = nav.sections.find((x) => x.key === active);
+    if (placed) return placed.label;
+    if (active === "calendar") return s["strings.nav.calendar"];
+    if (active === "workflows") return s["strings.nav.workflows"];
+    if (active === "routing") return s["strings.nav.routing"];
+    if (active === "settings") return s["strings.nav.settings"];
+    return s["strings.nav.inbox"];
+  })();
+  useWindowTitle(windowTitle(shell.settings["strings.window.title"], screenName));
 
   if (active === "onboarding") {
     // The dev server's fixture state: the conversation from the mock, with no Server behind it.
@@ -528,8 +735,10 @@ export function App({
         automation={nav.automation}
         active={active}
         onSelect={setActive}
-        onSearch={() => openSearch("")}
+        onSearch={openSearch}
         onCompose={onCompose}
+        onWorkspace={toggleSwitcher}
+        switcher={switcher}
       />,
     );
   }
@@ -547,11 +756,41 @@ export function App({
         tail={nav.railTail}
         active={active}
         onSelect={setActive}
-        onSearch={() => openSearch("")}
+        onSearch={openSearch}
         onCompose={onCompose}
+        onWorkspace={toggleSwitcher}
+        switcher={switcher}
       />,
     );
   }
+  // A Mail folder opens the stream as a lens on the folder's Threads.
+  const folderLens: FolderKey | undefined = isStreamFolder(active) ? active : undefined;
+  // The App's bottom agent, for the pages; the stream renders its own.
+  const bottomAgent =
+    shell.layout.agent === "bottom" && !aiOff ? (
+      <AgentComposer
+        key="agent-bottom"
+        agent={agent}
+        mode="bottom"
+        runtime={runtime}
+        strings={agentStrings}
+        suggestions={chips}
+        now={now}
+        open={bottomOpen}
+        onOpenChange={setBottomOpen}
+        placeholder={
+          !online
+            ? shell.settings["strings.agent.offline"]
+            : bottomOpen
+              ? shell.settings["strings.agent.placeholder_open"]
+              : shell.settings["strings.agent.placeholder"]
+        }
+        text={bottomText}
+        onTextChange={setBottomText}
+        onOpenThread={(id) => navigate(`thread:${id}`)}
+        onOpenRuntime={() => navigate("settings:ai")}
+      />
+    ) : null;
   if (shell.layout.agent === "left" && !aiOff) {
     cols.push("var(--agent-w)");
     parts.push(column("left"));
@@ -566,10 +805,8 @@ export function App({
         workspaceId={ws.id}
         runtimes={detection ?? undefined}
         keys={keys ?? undefined}
-        onAsk={(text) => {
-          setAgentText(text);
-          setActive("inbox");
-        }}
+        onAsk={askHere}
+        agent={bottomOpen ? bottomAgent : null}
       />
     ) : active === "routing" ? (
       <Routing
@@ -578,10 +815,8 @@ export function App({
         inbox={inbox}
         workspaceId={ws.id}
         onNavigate={navigate}
-        onAsk={(text) => {
-          setAgentText(text);
-          setActive("inbox");
-        }}
+        onAsk={askHere}
+        agent={bottomAgent}
       />
     ) : active === "workflows" ? (
       <Workflows
@@ -595,10 +830,8 @@ export function App({
           return parent ? `${parent.name} › ${g.name}` : g.name;
         }}
         onNavigate={navigate}
-        onAsk={(text) => {
-          setAgentText(text);
-          setActive("inbox");
-        }}
+        onAsk={askHere}
+        agent={bottomAgent}
         now={now}
       />
     ) : active === "calendar" && calendar ? (
@@ -607,52 +840,36 @@ export function App({
         source={calendar}
         now={now}
         onNavigate={navigate}
-        onAsk={(text) => {
-          setAgentText(text);
-          setActive("inbox");
-        }}
+        onAsk={askHere}
+        agent={bottomAgent}
       />
     ) : active === "scheduled" ? (
       <div key="screen" className="main inbox">
         <Scheduled composer={composer} strings={strings.scheduled} now={new Date()} />
       </div>
-    ) : active === "search" && search ? (
-      <Search
+    ) : active === "drafts" ? (
+      <Drafts
         key="screen"
-        search={search}
-        workspaceId={ws.id}
-        query={searchQuery}
-        onQuery={setSearchQuery}
-        recentThreads={inbox?.threads().slice(0, 20) ?? []}
-        onOpen={(threadId) => {
-          setOpenThread(threadId);
-          setActive("inbox");
-        }}
-        onBack={() => setActive("inbox")}
-        onCommand={(command) => {
-          if (command.type === "navigate") navigate(command.target);
-          else if (command.type === "ask" || command.type === "suggest") {
-            setAgentText(command.text);
-            setActive("inbox");
-          }
-        }}
-        onAsk={(ask) => {
-          setAgentText(ask.text);
+        composer={composer}
+        now={now}
+        onOpen={(draftId) => {
+          setComposeDraft(draftId);
           setActive("inbox");
         }}
       />
     ) : (
       <Inbox
-        key="screen"
+        key={folderLens ? `folder-${folderLens}` : "screen"}
         inbox={inbox}
         composer={composer}
         online={online}
         syncing={syncing}
         composeRequest={composeRequest}
+        searchRequest={searchRequest}
+        initialCompose={composeDraft ?? undefined}
         search={search}
         workspaceId={ws.id}
         initialOpen={openThread ?? undefined}
-        initialAgentText={agentText}
         onNavigate={navigate}
         onSearch={openSearch}
         agent={agent}
@@ -660,6 +877,7 @@ export function App({
         calendar={calendar}
         group={groupLens}
         section={sectionLens}
+        folder={folderLens}
         judge={shell.api.judge}
       />
     ),

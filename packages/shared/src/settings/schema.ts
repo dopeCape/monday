@@ -2536,6 +2536,18 @@ export const settingsSchema = {
     help: "What the model is told when it builds the profile from your sent mail.",
   }),
 
+  /* The Workspace switcher (CONTEXT.md "Workspace": one at a time) */
+  "workspace.current": setting({
+    type: z.string(),
+    default: "",
+    scope: "device",
+    section: "accounts",
+    group: "Accounts",
+    label: "Current account",
+    help: "The Account whose Workspace this device shows. Empty, or an Account no longer connected, shows the first one.",
+    hidden: "Kept by the workspace switcher at the top of the nav.",
+  }),
+
   /* Onboarding (docs/spec/onboarding.md) */
   "onboarding.state": setting({
     type: onboardingState,
@@ -2956,6 +2968,27 @@ export const settingsSchema = {
   "strings.nav.status.online": str("appearance", "Workspace status: connected", "Connected"),
   "strings.nav.status.syncing": str("appearance", "Workspace status: syncing", "Syncing"),
   "strings.nav.status.offline": str("appearance", "Workspace status: offline", "Offline"),
+  "strings.window.title": str("appearance", "Window title", "{screen} · monday"),
+  "strings.folder.starred.empty": str("routing", "Starred: empty line", "Nothing starred yet"),
+  "strings.folder.snoozed.empty": str("routing", "Snoozed: empty line", "Nothing snoozed"),
+  "strings.folder.snoozed.wakes": str("routing", "Snoozed: wake time", "Wakes {when}"),
+  "strings.folder.drafts.empty": str("accounts", "Drafts: empty line", "No drafts"),
+  "strings.folder.sent.empty": str("routing", "Sent: empty line", "Nothing sent yet"),
+  "strings.folder.archive.empty": str("routing", "Archive: empty line", "Nothing archived yet"),
+  "strings.drafts.no_recipient": str("accounts", "Drafts: no recipient", "No recipient"),
+  "strings.drafts.no_subject": str("accounts", "Drafts: no subject", "No subject"),
+  "strings.drafts.delete": str("accounts", "Drafts: delete button", "Delete draft"),
+  "strings.drafts.deleted": str("accounts", "Drafts: deleted toast", "Draft deleted"),
+  "strings.switcher.label": str("accounts", "Workspace switcher: label", "Switch account"),
+  "strings.switcher.title": str("accounts", "Workspace switcher: heading", "Accounts"),
+  "strings.switcher.add": str("accounts", "Workspace switcher: add", "Add an account"),
+  "strings.switcher.settings": str("accounts", "Workspace switcher: settings", "Settings"),
+  "strings.switcher.error": str("accounts", "Workspace switcher: sync error", "Sync error"),
+  "strings.switcher.disconnected": str(
+    "accounts",
+    "Workspace switcher: disconnected",
+    "Disconnected",
+  ),
   "strings.inbox.empty": str("routing", "Empty inbox line", "Nothing needs you"),
   "strings.inbox.syncing": str("routing", "Syncing line", "Syncing, {done} of {total}"),
   "strings.inbox.undo": str("routing", "Undo toast button", "Undo"),

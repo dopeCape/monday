@@ -182,7 +182,7 @@ export function paletteActions(keymap: Keymap, settings: Settings, mac: boolean)
   );
 }
 
-/** The Inbox, the Groups, saved Views and Settings pages. */
+/** The Inbox, the Mail folders, the Groups, saved Views and Settings pages. */
 export function paletteNavigation(
   settings: Settings,
   mac: boolean,
@@ -196,6 +196,16 @@ export function paletteNavigation(
     icon: "inbox",
     featured: true,
   });
+  // The Mail folders, by the names the nav gives them.
+  for (const [key, icon] of [
+    ["starred", "star"],
+    ["snoozed", "snooze"],
+    ["drafts", "compose"],
+    ["sent", "sent"],
+    ["archive", "archive"],
+  ] as const) {
+    out.push({ target: `folder:${key}`, label: t(`strings.nav.${key}`), icon });
+  }
   const byId = new Map(groups.map((g) => [g.id, g]));
   let featuredGroup = false;
   for (const g of groups) {
