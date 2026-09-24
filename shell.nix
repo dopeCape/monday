@@ -33,6 +33,9 @@ pkgs.mkShell {
     pango
     webkitgtk_4_1
     openssl
+    # TLS for WebKitGTK: without it every https:// load in the webview fails
+    # (remote images in mail, favicons), while the Sidecar's http://127.0.0.1 works.
+    glib-networking
 
     # tray icon support
     libayatana-appindicator
@@ -41,6 +44,9 @@ pkgs.mkShell {
   shellHook = ''
     # Make gsettings schemas visible to webkit/gtk (file dialogs, etc.)
     export XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS
+
+    # WebKitGTK's network process finds its TLS backend through GIO's modules.
+    export GIO_EXTRA_MODULES=${pkgs.glib-networking}/lib/gio/modules''${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}
 
     # Uncomment if the window renders blank/black (common with NVIDIA drivers)
     # export WEBKIT_DISABLE_DMABUF_RENDERER=1
