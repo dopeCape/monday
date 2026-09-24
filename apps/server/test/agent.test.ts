@@ -480,6 +480,13 @@ describe("the Agent host over Postgres", () => {
       global: Record<string, unknown>;
     };
     expect(reverted.global["appearance.palette"]).toBe("graphite");
+    // The change and its undo each reach the open clients through the feed, so they show at once.
+    const feed = await store.listChanges(workspaceId, { since: 0, limit: 1000 });
+    const settingChanges = feed.changes.filter((c) => c.kind === "settings");
+    expect(settingChanges.map((c) => (c.kind === "settings" ? c.payload.keys : []))).toEqual([
+      ["appearance.palette"],
+      ["appearance.palette"],
+    ]);
   });
 
   test("the MCP listing and the guard rails on the routes", async () => {

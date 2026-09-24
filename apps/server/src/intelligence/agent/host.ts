@@ -359,6 +359,13 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
           target: [settingsTable.scope, settingsTable.deviceId, settingsTable.key],
           set: { value: value as object, updatedAt: now() },
         });
+      // The open clients read their Settings again on this, so the change shows at once.
+      await mailstore.recordChange(db, {
+        workspaceId,
+        kind: "settings",
+        entityId: key,
+        payload: { keys: [key] },
+      });
     },
   };
   return host;

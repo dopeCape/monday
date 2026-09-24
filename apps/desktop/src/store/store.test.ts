@@ -439,6 +439,28 @@ describe("sync", () => {
   });
 });
 
+describe("Settings changed on the Server", () => {
+  test("a settings row in the feed tells the Shell to read its Settings again, and stores nothing", async () => {
+    const heard: string[][] = [];
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      backoff: { minMs: 5, maxMs: 20 },
+      onSettingsChanged: (keys) => heard.push(keys),
+    });
+    server.record({
+      kind: "settings",
+      entityId: "appearance.palette",
+      payload: { keys: ["appearance.palette"] },
+    } as Omit<Change, "seq" | "workspaceId" | "at">);
+    await store.sync();
+    expect(heard).toEqual([["appearance.palette"]]);
+    // Nothing else changes, and a second pull does not tell it again.
+    await store.sync();
+    expect(heard).toHaveLength(1);
+  });
+});
+
 describe("conflicts (ADR 0005)", () => {
   test("archive while offline, then a server move: both land and the user's archive wins", async () => {
     const { store, server } = await open();

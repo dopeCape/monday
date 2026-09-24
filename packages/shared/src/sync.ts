@@ -228,7 +228,17 @@ export type ChangeKind =
   | "judgments"
   | "calendar"
   | "event"
-  | "invite";
+  | "invite"
+  | "settings";
+
+/**
+ * Settings changed on the Server by something other than this client's own
+ * write (the Agent's change_setting, a Workflow): the client reads its
+ * Settings again so the change shows at once, without a restart.
+ */
+export interface SettingsChange {
+  keys: string[];
+}
 
 /** A calendar of the Workspace as the feed carries it; `deleted` when the Provider stopped listing it. */
 export interface CalendarChange {
@@ -421,7 +431,8 @@ export type ChangePayload =
   | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
-  | { kind: "invite"; payload: InviteChange };
+  | { kind: "invite"; payload: InviteChange }
+  | { kind: "settings"; payload: SettingsChange };
 
 export type Change = ChangePayload & {
   seq: number;

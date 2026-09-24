@@ -159,6 +159,8 @@ export interface StoreOptions {
   /** How many Briefs one pull warms at most; the rest wait for the next. */
   briefWarmLimit?: number;
   log?: (message: string) => void;
+  /** Told when the feed says Settings changed on the Server (the Agent's change_setting). */
+  onSettingsChanged?: ((keys: string[]) => void) | undefined;
 }
 
 const CURSOR_KEY = "cursor";
@@ -567,6 +569,9 @@ export function changeStatements(change: Change): Statement[] {
       return [eventUpsert(change.payload)];
     case "invite":
       return [inviteUpsert(change.payload)];
+    case "settings":
+      // Nothing to store: the Shell reads its Settings again (Store.onSettingsChanged).
+      return [];
   }
 }
 
@@ -1038,6 +1043,8 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     });
     await write(statements);
     await driver.exec(FTS_MERGE_SQL);
+    const settingKeys = changes.flatMap((c) => (c.kind === "settings" ? c.payload.keys : []));
+    if (settingKeys.length > 0) options.onSettingsChanged?.(settingKeys);
   };
 
   const drainOutbox = async (result: SyncResult) => {

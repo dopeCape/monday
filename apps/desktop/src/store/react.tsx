@@ -49,6 +49,8 @@ export function StoreProvider({
   // The transport reads its Settings live, so a change applies on the next connection.
   const settingsRef = useRef(shell.settings);
   settingsRef.current = shell.settings;
+  const refreshRef = useRef(shell.refresh);
+  refreshRef.current = shell.refresh;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is Try again
   useEffect(() => {
@@ -74,6 +76,8 @@ export function StoreProvider({
             log,
           }),
           log,
+          // The Agent changed a Setting on the Server: read them again so it shows now.
+          onSettingsChanged: () => void refreshRef.current(),
         });
         if (!disposed) setContent(apiContent(shell.api));
       } else {
