@@ -487,6 +487,25 @@ i.ph-bold > svg {
   width: 30px;
   padding: 0;
 }
+/* Icons in buttons, bare Phosphor SVGs or wrapped in <i class="ph">, at one even
+   whole-pixel size: a size taken from the text (12.5px) or an odd one (17px)
+   lands between pixels in a 30px button and draws blurred. */
+.btn > svg,
+.btn > i.ph,
+.btn > i.ph-fill,
+.btn > i.ph-bold {
+  flex: none;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  font-size: var(--icon-btn);
+  vertical-align: 0;
+}
+.btn > i.ph > svg,
+.btn > i.ph-fill > svg,
+.btn > i.ph-bold > svg {
+  width: 100%;
+  height: 100%;
+}
 .btn.sm {
   height: 26px;
   padding: 0 9px;
@@ -6300,4 +6319,274 @@ button.prov {
 }
 .reauth-notice .btn {
   flex: none;
+}
+
+/* ------------------------------ The attachment viewer: a floating window over the reader ------------------------------ */
+.scrim.viewer-scrim {
+  position: fixed;
+  place-items: center;
+  padding: 24px;
+  z-index: 70;
+}
+.viewer {
+  width: min(1100px, 100%);
+  height: min(88vh, 100%);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  outline: none;
+  animation: viewer-in var(--t-med) var(--ease);
+}
+@keyframes viewer-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+.viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.viewer-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.viewer-title b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viewer-title span,
+.viewer-nav span {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.viewer-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.viewer-body {
+  min-height: 0;
+  overflow: auto;
+  background: var(--sunken);
+}
+.viewer-notice {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 32px;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.viewer-notice.busy {
+  animation: fade-in var(--t-slow) var(--ease);
+}
+.viewer-more {
+  padding: 8px 16px;
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+/* images: fit by default, zoom scrolls */
+.viewer-image {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.viewer-image img {
+  max-width: 100%;
+  max-height: calc(88vh - 90px);
+  object-fit: contain;
+  border-radius: var(--r-sm);
+}
+.viewer-image[data-zoom="zoomed"] {
+  place-items: start;
+}
+.viewer-image[data-zoom="zoomed"] img {
+  max-height: none;
+}
+.viewer-tools {
+  position: sticky;
+  top: 0;
+  justify-self: end;
+  align-self: start;
+  display: flex;
+  gap: 4px;
+  z-index: 1;
+}
+.viewer-audio {
+  display: block;
+  margin: 48px auto;
+  width: min(520px, 90%);
+}
+.viewer-video {
+  display: block;
+  max-width: 100%;
+  max-height: calc(88vh - 70px);
+  margin: 0 auto;
+}
+/* PDF pages and Word documents read as paper */
+.viewer-pages,
+.viewer-docx-pages {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+.viewer-page {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+  max-width: 100%;
+  height: auto;
+}
+.viewer-docx-pages > section.docx {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  color: #111;
+  max-width: 100%;
+}
+/* text, code and the attached email */
+.viewer-text {
+  margin: 0;
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--fg);
+  white-space: pre;
+  tab-size: 2;
+}
+.viewer-text.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+.viewer-email {
+  padding: 16px 20px 0;
+}
+.viewer-email h3 {
+  margin: 0 0 12px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.viewer-email dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 12px;
+  font-size: var(--fs-sm);
+}
+.viewer-email dt {
+  color: var(--fg-faint);
+}
+.viewer-email dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.viewer-email .viewer-text {
+  padding: 12px 0 20px;
+  border-top: 1px solid var(--border);
+}
+/* sheets and CSV */
+.viewer-sheets {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+}
+.viewer-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.viewer-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 6px 10px;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.viewer-tabs button:hover {
+  background: var(--hover);
+}
+.viewer-tabs button.on {
+  background: var(--panel);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.viewer-table {
+  overflow: auto;
+  height: 100%;
+}
+.viewer-table table {
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  background: var(--panel);
+}
+.viewer-table th,
+.viewer-table td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.viewer-table th {
+  position: sticky;
+  top: 0;
+  background: var(--sunken);
+  font-weight: 600;
+}
+/* zip contents */
+.viewer-zip ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 12px;
+}
+.viewer-zip li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+.viewer-zip li:hover {
+  background: var(--hover);
+}
+.viewer-zip .sz {
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+:root[data-transitions="off"] .viewer {
+  animation: none;
 }

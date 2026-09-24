@@ -1394,6 +1394,7 @@ const AREAS: Array<{ key: string; actions: KeyAction[] }> = [
       "thread.archive",
       "thread.snooze",
       "thread.star",
+      "thread.toggle_read",
       "thread.delete",
       "thread.label",
       "thread.move",

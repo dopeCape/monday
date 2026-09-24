@@ -97,6 +97,11 @@ import {
 import { useClock } from "./inbox/useClock.ts";
 import { useExit, useExitValue } from "./inbox/useExit.ts";
 import { type DisplayRow, reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
+import {
+  AttachmentViewer,
+  type ViewerFile,
+  type ViewerStrings,
+} from "./inbox/viewer/AttachmentViewer.tsx";
 import { Palette, type PaletteCommand } from "./Palette.tsx";
 
 export interface SyncProgress {
@@ -850,7 +855,9 @@ export function Inbox({
 
   const focusAgent = useCallback(() => {
     setAgentOpen(true);
-    queueMicrotask(() => document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.focus());
+    queueMicrotask(() =>
+      document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.focus(),
+    );
   }, []);
 
   const startReply = useCallback(
@@ -862,7 +869,12 @@ export function Inbox({
     [thread, inbox, compose],
   );
 
-  const openAttachment = useCallback(
+  // The attachment open in the viewer: the files of its message and which one.
+  const [viewing, setViewing] = useState<{
+    files: readonly ViewerFile[];
+    index: number;
+  } | null>(null);
+  const downloadAttachment = useCallback(
     async (attachmentId: string) => {
       const all = messages.flatMap((m) => m.attachments);
       const meta = all.find((a) => a.id === attachmentId);
@@ -877,6 +889,47 @@ export function Inbox({
       }
     },
     [messages, inbox, compose, t],
+  );
+  // Opening an attachment previews it inside monday (reader.attachment_preview),
+  // else downloads it as before.
+  const openAttachment = useCallback(
+    async (attachmentId: string) => {
+      const owner = messages.find((m) => m.attachments.some((a) => a.id === attachmentId));
+      if (!owner || !settings["reader.attachment_preview"]) {
+        await downloadAttachment(attachmentId);
+        return;
+      }
+      const files = owner.attachments.map((a) => ({
+        id: a.id,
+        name: a.name,
+        mediaType: a.mediaType,
+        size: a.size,
+      }));
+      setViewing({ files, index: files.findIndex((f) => f.id === attachmentId) });
+    },
+    [messages, settings, downloadAttachment],
+  );
+  const viewerStrings = useMemo<ViewerStrings>(
+    () => ({
+      close: t("strings.viewer.close"),
+      download: t("strings.viewer.download"),
+      previous: t("strings.viewer.previous"),
+      next: t("strings.viewer.next"),
+      loading: t("strings.viewer.loading"),
+      noPreview: t("strings.viewer.no_preview"),
+      tooLarge: t("strings.viewer.too_large"),
+      failed: t("strings.viewer.failed"),
+      rowsMore: t("strings.viewer.rows_more"),
+      pageOf: t("strings.viewer.page_of"),
+      zipFiles: t("strings.viewer.zip_files"),
+      from: t("strings.viewer.from"),
+      to: t("strings.viewer.to"),
+      date: t("strings.viewer.date"),
+      zoomIn: t("strings.viewer.zoom_in"),
+      zoomOut: t("strings.viewer.zoom_out"),
+      label: t("strings.viewer.label"),
+    }),
+    [t],
   );
 
   const attachmentSrc = useCallback(
@@ -1121,6 +1174,7 @@ export function Inbox({
     "thread.snooze": () => !overlay && openPicker("snooze", acting()),
     "thread.delete": () => !overlay && request("delete", acting()),
     "thread.star": () => !overlay && void toggleStar(acting()),
+    "thread.toggle_read": () => !overlay && void toggleRead(acting()),
     "thread.label": () => {
       if (overlay) return false;
       setPaletteQuery(t("strings.inbox.action.label"));
@@ -1774,6 +1828,7 @@ export function Inbox({
             snooze: key("thread.snooze"),
             delete: key("thread.delete"),
             close: key("sheet.close"),
+            read: key("thread.toggle_read"),
           }}
           onClose={() => setReaderOpen(false)}
           onAsk={focusAgent}
@@ -1925,6 +1980,19 @@ export function Inbox({
           contacts={contacts}
           sections={sectionOptions}
           describeIntent={describe}
+        />
+      ) : null}
+      {viewing ? (
+        <AttachmentViewer
+          files={viewing.files}
+          index={viewing.index}
+          onIndex={(index) => setViewing((v) => (v ? { ...v, index } : v))}
+          onClose={() => setViewing(null)}
+          load={(id) => inbox.attachmentBytes(id)}
+          onDownload={(f) => void downloadAttachment(f.id)}
+          strings={viewerStrings}
+          maxBytes={settings["reader.preview_max_mb"] * 1024 * 1024}
+          maxRows={settings["reader.preview_max_rows"]}
         />
       ) : null}
     </div>

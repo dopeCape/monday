@@ -28,6 +28,8 @@
   --fs-2xl: 22px;
   --fs-3xl: 28px;
   --icon: 17px;
+  /* An icon inside a button: even and whole, so it centers on a whole pixel in the even-height buttons. */
+  --icon-btn: 16px;
   --avatar: 30px;
   --head-h: 50px;
   --row-h: 44px;
@@ -68,6 +70,7 @@
   --fs-2xl: 19px;
   --fs-3xl: 24px;
   --icon: 15px;
+  --icon-btn: 14px;
   --avatar: 26px;
   --head-h: 42px;
   --row-h: 34px;
@@ -90,6 +93,7 @@
   --fs-2xl: 24px;
   --fs-3xl: 31px;
   --icon: 19px;
+  --icon-btn: 18px;
   --avatar: 34px;
   --head-h: 56px;
   --row-h: 52px;

@@ -33,6 +33,8 @@ import {
   ArchiveIcon,
   ClockIcon,
   DotsThreeIcon,
+  EnvelopeSimpleIcon,
+  EnvelopeSimpleOpenIcon,
   FolderSimpleIcon,
   LightningIcon,
   StarIcon,
@@ -91,7 +93,7 @@ export interface ReaderProps {
   strings: ReaderStrings;
   messageStrings?: Partial<MessageStrings> | undefined;
   /** Hotkeys for the toolbar titles, as the UI prints them. */
-  keys: { archive: string; snooze: string; delete: string; close: string };
+  keys: { archive: string; snooze: string; delete: string; close: string; read?: string };
   /** Quoted history starts folded (a Setting). */
   collapseQuoted?: boolean | undefined;
   /** The reader.load_remote_images Setting: HTML bodies show remote images without asking. */
@@ -225,6 +227,21 @@ export function Reader({
             <Btn icon title={title(strings.delete, keys.delete)} onClick={onDelete}>
               <TrashIcon />
             </Btn>
+            <Btn
+              icon
+              title={
+                keys.read
+                  ? title(thread.unread ? strings.read : strings.unread, keys.read)
+                  : thread.unread
+                    ? strings.read
+                    : strings.unread
+              }
+              aria-label={thread.unread ? strings.read : strings.unread}
+              data-toggle="read"
+              onClick={onToggleRead}
+            >
+              {thread.unread ? <EnvelopeSimpleOpenIcon /> : <EnvelopeSimpleIcon />}
+            </Btn>
             {actions?.length ? <span className="vr" /> : null}
             {actions?.map((a) => (
               <Btn
@@ -251,14 +268,10 @@ export function Reader({
       {moreExit.mounted ? (
         <Picker
           label={strings.more}
-          items={[
-            { key: "star", label: thread.starred ? strings.unstar : strings.star },
-            { key: "read", label: thread.unread ? strings.read : strings.unread },
-          ]}
-          onPick={(key) => {
+          items={[{ key: "star", label: thread.starred ? strings.unstar : strings.star }]}
+          onPick={() => {
             setMore(false);
-            if (key === "star") onStar();
-            else onToggleRead();
+            onStar();
           }}
           onClose={() => setMore(false)}
           leaving={moreExit.leaving}

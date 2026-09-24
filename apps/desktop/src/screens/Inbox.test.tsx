@@ -707,10 +707,12 @@ describe("the reader", () => {
     const more = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")].find(
       (b) => b.title === "More",
     );
-    await act(async () => more?.click());
-    const item = [...document.querySelectorAll<HTMLButtonElement>(".reader .pop-item")].find((b) =>
-      b.textContent?.includes("Mark unread"),
+    // The read toggle is a button beside Delete now, not in More.
+    expect(more).toBeDefined();
+    const item = document.querySelector<HTMLButtonElement>(
+      '.reader .col-head [data-toggle="read"]',
     );
+    expect(item?.title).toStartWith("Mark unread");
     await act(async () => item?.click());
     expect(calls).toEqual(['markRead:["e1"]', 'markUnread:["e1"]']);
     expect(inbox.thread("e1")?.unread).toBe(true);
@@ -884,7 +886,7 @@ describe("the reader", () => {
     expect(reader()).toBe("e2");
   });
 
-  test("the reader's More menu stars and marks unread", async () => {
+  test("the reader's More menu stars; marking unread is a button beside Delete, and a key", async () => {
     const { inbox, calls } = spy(fixtureInbox());
     await mount({ inbox, initialOpen: "e3" });
     const more = [...document.querySelectorAll<HTMLButtonElement>(".reader .col-head .btn")].find(
@@ -892,10 +894,18 @@ describe("the reader", () => {
     );
     await act(async () => more?.click());
     const items = [...document.querySelectorAll<HTMLButtonElement>(".reader .pop .pop-item")];
-    expect(items.map((i) => i.textContent)).toEqual(["Star", "Mark unread"]);
-    await act(async () => items[1]?.click());
+    expect(items.map((i) => i.textContent)).toEqual(["Star"]);
+    await act(async () => more?.click());
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '.reader .col-head [data-toggle="read"]',
+    );
+    expect(toggle?.title).toBe("Mark unread (U)");
+    await act(async () => toggle?.click());
     expect(calls).toEqual(['markUnread:["e3"]']);
     expect(toast()).toBe("Marked unreadUndo Z");
+    // The keymap's key toggles it back.
+    await press("u");
+    expect(calls).toEqual(['markUnread:["e3"]', 'markRead:["e3"]']);
   });
 });
 
