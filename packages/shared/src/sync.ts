@@ -267,6 +267,8 @@ export interface EventChange {
   createdByAgent: boolean;
   updatedAt: IsoDate;
   deleted: boolean;
+  /** Minutes before the start to remind; null or absent keeps the calendar's default. */
+  reminders?: number[] | null | undefined;
 }
 
 /** An Invite as the feed carries it: everything the invite bar shows but the title, which is content. */
