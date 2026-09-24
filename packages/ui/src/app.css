@@ -6792,3 +6792,24 @@ button.prov {
 :root[data-transitions="off"] .viewer {
   animation: none;
 }
+
+/* ------------------------------ Dragging Threads into the Agent ------------------------------ */
+/* The wrapper takes no box: the column or dock inside keeps its place in the grid. */
+.agent-drop {
+  display: contents;
+}
+/* While a row is dragged, the Agent shows itself as the place to drop; over it, it says so plainly. */
+:root[data-dragging="threads"] .agent-col,
+:root[data-dragging="threads"] .agent-dock .agent-bar {
+  outline: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -4px;
+  transition: outline-color var(--t-fast) var(--ease);
+}
+:root[data-drop-over="agent"] .agent-col,
+:root[data-drop-over="agent"] .agent-dock .agent-bar {
+  outline: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+.row[draggable="true"] {
+  -webkit-user-drag: element;
+}

@@ -29,6 +29,7 @@ import {
   cleanLabel,
   type MentionItem,
   mentionItems,
+  THREAD_DRAG_TYPE,
 } from "./mentions.tsx";
 import { messagesOf, messageTime } from "./messages.ts";
 import { turnText } from "./runtime.ts";
@@ -297,6 +298,56 @@ describe("the @ mention menu", () => {
     });
     await type("@");
     expect(q('.agent-menu[data-kind="mentions"]')).toBeNull();
+  });
+});
+
+describe("Threads dropped into the Agent", () => {
+  /** A drag's data as the browser hands it over: the types during dragover, the data on drop. */
+  function dataTransfer(payload: Record<string, string>) {
+    return {
+      types: Object.keys(payload),
+      getData: (type: string) => payload[type] ?? "",
+      dropEffect: "none",
+    };
+  }
+  function fire(target: Element | null, type: string, data: ReturnType<typeof dataTransfer>) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", { value: data });
+    act(() => {
+      target?.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  test("a drop of rows puts them in the bar as Thread mentions the Agent can act on", async () => {
+    const client = fakeAgentClient({ turns: [answer("Done.")] });
+    await mount(client);
+    const threads = JSON.stringify([
+      { id: "t1", subject: "Quarterly report [draft]" },
+      { id: "t2", subject: "" },
+    ]);
+    const data = dataTransfer({ [THREAD_DRAG_TYPE]: threads, "text/plain": "Quarterly report" });
+    const column = q(".agent-col");
+    const over = fire(column, "dragover", data);
+    // Accepting the drag: the browser only drops where dragover was cancelled.
+    expect(over.defaultPrevented).toBe(true);
+    expect(document.documentElement.getAttribute("data-drop-over")).toBe("agent");
+    fire(column, "drop", data);
+    await settle();
+    expect(textState.value).toBe(
+      ":thread[Quarterly report draft]{name=t1} :thread[(no subject)]{name=t2} ",
+    );
+    expect(document.documentElement.getAttribute("data-drop-over")).toBeNull();
+  });
+
+  test("a drag without Threads (a file, some text) is left alone", async () => {
+    const client = fakeAgentClient({ turns: [] });
+    await mount(client);
+    const data = dataTransfer({ "text/plain": "hello" });
+    const over = fire(q(".agent-col"), "dragover", data);
+    expect(over.defaultPrevented).toBe(false);
+    fire(q(".agent-col"), "drop", data);
+    expect(textState.value).toBe("");
   });
 });
 

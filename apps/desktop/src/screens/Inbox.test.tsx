@@ -909,6 +909,58 @@ describe("the reader", () => {
   });
 });
 
+describe("dragging rows into the Agent", () => {
+  function drag(id: string) {
+    const set: Record<string, string> = {};
+    const event = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "dataTransfer", {
+      value: {
+        setData: (type: string, value: string) => {
+          set[type] = value;
+        },
+        effectAllowed: "none",
+      },
+    });
+    act(() => {
+      document.querySelector(`.row[data-thread=${id}]`)?.dispatchEvent(event);
+    });
+    return set;
+  }
+
+  test("a row carries its Thread; a row in the selection carries the whole selection", async () => {
+    await mount();
+    const row = document.querySelector<HTMLElement>(".row[data-thread=e2]");
+    expect(row?.getAttribute("draggable")).toBe("true");
+    const one = drag("e2");
+    expect(
+      JSON.parse(one["application/x-monday-threads"] ?? "[]").map((t: { id: string }) => t.id),
+    ).toEqual(["e2"]);
+    expect(document.documentElement.getAttribute("data-dragging")).toBe("threads");
+    await act(async () => {
+      document
+        .querySelector(".row[data-thread=e2]")
+        ?.dispatchEvent(new Event("dragend", { bubbles: true }));
+    });
+    expect(document.documentElement.getAttribute("data-dragging")).toBeNull();
+
+    await press("x");
+    await press("J", { shiftKey: true });
+    const many = drag("e1");
+    const carried = JSON.parse(many["application/x-monday-threads"] ?? "[]") as {
+      id: string;
+      subject: string;
+    }[];
+    expect(carried.map((t) => t.id)).toEqual(["e1", "e2"]);
+    expect(carried[0]?.subject.length).toBeGreaterThan(0);
+    // Outside the selection, a row carries only itself.
+    expect(
+      JSON.parse(drag("e4")["application/x-monday-threads"] ?? "[]").map(
+        (t: { id: string }) => t.id,
+      ),
+    ).toEqual(["e4"]);
+  });
+});
+
 describe("strings", () => {
   test("nothing user-visible carries an em-dash", async () => {
     await mount({ initialOpen: "e1" });

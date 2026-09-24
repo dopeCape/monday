@@ -36,6 +36,53 @@ export function useMentionItems(): readonly MentionItem[] {
   return useContext(ComposerMentionsContext);
 }
 
+/** What a list row carries when it is dragged: its Thread, or the whole multi-select. */
+export const THREAD_DRAG_TYPE = "application/x-monday-threads";
+
+export interface DraggedThread {
+  id: string;
+  subject: string;
+}
+
+/** Puts dragged Threads on a drag; plain text too, so dropping elsewhere reads sensibly. */
+export function writeThreadDrag(data: DataTransfer, threads: readonly DraggedThread[]): void {
+  data.setData(THREAD_DRAG_TYPE, JSON.stringify(threads));
+  data.setData("text/plain", threads.map((t) => t.subject).join("\n"));
+  data.effectAllowed = "copy";
+}
+
+/** Whether a drag carries Threads (types are readable during dragover, the data only on drop). */
+export function carriesThreads(data: DataTransfer | null): boolean {
+  return !!data && [...data.types].includes(THREAD_DRAG_TYPE);
+}
+
+export function readThreadDrag(data: DataTransfer | null): DraggedThread[] {
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data.getData(THREAD_DRAG_TYPE) || "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (t): t is DraggedThread =>
+        !!t && typeof t === "object" && typeof (t as DraggedThread).id === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Dropped Threads as the same directives an @ pick inserts, so the Agent reads them alike. */
+export function threadDirectives(threads: readonly DraggedThread[], untitled: string): string {
+  return threads
+    .map((t) =>
+      unstable_defaultDirectiveFormatter.serialize({
+        id: t.id,
+        type: "thread",
+        label: cleanLabel(t.subject) || untitled,
+      }),
+    )
+    .join(" ");
+}
+
 /** A label the directive syntax can carry: no brackets or braces, one line, not too long. */
 export function cleanLabel(label: string): string {
   const one = label

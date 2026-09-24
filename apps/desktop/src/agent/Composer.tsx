@@ -18,9 +18,10 @@ import {
   type Suggestion,
 } from "@monday/ui";
 import { WarningCircleIcon } from "@phosphor-icons/react";
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { openExternal } from "../platform/open.ts";
 import { ComposerEnvContext, useComposerEnvValue } from "./aui/context.tsx";
+import { carriesThreads, readThreadDrag, threadDirectives } from "./aui/mentions.tsx";
 import { useMondayRuntime } from "./aui/runtime.ts";
 import {
   Bar,
@@ -212,54 +213,91 @@ function ComposerBody({
     runtime: strings["strings.agent.open_runtime"],
   };
 
+  // Threads dragged from the list land in the bar as mentions, the same
+  // directives an @ pick inserts, ready for the user to say what to do.
+  const dropHandlers = {
+    onDragOver: (e: DragEvent<HTMLDivElement>) => {
+      if (!carriesThreads(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      document.documentElement.setAttribute("data-drop-over", "agent");
+    },
+    onDragLeave: (e: DragEvent<HTMLDivElement>) => {
+      const next = e.relatedTarget as Node | null;
+      if (next && e.currentTarget.contains(next)) return;
+      document.documentElement.removeAttribute("data-drop-over");
+    },
+    onDrop: (e: DragEvent<HTMLDivElement>) => {
+      document.documentElement.removeAttribute("data-drop-over");
+      document.documentElement.removeAttribute("data-dragging");
+      const threads = readThreadDrag(e.dataTransfer);
+      if (threads.length === 0) return;
+      e.preventDefault();
+      const directives = threadDirectives(threads, strings["strings.agent.drop_untitled"]);
+      const before = text.trim();
+      onTextChange(`${before ? `${before} ` : ""}${directives} `);
+      onOpenChange?.(true);
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      });
+    },
+  };
+
   if (mode === "bottom") {
     return (
-      <AgentDock>
-        {open || shown ? (
-          <AgentPanel
-            runtime={runtime}
-            onRuntime={onOpenRuntime}
-            onNew={onNew}
-            onHistory={toggleHistory}
-            onClose={() => onOpenChange?.(false)}
-            labels={labels}
-            className={leaving ? "leaving" : undefined}
-          >
-            {body}
-            {chips}
-          </AgentPanel>
-        ) : null}
-        <Bar
-          placeholder={placeholder}
-          text={text}
-          onTextChange={onTextChange}
-          onFocus={() => onOpenChange?.(true)}
-          inputRef={inputRef}
-          commands={!plain}
-        />
-      </AgentDock>
+      <div className="agent-drop" {...dropHandlers}>
+        <AgentDock>
+          {open || shown ? (
+            <AgentPanel
+              runtime={runtime}
+              onRuntime={onOpenRuntime}
+              onNew={onNew}
+              onHistory={toggleHistory}
+              onClose={() => onOpenChange?.(false)}
+              labels={labels}
+              className={leaving ? "leaving" : undefined}
+            >
+              {body}
+              {chips}
+            </AgentPanel>
+          ) : null}
+          <Bar
+            placeholder={placeholder}
+            text={text}
+            onTextChange={onTextChange}
+            onFocus={() => onOpenChange?.(true)}
+            inputRef={inputRef}
+            commands={!plain}
+          />
+        </AgentDock>
+      </div>
     );
   }
 
   return (
-    <AgentColumn
-      side={mode}
-      runtime={runtime}
-      onRuntime={onOpenRuntime}
-      onNew={onNew}
-      onHistory={toggleHistory}
-      labels={labels}
-      bare={plain}
-    >
-      {body}
-      {chips}
-      <Bar
-        placeholder={placeholder}
-        text={text}
-        onTextChange={onTextChange}
-        inputRef={inputRef}
-        commands={!plain}
-      />
-    </AgentColumn>
+    <div className="agent-drop" {...dropHandlers}>
+      <AgentColumn
+        side={mode}
+        runtime={runtime}
+        onRuntime={onOpenRuntime}
+        onNew={onNew}
+        onHistory={toggleHistory}
+        labels={labels}
+        bare={plain}
+      >
+        {body}
+        {chips}
+        <Bar
+          placeholder={placeholder}
+          text={text}
+          onTextChange={onTextChange}
+          inputRef={inputRef}
+          commands={!plain}
+        />
+      </AgentColumn>
+    </div>
   );
 }

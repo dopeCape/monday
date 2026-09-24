@@ -56,7 +56,7 @@ Built on Assistant UI's headless primitives (action bar, composer trigger popove
 ## Handoffs
 
 - `/` from anywhere focuses the composer. Tab from the search box or palette sends the typed text with the parsed operators attached. "Ask" in the reader header sends "About this thread" with the Thread attached.
-- Attaching context: dragging a Thread or an Event onto the input attaches it. The Agent sees attached items as tool results, not pasted text.
+- Attaching context: dragging a Thread (or, from a row in the multi-select, the whole selection) from the list onto the Agent, the panel or the bar, puts each Thread in the input as a mention, the same directive an @ pick inserts, so the user adds what to do and sends. The Agent reads a mention as a pointer to that Thread's id and uses its tools on it. While a row is dragged the Agent is outlined as the place to drop. Dropping an Event is not built yet.
 
 ## Runtime differences
 

@@ -35,6 +35,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { writeThreadDrag } from "../agent/aui/mentions.tsx";
 import { Composer as AgentComposer, composerStrings, PreviewView } from "../agent/Composer.tsx";
 import { runtimeLine } from "../agent/runtimeLine.ts";
 import { suggestionsFor } from "../agent/suggestions.ts";
@@ -1510,6 +1511,16 @@ export function Inbox({
         }}
         onArchive={(id) => request("archive", [id])}
         onSnooze={(id) => openPicker("snooze", [id])}
+        onDragStart={(id, e) => {
+          const ids = selection.includes(id) ? selection : [id];
+          writeThreadDrag(
+            e.dataTransfer,
+            ids.map((x) => ({ id: x, subject: inbox.thread(x)?.subject ?? "" })),
+          );
+          // The Agent lights up as the place to drop while the drag lasts.
+          document.documentElement.setAttribute("data-dragging", "threads");
+        }}
+        onDragEnd={() => document.documentElement.removeAttribute("data-dragging")}
         onAsk={() => {
           setFocus(th.id);
           focusAgent();

@@ -15,7 +15,8 @@
         "title": "monday",
         "width": 1440,
         "height": 900,
-        "decorations": false
+        "decorations": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

@@ -2,7 +2,7 @@
 // under :root[data-list="split"] reflows it into two lines.
 import type { Tag, Thread } from "@monday/shared";
 import { ArchiveIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
-import type { MouseEvent, ReactNode } from "react";
+import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { cx, formatListTime, highlightParts, personName } from "../format.ts";
 import { Icon } from "./icon.tsx";
 import { Btn, Mark } from "./primitives.tsx";
@@ -22,6 +22,9 @@ export interface MessageRowProps {
   onArchive?: ((threadId: string) => void) | undefined;
   onSnooze?: ((threadId: string) => void) | undefined;
   onAsk?: ((threadId: string) => void) | undefined;
+  /** Makes the row draggable (into the Agent); the handler fills the drag's data. */
+  onDragStart?: ((threadId: string, event: DragEvent<HTMLDivElement>) => void) | undefined;
+  onDragEnd?: (() => void) | undefined;
   className?: string | undefined;
   /** Words a search matched, marked in the sender, subject and snippet. */
   highlight?: readonly string[] | undefined;
@@ -47,6 +50,8 @@ export function MessageRow({
   onArchive,
   onSnooze,
   onAsk,
+  onDragStart,
+  onDragEnd,
   className,
   highlight,
 }: MessageRowProps) {
@@ -62,6 +67,9 @@ export function MessageRow({
       role="option"
       aria-selected={selected ?? false}
       data-thread={thread.id}
+      draggable={onDragStart ? true : undefined}
+      onDragStart={onDragStart ? (e) => onDragStart(thread.id, e) : undefined}
+      onDragEnd={onDragEnd}
       onClick={() => onOpen?.(thread.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter") onOpen?.(thread.id);

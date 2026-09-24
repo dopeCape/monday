@@ -4071,6 +4071,11 @@ export const settingsSchema = {
   "strings.agent.copy_code": str("ai", "Copy a code block", "Copy code"),
   "strings.agent.copy_table": str("ai", "Copy a table", "Copy table"),
   "strings.agent.latest": str("ai", "Scroll to the newest turn", "Jump to the latest"),
+  "strings.agent.drop_untitled": str(
+    "ai",
+    "A Thread dropped into the Agent without a subject",
+    "(no subject)",
+  ),
   "strings.agent.edit": str("ai", "Put a sent turn back in the composer", "Edit and resend"),
   "strings.agent.reload": str("ai", "Send the last turn again", "Ask again"),
   "strings.agent.working_for": str("ai", "Turn in progress, with time", "Working for {seconds}s"),
