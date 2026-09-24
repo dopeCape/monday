@@ -111,6 +111,8 @@ pub fn exec(conn: &Connection, sql: &str, params: &[Value]) -> Result<usize, Str
 }
 
 /// Runs one statement and returns its rows as JSON objects keyed by column name.
+/// The app answers with `query_packed`; this shape is what the tests read.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn query(conn: &Connection, sql: &str, params: &[Value]) -> Result<Vec<Row>, String> {
     let bound: Vec<SqlValue> = params.iter().map(to_sql).collect();
     let mut stmt = conn.prepare_cached(sql).map_err(|e| e.to_string())?;
