@@ -18,3 +18,4 @@ apps/server/data
 
 # screenshot diffs from scripts/shot.ts
 apps/desktop/test/diffs
+.demo/

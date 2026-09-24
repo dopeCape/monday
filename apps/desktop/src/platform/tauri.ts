@@ -175,6 +175,59 @@ export interface FakePlatformOptions {
 }
 
 /** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
+/** Where the browser dev server remembers a demo server's target (scripts/demo.ts). */
+export const DEMO_TARGET_KEY = "monday.demo.target";
+
+function demoSecret(key: string): string | null {
+  if (key !== "server.cloud" || typeof localStorage === "undefined") return null;
+  try {
+    return localStorage.getItem(DEMO_TARGET_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function forgetDemoSecret(key: string): void {
+  if (key !== "server.cloud" || typeof localStorage === "undefined") return;
+  try {
+    localStorage.removeItem(DEMO_TARGET_KEY);
+  } catch {}
+}
+
+/**
+ * On the browser dev server, `?demo=<server url>&token=<token>` (printed by
+ * scripts/demo.ts) connects to that server instead of the design fixture, and
+ * remembers it; `?demo=off` forgets it. Returns true when a demo server is set.
+ */
+export function adoptDemoTarget(): boolean {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return false;
+  const q = new URLSearchParams(window.location.search);
+  const demo = q.get("demo");
+  try {
+    if (demo === "off") {
+      localStorage.removeItem(DEMO_TARGET_KEY);
+    } else if (demo && q.get("token")) {
+      localStorage.setItem(
+        DEMO_TARGET_KEY,
+        JSON.stringify({
+          baseUrl: demo.replace(/\/+$/, ""),
+          token: q.get("token"),
+          deviceId: "demo-browser",
+        }),
+      );
+    }
+    if (demo) {
+      q.delete("demo");
+      q.delete("token");
+      const rest = q.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    }
+    return localStorage.getItem(DEMO_TARGET_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function recoveryFileText(key: string): string {
   return `monday recovery key. This unlocks every message on your server. Keep it private; without it, a new install cannot read your mail.\n${key}\n`;
 }
@@ -223,12 +276,15 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
       const content = options.files?.[path];
       return { path, exists: content !== undefined, text: content ?? "" };
     },
-    secretGet: async (k) => secrets.get(k) ?? null,
+    // The browser dev server keeps its secrets for the tab's life; a demo
+    // server's target (scripts/demo.ts) is kept in localStorage so a reload stays in it.
+    secretGet: async (k) => secrets.get(k) ?? demoSecret(k),
     secretSet: async (k, v) => {
       secrets.set(k, v);
     },
     secretDelete: async (k) => {
       secrets.delete(k);
+      forgetDemoSecret(k);
     },
     sidecarInfo: async () => ({ port: 0, token: "", running: false }),
     onSidecarReady: () => () => {},

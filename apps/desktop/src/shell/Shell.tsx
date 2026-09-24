@@ -41,6 +41,7 @@ import {
   saveCloudTarget,
 } from "../platform/cloud.ts";
 import {
+  adoptDemoTarget,
   type ConfigFile,
   type Platform,
   type ProcessRunner,
@@ -298,8 +299,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       if (p.isTauri) setSpawn(() => p.spawn);
       setHostKind(p.isTauri ? "tauri" : "browser");
       // The browser dev server is the design fixture, whose world has the assistant
-      // everywhere: its Workspace's saved Settings say the full AI level.
-      if (!p.isTauri) {
+      // everywhere: its Workspace's saved Settings say the full AI level. A demo
+      // server (scripts/demo.ts) is a real one instead, starting from nothing.
+      if (!p.isTauri && !adoptDemoTarget()) {
         setStored((s) => ({
           "ai.level": "automate",
           // The mock's nav shows one Section the user placed there (design/js/data.js).

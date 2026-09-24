@@ -62,6 +62,8 @@ export interface FakeProviderOptions {
   /** False to report no push. */
   push?: boolean;
   pageSize?: number;
+  /** A pause before each page and each body, so a demo's first sync takes long enough to watch. */
+  latencyMs?: number;
   /**
    * Hands out a fake calendar from Session.calendar() (slice 18), playing
    * Google or Graph; absent, the Session has no calendar API and the
@@ -100,6 +102,9 @@ export function createFakeProvider(
 ): FakeProvider {
   const threads = options.threads ?? false;
   const page = options.pageSize ?? 200;
+  const latency = options.latencyMs ?? 0;
+  const pause = () =>
+    latency > 0 ? new Promise((r) => setTimeout(r, latency)) : Promise.resolve();
   const store = new Map<string, Stored>();
   let log: LogEntry[] = [];
   let seq = 0;
@@ -248,6 +253,7 @@ export function createFakeProvider(
 
     async *syncMailbox(mailboxId, state, syncOptions: SyncOptions = {}) {
       count("syncMailbox");
+      await pause();
       const limit = syncOptions.limit ?? page;
       let stored: FakeState | null = null;
       try {
@@ -314,6 +320,7 @@ export function createFakeProvider(
 
     async fetchMessage(id) {
       count("fetchMessage");
+      await pause();
       const s = require(id);
       const attachments: RawAttachment[] = s.attachments.map((a) => {
         const bytes = encoder.encode(a.text);

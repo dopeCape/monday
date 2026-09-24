@@ -15,11 +15,27 @@ import { createTypeSafeJudge, type JudgeModel } from "../src/intelligence/index.
 import { createJobs, type Jobs, type JobsOptions } from "../src/jobs/index.ts";
 import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
 import { type CredentialStore, createCredentialStore } from "../src/providers/credentials.ts";
-import { createProviderRegistry, type ProviderRegistry } from "../src/providers/index.ts";
+import {
+  createFakeProvider,
+  createProviderRegistry,
+  generateFixture,
+  type ProviderRegistry,
+} from "../src/providers/index.ts";
 import { createPushManager, type PushManager, readPushSettings } from "../src/providers/push.ts";
 import { createSyncEngine, type SyncEngine } from "../src/providers/sync.ts";
 import { readGlobalSetting } from "../src/settings/read.ts";
 import { unlockAtBoot } from "./root-key.ts";
+
+/** The fake mailbox a demo connects to, for the IMAP and JMAP paths. */
+function demoProviders(env: NodeJS.ProcessEnv) {
+  const latencyMs = Number(env.MONDAY_DEMO_LATENCY_MS ?? 700);
+  const fake = createFakeProvider(generateFixture(), {
+    pageSize: 8,
+    latencyMs: Number.isFinite(latencyMs) ? latencyMs : 700,
+    calendar: { source: "google" },
+  });
+  return { imap: fake, jmap: fake };
+}
 
 export interface ServicesOptions {
   db: Db;
@@ -106,6 +122,10 @@ export async function createServices(options: ServicesOptions): Promise<Services
         return seconds * 1000;
       },
     },
+    // MONDAY_DEMO=1 (scripts/demo.ts, never the app): an IMAP or JMAP Account
+    // connects to a fake mailbox with a calendar, paced by MONDAY_DEMO_LATENCY_MS
+    // so the first sync can be watched. Any address; any password but "wrong".
+    ...(env.MONDAY_DEMO === "1" ? { overrides: demoProviders(env) } : {}),
   });
   const sync = createSyncEngine({ db, mailstore, providers, credentials, log: debug });
   sync.registerSteps(jobs);
