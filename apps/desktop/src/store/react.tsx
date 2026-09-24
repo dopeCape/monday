@@ -145,7 +145,14 @@ export function StorePoolProvider({ children }: { children: ReactNode }) {
     });
   }, [api]);
 
-  useEffect(() => () => void pool.close(), [pool]);
+  // The pool lives as long as the window: React's StrictMode unmounts and
+  // remounts once in development, and closing here would leave it closed for
+  // good. It closes when the page goes away.
+  useEffect(() => {
+    const close = () => void pool.close();
+    window.addEventListener("pagehide", close);
+    return () => window.removeEventListener("pagehide", close);
+  }, [pool]);
   // A new Server target remakes every wake connection.
   const server = shell.server;
   const first = useRef(true);
