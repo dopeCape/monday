@@ -466,10 +466,16 @@ describe("the Calendar screen", () => {
     expect(el.querySelectorAll(".cal-tg-dh")).toHaveLength(7);
     // "m" in the Inbox moves a Thread; here it is only the Month view.
     await press("k", { metaKey: true });
-    const input = document.querySelector<HTMLInputElement>(
-      ".cmdk input, .palette input, input[placeholder]",
-    );
+    const input = document.querySelector<HTMLInputElement>(".cmdk input");
     expect(input).not.toBeNull();
+    await typeInto(input, "3 oct");
+    const jump = [...document.querySelectorAll(".cmdk *")].find(
+      (n) => n.children.length === 0 && n.textContent === "Calendar: go to Sat 3 Oct 2026",
+    );
+    expect(jump).not.toBeUndefined();
+    await click(jump?.closest("button, [role='option']") ?? jump);
+    await act(tick);
+    expect(heading()).toBe("September to October 2026");
   });
 
   test("Agenda groups by day with answer buttons on the invite; Month opens a day", async () => {

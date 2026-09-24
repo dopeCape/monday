@@ -364,6 +364,9 @@ export async function createStoreCalendar(
   const fetchOthers = async (from: number, to: number) => {
     await loadAccounts();
     if (!wantOthers()) {
+      // Any fetch still on its way is stale now.
+      fetching += 1;
+      covered = null;
       if (other.size > 0) {
         other.clear();
         emit();

@@ -9,7 +9,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 1. [`CONTEXT.md`](../../CONTEXT.md), the glossary. Every term in every document below is defined there.
 2. The eleven ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
 3. [`architecture.md`](./architecture.md), how the modules, deployments and data fit together, with the data model and API shape.
-4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
+4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
 5. [`slices.md`](./slices.md), the ordered implementation plan.
 6. The research under [`docs/research/`](../research/) on the `research/*` branches, for the provider and platform facts behind the decisions.
 
@@ -28,7 +28,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Repo, modules, store, tests, UI stack | ADR 0009 |
 | Drafts, send, voice, attachments | ADR 0010 |
 | Search and command palette | ADR 0011 |
-| Calendar | issue 15, issue 16, research 6 |
+| Calendar | `calendar.md`, issue 15, issue 16, research 6 |
 | External MCP | `external-mcp.md` |
 | Onboarding | `onboarding.md` |
 | Design system and layouts | `design/README.md`, `design/` mock |
