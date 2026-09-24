@@ -44,15 +44,17 @@ const onboardingContext: ToolDefinition<{ senders?: number | undefined }> = {
     const seam = seamOf(ctx);
     if (!seam) return { kind: "refused", text: REFUSED };
     const workspaceId = ctx.host.workspaceId;
-    const [level, senders, threadCount, groups, workflows] = await Promise.all([
+    const [level, senders, threadCount, groups, workflows, keymap] = await Promise.all([
       seam.level(),
       seam.topSenders(workspaceId, input.senders ?? 8),
       seam.threadCount(workspaceId),
       ctx.host.listGroups(),
       ctx.extensions?.workflows?.list(workspaceId) ?? Promise.resolve([]),
+      ctx.host.readSetting("keyboard.keymap"),
     ]);
     const lines = [
       `AI level: ${level}.`,
+      `Keymap in effect: ${String(keymap.value)}.`,
       `Threads synced: ${threadCount}.`,
       senders.length
         ? `Top senders: ${senders.map((s) => `${s.name || s.email} <${s.email}> (${plural(s.messages, "message")})`).join("; ")}.`
@@ -67,7 +69,14 @@ const onboardingContext: ToolDefinition<{ senders?: number | undefined }> = {
     return {
       kind: "result",
       text: lines.join("\n"),
-      data: { level, senders, threadCount, groups, workflows: workflows.map((w) => w.name) },
+      data: {
+        level,
+        keymap: keymap.value,
+        senders,
+        threadCount,
+        groups,
+        workflows: workflows.map((w) => w.name),
+      },
     };
   },
 };
@@ -145,7 +154,8 @@ const proposeGroups: ToolDefinition<{ groups: GroupProposal[]; recent?: number |
     }));
     return {
       kind: "action",
-      preview: text(groupsPreviewText(counts, preview.considered)),
+      // The card shows each Group as its own row; groupsPreviewText is the same list in words.
+      preview: { kind: "groups", groups: counts, considered: preview.considered },
       count: ALWAYS_ASK,
       apply: async () => {
         const ids = new Map<string, string>();

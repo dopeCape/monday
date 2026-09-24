@@ -12,6 +12,7 @@
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type {
   AiLevel,
+  HostedProvider,
   HostedState,
   IntentReading,
   IntentRequest,
@@ -63,6 +64,7 @@ import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
+import { createDemoChat, createDemoConverse, withDemoKey } from "./runtime/demo.ts";
 import {
   type ChatModel,
   type ConverseModel,
@@ -204,6 +206,12 @@ export interface IntelligenceOptions {
   log?: (message: string) => void;
   /** The AI level; defaults to the Setting ai.level. Tests may pin it. */
   level?: () => Promise<AiLevel>;
+  /**
+   * The browser demo's scripted assistant (runtime/demo.ts), for MONDAY_DEMO=1
+   * only: a placeholder key for this provider behind every shared-key read,
+   * and calls carrying it answered by the script instead of a model.
+   */
+  demo?: { provider: HostedProvider } | undefined;
 }
 
 export interface Intelligence {
@@ -410,10 +418,13 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const { db, mailstore } = options;
   const now = options.now ?? (() => new Date());
   const log = options.log ?? (() => {});
-  const keys = createProviderKeyStore(db, mailstore);
+  const stored = createProviderKeyStore(db, mailstore);
+  const keys = options.demo ? withDemoKey(stored, options.demo.provider) : stored;
   const meter = createMeter(db, { now });
   const level = options.level ?? (() => readGlobalSetting(db, "ai.level"));
   const hostedSettings = () => readGlobalSettings(db, HOSTED_SETTING_KEYS);
+  const demoChat = (real: ChatModel) => (options.demo ? createDemoChat(real) : real);
+  const demoConverse = (real: ConverseModel) => (options.demo ? createDemoConverse(real) : real);
   const resolveKey: KeysResolver = options.keys ?? ((provider) => keys.load(provider));
   const validateKey: KeyValidator =
     options.validateKey ??
@@ -423,8 +434,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       return validateTypeSafeKey(key, { baseUrl: s["ai.endpoint.typesafe"] });
     });
   const runtime = createHostedRuntime({
-    chat: options.chat ?? createLangChainChat(),
-    converse: options.converse ?? createLangChainConverse(),
+    chat: demoChat(options.chat ?? createLangChainChat()),
+    converse: demoConverse(options.converse ?? createLangChainConverse()),
     ...(options.judge ? { judge: options.judge } : {}),
     keys: resolveKey,
     settings: hostedSettings,

@@ -148,7 +148,17 @@ export type ToolPreview =
   | { kind: "event"; event: EventPreview }
   /** A calendar draft the Agent proposes: the card shows the summary with Apply and Discard. */
   | { kind: "calendar-draft"; draft: CalendarDraft }
+  | { kind: "groups"; groups: GroupProposalPreview[]; considered: number }
   | { kind: "text"; text: string };
+
+/** One Group onboarding proposes, as its card shows it before anything is created. */
+export interface GroupProposalPreview {
+  name: string;
+  /** The plain-language Routing rule. */
+  sentence: string;
+  /** Existing Threads that would move into it on approval. */
+  moves: number;
+}
 
 /** An Event as the scheduling card shows it before it exists (slice 18). */
 export interface EventPreview {

@@ -420,12 +420,20 @@ export function App({
     offered.current.add(fresh.id);
     // The welcome already asked the level and the keymap: with AI off there is
     // nothing left to ask, and otherwise the offer opens on the conversation.
+    // A welcome the user skipped skips the first Account's conversation too:
+    // they asked for the defaults, not for questions (a later Account still
+    // gets its own offer).
     const welcomed = state[WELCOME_KEY] !== undefined;
     const aiOff = shellRef.current.settings["ai.level"] === "off";
-    if (welcomed && aiOff) {
+    const firstAccount = Object.keys(state).every((k) => k === WELCOME_KEY);
+    const skippedWelcome = state[WELCOME_KEY]?.status === "skipped" && firstAccount;
+    if (welcomed && (aiOff || skippedWelcome)) {
       void shellRef.current.set("onboarding.state", {
         ...state,
-        [fresh.id]: { status: "completed", at: new Date().toISOString() },
+        [fresh.id]: {
+          status: skippedWelcome ? "skipped" : "completed",
+          at: new Date().toISOString(),
+        },
       });
       return;
     }

@@ -178,6 +178,33 @@ export function PreviewView({
     }
     case "calendar-draft":
       return <CalendarDraftPreview draft={preview.draft} />;
+    case "groups":
+      return (
+        <div className="agent-preview agent-groups">
+          <div className="count">
+            {fill(strings["strings.agent.preview_groups.title"], { n: preview.groups.length })}
+          </div>
+          <ul className="group-proposals">
+            {preview.groups.map((g) => (
+              <li key={g.name} className="group-proposal">
+                <FolderSimplePlusIcon aria-hidden="true" />
+                <div>
+                  <b>{g.name}</b>
+                  <span>{g.sentence}</span>
+                </div>
+                <span className="moves" data-moves={g.moves}>
+                  {g.moves > 0
+                    ? fill(strings["strings.agent.preview_groups.moves"], { n: g.moves })
+                    : strings["strings.agent.preview_groups.none"]}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="more">
+            {fill(strings["strings.agent.preview_groups.note"], { n: preview.considered })}
+          </div>
+        </div>
+      );
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }
@@ -228,6 +255,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
   update_section: RowsIcon,
   delete_section: RowsIcon,
   create_group: FolderSimplePlusIcon,
+  propose_groups: FolderSimplePlusIcon,
   update_group: FolderSimpleIcon,
   create_action: LightningIcon,
   update_action: LightningIcon,
@@ -357,6 +385,9 @@ export const TOOL_UIS: Readonly<Record<string, ToolCallMessagePartComponent>> = 
   update_action: MondayTool,
   delete_action: MondayTool,
   undo: MondayTool,
+  // Onboarding: the Groups proposal as its own rows, the keymap as a Setting line.
+  propose_groups: MondayTool,
+  set_keymap: MondayTool,
   // A failed turn.
   [ERROR_TOOL]: ErrorTool,
 };

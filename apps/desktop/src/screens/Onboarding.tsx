@@ -1,27 +1,52 @@
-// Onboarding (docs/spec/onboarding.md, CONTEXT.md "AI level", "Onboarding"):
-// shown once per Account after it is added and syncing, and again from "Set
-// me up". The first screen is the three choices, the only step that is not a
-// chat because it decides whether there is a chat at all. `off` ends with the
-// keymap question. `assist` and `automate` continue as the conversation in the
-// composer on a Session of its own, with chips built from the top senders
-// already synced and the tools, every step skippable, closing skipping the
-// rest; the Agent's onboarding tools propose Groups (with move counts) and
-// catalog Workflows (with Dry runs) and nothing applies until approved.
-// Moving up from `off` with no runtime configured shows the runtime step
-// (TypeSafe, a language model, or both) before the level is saved. Every
-// string and knob is a Setting (ADR 0004).
+// Onboarding (docs/spec/onboarding.md, CONTEXT.md "AI level", "Onboarding").
+//
+// The welcome runs before any Account exists: the AI level, the runtime step
+// only when the level needs one and none is configured, the keymap, then
+// connecting the first Account. One idea per screen, centered, with a slim
+// progress line at the top; Enter continues, Esc goes back, the arrow keys
+// move between cards. Every step has "Skip, use sensible defaults": it sets
+// whatever was not chosen yet from the onboarding.defaults.* Settings and
+// goes straight to connecting an Account (or, with one, to the Inbox).
+//
+// After an Account's first sync, `assist` and `automate` get the conversation:
+// the Agent asks a few questions in the composer on a Session of its own, the
+// answers' chips wait above the input as quick replies, proposals arrive as
+// cards, and the header counts the questions. `off` has nothing to ask.
+// "Set me up" runs it again from the level. Every string and knob is a
+// Setting (ADR 0004).
 
 import type { AiLevel, Density, OnboardingState, SettingKey, Settings } from "@monday/shared";
-import { Btn, Chip, type ChoiceCard, ChoiceCards } from "@monday/ui";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Btn, type ChoiceCard, ChoiceCards, cx, Kbd } from "@monday/ui";
+import {
+  ArrowLeftIcon,
+  CaretDownIcon,
+  ChatCircleTextIcon,
+  EnvelopeSimpleIcon,
+  FlowArrowIcon,
+} from "@phosphor-icons/react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Composer, composerStrings } from "../agent/Composer.tsx";
 import type { AgentClient } from "../agent/client.ts";
 import { desiredRuntime, runtimeLine } from "../agent/runtimeLine.ts";
 import { useAgentSession } from "../agent/useAgentSession.ts";
+import { chordLabel, KEYMAPS, type KeyAction } from "../keyboard/keymaps.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
 import { AddAccount } from "./settings/AddAccount.tsx";
-import { levelCards, RuntimeStep, useRuntimeConfigured } from "./settings/controls.tsx";
+import {
+  levelCards,
+  RuntimeStep,
+  runtimeSatisfies,
+  useRuntimeState,
+} from "./settings/controls.tsx";
 import {
   KeyStateProvider,
   type RuntimeDetection,
@@ -61,11 +86,11 @@ export interface OnboardingProps {
    */
   mode?: "welcome" | "account" | undefined;
   now?: Date | undefined;
-  /** Leaves the screen: after Done, Skip the rest, or when nothing is left to ask. */
+  /** Leaves the screen: after Done, Skip, or when nothing is left to ask. */
   onDone: () => void;
 }
 
-type Step = "level" | "runtime" | "chat" | "keymap" | "connect";
+type Step = "level" | "runtime" | "keymap" | "connect" | "chat";
 
 /** The onboarding.state key of the welcome run, which belongs to no Account. */
 export const WELCOME_KEY = "welcome";
@@ -104,6 +129,82 @@ export function chipsForQuestion(
       return [];
   }
 }
+
+/* ------------------------------ The sensible defaults ------------------------------ */
+
+export interface SkipDefaults {
+  level: AiLevel;
+  keymap: KeymapChoice;
+  density: Density;
+  notifications: boolean;
+}
+
+/**
+ * What skipping sets, from the onboarding.defaults.* Settings: `auto` level is
+ * an assistant when a runtime for one is already configured here (so it works
+ * at once) and Just mail otherwise; `auto` density comes from the screen.
+ */
+export function skipDefaults(
+  s: Pick<
+    Settings,
+    | "onboarding.defaults.level"
+    | "onboarding.defaults.keymap"
+    | "onboarding.defaults.density"
+    | "onboarding.defaults.notifications"
+  >,
+  assistReady: boolean,
+  width: number,
+): SkipDefaults {
+  const level = s["onboarding.defaults.level"];
+  const density = s["onboarding.defaults.density"];
+  return {
+    level: level === "auto" ? (assistReady ? "assist" : "off") : level,
+    keymap: s["onboarding.defaults.keymap"],
+    density: density === "auto" ? densityFor(width) : density,
+    notifications: s["onboarding.defaults.notifications"],
+  };
+}
+
+/** The one line that says what the defaults are. */
+export function defaultsLine(s: Settings, d: SkipDefaults): string {
+  const level = levelCards(s).find((c) => c.value === d.level)?.title ?? d.level;
+  return fill(s["strings.onboarding.defaults_line"], {
+    level,
+    keymap: s[`strings.onboarding.keymap.${d.keymap}`],
+    density: s[`strings.onboarding.density.${d.density}`],
+    notifications: d.notifications
+      ? s["strings.onboarding.defaults_on"]
+      : s["strings.onboarding.defaults_off"],
+  });
+}
+
+function fill(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (m, k: string) =>
+    values[k] === undefined ? m : String(values[k]),
+  );
+}
+
+/** The keys a keymap card shows: its own chords for moving and archiving. */
+const SAMPLE_KEYS: readonly KeyAction[] = ["move.down", "move.up", "thread.archive"];
+
+function KeySample({ keymap }: { keymap: KeymapChoice }) {
+  const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  return (
+    <span className="onb-keys">
+      {SAMPLE_KEYS.map((a) => (
+        <Kbd key={a}>{chordLabel(KEYMAPS[keymap][a], mac)}</Kbd>
+      ))}
+    </span>
+  );
+}
+
+const LEVEL_ICONS: Record<AiLevel, ReactNode> = {
+  off: <EnvelopeSimpleIcon />,
+  assist: <ChatCircleTextIcon />,
+  automate: <FlowArrowIcon />,
+};
+
+/* ------------------------------ The screen ------------------------------ */
 
 /** The screen: the Settings seams for the runtime step around the body. */
 export function Onboarding(props: OnboardingProps) {
@@ -144,6 +245,13 @@ export function Onboarding(props: OnboardingProps) {
   );
 }
 
+/** Whether a key press belongs to a field the user is typing in. */
+function typing(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return false;
+  return el.closest("input, textarea, select, [contenteditable='true'], form") !== null;
+}
+
 function OnboardingBody({
   accountId,
   workspaceId,
@@ -163,11 +271,21 @@ function OnboardingBody({
   const now = nowProp ?? new Date();
   const current = s["ai.level"];
   const [step, setStep] = useState<Step>(initialStep ?? "level");
+  const [dir, setDir] = useState<"forward" | "back">("forward");
   const [chosen, setChosen] = useState<AiLevel | null>(
     initialStep === "runtime" ? "automate" : rerun || initialStep === "chat" ? current : null,
   );
-  const [finished, setFinished] = useState(false);
+  const [details, setDetails] = useState(false);
   const seeded = useRef(false);
+  // What the user chose themselves this run; skipping never overrides it.
+  const picked = useRef({ level: false, keymap: false });
+  const skipped = useRef(false);
+  const width = screenWidth ?? (typeof window !== "undefined" ? window.innerWidth : 1440);
+
+  const go = useCallback((next: Step, direction: "forward" | "back" = "forward") => {
+    setDir(direction);
+    setStep(next);
+  }, []);
 
   /* ------------------------------ State and seeds ------------------------------ */
 
@@ -189,80 +307,105 @@ function OnboardingBody({
   useEffect(() => {
     if (rerun || !firstRun || seeded.current || shell.pinned.has("appearance.density")) return;
     seeded.current = true;
-    const width = screenWidth ?? (typeof window !== "undefined" ? window.innerWidth : 1440);
     const density = densityFor(width);
     if (density !== s["appearance.density"]) void shell.set("appearance.density", density);
-  }, [rerun, firstRun, screenWidth, shell, s["appearance.density"]]);
+  }, [rerun, firstRun, width, shell, s["appearance.density"]]);
 
   const finish = (status: "completed" | "skipped") => {
-    record(status);
+    record(skipped.current ? "skipped" : status);
     onDone();
   };
 
-  /* ------------------------------ The conversation ------------------------------ */
-
-  const runtime = useMemo(() => desiredRuntime(s), [s]);
-  const agent = useAgentSession({
-    client: step === "chat" ? agentClient : null,
-    workspaceId,
-    context: () => ({ pinned: [...shell.pinned], onboarding: true }),
-    newAfterHours: s["ai.session.new_after_hours"],
-    runtime,
-    developerModeDefault: false,
-    onSettingsChanged: () => void shell.refresh(),
-  });
-  const kicked = useRef(false);
-  useEffect(() => {
-    if (step !== "chat" || kicked.current || !agentClient) return;
-    kicked.current = true;
-    void agent.newSession().then(() => agent.send(s["strings.onboarding.kickoff"]));
-  }, [step, agentClient, agent, s["strings.onboarding.kickoff"]]);
-  // The conversation is over once the Agent stopped after a turn with no card waiting and
-  // it set the keymap, or once it cannot go on.
-  useEffect(() => {
-    if (step !== "chat" || agent.busy) return;
-    const done = agent.events.some(
-      (e) => e.kind === "tool" && e.call.tool === "set_keymap" && e.call.status === "done",
-    );
-    if (done) setFinished(true);
-  }, [step, agent.busy, agent.events]);
-  const questions = useMemo(
-    () => agent.events.filter((e) => e.kind === "text").length,
-    [agent.events],
-  );
-  const chips = useMemo(
-    () => chipsForQuestion(questions, s, senders.slice(0, s["onboarding.sender_chips"])),
-    [questions, s, senders],
-  );
-  const agentStrings = useMemo(() => composerStrings(s), [s]);
-  const [text, setText] = useState("");
-  const runtimeText = runtimeLine(agent.runtimeInfo, s, address);
-
-  /* ------------------------------ Steps ------------------------------ */
+  /* ------------------------------ The runtime ------------------------------ */
 
   // Level-aware (docs/spec/onboarding.md): an assistant needs a language model; sorting runs on TypeSafe alone.
-  const configured = useRuntimeConfigured(chosen ?? "assist");
-  const pickLevel = (level: AiLevel) => setChosen(level);
+  const runtimeState = useRuntimeState();
+  const satisfied = (level: AiLevel) =>
+    runtimeState === null ? null : runtimeSatisfies(runtimeState, level);
+  const configured = satisfied(chosen ?? "assist");
   /** Moving up from off needs to know whether a runtime exists; Continue waits for detection. */
   const needsRuntimeAnswer = chosen !== null && chosen !== "off" && current === "off";
-  const continueFromLevel = async () => {
-    const level = chosen ?? "off";
-    if (level !== "off" && current === "off" && configured !== true) {
-      setStep("runtime");
+  const needsRuntime = needsRuntimeAnswer && configured === false;
+
+  /* ------------------------------ The plan and the progress ------------------------------ */
+
+  const conversationOnly = initialStep === "chat" && !rerun;
+  const plan = useMemo<Step[]>(() => {
+    if (conversationOnly) return ["chat"];
+    const steps: Step[] = ["level"];
+    if (needsRuntime || step === "runtime") steps.push("runtime");
+    if (mode === "welcome") steps.push("keymap", "connect");
+    else steps.push((chosen ?? current) === "off" ? "keymap" : "chat");
+    return steps;
+  }, [conversationOnly, needsRuntime, step, mode, chosen, current]);
+  const at = Math.max(0, plan.indexOf(step));
+  const previous = at > 0 ? plan[at - 1] : undefined;
+
+  /* ------------------------------ Moves ------------------------------ */
+
+  const applyLevel = async (level: AiLevel) => {
+    picked.current.level = true;
+    if (level !== current) await shell.set("ai.level", level);
+    if (level === "off" || mode === "welcome") go("keymap");
+    else go("chat");
+  };
+  const continueFromLevel = async (level: AiLevel | null = chosen) => {
+    if (level === null) return;
+    if (level !== "off" && current === "off" && satisfied(level) !== true) {
+      if (satisfied(level) === null) return;
+      go("runtime");
       return;
     }
     await applyLevel(level);
   };
-  const applyLevel = async (level: AiLevel) => {
-    if (level !== current) await shell.set("ai.level", level);
-    if (level === "off" || mode === "welcome") setStep("keymap");
-    else setStep("chat");
-  };
   /** After the keymap: the welcome connects the first Account; an Account's offer is done. */
   const afterKeymap = () => {
-    if (mode === "welcome") setStep("connect");
+    picked.current.keymap = true;
+    if (mode === "welcome") go("connect");
     else finish("completed");
   };
+
+  const defaults = skipDefaults(s, satisfied("assist") === true, width);
+  /**
+   * Skip, use sensible defaults: what was not chosen yet takes its default,
+   * then the welcome connects an Account and an Account's offer ends. "Set me
+   * up" again changes nothing on Skip; the user's Settings stay as they are.
+   */
+  const skip = async () => {
+    skipped.current = true;
+    if (!rerun) {
+      const set = (key: SettingKey, value: unknown) =>
+        shell.pinned.has(key) ? Promise.resolve() : shell.set(key, value as never);
+      if (!picked.current.level && defaults.level !== current)
+        await set("ai.level", defaults.level);
+      if (!picked.current.keymap && defaults.keymap !== s["keyboard.keymap"])
+        await set("keyboard.keymap", defaults.keymap);
+      if (defaults.density !== s["appearance.density"])
+        await set("appearance.density", defaults.density);
+      if (defaults.notifications !== s["notifications.enabled"])
+        await set("notifications.enabled", defaults.notifications);
+    }
+    if (mode === "welcome") go("connect");
+    else finish("skipped");
+  };
+
+  const primary = (card?: string) => {
+    if (step === "level") {
+      const level = (card as AiLevel | undefined) ?? chosen;
+      if (card) setChosen(level);
+      void continueFromLevel(level);
+    } else if (step === "runtime") {
+      if (configured) void applyLevel(chosen ?? "assist");
+    } else if (step === "keymap") {
+      if (card) void shell.set("keyboard.keymap", card as KeymapChoice);
+      afterKeymap();
+    }
+  };
+  const back = () => {
+    if (previous) go(previous, "back");
+  };
+
+  /* ------------------------------ Cards ------------------------------ */
 
   const keymaps: ChoiceCard<KeymapChoice>[] = [
     {
@@ -281,108 +424,343 @@ function OnboardingBody({
       body: s["strings.onboarding.keymap.natural_sub"],
     },
   ];
+  const levels = levelCards(s).map((c) => ({ ...c, icon: LEVEL_ICONS[c.value] }));
 
-  const lots = threadCount >= s["onboarding.focus_view_threads"];
+  // The keys: Enter continues, Esc goes back, arrows move between the cards.
+  const keysRef = useRef({ primary, back, step, chosen, keymap: s["keyboard.keymap"] });
+  keysRef.current = { primary, back, step, chosen, keymap: s["keyboard.keymap"] };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = keysRef.current;
+      if (k.step === "chat" || typing(e.target)) return;
+      const card = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".choice-card");
+      if (e.key === "Enter") {
+        const onButton = (e.target as HTMLElement | null)?.closest?.("button");
+        // Another button takes Enter as its own click; a card continues with itself.
+        if (onButton && !card) return;
+        e.preventDefault();
+        k.primary(card?.dataset.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        k.back();
+      } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        if (k.step !== "level" && k.step !== "keymap") return;
+        const cards = [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            '[data-screen="onboarding"] .onb-step .choice-cards > .choice-card',
+          ),
+        ];
+        if (cards.length === 0) return;
+        e.preventDefault();
+        const on = k.step === "level" ? k.chosen : k.keymap;
+        const from = cards.findIndex((c) => c.dataset.value === (card?.dataset.value ?? on));
+        const delta = e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1;
+        const next = cards[(from + delta + cards.length) % cards.length];
+        next?.focus();
+        next?.click();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
+  if (step === "chat") {
+    return (
+      <div className="main page" data-screen="onboarding" data-step="chat">
+        <Conversation
+          workspaceId={workspaceId}
+          address={address}
+          agentClient={agentClient}
+          senders={senders}
+          threadCount={threadCount}
+          now={now}
+          onFinish={finish}
+        />
+      </div>
+    );
+  }
+
+  /* ------------------------------ One step ------------------------------ */
+
+  let title = "";
+  let intro: string | null = null;
+  let body: ReactNode = null;
+  let next: ReactNode = null;
+  const cont = s["strings.onboarding.continue"];
+  if (step === "level") {
+    title = s["strings.onboarding.title"];
+    intro = s["strings.onboarding.intro"];
+    body = (
+      <>
+        <ChoiceCards
+          cards={levels}
+          value={chosen}
+          onChange={setChosen}
+          details={details}
+          className="onb-cards"
+        />
+        <button
+          type="button"
+          className="onb-disclose"
+          aria-expanded={details}
+          onClick={() => setDetails((d) => !d)}
+        >
+          {s["strings.onboarding.included"]}
+          <CaretDownIcon aria-hidden="true" />
+        </button>
+      </>
+    );
+    next = (
+      <Btn
+        primary
+        data-action="continue"
+        disabled={chosen === null || (needsRuntimeAnswer && configured === null)}
+        onClick={() => void continueFromLevel()}
+      >
+        {cont} <Kbd>Enter</Kbd>
+      </Btn>
+    );
+  } else if (step === "runtime") {
+    title = s["strings.ai.level.runtime_title"];
+    intro = s["strings.onboarding.runtime_intro"];
+    body = (
+      <RuntimeStep
+        bare
+        level={chosen ?? "assist"}
+        onContinue={() => void applyLevel(chosen ?? "assist")}
+        onBack={() => go("level", "back")}
+      />
+    );
+    next = (
+      <Btn
+        primary
+        data-action="continue"
+        disabled={!configured}
+        onClick={() => void applyLevel(chosen ?? "assist")}
+      >
+        {s["strings.ai.level.runtime_continue"]} <Kbd>Enter</Kbd>
+      </Btn>
+    );
+  } else if (step === "keymap") {
+    title = s["strings.onboarding.keymap_title"];
+    intro = s["strings.onboarding.keymap_intro"];
+    body = (
+      <ChoiceCards
+        cards={keymaps.map((c) => ({ ...c, icon: <KeySample keymap={c.value} /> }))}
+        value={s["keyboard.keymap"]}
+        onChange={(k) => {
+          picked.current.keymap = true;
+          void shell.set("keyboard.keymap", k);
+        }}
+        className="onb-cards"
+      />
+    );
+    next = (
+      <Btn primary data-action="continue" onClick={afterKeymap}>
+        {mode === "welcome" ? cont : s["strings.onboarding.done"]} <Kbd>Enter</Kbd>
+      </Btn>
+    );
+  } else if (step === "connect") {
+    title = s["strings.onboarding.connect_title"];
+    intro = s["strings.onboarding.connect_intro"];
+    body = (
+      <div className="onb-connect">
+        <AddAccount onAdded={() => finish("completed")} />
+      </div>
+    );
+    next = <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.connect_later"]}</Btn>;
+  }
+
+  const showSkip = step !== "connect";
   return (
     <div className="main page" data-screen="onboarding" data-step={step}>
       <div className="onboarding">
-        <div className="onboarding-in" key={step}>
-          {step === "level" ? (
-            <>
-              <h1>{s["strings.onboarding.title"]}</h1>
-              <p>{s["strings.onboarding.intro"]}</p>
-              <ChoiceCards cards={levelCards(s)} value={chosen} onChange={pickLevel} />
-              <p className="choice-note">{s["strings.ai.level.change_note"]}</p>
-              <div className="actions">
-                <span className="sp" />
-                <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip"]}</Btn>
-                <Btn
-                  primary
-                  disabled={chosen === null || (needsRuntimeAnswer && configured === null)}
-                  onClick={() => void continueFromLevel()}
-                >
-                  {s["strings.onboarding.continue"]}
+        <Progress
+          steps={plan.length}
+          at={at}
+          label={fill(s["strings.onboarding.step"], { n: at + 1, total: plan.length })}
+        />
+        <div className="onb-stage">
+          <section className="onb-step" key={step} data-dir={dir} aria-labelledby="onb-title">
+            <header className="onb-head">
+              <h1 id="onb-title">{title}</h1>
+              {intro ? <p>{intro}</p> : null}
+            </header>
+            {body}
+            <div className="actions">
+              {previous ? (
+                <Btn data-action="back" onClick={back}>
+                  <ArrowLeftIcon /> {s["strings.onboarding.back"]}
                 </Btn>
-              </div>
-            </>
-          ) : null}
-
-          {step === "runtime" ? (
-            <>
-              <h1>{s["strings.ai.level.runtime_title"]}</h1>
-              <RuntimeStep
-                level={chosen ?? "assist"}
-                onContinue={() => void applyLevel(chosen ?? "assist")}
-                onBack={() => setStep("level")}
-              />
-            </>
-          ) : null}
-
-          {step === "chat" ? (
-            <>
-              <h1>{s["strings.onboarding.chat_title"]}</h1>
-              <p>{s["strings.onboarding.chat_intro"]}</p>
-              <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
-                <Composer
-                  agent={agent}
-                  mode="right"
-                  runtime={runtimeText}
-                  strings={agentStrings}
-                  suggestions={[]}
-                  replies={finished ? [] : [...chips, s["strings.onboarding.skip"]]}
-                  now={now}
-                  placeholder={s["strings.agent.placeholder_open"]}
-                  text={text}
-                  onTextChange={setText}
-                  plain
-                />
-              </div>
-              <div className="actions">
-                <span className="sp" />
-                {finished ? (
-                  <Btn primary onClick={() => finish("completed")}>
-                    {s["strings.onboarding.done"]}
-                  </Btn>
-                ) : (
-                  <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.skip_rest"]}</Btn>
-                )}
-              </div>
-            </>
-          ) : null}
-
-          {step === "keymap" ? (
-            <>
-              <h1>{s["strings.onboarding.keymap_title"]}</h1>
-              <p>{s["strings.onboarding.keymap_intro"]}</p>
-              <ChoiceCards
-                cards={keymaps}
-                value={s["keyboard.keymap"]}
-                onChange={(k) => void shell.set("keyboard.keymap", k)}
-              />
-              <div className="actions">
-                <span className="sp" />
-                <Btn primary onClick={afterKeymap}>
-                  {mode === "welcome"
-                    ? s["strings.onboarding.continue"]
-                    : s["strings.onboarding.done"]}
-                </Btn>
-              </div>
-            </>
-          ) : null}
-
-          {step === "connect" ? (
-            <>
-              <h1>{s["strings.onboarding.connect_title"]}</h1>
-              <p>{s["strings.onboarding.connect_intro"]}</p>
-              <AddAccount onAdded={() => finish("completed")} />
-              <div className="actions">
-                <span className="sp" />
-                <Btn onClick={() => finish("skipped")}>{s["strings.onboarding.connect_later"]}</Btn>
-              </div>
-            </>
-          ) : null}
+              ) : null}
+              <span className="sp" />
+              {next}
+            </div>
+          </section>
         </div>
+        <footer className="onb-foot">
+          {showSkip ? (
+            <>
+              <button
+                type="button"
+                className="onb-skip"
+                data-action="skip"
+                onClick={() => void skip()}
+              >
+                {rerun ? s["strings.onboarding.skip"] : s["strings.onboarding.skip_defaults"]}
+              </button>
+              {rerun ? null : <span className="onb-defaults">{defaultsLine(s, defaults)}</span>}
+            </>
+          ) : null}
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/** The slim progress line: one segment per step, the ones behind and the current filled. */
+function Progress({ steps, at, label }: { steps: number; at: number; label: string }) {
+  if (steps < 2) return <div className="onb-progress" aria-hidden="true" />;
+  return (
+    <div
+      className="onb-progress"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={1}
+      aria-valuemax={steps}
+      aria-valuenow={at + 1}
+    >
+      {Array.from({ length: steps }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the segments are positions, not items
+        <span key={i} className={cx(i < at && "done", i === at && "on")} />
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------ The conversation ------------------------------ */
+
+function Conversation({
+  workspaceId,
+  address,
+  agentClient,
+  senders,
+  threadCount,
+  now,
+  onFinish,
+}: {
+  workspaceId: string;
+  address: string;
+  agentClient: AgentClient | null;
+  senders: readonly string[];
+  threadCount: number;
+  now: Date;
+  onFinish: (status: "completed" | "skipped") => void;
+}) {
+  const shell = useShell();
+  const s = shell.settings;
+  const runtime = useMemo(() => desiredRuntime(s), [s]);
+  const agent = useAgentSession({
+    client: agentClient,
+    workspaceId,
+    context: () => ({ pinned: [...shell.pinned], onboarding: true }),
+    newAfterHours: s["ai.session.new_after_hours"],
+    runtime,
+    developerModeDefault: false,
+    onSettingsChanged: () => void shell.refresh(),
+  });
+  const kicked = useRef(false);
+  useEffect(() => {
+    if (kicked.current || !agentClient) return;
+    kicked.current = true;
+    void agent.newSession().then(() => agent.send(s["strings.onboarding.kickoff"]));
+  }, [agentClient, agent, s["strings.onboarding.kickoff"]]);
+  // The conversation is over once the Agent stopped after it set the keymap, its last step.
+  const [finished, setFinished] = useState(false);
+  useEffect(() => {
+    if (agent.busy) return;
+    const done = agent.events.some(
+      (e) => e.kind === "tool" && e.call.tool === "set_keymap" && e.call.status === "done",
+    );
+    if (done) setFinished(true);
+  }, [agent.busy, agent.events]);
+  const texts = useMemo(() => agent.events.filter((e) => e.kind === "text"), [agent.events]);
+  const asked = useMemo(
+    () => agent.events.filter((e) => e.kind === "text" && e.text.trim().endsWith("?")).length,
+    [agent.events],
+  );
+  const total = s["onboarding.questions_max"];
+  const chips = useMemo(
+    () => chipsForQuestion(texts.length, s, senders.slice(0, s["onboarding.sender_chips"])),
+    [texts.length, s, senders],
+  );
+  const agentStrings = useMemo(() => composerStrings(s), [s]);
+  const [text, setText] = useState("");
+  const runtimeText = runtimeLine(agent.runtimeInfo, s, address);
+  const reviewing = agent.waiting.length > 0;
+  const status = finished
+    ? s["strings.onboarding.chat_finished"]
+    : reviewing
+      ? s["strings.onboarding.chat_review"]
+      : asked > 0
+        ? fill(s["strings.onboarding.chat_progress"], { n: Math.min(asked, total), total })
+        : s["strings.onboarding.chat_starting"];
+  const share = finished
+    ? 1
+    : reviewing
+      ? total / (total + 1)
+      : Math.min(asked, total) / (total + 1);
+  const lots = threadCount >= s["onboarding.focus_view_threads"];
+
+  return (
+    <div className="onboarding onb-convo-wrap">
+      <div className="onb-convo" data-finished={finished ? "true" : undefined}>
+        <header className="onb-convo-head">
+          <div>
+            <h1>{s["strings.onboarding.chat_title"]}</h1>
+            <p>{s["strings.onboarding.chat_intro"]}</p>
+          </div>
+          <div className="onb-convo-progress" aria-live="polite">
+            <span>{status}</span>
+            <div
+              className="onb-meter"
+              role="progressbar"
+              aria-label={status}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(share * 100)}
+            >
+              <span style={{ "--p": String(share) } as CSSProperties} />
+            </div>
+          </div>
+        </header>
+        <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
+          <Composer
+            agent={agent}
+            mode="right"
+            runtime={runtimeText}
+            strings={agentStrings}
+            suggestions={[]}
+            replies={finished || reviewing ? [] : [...chips, s["strings.onboarding.skip"]]}
+            now={now}
+            placeholder={s["strings.agent.placeholder_open"]}
+            text={text}
+            onTextChange={setText}
+            plain
+          />
+        </div>
+        <footer className="onb-convo-foot">
+          {finished ? null : (
+            <Btn onClick={() => onFinish("skipped")}>{s["strings.onboarding.skip_rest"]}</Btn>
+          )}
+          <span className="sp" />
+          {finished ? (
+            <Btn primary autoFocus onClick={() => onFinish("completed")}>
+              {s["strings.onboarding.done"]}
+            </Btn>
+          ) : null}
+        </footer>
       </div>
     </div>
   );

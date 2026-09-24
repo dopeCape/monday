@@ -131,6 +131,8 @@ export interface ChoiceCard<V extends string> {
   body: string;
   /** A short third line in the foreground color, such as what the choice adds. */
   adds?: string | undefined;
+  /** The longer account of the choice, shown when the cards open their details. */
+  detail?: string | undefined;
   icon?: ReactNode | undefined;
 }
 
@@ -140,6 +142,8 @@ export interface ChoiceCardsProps<V extends string> {
   onChange?: ((value: V) => void) | undefined;
   disabled?: boolean | undefined;
   className?: string | undefined;
+  /** Shows each card's detail under its body (onboarding's "What's included"). */
+  details?: boolean | undefined;
 }
 
 /**
@@ -154,6 +158,7 @@ export function ChoiceCards<V extends string>({
   onChange,
   disabled,
   className,
+  details,
 }: ChoiceCardsProps<V>) {
   return (
     <div className={cx("choice-cards", className)} data-count={cards.length}>
@@ -171,6 +176,7 @@ export function ChoiceCards<V extends string>({
           <b>{c.title}</b>
           <span>{c.body}</span>
           {c.adds ? <span className="adds">{c.adds}</span> : null}
+          {details && c.detail ? <span className="detail">{c.detail}</span> : null}
         </button>
       ))}
     </div>

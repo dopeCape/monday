@@ -6736,6 +6736,14 @@ button.prov {
   animation: sink var(--t-fast) var(--ease-in) forwards;
   pointer-events: none;
 }
+/* "Your inbox is ready": the same note, over whichever screen is showing. */
+.toast.ready-note {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 60;
+  padding-right: 14px;
+}
 .toast .btn {
   height: 26px;
   padding: 0 8px;
@@ -7932,62 +7940,412 @@ button.prov {
   gap: 8px;
 }
 
-/* ------------------------------ Onboarding (slice 20) ------------------------------ */
+/* ------------------------------ Onboarding (docs/spec/onboarding.md) ------------------------------ */
+/* One idea per screen, centered in the window: a slim progress line on top,
+   the step in the middle, the skip and what it sets at the bottom. Steps
+   slide in from the side they come from; transitions off stops it. */
 .onboarding {
   height: 100%;
   min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg);
+}
+.onb-progress {
+  justify-self: center;
+  display: flex;
+  gap: 6px;
+  padding-top: 32px;
+  min-height: 35px;
+}
+.onb-progress > span {
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background var(--t-med) var(--ease);
+}
+.onb-progress > span.done {
+  background: var(--fg-faint);
+}
+.onb-progress > span.on {
+  background: var(--fg);
+}
+.onb-stage {
+  min-height: 0;
   overflow: auto;
-  display: grid;
-  justify-content: center;
-  align-content: start;
-  padding: 72px 40px 120px;
-  grid-template-columns: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 24px 40px;
 }
-.onboarding-in {
-  min-width: 0;
+.onb-step {
+  margin: auto;
+  width: min(780px, 100%);
   display: grid;
-  gap: 20px;
-  animation: fade-in var(--t-slow) var(--ease);
+  gap: 28px;
+  animation: onb-in var(--t-med) var(--ease);
 }
-.onboarding h1 {
-  font-size: var(--fs-2xl);
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.onb-step[data-dir="back"] {
+  animation-name: onb-back;
+}
+@keyframes onb-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes onb-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+.onb-head {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+}
+.onb-head h1 {
   margin: 0;
+  font-size: var(--fs-3xl);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
 }
-.onboarding > .onboarding-in > p {
-  margin: -8px 0 4px;
+.onb-head p {
+  margin: 0;
+  max-width: 52ch;
   color: var(--fg-muted);
   font-size: var(--fs-md);
   line-height: 1.5;
 }
-.onboarding .actions {
+.onb-step .choice-card {
+  gap: 6px;
+  padding: 20px 18px 18px;
+  background: var(--panel);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+.onb-step .choice-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.onb-step .choice-card.on {
+  border-color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--fg);
+}
+.onb-cards .choice-card > .ic {
+  margin-bottom: 10px;
+  font-size: 20px;
+  color: var(--fg);
+}
+.onb-cards .choice-card > b {
+  font-size: var(--fs-md);
+}
+.choice-card > span.detail {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  animation: fade-in var(--t-med) var(--ease);
+}
+.onb-disclose {
+  justify-self: center;
+  margin-top: -14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.onb-disclose:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.onb-disclose svg {
+  transition: transform var(--t-fast) var(--ease);
+}
+.onb-disclose[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.onb-step > .actions {
   display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: flex-end;
 }
-.onboarding .actions .sp {
+.onb-step > .actions .sp {
   flex: 1;
 }
-.onboarding-step {
-  color: var(--fg-faint);
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.onb-step > .actions .btn {
+  height: 34px;
+  padding: 0 14px;
 }
-.onboarding-chat {
+.onb-step > .actions .btn.primary .kbd {
+  margin-right: -4px;
+  color: inherit;
+  background: transparent;
+  border-color: color-mix(in srgb, var(--bg) 35%, transparent);
+  opacity: 0.75;
+}
+.onb-step .level-runtime.bare {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.onb-cards .choice-card > .ic .onb-keys {
+  display: inline-flex;
+  gap: 4px;
+}
+.onb-cards .choice-card > .ic .kbd {
+  min-width: 22px;
+  padding: 4px 6px;
+  font-size: var(--fs-xs);
+  text-align: center;
+  color: var(--fg-muted);
+}
+.onb-cards .choice-card.on > .ic .kbd {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+/* The Account step: the provider cards stand on their own; a path's form sits in one panel. */
+.onb-connect {
+  padding: 20px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background: var(--bg);
-  min-height: 420px;
+  background: var(--panel);
+}
+.onb-connect:has(> .providers) {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.onb-connect > h1 {
+  display: none;
+}
+.onb-connect .wizard {
+  max-width: none;
+}
+.onb-connect .wizard-title {
+  font-size: var(--fs-lg);
+}
+/* A path's form has its own Back; the step's would say the same thing twice. */
+.onb-step:has(.onb-connect .wizard) > .actions [data-action="back"] {
+  visibility: hidden;
+}
+.onb-foot {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  min-height: 72px;
+  padding: 12px 40px 28px;
+  text-align: center;
+}
+.onb-skip {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color var(--t-fast) var(--ease);
+}
+.onb-skip:hover {
+  text-decoration-color: currentColor;
+}
+.onb-defaults {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+@media (max-width: 900px) {
+  .onb-stage,
+  .onb-foot {
+    padding-inline: 20px;
+  }
+}
+
+/* The conversation after the first sync: one centered surface with the
+   question count on top, the thread in the middle, the quick replies and the
+   input at the bottom, Skip and Done under it. */
+.onb-convo-wrap {
+  grid-template-rows: minmax(0, 1fr);
+  padding: 32px 40px;
+}
+.onb-convo {
+  justify-self: center;
+  align-self: center;
+  width: min(720px, 100%);
+  max-height: min(820px, 100%);
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  animation: onb-in var(--t-med) var(--ease);
+}
+.onb-convo-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+}
+.onb-convo-head > div:first-child {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.onb-convo-head h1 {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.onb-convo-head p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+}
+.onb-convo-progress {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+  min-width: 170px;
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.onb-meter {
+  width: 170px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.onb-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--fg);
+  transform-origin: left;
+  transform: scaleX(var(--p));
+  transition: transform var(--t-slow) var(--ease);
+}
+.onboarding-chat {
+  min-height: 0;
+  height: 520px;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
+}
+.onboarding-chat > .agent-drop {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .onboarding-chat .agent-col {
   flex: 1;
+  min-height: 0;
+  width: auto;
   border: 0;
+  background: transparent;
+}
+/* The kickoff turn ("Set me up.") is the screen's, not the user's words; the
+   screen's header already names the conversation, and a question needs no
+   copy or retry under it, nor the line that says the setup was read. */
+.onboarding-chat .agent-thread .u-turn:first-of-type,
+.onboarding-chat .col-head,
+.onboarding-chat .agent-answer-acts,
+.onboarding-chat .agent-steps {
+  display: none;
+}
+.onboarding-chat .agent-thread {
+  padding-top: 20px;
+}
+.onboarding-chat .agent-suggest {
+  padding-top: 4px;
+}
+.onb-convo-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.onb-convo-foot .sp {
+  flex: 1;
+}
+.onb-convo-foot .btn {
+  height: 34px;
+  padding: 0 14px;
+}
+.onb-convo[data-finished="true"] .onb-convo-foot .btn.primary {
+  animation: fade-in var(--t-med) var(--ease);
+}
+/* Onboarding's Groups proposal: one row per Group with what it would move. */
+.agent-groups .group-proposals {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.agent-groups .group-proposal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.agent-groups .group-proposal > svg {
+  color: var(--fg-muted);
+  font-size: 16px;
+}
+.agent-groups .group-proposal > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-groups .group-proposal b {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+.agent-groups .group-proposal > div > span {
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-groups .group-proposal .moves {
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.agent-groups .group-proposal .moves[data-moves="0"] {
+  color: var(--fg-faint);
 }
 
 /* Keyboard focus on the agent, routing, workflows, calendar and onboarding surfaces. */
@@ -8095,21 +8453,48 @@ button.prov {
 }
 
 /* ------------------------------ First sync (docs/spec/onboarding.md) ------------------------------ */
+/* The same frame as onboarding: the account and Settings along the top, the
+   wait centered in the window, its phases in one quiet panel. */
 .first-sync {
   height: 100%;
   min-height: 0;
-  overflow: auto;
   display: grid;
-  justify-content: center;
-  align-content: start;
-  padding: 96px 40px 120px;
-  grid-template-columns: min(560px, 100%);
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg);
+}
+.first-sync-stage {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 40px 72px;
 }
 .first-sync-in {
+  margin: auto;
+  width: min(560px, 100%);
   min-width: 0;
   display: grid;
-  gap: 20px;
+  gap: 24px;
   animation: fade-in var(--t-slow) var(--ease);
+}
+.first-sync-head {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+}
+.first-sync-head > .lg {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 6px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  color: var(--fg);
 }
 [data-leaving="true"] .first-sync-in {
   animation: first-sync-out var(--t-slow) var(--ease-in) forwards;
@@ -8124,16 +8509,17 @@ button.prov {
   position: relative;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
+  padding: 18px 24px 0;
 }
 .first-sync-account {
-  flex: 1;
   min-width: 0;
+  max-width: 360px;
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  margin: -6px -8px;
   padding: 6px 8px;
   border: 0;
   border-radius: 10px;
@@ -8153,7 +8539,7 @@ button.prov {
 }
 .pop.ws-menu.first-sync-menu {
   top: calc(100% + 8px);
-  left: -8px;
+  left: 24px;
   right: auto;
   width: 320px;
 }
@@ -8180,13 +8566,14 @@ button.prov {
   font-size: var(--fs-xs);
 }
 .first-sync h1 {
-  font-size: var(--fs-2xl);
+  margin: 0;
+  font-size: var(--fs-3xl);
   font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 8px 0 0;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
 }
-.first-sync-in > p {
-  margin: -8px 0 4px;
+.first-sync-head > p {
+  margin: 0;
   color: var(--fg-muted);
   font-size: var(--fs-md);
   line-height: 1.5;
@@ -8194,6 +8581,14 @@ button.prov {
 .first-sync-lines {
   display: grid;
   gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+.first-sync-lines:empty {
+  display: none;
 }
 .first-sync-row {
   display: flex;
@@ -8234,6 +8629,7 @@ button.prov {
   color: var(--fg-muted);
   font-size: var(--fs-sm);
   line-height: 1.5;
+  text-align: center;
 }
 .first-sync-error {
   display: flex;
@@ -8263,10 +8659,10 @@ button.prov {
   display: flex;
   gap: 8px;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
 }
 .first-sync .actions .sp {
-  flex: 1;
+  display: none;
 }
 .first-sync button:focus-visible {
   outline: 2px solid var(--accent);

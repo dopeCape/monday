@@ -38,13 +38,17 @@ export function onboardingFixtureClient(now: () => Date): FakeAgentClient {
             status: "waiting",
           },
           {
-            kind: "text",
-            text: [
-              "Hiring: Candidates, recruiters and interview threads. (6 threads would move)",
-              "Finance: Invoices, receipts and payment notices. (2 threads would move)",
-              "Investors: Mail from Meridian and the other funds. (3 threads would move)",
-              "Over the newest 50 threads. Nothing moves until you approve; one Undo puts it all back.",
-            ].join("\n"),
+            kind: "groups",
+            groups: [
+              {
+                name: "Hiring",
+                sentence: "Candidates, recruiters and interview threads.",
+                moves: 6,
+              },
+              { name: "Finance", sentence: "Invoices, receipts and payment notices.", moves: 2 },
+              { name: "Investors", sentence: "Mail from Meridian and the other funds.", moves: 3 },
+            ],
+            considered: 50,
           },
         ),
       ],

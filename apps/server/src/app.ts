@@ -3,7 +3,7 @@
 // the process-level pieces (research 22, section 2.1).
 
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
-import type { DeploymentMode } from "@monday/shared";
+import type { DeploymentMode, HostedProvider } from "@monday/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "./auth/cors.ts";
@@ -149,6 +149,8 @@ export interface AppOptions {
   checkpointer?: BaseCheckpointSaver;
   /** The judge under the default intelligence module (ADR 0012); the entries pass TypeSafe. Ignored when `intelligence` is given. */
   judge?: JudgeModel;
+  /** The browser demo's scripted assistant (MONDAY_DEMO=1 only); ignored when `intelligence` is given. */
+  demo?: { provider: HostedProvider } | undefined;
   /**
    * The in-process wake bus for the Changes feed. The entry feeds it from a
    * LISTEN connection and shares it with the WebSocket transport; defaults to a
@@ -236,6 +238,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         drafts,
         ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
         ...(options.judge ? { judge: options.judge } : {}),
+        ...(options.demo ? { demo: options.demo } : {}),
       });
       if (options.jobs) created.registerSteps(options.jobs);
       return created;

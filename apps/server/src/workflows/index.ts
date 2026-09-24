@@ -605,7 +605,9 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
                 ? `${preview.preview.event.action} "${preview.preview.event.title}" ${preview.preview.event.start.replace("T", " ").slice(0, 16)}`
                 : preview.preview.kind === "calendar-draft"
                   ? `propose "${preview.preview.draft.title}" (${preview.preview.draft.changes.length} changes)`
-                  : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
+                  : preview.preview.kind === "groups"
+                    ? `create ${preview.preview.groups.map((g) => g.name).join(", ")}`
+                    : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }
     try {

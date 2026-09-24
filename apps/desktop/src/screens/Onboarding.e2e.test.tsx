@@ -62,15 +62,21 @@ function Capture() {
 
 const settle = () => act(async () => Bun.sleep(30));
 const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
-const qa = <T extends Element = HTMLElement>(sel: string) => [...document.querySelectorAll<T>(sel)];
 async function click(el: Element | null | undefined) {
   if (!el) throw new Error("nothing to click");
   await act(async () => (el as HTMLElement).click());
   await settle();
 }
 async function clickText(label: string, within: ParentNode = document) {
+  // A button's words without the key it shows (Continue [Enter] reads "Continue").
+  const words = (b: Element) =>
+    [...b.childNodes]
+      .filter((n) => !(n instanceof Element && n.classList.contains("kbd")))
+      .map((n) => n.textContent ?? "")
+      .join("")
+      .trim();
   const el = [...within.querySelectorAll<HTMLButtonElement>("button")].find(
-    (b) => (b.textContent ?? "").trim() === label,
+    (b) => words(b) === label,
   );
   if (!el) throw new Error(`no button ${label}`);
   await click(el);
@@ -239,9 +245,7 @@ describe("onboarding with a TypeSafe key, end to end (slice 24)", () => {
     expect(q('[data-panel="runtime-step"] [data-note]')?.textContent).toContain(
       "TypeSafe alone sorts.",
     );
-    const cont = qa<HTMLButtonElement>('[data-panel="runtime-step"] button').find(
-      (b) => b.textContent?.trim() === "Continue",
-    );
+    const cont = q<HTMLButtonElement>('[data-action="continue"]');
     expect(cont?.disabled).toBe(false);
     await click(cont);
     expect(captured?.settings["ai.level"]).toBe("automate");

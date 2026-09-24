@@ -279,6 +279,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const [sidecarError, setSidecarError] = useState<string | null>(null);
   const [spawn, setSpawn] = useState<ProcessRunner | null>(null);
   const [hostKind, setHostKind] = useState<"tauri" | "browser" | null>(null);
+  // A demo server (scripts/demo.ts) in the browser: no CLI can be spawned here,
+  // so its assistant runs Hosted, on the demo server's scripted runtime.
+  const [demo, setDemo] = useState(false);
   const [cloud, setCloudState] = useState<CloudTarget | null>(null);
   const [server, setServer] = useState<Picked | null>(null);
   const configRef = useRef(config);
@@ -301,7 +304,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       // The browser dev server is the design fixture, whose world has the assistant
       // everywhere: its Workspace's saved Settings say the full AI level. A demo
       // server (scripts/demo.ts) is a real one instead, starting from nothing.
-      if (!p.isTauri && !adoptDemoTarget()) {
+      const demoServer = !p.isTauri && adoptDemoTarget();
+      setDemo(demoServer);
+      if (!p.isTauri && !demoServer) {
         setStored((s) => ({
           "ai.level": "automate",
           // The mock's nav shows one Section the user placed there (design/js/data.js).
@@ -344,8 +349,13 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   }, [platformOf]);
 
   const resolved = useMemo(
-    () => resolveSettings(config.values, stored, defaultSettings()),
-    [config.values, stored],
+    () =>
+      resolveSettings(
+        config.values,
+        stored,
+        demo ? { ...defaultSettings(), "ai.mode": "hosted" } : defaultSettings(),
+      ),
+    [config.values, stored, demo],
   );
   const settings = resolved.settings;
 
