@@ -241,9 +241,77 @@ export interface RecurrenceRule {
   byMonth: number[];
 }
 
+/* The recurrence value an Event carries is the RRULE's value on its first
+   line, optionally followed by "EXDATE:" lines listing the instances left
+   out (UTC basic format, comma separated). Google and Graph expand
+   instances themselves, so their values never carry EXDATE lines; CalDAV
+   and the Local calendar keep masters and do. */
+
+/** The RRULE value and the excluded instances of an Event's recurrence value. */
+export function splitRecurrence(value: string): { rule: string; exdates: Date[] } {
+  const lines = value.split(/\r?\n/).map((l) => l.trim());
+  const rule = (lines[0] ?? "").replace(/^RRULE:/i, "");
+  const exdates: Date[] = [];
+  for (const line of lines.slice(1)) {
+    const m = /^EXDATE(?:;[^:]*)?:(.*)$/i.exec(line);
+    if (!m) continue;
+    for (const v of (m[1] ?? "").split(",")) {
+      const d = basicDate(v);
+      if (d) exdates.push(d);
+    }
+  }
+  return { rule, exdates };
+}
+
+/** An instant in the iCalendar UTC basic format: 20260921T070000Z. */
+export function basicUtc(d: Date): string {
+  return d
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
+}
+
+/** A recurrence value from its rule and excluded instances. */
+export function joinRecurrence(rule: string, exdates: readonly Date[] = []): string {
+  const unique = [...new Set(exdates.map((d) => d.getTime()))].sort((a, b) => a - b);
+  if (unique.length === 0) return rule;
+  return `${rule}\nEXDATE:${unique.map((t) => basicUtc(new Date(t))).join(",")}`;
+}
+
+/** The value with one more instance left out. */
+export function withExdate(value: string, at: Date): string {
+  const { rule, exdates } = splitRecurrence(value);
+  return joinRecurrence(rule, [...exdates, at]);
+}
+
+/**
+ * The value ending before an instant: COUNT gives way to UNTIL one second
+ * earlier (a DATE for an all-day series), and exclusions after it go.
+ */
+export function recurrenceUntil(value: string, before: Date, allDay = false): string {
+  const { rule, exdates } = splitRecurrence(value);
+  const last = new Date(before.getTime() - 1000);
+  const until = allDay ? basicUtc(last).slice(0, 8) : basicUtc(last);
+  const parts = rule.split(";").filter((p) => p.length > 0 && !/^(COUNT|UNTIL)=/i.test(p));
+  parts.push(`UNTIL=${until}`);
+  return joinRecurrence(
+    parts.join(";"),
+    exdates.filter((d) => d.getTime() < before.getTime()),
+  );
+}
+
+/** The value with its COUNT and UNTIL removed, for a series that starts again at an instance. */
+export function recurrenceFrom(value: string): string {
+  const { rule } = splitRecurrence(value);
+  return rule
+    .split(";")
+    .filter((p) => p.length > 0 && !/^(COUNT|UNTIL)=/i.test(p))
+    .join(";");
+}
+
 export function parseRRule(rrule: string): RecurrenceRule | null {
   const parts: Record<string, string> = {};
-  for (const piece of rrule.replace(/^RRULE:/i, "").split(";")) {
+  for (const piece of splitRecurrence(rrule).rule.split(";")) {
     const [k, v] = piece.split("=");
     if (k && v !== undefined) parts[k.toUpperCase()] = v;
   }
@@ -296,7 +364,7 @@ export function expandRecurrence(
   const duration = end.getTime() - start.getTime();
   const tz = zone ?? "Etc/UTC";
   const origin = utcToZoned(tz, start);
-  const excluded = new Set(exdates.map((d) => d.getTime()));
+  const excluded = new Set([...exdates, ...splitRecurrence(rrule).exdates].map((d) => d.getTime()));
   const out: Occurrence[] = [];
   let produced = 0;
   const emit = (at: Date): boolean => {

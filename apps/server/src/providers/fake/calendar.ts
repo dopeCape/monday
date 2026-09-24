@@ -5,6 +5,7 @@
 // can assert that Google sent the invite and monday did not.
 
 import type { CalendarInfo, IsoDate, MeetingLinkKind, RsvpResponse } from "@monday/shared";
+import { parseRRule } from "@monday/shared";
 import { parseICalendar } from "../../calendar/ical.ts";
 import {
   type CalendarSession,
@@ -66,6 +67,7 @@ export function createFakeCalendar(
   const source = options.source ?? "google";
   const now = options.now ?? (() => new Date());
   const providerSendsInvites = options.providerSendsInvites ?? source !== "caldav";
+  const expands = source !== "caldav";
   const events = new Map<string, ProviderEvent>();
   let log: LogEntry[] = [];
   let seq = 0;
@@ -96,6 +98,33 @@ export function createFakeCalendar(
   const others = (e: ProviderEvent) =>
     e.attendees.map((a) => a.email).filter((email) => email !== address.toLowerCase());
 
+  /**
+   * What Google does to a series' instances when its master changes: a moved
+   * master moves them by the same amount, an UNTIL drops those after it.
+   */
+  const followSeries = (before: ProviderEvent, after: ProviderEvent) => {
+    const shift = Date.parse(after.start) - Date.parse(before.start);
+    const length = Date.parse(after.end) - Date.parse(after.start);
+    const until = after.recurrence ? parseRRule(after.recurrence)?.until : null;
+    for (const i of [...events.values()]) {
+      if (i.recurringEventId !== before.id) continue;
+      const start = Date.parse(i.start) + shift;
+      if (until && start > until.getTime()) {
+        events.delete(i.id);
+        record(i.id, true);
+        continue;
+      }
+      events.set(i.id, {
+        ...i,
+        title: after.title,
+        start: new Date(start).toISOString(),
+        end: new Date(start + length).toISOString(),
+        updatedAt: now().toISOString(),
+      });
+      record(i.id, false);
+    }
+  };
+
   const session: FakeCalendar = {
     mailed,
     calls,
@@ -119,9 +148,15 @@ export function createFakeCalendar(
       window: EventWindow,
     ): AsyncIterable<CalendarSyncEvent> {
       count("syncEvents");
+      // Google and Graph expand series: the master itself never comes through a sync.
+      const hidden = (e: ProviderEvent) => expands && e.recurrence !== null && !e.recurringEventId;
       const inCalendar = () =>
         [...events.values()].filter(
-          (e) => e.calendarId === calendarId && e.end >= window.from && e.start < window.to,
+          (e) =>
+            e.calendarId === calendarId &&
+            !hidden(e) &&
+            e.end >= window.from &&
+            e.start < window.to,
         );
       const since = state ? Number(JSON.parse(state).seq) : null;
       const oldest = log[0]?.seq ?? seq + 1;
@@ -136,7 +171,7 @@ export function createFakeCalendar(
       for (const id of touched) {
         const e = events.get(id);
         if (!e || e.calendarId !== calendarId) yield { type: "removed", id };
-        else yield { type: "upserted", event: { ...e } };
+        else if (!hidden(e)) yield { type: "upserted", event: { ...e } };
       }
       yield { type: "state", state: JSON.stringify({ seq }), complete: true };
     },
@@ -174,6 +209,7 @@ export function createFakeCalendar(
         recurrence: input.recurrence ?? null,
         recurringEventId: null,
         response: "accepted",
+        reminders: input.reminders ?? null,
         etag: `"${seq + 1}"`,
         updatedAt: now().toISOString(),
       };
@@ -199,6 +235,9 @@ export function createFakeCalendar(
         ...(input.start !== undefined ? { start: input.start } : {}),
         ...(input.end !== undefined ? { end: input.end } : {}),
         ...(input.allDay !== undefined ? { allDay: input.allDay } : {}),
+        ...(input.timeZone !== undefined ? { timeZone: input.timeZone } : {}),
+        ...(input.recurrence !== undefined ? { recurrence: input.recurrence } : {}),
+        ...(input.reminders !== undefined ? { reminders: input.reminders } : {}),
         ...(input.attendees !== undefined
           ? {
               attendees: [
@@ -216,10 +255,15 @@ export function createFakeCalendar(
       };
       events.set(eventId, next);
       record(eventId, false);
+      if (expands && next.recurrence !== null && !next.recurringEventId) followSeries(e, next);
       if (providerSendsInvites && others(next).length > 0) {
         mailed.push({ kind: "update", eventId, to: others(next) });
       }
       return { ...next };
+    },
+    async readEvent(_calendarId, eventId) {
+      count("readEvent");
+      return { ...require(eventId) };
     },
     async deleteEvent(_calendarId, eventId) {
       count("deleteEvent");
@@ -227,6 +271,13 @@ export function createFakeCalendar(
       if (!e) return;
       events.delete(eventId);
       record(eventId, true);
+      if (expands) {
+        for (const i of [...events.values()]) {
+          if (i.recurringEventId !== eventId) continue;
+          events.delete(i.id);
+          record(i.id, true);
+        }
+      }
       if (providerSendsInvites && others(e).length > 0) {
         mailed.push({ kind: "cancel", eventId, to: others(e) });
       }

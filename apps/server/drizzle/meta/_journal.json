@@ -120,6 +120,13 @@
       "when": 1790152266711,
       "tag": "0017_oauth_apps",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790229804459,
+      "tag": "0018_calendar_reminders",
+      "breakpoints": true
     }
   ]
 }

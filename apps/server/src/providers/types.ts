@@ -284,6 +284,12 @@ export interface ProviderEvent {
   response: RsvpResponse | null;
   etag: string | null;
   updatedAt: IsoDate;
+  /**
+   * Minutes before the start to remind; null when the Event keeps the
+   * calendar's default, absent when the adapter does not say (the stored
+   * value is kept then).
+   */
+  reminders?: number[] | null | undefined;
 }
 
 export interface EventWindow {
@@ -337,6 +343,12 @@ export interface CalendarSession {
     etag: string | null,
   ): Promise<ProviderEvent>;
   deleteEvent(calendarId: string, eventId: string): Promise<void>;
+  /**
+   * One Event as the Provider holds it, by id: the series master of an
+   * instance the Provider expanded, for "all events" and "this and
+   * following". Absent where masters are never hidden (CalDAV).
+   */
+  readEvent?(calendarId: string, eventId: string): Promise<ProviderEvent>;
   /** The Account's own answer on an Event it was invited to; the Provider mails the reply. */
   rsvp(calendarId: string, eventId: string, response: RsvpResponse): Promise<ProviderEvent>;
   /**

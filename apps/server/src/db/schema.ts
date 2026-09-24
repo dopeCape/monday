@@ -1186,6 +1186,8 @@ export const events = pgTable(
     recurringEventId: text("recurring_event_id"),
     response: text("response").$type<RsvpResponse | null>(),
     createdByAgent: boolean("created_by_agent").notNull().default(false),
+    /** Minutes before the start to remind; null keeps the calendar's default. */
+    reminders: jsonb("reminders").$type<number[] | null>(),
     etag: text("etag"),
     /** The iCalendar SEQUENCE the Event was last seen at, for the invite bar's "ask again" rule. */
     sequence: integer("sequence").notNull().default(0),

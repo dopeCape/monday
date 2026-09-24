@@ -65,6 +65,8 @@ export interface GraphEvent {
   changeKey?: string;
   lastModifiedDateTime?: string;
   originalStartTimeZone?: string;
+  isReminderOn?: boolean;
+  reminderMinutesBeforeStart?: number;
 }
 
 interface GraphState {
@@ -154,6 +156,11 @@ export function eventOfGraph(calendarId: string, me: string, e: GraphEvent): Pro
     recurrence: null,
     recurringEventId: e.seriesMasterId ?? null,
     response: own,
+    ...(e.isReminderOn === false
+      ? { reminders: [] }
+      : typeof e.reminderMinutesBeforeStart === "number"
+        ? { reminders: [e.reminderMinutesBeforeStart] }
+        : {}),
     etag: e.changeKey ?? null,
     updatedAt: e.lastModifiedDateTime
       ? new Date(e.lastModifiedDateTime).toISOString()
@@ -165,6 +172,15 @@ function graphDate(at: IsoDate, allDay: boolean): GraphDateTime {
   return allDay
     ? { dateTime: `${at.slice(0, 10)}T00:00:00.0000000`, timeZone: "UTC" }
     : { dateTime: at.replace("Z", ""), timeZone: "UTC" };
+}
+
+/** Graph keeps one reminder per Event: the first minutes, off for an empty list, the default for null. */
+export function graphReminder(minutes: readonly number[] | null): Record<string, unknown> {
+  if (minutes === null) return { isReminderOn: true, reminderMinutesBeforeStart: 15 };
+  const first = minutes[0];
+  return first === undefined
+    ? { isReminderOn: false }
+    : { isReminderOn: true, reminderMinutesBeforeStart: first };
 }
 
 function graphAttendees(people: readonly Person[]): GraphAttendee[] {
@@ -301,6 +317,7 @@ export function createGraphCalendar(
         isAllDay: input.allDay ?? false,
         attendees: graphAttendees(input.attendees ?? []),
         ...(teams ? { isOnlineMeeting: true, onlineMeetingProvider: "teamsForBusiness" } : {}),
+        ...(input.reminders !== undefined ? graphReminder(input.reminders) : {}),
         transactionId: crypto.randomUUID(),
       };
       const created = await client.request<GraphEvent>(eventsPath(calendarId), {
@@ -322,6 +339,7 @@ export function createGraphCalendar(
       if (input.end !== undefined) body.end = graphDate(input.end, input.allDay ?? false);
       if (input.allDay !== undefined) body.isAllDay = input.allDay;
       if (input.attendees !== undefined) body.attendees = graphAttendees(input.attendees);
+      if (input.reminders !== undefined) Object.assign(body, graphReminder(input.reminders));
       if (input.meetingLink === "teams") {
         body.isOnlineMeeting = true;
         body.onlineMeetingProvider = "teamsForBusiness";
@@ -332,6 +350,13 @@ export function createGraphCalendar(
         headers: utc,
       });
       return eventOfGraph(calendarId, me, updated);
+    },
+
+    async readEvent(calendarId, eventId) {
+      const e = await client.request<GraphEvent>(`me/events/${encodeURIComponent(eventId)}`, {
+        headers: utc,
+      });
+      return eventOfGraph(calendarId, me, e);
     },
 
     async deleteEvent(_calendarId, eventId) {

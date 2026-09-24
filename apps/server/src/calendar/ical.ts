@@ -8,7 +8,9 @@
 import type { Attendee, EventStatus, InviteMethod, Person, RsvpResponse } from "@monday/shared";
 import {
   ianaZoneOf,
+  joinRecurrence,
   meetingLinkIn,
+  splitRecurrence,
   utcToZoned,
   zonedToUtc,
   zoneOffsetMinutes,
@@ -267,6 +269,8 @@ export interface ParsedEvent {
   /** RECURRENCE-ID, when the VEVENT addresses one instance. */
   recurrenceId: Date | null;
   exdates: Date[];
+  /** Minutes before the start of each display VALARM relative to the start; null when none. */
+  reminders: number[] | null;
   /** CONFERENCE (RFC 7986), or a meeting URL found in LOCATION or DESCRIPTION. */
   link: string | null;
   /** Vendor properties kept as they came, for round trips. */
@@ -368,6 +372,13 @@ function parseEvent(
       .map((v) => parseDate({ ...p, value: v }, timezones)?.date)
       .filter((d): d is Date => d !== undefined),
   );
+  const alarms = vevent.components
+    .filter((c) => c.name === "VALARM")
+    .map((c) => propertyOf(c, "TRIGGER"))
+    .filter((t): t is ICalProperty => t !== null && (t.params.RELATED ?? "START") === "START")
+    .map((t) => parseDuration(t.value))
+    .filter((ms): ms is number => ms !== null && ms <= 0)
+    .map((ms) => Math.round(-ms / 60_000));
   const stampProp = propertyOf(vevent, "DTSTAMP");
   const extra: Record<string, string> = {};
   for (const p of vevent.properties) if (p.name.startsWith("X-")) extra[p.name] = p.value;
@@ -388,6 +399,7 @@ function parseEvent(
     recurrence: rrule,
     recurrenceId: recurrenceIdProp ? (parseDate(recurrenceIdProp, timezones)?.date ?? null) : null,
     exdates,
+    reminders: alarms.length > 0 ? alarms : null,
     link:
       conference ??
       vendorLink ??
@@ -396,6 +408,11 @@ function parseEvent(
       (url && meetingLinkIn(url) ? url : null),
     extra,
   };
+}
+
+/** The recurrence value of a parsed VEVENT: its RRULE with its EXDATEs carried along; null for a single one. */
+export function seriesOf(parsed: Pick<ParsedEvent, "recurrence" | "exdates">): string | null {
+  return parsed.recurrence ? joinRecurrence(parsed.recurrence, parsed.exdates) : null;
 }
 
 /** Parses an iCalendar text into its method and VEVENTs; an empty list when it holds none. */
@@ -436,6 +453,8 @@ export interface EventToWrite {
   link: string | null;
   /** RECURRENCE-ID for a reply or cancel of one instance. */
   recurrenceId?: Date | null;
+  /** Minutes before the start for display VALARMs; none written when null or absent. */
+  reminders?: number[] | null;
 }
 
 function dateLine(name: string, date: Date, allDay: boolean, zone: string | null): string {
@@ -493,7 +512,18 @@ function eventLines(event: EventToWrite, method: InviteMethod | null): string[] 
   if (event.description) lines.push(`DESCRIPTION:${escapeText(event.description)}`);
   if (event.location) lines.push(`LOCATION:${escapeText(event.location)}`);
   if (event.link) lines.push(`CONFERENCE;VALUE=URI;FEATURE=VIDEO:${event.link}`);
-  if (event.recurrence) lines.push(`RRULE:${event.recurrence}`);
+  if (event.recurrence) {
+    // The value may carry EXDATE lines after the rule (packages/shared splitRecurrence).
+    const { rule, exdates } = splitRecurrence(event.recurrence);
+    if (rule) lines.push(`RRULE:${rule}`);
+    if (exdates.length > 0) {
+      lines.push(
+        event.allDay
+          ? `EXDATE;VALUE=DATE:${exdates.map(formatDate).join(",")}`
+          : `EXDATE:${exdates.map(formatUtc).join(",")}`,
+      );
+    }
+  }
   lines.push(`STATUS:${STATUS_LINE[event.status]}`);
   if (event.organizer) lines.push(personLine("ORGANIZER", event.organizer));
   for (const a of event.attendees) {
@@ -504,6 +534,17 @@ function eventLines(event: EventToWrite, method: InviteMethod | null): string[] 
         ...(method === "REQUEST" ? ["RSVP=TRUE"] : []),
       ]),
     );
+  }
+  if (method === null) {
+    for (const minutes of event.reminders ?? []) {
+      lines.push(
+        "BEGIN:VALARM",
+        "ACTION:DISPLAY",
+        `DESCRIPTION:${escapeText(event.title)}`,
+        `TRIGGER:-PT${Math.max(0, Math.round(minutes))}M`,
+        "END:VALARM",
+      );
+    }
   }
   lines.push("END:VEVENT");
   return lines;

@@ -1,10 +1,12 @@
 /// <reference types="bun-types" />
 // The Calendar screen, the invite bar and the reminders through the calendar
-// seam (slice 18): Week and Agenda over fixture Events with a recurring
-// master expanded on the client, the Today panel with the current Event
-// marked and Join on the linked one, the calendar list's visibility switch,
-// an Event added by hand, the Schedule handoff, the invite bar's Accept as
-// an Outbox intent with the overlap line, and a reminder fired at the lead.
+// seam (slice 18, docs/spec/calendar.md): Week, Month and Agenda over
+// fixture Events with a recurring master expanded on the client, the
+// detail with the answers and Join, the quick create asking before guests
+// are emailed, a repeating Event's "this one", a drag that moves an Event
+// and its Undo, the keys, search, an Account whose Calendar API is off, the
+// Today panel, the calendar list, the Schedule handoff, the invite bar's
+// Accept as an Outbox intent with the overlap line, and reminders.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { CalendarEvent, Calendar as CalendarRow, Invite } from "@monday/shared";
@@ -212,21 +214,86 @@ describe("occurrencesIn", () => {
   });
 });
 
+const typeInto = async (input: Element | null | undefined, value: string) => {
+  if (!input) throw new Error("no input");
+  const proto =
+    input instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  await act(async () => {
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(tick);
+};
+
+const press = async (key: string, init: KeyboardEventInit = {}) => {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, ...init }));
+  });
+  await act(tick);
+};
+
+const pointer = async (el: Element | Window, type: string, x: number, y: number) => {
+  await act(async () => {
+    const e = new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+    el.dispatchEvent(e);
+  });
+  await act(tick);
+};
+
+const button = (root: ParentNode, text: string) =>
+  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === text) ?? null;
+
+/** The Event detail's popover, once open. */
+const popover = () => document.querySelector(".cal-pop");
+
+/** Lays the grid's day columns out side by side (happy-dom has no layout): 100px wide, the day from y = 0. */
+function layOut(el: HTMLElement) {
+  const cols = [...el.querySelectorAll<HTMLElement>(".cal-tg-col")];
+  cols.forEach((c, i) => {
+    c.getBoundingClientRect = () =>
+      ({
+        left: 100 + i * 100,
+        right: 200 + i * 100,
+        top: 0,
+        bottom: 24 * 48,
+        width: 100,
+        height: 24 * 48,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+  });
+}
+
 describe("the Calendar screen", () => {
-  test("Week shows the week's Events with the Agent's marked, Today lists the current one with Join", async () => {
+  test("Week: every day of the week, the Events side by side, the Agent's marked, all-day ones on their row, Today with Join", async () => {
     const source = fixtureCalendar({ calendars, events, invites });
     const opened: string[] = [];
     await mount(<Calendar source={source} now={NOW} onOpenLink={(h) => opened.push(h)} />);
     const el = host as HTMLElement;
     expect(el.querySelector(".col-head .count")?.textContent).toBe("September 2026");
-    expect(el.querySelectorAll(".cal-day")).toHaveLength(7);
-    expect(el.querySelectorAll(".cal-day.today")).toHaveLength(1);
-    const titles = [...el.querySelectorAll(".cal-col .ev b")].map((b) => b.textContent);
+    expect(el.querySelectorAll(".cal-tg-dh")).toHaveLength(7);
+    expect(el.querySelectorAll(".cal-tg-dh.today")).toHaveLength(1);
+    const titles = [...el.querySelectorAll(".cal-tg-col .cal-block b")].map((b) => b.textContent);
     expect(titles.filter((t) => t === "Standup")).toHaveLength(5);
     expect(titles).toContain("Aoife Brennan, take-home");
-    const agentEvent = [...el.querySelectorAll(".cal-col .ev.agent")];
-    expect(agentEvent).toHaveLength(1);
-    expect(agentEvent[0]?.textContent).toContain("created by monday");
+    expect(el.querySelectorAll(".cal-tg-col .cal-block.agent")).toHaveLength(1);
+    // The current time is drawn once, in today's column.
+    expect(el.querySelectorAll(".cal-tg-col.today .cal-now")).toHaveLength(1);
+    // The all-day Offsite sits on the all-day row, not in the grid.
+    expect(el.querySelector(".cal-allday-cells .cal-bar")?.textContent).toContain("Offsite");
+    expect(titles).not.toContain("Offsite");
+    // Saturday and Sunday are shaded as days off; the working hours of a weekday are clear.
+    expect(el.querySelectorAll(".cal-tg-col.off")).toHaveLength(2);
     // The Today panel: Focus is the current one at 14:20; Aoife's has Join.
     const rows = [...el.querySelectorAll(".today-panel .tp-row")];
     expect(rows.map((r) => r.querySelector("b")?.textContent)).toEqual([
@@ -235,59 +302,265 @@ describe("the Calendar screen", () => {
       "Aoife Brennan, take-home",
     ]);
     expect(rows[1]?.className).toContain("now");
-    await click(rows[2]?.querySelector("button"));
+    await click(button(rows[2] as Element, "Join"));
+    expect(opened).toEqual(["https://meet.genai-labs.io/aoife"]);
+    // The invite still waiting for an answer is listed beside the week.
+    expect(el.querySelector(".cal-waiting")?.textContent).toContain("Podcast recording");
+  });
+
+  test("an Event's detail: when, the guests and their answers, Join, and Yes, Maybe, No on an invite", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    const opened: string[] = [];
+    await mount(<Calendar source={source} now={NOW} onOpenLink={(h) => opened.push(h)} />);
+    const el = host as HTMLElement;
+    const podcast = [...el.querySelectorAll<HTMLElement>(".cal-block")].find((b) =>
+      b.textContent?.includes("Podcast recording"),
+    );
+    await pointer(podcast as Element, "pointerdown", 10, 10);
+    await pointer(window, "pointerup", 10, 10);
+    const pop = popover();
+    expect(pop?.querySelector("h3")?.textContent).toBe("Podcast recording");
+    expect(pop?.textContent).toContain("Fri 18 Sep, 13:00 to 14:00");
+    expect(pop?.textContent).toContain("Sofia Lindqvist");
+    expect(pop?.textContent).toContain("organizer");
+    expect(pop?.textContent).toContain("tejas@genai-labs.io");
+    // Not the user's own: no Edit, but an answer row.
+    expect(pop?.querySelector('button[title="Edit"]')).toBeNull();
+    await click(button(pop as Element, "Maybe"));
+    expect(source.log).toEqual(["respond podcast tentative"]);
+    await press("Escape");
+    expect(popover()).toBeNull();
+
+    // Aoife's is the user's own, with a link: Join, and Edit.
+    const aoife = [...el.querySelectorAll<HTMLElement>(".cal-block")].find((b) =>
+      b.textContent?.includes("Aoife"),
+    );
+    await act(async () => {
+      aoife?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await act(tick);
+    expect(popover()?.textContent).toContain("meet.genai-labs.io");
+    expect(popover()?.querySelector('button[title="Edit"]')).not.toBeNull();
+    await click(button(popover() as Element, "Join"));
     expect(opened).toEqual(["https://meet.genai-labs.io/aoife"]);
   });
 
-  test("Agenda groups by day with answer buttons on the tentative invite; Month opens a day", async () => {
+  test("a new Event from the header: the quick create, a guest, the ask before invitations go, then the Event", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    await click(button(el.querySelector(".col-head") as Element, "Event"));
+    const form = document.querySelector<HTMLFormElement>(".cal-quick");
+    expect(form).not.toBeNull();
+    await typeInto(form?.querySelector(".cal-quick-title"), "Dentist");
+    await typeInto(form?.querySelector(".cal-people-input"), "Kenji <kenji@meridian.test>,");
+    expect(form?.querySelector(".cal-chip")?.textContent).toContain("Kenji");
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(tick);
+    // Guests are emailed: ask first (ADR 0002).
+    const dialog = document.querySelector(".cal-dialog");
+    expect(dialog?.textContent).toContain("Send invitations?");
+    expect(dialog?.textContent).toContain("Kenji will get an email about this.");
+    expect(source.log).toEqual([]);
+    await click(button(dialog as Element, "Send"));
+    await act(tick);
+    expect(source.log).toEqual(["create Dentist"]);
+    expect(document.querySelector(".cal-quick")).toBeNull();
+    const made = source.events().find((e) => e.title === "Dentist");
+    expect(made?.attendees.map((a) => a.email)).toEqual(["kenji@meridian.test"]);
+    // The default length from Settings, on the next slot after 14:20.
+    expect(new Date(made?.start ?? "").getHours()).toBe(14);
+    expect(new Date(made?.start ?? "").getMinutes()).toBe(30);
+    expect((Date.parse(made?.end ?? "") - Date.parse(made?.start ?? "")) / 60_000).toBe(30);
+  });
+
+  test("an end before the start is refused in plain words and nothing is made; More options opens the editor", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    await click(button(el.querySelector(".col-head") as Element, "Event"));
+    const form = document.querySelector<HTMLFormElement>(".cal-quick");
+    await typeInto(form?.querySelector('input[aria-label="End"]'), "09:00");
+    expect(form?.querySelector(".cal-error")?.textContent).toBe(
+      "The end has to come after the start.",
+    );
+    expect((button(form as Element, "Add") as HTMLButtonElement).disabled).toBe(true);
+    await click(button(form as Element, "More options"));
+    expect(document.querySelector(".cal-quick")).toBeNull();
+    const editor = document.querySelector(".cal-editor");
+    expect(editor).not.toBeNull();
+    expect(editor?.querySelector('select[aria-label="Repeat"]')).not.toBeNull();
+    expect(editor?.querySelector('textarea[aria-label="Notes"]')).not.toBeNull();
+    await click(button(editor as Element, "Cancel"));
+    expect(document.querySelector(".cal-editor")).toBeNull();
+    expect(source.log).toEqual([]);
+  });
+
+  test("a repeating Event asks which instances: this one leaves the others in place", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    const standups = () =>
+      [...el.querySelectorAll<HTMLElement>(".cal-block")].filter((b) =>
+        b.textContent?.includes("Standup"),
+      );
+    expect(standups()).toHaveLength(5);
+    await pointer(standups()[2] as Element, "pointerdown", 10, 10);
+    await pointer(window, "pointerup", 10, 10);
+    expect(popover()?.textContent).toContain("Every weekday");
+    await click(popover()?.querySelector('button[title="Delete"]'));
+    const dialog = document.querySelector(".cal-dialog");
+    expect(dialog?.querySelector("h3")?.textContent).toBe("Delete a repeating Event");
+    await click(button(dialog as Element, "OK"));
+    await act(tick);
+    expect(source.log).toEqual(["remove standup this"]);
+    expect(standups()).toHaveLength(4);
+  });
+
+  test("dragging an Event moves it on the grid, snapped; Undo puts it back", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    layOut(el);
+    const focus = [...el.querySelectorAll<HTMLElement>(".cal-block")].find((b) =>
+      b.textContent?.includes("Focus"),
+    );
+    // Focus is Thursday 13:00; the grid's Thursday column is the fourth (Monday first).
+    await pointer(focus as Element, "pointerdown", 450, 13 * 48);
+    await pointer(window, "pointermove", 550, 13 * 48 + 50);
+    await pointer(window, "pointerup", 550, 13 * 48 + 50);
+    await act(tick);
+    expect(source.log[0]).toBe("update focus end,start");
+    const moved = source.events().find((e) => e.id === "focus");
+    // One day on, an hour later (50px at 48px an hour, snapped to 15 minutes).
+    expect(new Date(moved?.start ?? "").getDate()).toBe(18);
+    expect(new Date(moved?.start ?? "").getHours()).toBe(14);
+    expect(new Date(moved?.start ?? "").getMinutes()).toBe(0);
+    expect(document.querySelector(".toast")?.textContent).toContain("Event changed");
+    await press("z");
+    expect(source.log[1]).toBe("update focus end,start");
+    expect(source.events().find((e) => e.id === "focus")?.start).toBe(at(17, 13));
+  });
+
+  test("keys switch views and move through time; the palette's date opens a day", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    const heading = () => el.querySelector(".col-head .count")?.textContent;
+    await press("m");
+    expect(el.querySelector(".cal-month")).not.toBeNull();
+    expect(heading()).toBe("September 2026");
+    await press("j");
+    expect(heading()).toBe("October 2026");
+    await press("t");
+    expect(heading()).toBe("September 2026");
+    await press("d");
+    expect(heading()).toBe("Thursday 17 September 2026");
+    await press("k");
+    expect(heading()).toBe("Wednesday 16 September 2026");
+    await press("a");
+    expect(el.querySelector(".cal-agenda")).not.toBeNull();
+    await press("w");
+    expect(el.querySelectorAll(".cal-tg-dh")).toHaveLength(7);
+    // "m" in the Inbox moves a Thread; here it is only the Month view.
+    await press("k", { metaKey: true });
+    const input = document.querySelector<HTMLInputElement>(".cmdk input");
+    expect(input).not.toBeNull();
+    await typeInto(input, "3 oct");
+    const jump = [...document.querySelectorAll(".cmdk *")].find(
+      (n) => n.children.length === 0 && n.textContent === "Calendar: go to Sat 3 Oct 2026",
+    );
+    expect(jump).not.toBeUndefined();
+    await click(jump?.closest("button, [role='option']") ?? jump);
+    await act(tick);
+    expect(heading()).toBe("September to October 2026");
+  });
+
+  test("Agenda groups by day with answer buttons on the invite; Month opens a day", async () => {
     const source = fixtureCalendar({ calendars, events, invites });
     await mount(<Calendar source={source} now={NOW} initialView="agenda" />);
     const el = host as HTMLElement;
-    const headings = [...el.querySelectorAll(".agenda .sec")].map((s) => s.textContent);
+    const headings = [...el.querySelectorAll(".cal-ag-day")].map((s) => s.textContent);
     expect(headings[0]).toBe("Today, Thursday 17");
     expect(headings[1]).toBe("Tomorrow, Friday 18");
-    const podcast = [...el.querySelectorAll(".ag-row")].find((r) =>
+    const podcast = [...el.querySelectorAll(".cal-ag-row")].find((r) =>
       r.textContent?.includes("Podcast recording"),
     );
     expect(podcast?.textContent).toContain("Sofia Lindqvist");
-    expect(podcast?.textContent).toContain("Not answered");
-    await click(
-      [...(podcast?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Accept"),
-    );
+    await click(button(podcast as Element, "Accept"));
     expect(source.log).toEqual(["respond podcast accepted"]);
 
-    await click([...el.querySelectorAll(".seg button")].find((b) => b.textContent === "Month"));
-    expect(el.querySelectorAll(".cal-mc")).toHaveLength(42);
-    const day18 = [...el.querySelectorAll(".cal-mc")].find(
+    await click(button(el.querySelector(".seg") as Element, "Month"));
+    const cells = [...el.querySelectorAll(".cal-mc")];
+    expect(cells.length % 7).toBe(0);
+    const day18 = cells.find(
       (c) => c.querySelector(".cal-md")?.textContent === "18" && !c.className.includes("outside"),
     );
     expect(day18?.textContent).toContain("Podcast recording");
-    await click(day18);
-    expect(el.querySelectorAll(".cal-day")).toHaveLength(1);
-    expect(el.querySelector(".cal-dh")?.textContent).toContain("Fri 18");
-    // The head names the one day, not a span that ends the day before.
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("Fri 18 Sep");
-    // Previous and next step one day; Today comes back to the 17th.
-    await click(el.querySelector('.col-head button[title="Previous"]'));
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
-    await click(el.querySelector('.col-head button[title="Next"]'));
-    await click(el.querySelector('.col-head button[title="Next"]'));
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("Sat 19 Sep");
-    await click(
-      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
-    );
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("Thu 17 Sep");
-    // Month steps a month at a time and Today returns to September.
-    await click([...el.querySelectorAll(".seg button")].find((b) => b.textContent === "Month"));
-    await click(el.querySelector('.col-head button[title="Next"]'));
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("October 2026");
-    await click(
-      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent === "Today"),
-    );
-    expect(el.querySelector(".col-head .count")?.textContent).toBe("September 2026");
+    await click(day18?.querySelector(".cal-md"));
+    expect(el.querySelectorAll(".cal-tg-dh")).toHaveLength(1);
+    expect(el.querySelector(".col-head .count")?.textContent).toBe("Friday 18 September 2026");
   });
 
-  test("the calendar list hides a calendar; the form adds an Event; Schedule hands the composer a sentence", async () => {
+  test("an Account whose Calendar API is off says so, with the fix and Try again", async () => {
+    const source = fixtureCalendar({
+      calendars,
+      events,
+      invites,
+      accounts: [
+        { workspaceId: "ws", accountId: "acct", address: "tejas@genai-labs.io", current: true },
+      ],
+      statuses: [
+        {
+          workspaceId: "ws",
+          accountId: "acct",
+          source: "google",
+          problem: {
+            kind: "api-disabled",
+            message:
+              "Google Calendar API has not been used in project 123 before or it is disabled.",
+            fixUrl:
+              "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=123",
+          },
+          lastSync: null,
+          checkedAt: NOW.toISOString(),
+        },
+      ],
+    });
+    const opened: string[] = [];
+    await mount(<Calendar source={source} now={NOW} onOpenLink={(h) => opened.push(h)} />);
+    await act(tick);
+    const el = host as HTMLElement;
+    const banner = el.querySelector(".cal-banner");
+    expect(banner?.textContent).toContain("The calendar of tejas@genai-labs.io is turned off");
+    expect(banner?.textContent).toContain("The Google Calendar API is not enabled");
+    await click(button(banner as Element, "Enable Calendar API"));
+    expect(opened).toEqual([
+      "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=123",
+    ]);
+    await click(button(banner as Element, "Try again"));
+    await act(tick);
+    expect(source.log).toContain("retry ws");
+    expect(el.querySelector(".cal-banner")).toBeNull();
+  });
+
+  test("search looks through titles, places and people", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    await press("f", { ctrlKey: true });
+    const input = el.querySelector<HTMLInputElement>(".cal-search input");
+    expect(input).not.toBeNull();
+    await typeInto(input, "sofia");
+    const rows = [...el.querySelectorAll(".cal-results .cal-ag-row")];
+    expect(rows.map((r) => r.querySelector("b")?.textContent)).toEqual(["Podcast recording"]);
+    await typeInto(input, "nothing like it");
+    expect(el.querySelector(".cal-results .cal-empty")?.textContent).toContain("Nothing matches");
+  });
+
+  test("the calendar list hides a calendar; Schedule hands the composer a sentence", async () => {
     const source = fixtureCalendar({ calendars, events, invites });
     const asked: string[] = [];
     await mount(<Calendar source={source} now={NOW} onAsk={(t) => asked.push(t)} />);
@@ -296,21 +569,7 @@ describe("the Calendar screen", () => {
     expect(boxes).toHaveLength(2);
     await click(boxes[1]);
     expect(source.log).toContain("visible cal-2 false");
-
-    await click(
-      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.trim() === "Event"),
-    );
-    const form = el.querySelector<HTMLFormElement>("form.cal-form");
-    expect(form).not.toBeNull();
-    await act(async () => {
-      (form?.elements.namedItem("title") as HTMLInputElement).value = "Dentist";
-      (form?.elements.namedItem("attendees") as HTMLInputElement).value = "";
-      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    });
-    await act(tick);
-    expect(source.log).toContain("create Dentist");
-    expect(el.querySelector("form.cal-form")).toBeNull();
-
+    expect(el.querySelector(".cal-allday-cells .cal-bar")).toBeNull();
     await click(
       [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.includes("Schedule")),
     );
@@ -337,11 +596,9 @@ describe("the Calendar screen", () => {
     expect(
       [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.includes("Schedule")),
     ).toBe(false);
-    // The calendar itself is untouched: the views, Today and the Event form stay.
-    expect(el.querySelectorAll(".cal-day")).toHaveLength(7);
-    expect(
-      [...el.querySelectorAll(".col-head button")].some((b) => b.textContent?.trim() === "Event"),
-    ).toBe(true);
+    // The calendar itself is untouched: the views and the new Event button stay.
+    expect(el.querySelectorAll(".cal-tg-dh")).toHaveLength(7);
+    expect(button(el.querySelector(".col-head") as Element, "Event")).not.toBeNull();
     await render("assist");
     await act(tick);
     expect(el.querySelector(".agent-dock")).not.toBeNull();
@@ -350,50 +607,19 @@ describe("the Calendar screen", () => {
     ).toBe(true);
   });
 
-  test("an Event whose end is not after its start is refused in plain words and nothing is created", async () => {
-    const source = fixtureCalendar({ calendars, events, invites });
-    await mount(<Calendar source={source} now={NOW} />);
-    const el = host as HTMLElement;
-    await click(
-      [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.trim() === "Event"),
-    );
-    const form = el.querySelector<HTMLFormElement>("form.cal-form");
-    if (!form) throw new Error("no form");
-    await act(async () => {
-      (form.elements.namedItem("title") as HTMLInputElement).value = "Backwards";
-      (form.elements.namedItem("start") as HTMLInputElement).value = "2026-09-17T16:00";
-      (form.elements.namedItem("end") as HTMLInputElement).value = "2026-09-17T15:00";
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  test("an answer the seam refuses shows why, in plain words", async () => {
+    const source = fixtureCalendar({
+      calendars,
+      events,
+      invites,
+      fail: { respond: "the Provider is unreachable" },
     });
-    await act(tick);
-    expect(source.log).toEqual([]);
-    expect(el.querySelector(".cal-error")?.textContent).toBe(
-      "The end has to come after the start.",
-    );
-    // Cancel closes the form and forgets the complaint.
-    await click(
-      [...form.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel"),
-    );
-    expect(el.querySelector("form.cal-form")).toBeNull();
-    expect(el.querySelector(".cal-error")).toBeNull();
-  });
-
-  test("an answer from the Agenda that the seam refuses shows why, in plain words", async () => {
-    const inner = fixtureCalendar({ calendars, events, invites });
-    const source = {
-      ...inner,
-      respond: async () => {
-        throw new Error("the Provider is unreachable");
-      },
-    };
     await mount(<Calendar source={source} now={NOW} initialView="agenda" />);
     const el = host as HTMLElement;
-    const podcast = [...el.querySelectorAll(".ag-row")].find((r) =>
+    const podcast = [...el.querySelectorAll(".cal-ag-row")].find((r) =>
       r.textContent?.includes("Podcast recording"),
     );
-    await click(
-      [...(podcast?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Accept"),
-    );
+    await click(button(podcast as Element, "Accept"));
     expect(el.querySelector(".cal-answer-error")?.textContent).toBe(
       "Could not send your answer: the Provider is unreachable",
     );
@@ -506,6 +732,18 @@ describe("reminders", () => {
     expect(next?.at.toISOString()).toBe(new Date(2026, 8, 17, 14, 50).toISOString());
     const later = nextReminder(source, 10, new Date(2026, 8, 17, 16, 0), new Set(), (t) => t);
     expect(later?.title).toBe("Standup");
+  });
+
+  test("an Event's own reminders replace the lead: each fires once, the earliest first", () => {
+    const own = events.map((e) => (e.id === "aoife" ? { ...e, reminders: [60, 5] } : e));
+    const source = fixtureCalendar({ calendars, events: own });
+    const now = new Date(2026, 8, 17, 13, 50);
+    const first = nextReminder(source, 10, now, new Set(), (t) => t);
+    expect(first?.key).toBe("aoife#60");
+    expect(first?.at.toISOString()).toBe(new Date(2026, 8, 17, 14, 0).toISOString());
+    const second = nextReminder(source, 10, now, new Set(["aoife#60"]), (t) => t);
+    expect(second?.key).toBe("aoife#5");
+    expect(second?.at.toISOString()).toBe(new Date(2026, 8, 17, 14, 55).toISOString());
   });
 
   test("scheduleReminders fires the notification at the lead and re-arms", async () => {

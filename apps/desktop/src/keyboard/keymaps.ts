@@ -6,6 +6,11 @@
 // event.key lowercased ("j", "enter", "escape", "arrowdown", "#", "/").
 // Shift is implied for printable non-letters such as "#", so the chord is "#"
 // even though the user holds Shift to type it.
+//
+// Actions have a scope: the mail screens' actions and the Calendar's share
+// chords ("m" moves a Thread in the Inbox and opens Month on the Calendar),
+// and a few global ones (the palette, the agent, Escape, the saved views)
+// work everywhere. Two actions clash only when their scopes meet.
 
 export const KEY_ACTIONS = [
   "move.down",
@@ -39,11 +44,51 @@ export const KEY_ACTIONS = [
   "view.7",
   "view.8",
   "view.9",
+  "calendar.today",
+  "calendar.previous",
+  "calendar.next",
+  "calendar.view.day",
+  "calendar.view.week",
+  "calendar.view.month",
+  "calendar.view.agenda",
+  "calendar.new_event",
+  "calendar.search",
 ] as const;
 
 export type KeyAction = (typeof KEY_ACTIONS)[number];
 export type KeymapName = "vim" | "gmail" | "natural";
 export type Keymap = Readonly<Record<KeyAction, string>>;
+
+/** Where an action works: the mail screens, the Calendar, or everywhere. */
+export type KeyScope = "mail" | "calendar" | "global";
+
+const GLOBAL_ACTIONS: ReadonlySet<string> = new Set([
+  "palette.open",
+  "agent.focus",
+  "sheet.close",
+  "undo",
+]);
+
+export function actionScope(action: KeyAction): KeyScope {
+  if (action.startsWith("calendar.")) return "calendar";
+  if (GLOBAL_ACTIONS.has(action) || action.startsWith("view.")) return "global";
+  return "mail";
+}
+
+/** Whether an action is live on a screen of this scope. */
+export function inScope(action: KeyAction, scope: Exclude<KeyScope, "global">): boolean {
+  const own = actionScope(action);
+  return own === "global" || own === scope;
+}
+
+const calendarKeys = {
+  "calendar.today": "t",
+  "calendar.view.day": "d",
+  "calendar.view.week": "w",
+  "calendar.view.month": "m",
+  "calendar.view.agenda": "a",
+  "calendar.search": "mod+f",
+} as const;
 
 const views = {
   "view.1": "mod+1",
@@ -81,6 +126,10 @@ export const VIM: Keymap = {
   "agent.focus": "/",
   "palette.open": "mod+k",
   ...views,
+  ...calendarKeys,
+  "calendar.previous": "k",
+  "calendar.next": "j",
+  "calendar.new_event": "c",
 };
 
 export const GMAIL: Keymap = {
@@ -108,6 +157,10 @@ export const GMAIL: Keymap = {
   "agent.focus": "/",
   "palette.open": "mod+k",
   ...views,
+  ...calendarKeys,
+  "calendar.previous": "k",
+  "calendar.next": "j",
+  "calendar.new_event": "c",
 };
 
 export const NATURAL: Keymap = {
@@ -134,6 +187,10 @@ export const NATURAL: Keymap = {
   "agent.focus": "mod+/",
   "palette.open": "mod+k",
   ...views,
+  ...calendarKeys,
+  "calendar.previous": "arrowleft",
+  "calendar.next": "arrowright",
+  "calendar.new_event": "mod+n",
 };
 
 export const KEYMAPS: Readonly<Record<KeymapName, Keymap>> = {
@@ -228,13 +285,22 @@ export function chordOf(e: KeyLike): string {
   return parts.join("+");
 }
 
-/** The action a chord is bound to in a map, if any. Earlier actions win on conflict. */
-export function actionFor(map: Keymap, chord: string): KeyAction | null {
-  for (const action of KEY_ACTIONS) if (map[action] === chord) return action;
+/**
+ * The action a chord is bound to in a map on a screen of `scope` (the mail
+ * screens by default), if any. Earlier actions win on conflict.
+ */
+export function actionFor(
+  map: Keymap,
+  chord: string,
+  scope: Exclude<KeyScope, "global"> = "mail",
+): KeyAction | null {
+  for (const action of KEY_ACTIONS) {
+    if (map[action] === chord && inScope(action, scope)) return action;
+  }
   return null;
 }
 
-/** Bindings that share one chord, for the Shortcuts page to highlight. */
+/** Bindings that share one chord where both work, for the Shortcuts page to highlight. */
 export function conflicts(map: Keymap): Array<{ chord: string; actions: KeyAction[] }> {
   const byChord = new Map<string, KeyAction[]>();
   for (const action of KEY_ACTIONS) {
@@ -242,9 +308,17 @@ export function conflicts(map: Keymap): Array<{ chord: string; actions: KeyActio
     list.push(action);
     byChord.set(map[action], list);
   }
-  return [...byChord.entries()]
-    .filter(([, actions]) => actions.length > 1)
-    .map(([chord, actions]) => ({ chord, actions }));
+  const meet = (a: KeyAction, b: KeyAction) => {
+    const x = actionScope(a);
+    const y = actionScope(b);
+    return x === "global" || y === "global" || x === y;
+  };
+  const out: Array<{ chord: string; actions: KeyAction[] }> = [];
+  for (const [chord, actions] of byChord) {
+    const clashing = actions.filter((a) => actions.some((b) => b !== a && meet(a, b)));
+    if (clashing.length > 1) out.push({ chord, actions: clashing });
+  }
+  return out;
 }
 
 /** "mod+k" as the label the UI prints: "⌘K" on macOS, "Ctrl+K" elsewhere. */

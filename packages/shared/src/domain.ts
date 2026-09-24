@@ -670,6 +670,12 @@ export interface CalendarEvent {
   /** Provider ETag, Schedule-Tag or change key; drives conditional updates. */
   etag: string | null;
   updatedAt: IsoDate;
+  /**
+   * Minutes before the start to remind, as the Event sets them; null or
+   * absent when the Event keeps the calendar's default (the
+   * notifications.calendar_lead_minutes Setting on this Device).
+   */
+  reminders?: number[] | null | undefined;
 }
 
 /** What creates or updates an Event: everything the user can edit. */
@@ -687,11 +693,64 @@ export interface EventInput {
   meetingLink?: MeetingLinkKind | undefined;
   customLink?: string | null | undefined;
   recurrence?: string | null | undefined;
+  /** Minutes before the start to remind; null keeps the calendar's default. */
+  reminders?: number[] | null | undefined;
   createdByAgent?: boolean | undefined;
 }
 
 /** What updates an Event: any subset of the input; an absent field keeps its value. */
 export type EventPatch = { [K in keyof EventInput]?: EventInput[K] | undefined };
+
+/**
+ * Which instances of a recurring Event a change or a delete reaches: the one
+ * picked, it and every later one, or the whole series. A single Event ignores it.
+ */
+export type RecurrenceScope = "this" | "following" | "all";
+
+/** How an update or a delete of a possibly recurring Event is aimed. */
+export interface EventWriteOptions {
+  /** Default "this" for an instance the Provider expanded, "all" for a master. */
+  scope?: RecurrenceScope | undefined;
+  /**
+   * The picked instance's own start, as the view expanded it, when the Event
+   * id names a recurring master (CalDAV and the Local calendar hand masters;
+   * the client expands them). Absent for Provider-expanded instances.
+   */
+  occurrence?: IsoDate | undefined;
+}
+
+/** Why an Account's calendar cannot be read, in a form the Calendar screen can explain. */
+export type CalendarProblemKind =
+  /** The calendar API is turned off where the sign-in lives (Google Cloud project, Entra tenant). */
+  | "api-disabled"
+  /** The sign-in did not grant calendar access: signing in again and allowing it fixes it. */
+  | "scope"
+  /** The sign-in expired or was revoked: reconnect the Account. */
+  | "auth"
+  /** The Provider could not be reached. */
+  | "network"
+  /** The Provider is refusing for now (quota). */
+  | "rate-limit"
+  | "other";
+
+export interface CalendarProblem {
+  kind: CalendarProblemKind;
+  /** The Provider's own words, for the details line. */
+  message: string;
+  /** Where the fix happens (the Calendar API's page in the Cloud console), when known. */
+  fixUrl: string | null;
+}
+
+/** Whether a Workspace's calendar is readable right now, and why not. */
+export interface CalendarStatus {
+  workspaceId: Id;
+  accountId: Id;
+  source: CalendarSource;
+  problem: CalendarProblem | null;
+  /** When the calendar was last read without error; null when never. */
+  lastSync: IsoDate | null;
+  checkedAt: IsoDate;
+}
 
 export type InviteMethod = "REQUEST" | "REPLY" | "CANCEL" | "PUBLISH";
 

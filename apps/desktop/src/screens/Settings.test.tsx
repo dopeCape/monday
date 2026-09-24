@@ -1240,6 +1240,7 @@ describe("Settings › Shortcuts", () => {
       "Compose",
       "Select",
       "Views",
+      "Calendar",
     ]);
     await click(q('[data-action="thread.star"] .chord-btn'));
     const input = q<HTMLInputElement>('[data-action="thread.star"] input');
@@ -1392,15 +1393,15 @@ describe("Settings › search", () => {
     ]);
     // Groups with nothing primary start folded, and the index marks them.
     const folded = qa(".settings-index a[data-folded]").map((a) => a.textContent);
-    expect(folded).toEqual(["Views", "Inbox", "Calendar", "Search", "Advanced"]);
+    expect(folded).toEqual(["Views", "Inbox", "Search", "Advanced"]);
     expect(q(".settings-index a.on")?.textContent).toBe("Theme");
     await click(q('.settings-index a[data-index-group="Text"]'));
     expect(q(".settings-index a.on")?.textContent).toBe("Text");
     expect(q("#group-text")).not.toBeNull();
     // A click on a folded group opens it.
-    expect(q('[data-setting="calendar.day_start_hour"]')).toBeNull();
-    await click(q('.settings-index a[data-index-group="Calendar"]'));
-    expect(q('[data-setting="calendar.day_start_hour"]')).not.toBeNull();
+    expect(q('[data-setting="views.list"]')).toBeNull();
+    await click(q('.settings-index a[data-index-group="Views"]'));
+    expect(q('[data-setting="views.list"]')).not.toBeNull();
     // About has one group: no index.
     if (root) await act(async () => root?.unmount());
     root = null;

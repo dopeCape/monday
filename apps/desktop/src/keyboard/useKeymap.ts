@@ -17,6 +17,7 @@ import {
   type KeyLike,
   type Keymap,
   type KeymapName,
+  type KeyScope,
   resolveKeymap,
 } from "./keymaps.ts";
 
@@ -50,10 +51,11 @@ export function dispatchKey(
   handlers: KeyHandlers,
   ctx: KeyContext,
   e: DispatchEvent,
+  scope: Exclude<KeyScope, "global"> = "mail",
 ): KeyAction | null {
   const chord = chordOf(e);
   if (e.typing && chord !== "escape" && !chord.startsWith("mod+")) return null;
-  const action = actionFor(map, chord);
+  const action = actionFor(map, chord, scope);
   if (!action) return null;
   const handler = handlers[action];
   if (!handler) return null;
@@ -83,23 +85,33 @@ export function useActiveKeymap(): Keymap {
  * active map. Handlers and context are read at press time, so callers pass
  * fresh values on every render without re-binding the listener.
  */
-export function useKeymap(handlers: KeyHandlers, ctx: KeyContext): Keymap {
+export function useKeymap(
+  handlers: KeyHandlers,
+  ctx: KeyContext,
+  scope: Exclude<KeyScope, "global"> = "mail",
+): Keymap {
   const map = useActiveKeymap();
-  const latest = useRef({ handlers, ctx, map });
-  latest.current = { handlers, ctx, map };
+  const latest = useRef({ handlers, ctx, map, scope });
+  latest.current = { handlers, ctx, map, scope };
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
-      const { handlers: h, ctx: c, map: m } = latest.current;
-      dispatchKey(m, h, c, {
-        key: e.key,
-        metaKey: e.metaKey,
-        ctrlKey: e.ctrlKey,
-        shiftKey: e.shiftKey,
-        altKey: e.altKey,
-        typing: isTypingTarget(e.target),
-        preventDefault: () => e.preventDefault(),
-      });
+      const { handlers: h, ctx: c, map: m, scope: sc } = latest.current;
+      dispatchKey(
+        m,
+        h,
+        c,
+        {
+          key: e.key,
+          metaKey: e.metaKey,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          typing: isTypingTarget(e.target),
+          preventDefault: () => e.preventDefault(),
+        },
+        sc,
+      );
     };
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
