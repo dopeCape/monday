@@ -607,7 +607,9 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
                   ? `propose "${preview.preview.draft.title}" (${preview.preview.draft.changes.length} changes)`
                   : preview.preview.kind === "groups"
                     ? `create ${preview.preview.groups.map((g) => g.name).join(", ")}`
-                    : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
+                    : preview.preview.kind === "workflow"
+                      ? `${preview.preview.action} workflow "${preview.preview.workflow.name}"`
+                      : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }
     try {

@@ -11,14 +11,7 @@
 // `off` keeps every Group and Workflow row.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type {
-  Account,
-  AgentEvent,
-  GroupView,
-  SessionSummary,
-  ToolPreview,
-  WorkflowView,
-} from "@monday/shared";
+import type { Account, AgentEvent, GroupView, SessionSummary, WorkflowView } from "@monday/shared";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
@@ -138,7 +131,6 @@ describe("a fresh Fastmail account ends onboarding with approved Groups and one 
     if (card?.kind !== "tool") throw new Error(`no waiting ${tool} card`);
     return card;
   };
-  const textOf = (p: ToolPreview | null) => (p?.kind === "text" ? p.text : "");
   const syncAll = async () => {
     let report = await engine.syncAccount(account.id);
     for (let i = 0; i < 20 && report.more; i++) report = await engine.syncAccount(account.id);
@@ -392,8 +384,13 @@ describe("a fresh Fastmail account ends onboarding with approved Groups and one 
     // Picking one: the adopt card asks with its Dry run.
     events = await turn("Invoices");
     const adopt = waitingCard(events, "adopt_workflow");
-    expect(textOf(adopt.preview)).toContain('Enable "Invoices to Drive"?');
-    expect(textOf(adopt.preview)).toContain("Dry run");
+    // The card draws the catalog Workflow's flow, with its Dry run as the line under it.
+    expect(adopt.preview).toMatchObject({
+      kind: "workflow",
+      action: "enable",
+      workflow: { name: "Invoices to Drive" },
+    });
+    expect(adopt.preview?.kind === "workflow" ? adopt.preview.note : "").toContain("Dry run");
     expect(await workflows()).toEqual([]);
 
     events = await approve(adopt.call.id);

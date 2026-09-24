@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   cronMatches,
   describeWorkflow,
+  diffWorkflow,
   evaluateCondition,
   nextCronRun,
   parseCron,
@@ -166,5 +167,45 @@ describe("cron", () => {
     // Day-of-month or day-of-week when both are set (cron's rule).
     const either = parseCron("0 0 15 * mon");
     expect(nextCronRun(either, wed)?.toISOString()).toBe("2026-09-21T00:00:00.000Z");
+  });
+});
+
+describe("what an edit changes", () => {
+  const doc = (steps: unknown[], trigger: unknown = { kind: "manual" }, name = "Digest") => {
+    const p = parseWorkflowInput({ name, trigger, steps });
+    if (!p.ok) throw new Error(p.error);
+    return p.value;
+  };
+  const archive = { id: "archive", kind: "archive", name: "Archive" };
+  const notify = { id: "tell", kind: "notify", name: "Tell me", text: "Done" };
+
+  test("Steps are matched by id: new, changed, the same, and the ones taken out", () => {
+    const before = doc([archive, notify, { id: "wait", kind: "wait", name: "Wait", hours: 2 }]);
+    const after = doc([
+      { ...notify, text: "Done: {{thread.subject}}" },
+      archive,
+      { id: "tag", kind: "tag", name: "Label", add: ["done"] },
+    ]);
+    const d = diffWorkflow(before, after);
+    expect(d.steps).toEqual([
+      { id: "tell", change: "changed" },
+      { id: "archive", change: "same" },
+      { id: "tag", change: "added" },
+    ]);
+    expect(d.removed.map((s) => s.id)).toEqual(["wait"]);
+    expect(d.trigger).toBe("same");
+    expect(d.renamed).toBe(false);
+    expect(d.changed).toBe(true);
+  });
+
+  test("key order never counts as a change; a new trigger or name does", () => {
+    const a = doc([archive], { kind: "arrival", group: "g", predicate: { hasAttachment: true } });
+    const b = doc([archive], { predicate: { hasAttachment: true }, group: "g", kind: "arrival" });
+    expect(diffWorkflow(a, b).changed).toBe(false);
+    const c = doc([archive], { kind: "schedule", cron: "0 16 * * fri" }, "Weekly");
+    const d = diffWorkflow(a, c);
+    expect(d.trigger).toBe("changed");
+    expect(d.renamed).toBe(true);
+    expect(d.changed).toBe(true);
   });
 });
