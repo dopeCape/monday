@@ -1,9 +1,10 @@
 // SMTP submission (RFC 6409, RFC 8314): implicit TLS on 465 or STARTTLS on
 // 587, AUTH PLAIN or XOAUTH2, via nodemailer. The envelope comes from the
 // message headers unless the caller supplies recipients; a Bcc header never
-// leaves the machine.
+// leaves the machine. nodemailer loads on the first send, not at boot.
 
-import nodemailer, { type Transporter } from "nodemailer";
+import type { Transporter } from "nodemailer";
+import { lazy } from "../../lazy.ts";
 import { parseMime, peopleOf } from "../mime.ts";
 import type { Auth, HostPort } from "../types.ts";
 import { ProviderError } from "../types.ts";
@@ -18,6 +19,9 @@ export interface SmtpOptions {
   /** Injected for tests; defaults to nodemailer's SMTP transport. */
   createTransport?: (options: Record<string, unknown>) => Transporter;
 }
+
+/** nodemailer, imported by the first send and reused after it. */
+const loadNodemailer = lazy(() => import("nodemailer"));
 
 /** Strips a Bcc header (folded lines included) from the header block. */
 export function stripBcc(mime: Uint8Array): Uint8Array {
@@ -48,8 +52,7 @@ export function createSmtpSender(
   address: string,
   options: SmtpOptions = {},
 ): SmtpSender {
-  const create = options.createTransport ?? ((o) => nodemailer.createTransport(o));
-  const transport = create({
+  const transportOptions = {
     host: endpoint.host,
     port: endpoint.port,
     secure: endpoint.tls === "tls",
@@ -57,14 +60,22 @@ export function createSmtpSender(
     ignoreTLS: endpoint.tls === "none",
     auth: smtpAuthOf(auth),
     connectionTimeout: 30_000,
+  };
+  // Made by the first send; close() before any send has nothing to close.
+  let transport: Transporter | null = null;
+  const transportOf = lazy(async () => {
+    const create = options.createTransport ?? (await loadNodemailer()).createTransport;
+    transport = create(transportOptions);
+    return transport;
   });
   return {
     async send(mime, to) {
       const envelope = await envelopeOf(mime, address);
       const rcpt = to && to.length > 0 ? to : envelope.to;
       if (rcpt.length === 0) throw new ProviderError("no recipients", "protocol");
+      const smtp = await transportOf();
       try {
-        const info = await transport.sendMail({
+        const info = await smtp.sendMail({
           envelope: { from: envelope.from, to: rcpt },
           raw: Buffer.from(stripBcc(mime)),
         });
@@ -81,7 +92,7 @@ export function createSmtpSender(
       }
     },
     close() {
-      transport.close();
+      transport?.close();
     },
   };
 }

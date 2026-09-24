@@ -22,6 +22,7 @@ import {
 import type { ApprovalDecision, Task, ToolPreview, Usage } from "@monday/shared";
 import type { AgentMessage, HostedRuntime, ToolSpec } from "../runtime/index.ts";
 import type { ActivityRow } from "./activity.ts";
+import { BudgetExceededError } from "./budget.ts";
 import type { ToolServer } from "./tools/index.ts";
 
 export const AgentState = Annotation.Root({
@@ -35,13 +36,7 @@ export const AgentState = Annotation.Root({
   toolCalls: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }),
 });
 
-/** An agentic Step spent more than its Budget allows (CONTEXT.md "Budget": the Run fails). */
-export class BudgetExceededError extends Error {
-  constructor(readonly cap: "calls" | "tokens" | "minutes") {
-    super(`budget exceeded: ${cap}`);
-    this.name = "BudgetExceededError";
-  }
-}
+export { BudgetExceededError };
 
 export type AgentStateType = typeof AgentState.State;
 

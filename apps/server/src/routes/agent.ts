@@ -23,13 +23,16 @@
 //                                                  bearer = the Device token, X-Monday-Workspace and
 //                                                  X-Monday-Session say whose cards they are
 
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { AgentEvent, Runtime, TurnContext } from "@monday/shared";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
-import { type AgentHost, createMondayMcpServer } from "../intelligence/agent/index.ts";
+import {
+  type AgentHost,
+  createMcpHttpTransport,
+  createMondayMcpServer,
+} from "../intelligence/agent/index.ts";
 import { parseBody } from "./validate.ts";
 
 const runtimeSchema: z.ZodType<Runtime> = z.union([
@@ -180,8 +183,8 @@ export function agentRoutes(agent: AgentHost, routeOptions: AgentRoutesOptions =
           .filter(Boolean)
       : undefined;
     // Stateless: no MCP session id, one server per request, the JSON answer once the tool returns.
-    const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
-    const server = createMondayMcpServer(agent, { workspaceId, sessionId, pinned });
+    const transport = await createMcpHttpTransport();
+    const server = await createMondayMcpServer(agent, { workspaceId, sessionId, pinned });
     await server.connect(transport);
     try {
       return await transport.handleRequest(c.req.raw);

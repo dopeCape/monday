@@ -27,7 +27,11 @@ import type {
   ExternalKeyCreated,
   ExternalPending,
 } from "@monday/shared";
-import { type AgentHost, createMondayMcpServer } from "../intelligence/agent/index.ts";
+import {
+  type AgentHost,
+  createMondayMcpServer,
+  type McpServer,
+} from "../intelligence/agent/index.ts";
 import type { ExternalSeam } from "../intelligence/agent/tools/extensions.ts";
 import {
   type CredentialStore,
@@ -77,10 +81,7 @@ export interface External extends ExternalSeam {
     credential: Pick<ExternalCredential, "workspaceIds">,
   ): Promise<Array<{ id: string; address: string }>>;
   /** The MCP server for one credential in one Workspace. */
-  mcpServer(
-    credential: ExternalCredential,
-    workspaceId: string,
-  ): Promise<ReturnType<typeof createMondayMcpServer>>;
+  mcpServer(credential: ExternalCredential, workspaceId: string): Promise<McpServer>;
   listCredentials(): Promise<ExternalCredential[]>;
   /** The calls of this Workspace parked on an approval, for the owner's client. */
   pending(workspaceId: string): Promise<ExternalPending[]>;

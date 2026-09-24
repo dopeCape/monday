@@ -142,8 +142,8 @@ export async function bootCloud(
   await backfillDraftMirrors(handle.db, services.jobs).catch((error) =>
     log(`draft mirror backfill failed: ${error}`),
   );
-  // LangGraph checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after the migrations.
-  const checkpointer = await createCheckpointer(databaseUrl, handle.db, services.mailstore);
+  // LangGraph checkpoints for paused Agent turns, sealed under the Workspace keys; loaded and set up by the first Hosted turn.
+  const checkpointer = createCheckpointer(databaseUrl, handle.db, services.mailstore);
 
   const app = createApp({
     db: handle.db,
@@ -153,7 +153,7 @@ export async function bootCloud(
     mailstore: services.mailstore,
     jobs: services.jobs,
     sync: services.sync,
-    checkpointer,
+    checkpointer: checkpointer.load,
     judge: services.judge,
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,

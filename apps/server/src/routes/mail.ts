@@ -22,9 +22,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
 import type { BodyState } from "../db/schema.ts";
-import { displayBody } from "../mail/index.ts";
+import { lazy } from "../lazy.ts";
 import type { Mailstore } from "../mailstore/index.ts";
 import { parseBody } from "./validate.ts";
+
+/** The reader's sanitiser (sanitize-html, postcss), imported by the first body served. */
+const loadMail = lazy(() => import("../mail/index.ts"));
 
 const listQuery = z.object({
   workspace: z.string().min(1),
@@ -203,6 +206,7 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     // the single route.
     const states = await options.bodyStates?.(page.bodies.map((b) => b.id));
     const allowRemoteImages = await remoteImages(c.req.query("images"));
+    const { displayBody } = await loadMail();
     const bodies = [];
     for (const b of page.bodies) {
       const bodyState = states?.get(b.id) ?? "fetched";
@@ -242,6 +246,7 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     const body = await mailstore.readMessageBody(messageId);
     const header = await mailstore.findMessage(messageId);
     const allowRemoteImages = await remoteImages(c.req.query("images"));
+    const { displayBody } = await loadMail();
     // bodyState tells the Message's body from the empty stand-in a
     // header-only sync leaves: a client caches only a fetched one.
     return c.json({

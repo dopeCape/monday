@@ -7,7 +7,7 @@
 // header block and everything after it, or a "________" rule before one.
 // Everything that is not a link is escaped.
 
-import { escapeHtml } from "./sanitize.ts";
+import { escapeHtml } from "./escape.ts";
 
 export interface TextHtml {
   html: string;

@@ -13,7 +13,6 @@
 // `resume` exactly as a Hosted interrupt does, and the tool cards reach the
 // Device through `live`.
 
-import { type BaseCheckpointSaver, MemorySaver } from "@langchain/langgraph";
 import type {
   ActivityRecord,
   AgentEvent,
@@ -29,13 +28,9 @@ import type {
 } from "@monday/shared";
 import type { HostedRuntime } from "../runtime/index.ts";
 import { type ActivityLog, type ActivityRow, draftOpenOf, publicActivity } from "./activity.ts";
-import {
-  type AgentGraph,
-  BudgetExceededError,
-  createAgentGraph,
-  type InterruptPayload,
-  type RunContext,
-} from "./graph.ts";
+import { BudgetExceededError } from "./budget.ts";
+import type { AgentGraph, InterruptPayload, RunContext } from "./graph.ts";
+import { type CheckpointerSource, createLazyAgentGraph } from "./graph-lazy.ts";
 import { createHostedSession, SessionNotFoundError, TurnBusyError } from "./session-runtime.ts";
 import type { SessionStore } from "./sessions.ts";
 import {
@@ -47,12 +42,15 @@ import {
 
 export type { ActivityLog, ActivityRow } from "./activity.ts";
 export { createActivityLog, createMemoryActivityLog, publicActivity } from "./activity.ts";
+export { BudgetExceededError } from "./budget.ts";
 export type { InterruptPayload } from "./graph.ts";
-export { BudgetExceededError } from "./graph.ts";
+export type { CheckpointerSource } from "./graph-lazy.ts";
 export { createServerToolHost } from "./host.ts";
 export {
+  createMcpHttpTransport,
   createMondayMcpServer,
   type McpContext,
+  type McpServer,
   mcpResultOf,
   scopeAllows,
   scopeError,
@@ -101,8 +99,11 @@ export interface AgentHostOptions {
   settings(): Promise<AgentSettings>;
   /** The Workspace's address, appended to the system prompt. */
   workspaceAddress(workspaceId: string): Promise<string>;
-  /** LangGraph's checkpointer; PostgresSaver in production, memory by default. */
-  checkpointer?: BaseCheckpointSaver;
+  /**
+   * LangGraph's checkpointer, or its loader; PostgresSaver in production, memory
+   * by default. Resolved by the first turn, never at creation.
+   */
+  checkpointer?: CheckpointerSource;
   now?: () => Date;
   /** The seams of the extension tools; filled after creation by the modules that need this host. */
   extensions?: ToolExtensions | undefined;
@@ -250,7 +251,6 @@ export function epochOf(events: readonly AgentEvent[]): number {
 export function createAgentHost(options: AgentHostOptions): AgentHost {
   const { runtime, activity, sessions } = options;
   const now = options.now ?? (() => new Date());
-  const checkpointer = options.checkpointer ?? new MemorySaver();
   const toolServers = new Map<string, ToolServer>();
   const running = new Map<string, RunContext>();
   const hosted = new Map<string, { runtime: string; session: AgentSession }>();
@@ -295,9 +295,9 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     return server;
   };
 
-  const graph: AgentGraph = createAgentGraph({
+  const graph: AgentGraph = createLazyAgentGraph({
     runtime,
-    checkpointer,
+    checkpointer: options.checkpointer,
     contextFor: (threadId) => {
       const ctx = running.get(threadId);
       if (!ctx) throw new Error(`no run context for thread ${threadId}`);

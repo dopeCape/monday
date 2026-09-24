@@ -2,16 +2,20 @@
 // sync, fetch and changes; watch() opens one more per hot folder for IDLE.
 // The sync tier is chosen per mailbox after ENABLE (tiers.ts); actions map to
 // flags and moves per inbox.md; sent mail is appended to \Sent unless the host
-// is one that copies it itself.
+// is one that copies it itself. imapflow and nodemailer load on the first
+// connection and the first send, so a Server with no IMAP Account never
+// carries them.
 
 import type {
   FetchMessageObject,
+  ImapFlow,
+  ImapFlowOptions,
   ListResponse,
   MailboxObject,
   MessageStructureObject,
 } from "imapflow";
-import { AuthenticationFailure, ImapFlow, type ImapFlowOptions } from "imapflow";
 import { decodeWords } from "postal-mime";
+import { lazy } from "../../lazy.ts";
 import { parseMime, pickHeaders, rawMessageOf } from "../mime.ts";
 import { asyncQueue } from "../queue.ts";
 import {
@@ -104,17 +108,25 @@ function clientOptions(endpoint: HostPort, credentials: Credentials): ImapFlowOp
   };
 }
 
-async function connectClient(
-  create: (options: ImapFlowOptions) => ImapFlow,
-  options: ImapFlowOptions,
-): Promise<ImapFlow> {
-  const client = create(options);
+/** imapflow, imported by the first IMAP connection and reused after it. */
+const loadImapflow = lazy(() => import("imapflow"));
+
+/** A real ImapFlow client, the package loaded on first use. */
+async function createImapFlow(options: ImapFlowOptions): Promise<ImapFlow> {
+  const { ImapFlow } = await loadImapflow();
+  return new ImapFlow(options);
+}
+
+type CreateClient = (options: ImapFlowOptions) => ImapFlow | Promise<ImapFlow>;
+
+async function connectClient(create: CreateClient, options: ImapFlowOptions): Promise<ImapFlow> {
+  const client = await create(options);
   // Without a listener an async socket error would be an unhandled event.
   client.on("error", () => {});
   try {
     await client.connect();
   } catch (cause) {
-    if (cause instanceof AuthenticationFailure) {
+    if (cause instanceof (await loadImapflow()).AuthenticationFailure) {
       throw new ProviderError("IMAP server refused the credentials", "auth", { cause });
     }
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -132,7 +144,7 @@ export function createImapProvider(options: ImapProviderOptions = {}): Provider 
       if (credentials.endpoint.kind !== "imap") {
         throw new ProviderError("IMAP needs host and port", "unsupported");
       }
-      const create = options.createClient ?? ((o) => new ImapFlow(o));
+      const create: CreateClient = options.createClient ?? createImapFlow;
       const client = await connectClient(
         create,
         clientOptions(credentials.endpoint.imap, credentials),
@@ -241,7 +253,7 @@ class ImapSession implements Session {
     private readonly credentials: Credentials,
     private readonly endpoint: { imap: HostPort; smtp: HostPort },
     private readonly options: ImapProviderOptions,
-    private readonly create: (options: ImapFlowOptions) => ImapFlow,
+    private readonly create: CreateClient,
   ) {
     this.page = options.pageSize ?? DEFAULT_PAGE;
     this.tier = chooseTier(client.capabilities, client.enabled);
