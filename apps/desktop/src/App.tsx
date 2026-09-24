@@ -654,6 +654,14 @@ export function App({
         })
       : null,
   );
+  // The dev server's fixture draft (`&caldraft=1`), with no Agent to propose one.
+  useEffect(() => {
+    if (!draftStore || shell.server || shell.host !== "browser") return;
+    if (new URLSearchParams(location.search).get("caldraft") !== "1") return;
+    void import("./screens/calendar/fixture.ts").then((fx) =>
+      draftStore.offer(fx.devDraft(new Date())),
+    );
+  }, [draftStore, shell.server, shell.host]);
   // A draft in the Session reaches the store even while the composer is closed.
   useEffect(() => {
     if (!draftStore) return;
