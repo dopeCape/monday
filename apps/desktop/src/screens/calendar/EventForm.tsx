@@ -153,12 +153,16 @@ function TimeFields({
   draft,
   onChange,
   s,
+  compact = false,
 }: {
   draft: Draft;
   onChange: (d: Draft) => void;
   s: Settings;
+  /** The quick create: the end date only when the Event runs past its first day. */
+  compact?: boolean;
 }) {
   const step = s["calendar.snap_minutes"] * 60;
+  const endDate = !compact || draft.allDay || draft.endDate !== draft.startDate;
   return (
     <div className="cal-times">
       <Input
@@ -186,13 +190,37 @@ function TimeFields({
           onChange={(e) => onChange({ ...draft, endTime: e.target.value })}
         />
       )}
-      <Input
-        type="date"
-        aria-label={s["strings.calendar.form.end_date"]}
-        value={draft.endDate}
-        onChange={(e) => onChange({ ...draft, endDate: e.target.value })}
-      />
+      {endDate ? (
+        <Input
+          type="date"
+          aria-label={s["strings.calendar.form.end_date"]}
+          value={draft.endDate}
+          onChange={(e) => onChange({ ...draft, endDate: e.target.value })}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/** The all-day switch with its words beside it. */
+function AllDay({
+  draft,
+  onChange,
+  s,
+}: {
+  draft: Draft;
+  onChange: (d: Draft) => void;
+  s: Settings;
+}) {
+  return (
+    <span className="cal-switch">
+      <Switch
+        on={draft.allDay}
+        label={s["strings.calendar.all_day"]}
+        onChange={(v) => onChange({ ...draft, allDay: v })}
+      />
+      <span aria-hidden="true">{s["strings.calendar.all_day"]}</span>
+    </span>
   );
 }
 
@@ -257,13 +285,9 @@ export function QuickCreate({
         aria-label={s["strings.calendar.form.title"]}
         onChange={(e) => onChange({ ...draft, title: e.target.value })}
       />
-      <TimeFields draft={draft} onChange={onChange} s={s} />
+      <TimeFields draft={draft} onChange={onChange} s={s} compact />
       <div className="cal-quick-row">
-        <Switch
-          on={draft.allDay}
-          label={s["strings.calendar.all_day"]}
-          onChange={(v) => onChange({ ...draft, allDay: v })}
-        />
+        <AllDay draft={draft} onChange={onChange} s={s} />
         <span className="cal-dot" aria-hidden="true" />
         <CalendarSelect
           calendars={calendars}
@@ -409,11 +433,7 @@ export function EventEditor({
             <div className="cal-field">
               <TimeFields draft={draft} onChange={onChange} s={s} />
               <div className="cal-field-row">
-                <Switch
-                  on={draft.allDay}
-                  label={s["strings.calendar.all_day"]}
-                  onChange={(v) => onChange({ ...draft, allDay: v })}
-                />
+                <AllDay draft={draft} onChange={onChange} s={s} />
                 {draft.allDay ? null : (
                   <label className="cal-inline">
                     <Icon icon={GlobeIcon} />

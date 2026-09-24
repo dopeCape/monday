@@ -4142,6 +4142,8 @@ button.prov {
 .cal-tg-body {
   position: relative;
   height: calc(24 * var(--hour));
+  /* room to scroll the last hours clear of the agent bar */
+  margin-bottom: calc(var(--bar-h) + 40px);
   cursor: cell;
   user-select: none;
 }
@@ -4225,7 +4227,7 @@ button.prov {
 
 /* an Event: a block on the grid, a bar in the all-day row, a line in Month */
 .cal-ev {
-  --ev-bg: color-mix(in srgb, var(--ev) 16%, var(--panel));
+  --ev-bg: color-mix(in srgb, var(--ev) 17%, var(--panel));
   font: inherit;
   text-align: left;
   color: var(--fg);
@@ -4288,6 +4290,9 @@ button.prov {
 .cal-block.short .cal-ev-time {
   flex: none;
 }
+.cal-block.mid b {
+  -webkit-line-clamp: 1;
+}
 .cal-block:hover,
 .cal-bar:hover,
 .cal-me.bar:hover {
@@ -4337,13 +4342,13 @@ button.prov {
   box-shadow:
     inset 3px 0 0 var(--ev),
     var(--shadow-lg);
-  z-index: 9 !important;
+  z-index: 9;
   transition: none;
   animation: none;
 }
 .cal-tg.dragging,
 .cal-tg.dragging * {
-  cursor: grabbing !important;
+  cursor: grabbing;
 }
 .cal-ev-resize {
   position: absolute;
@@ -4426,6 +4431,7 @@ button.prov {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  padding-bottom: calc(var(--bar-h) + 36px);
   --wk: 0px;
 }
 .cal-month.weeknos {
@@ -4549,7 +4555,7 @@ button.prov {
 }
 .cal-month.dragging,
 .cal-month.dragging * {
-  cursor: grabbing !important;
+  cursor: grabbing;
 }
 .cal-more {
   align-self: flex-start;
@@ -5132,6 +5138,14 @@ button.prov {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.cal-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  white-space: nowrap;
 }
 .cal-quick-row > i {
   color: var(--fg-faint);

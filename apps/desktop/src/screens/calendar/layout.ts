@@ -44,7 +44,7 @@ export interface Placed {
  * Events share the column in equal parts, and an Event widens into the
  * columns to its right that stay free for its whole span.
  */
-export function layoutDay(items: readonly Occurrence[], day: Date): Placed[] {
+export function layoutDay(items: readonly Occurrence[], day: Date, minMinutes = 15): Placed[] {
   const from = startOfDay(day).getTime();
   const next = addDays(startOfDay(day), 1).getTime();
   const dayMinutes = Math.round((next - from) / 60_000);
@@ -65,7 +65,7 @@ export function layoutDay(items: readonly Occurrence[], day: Date): Placed[] {
 
   const out: Placed[] = [];
   // A zero-length Event still takes a sliver so it can be seen and picked.
-  const end = (x: { top: number; bottom: number }) => Math.max(x.bottom, x.top + 15);
+  const end = (x: { top: number; bottom: number }) => Math.max(x.bottom, x.top + minMinutes);
   let group: Array<(typeof spans)[number] & { column: number }> = [];
   let groupEnd = -1;
   const flush = () => {

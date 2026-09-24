@@ -242,6 +242,7 @@ export function EventDetail({
           ).map(([value, label]) => (
             <Btn
               sm
+              outline={o.response !== value}
               key={value}
               on={o.response === value}
               aria-pressed={o.response === value}

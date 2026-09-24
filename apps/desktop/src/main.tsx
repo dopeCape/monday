@@ -118,9 +118,14 @@ function Root() {
         routingSeam = r;
         return r;
       }),
-      createStoreCalendar(store, shell.api, {
-        otherAccounts: () => settingsRef.current["calendar.other_accounts"],
-      }),
+      // The browser dev server has no Server: a fixture week of two Accounts' calendars.
+      browser
+        ? import("./screens/calendar/fixture.ts").then((fx) =>
+            fx.devCalendar(new Date(), new URLSearchParams(location.search).get("calstate")),
+          )
+        : createStoreCalendar(store, shell.api, {
+            otherAccounts: () => settingsRef.current["calendar.other_accounts"],
+          }),
       createStoreInbox(store, {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],

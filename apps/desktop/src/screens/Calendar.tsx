@@ -654,7 +654,11 @@ export function Calendar({
       case "navigate":
         if (command.target.startsWith("calendar:")) {
           const day = fromDayKey(command.target.slice("calendar:".length));
-          if (day) setAnchor(day);
+          if (day) {
+            setAnchor(day);
+            setSearchOpen(false);
+            setQuery("");
+          }
         } else if (command.target !== "calendar") onNavigate?.(command.target);
         break;
       case "open":

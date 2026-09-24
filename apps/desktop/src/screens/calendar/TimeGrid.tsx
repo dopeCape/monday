@@ -113,7 +113,13 @@ export function TimeGrid({
   dragRef.current = drag;
   const origin = useRef<{ x: number; y: number } | null>(null);
 
-  const timed = useMemo(() => days.map((d) => layoutDay(items, d)), [days, items]);
+  // A block is never shorter than one line of text; the layout keeps it clear of the next.
+  const minBlock = 18;
+  const minMinutes = Math.ceil(((minBlock + 2) / hour) * 60);
+  const timed = useMemo(
+    () => days.map((d) => layoutDay(items, d, minMinutes)),
+    [days, items, minMinutes],
+  );
   const lanes = useMemo(() => allDayLanes(items, days), [items, days]);
   const laneCount = lanes.reduce((n, l) => Math.max(n, l.lane + 1), 0);
 
@@ -308,7 +314,7 @@ export function TimeGrid({
           : o,
       )
     : items;
-  const shownTimed = moving ? days.map((d) => layoutDay(shownItems, d)) : timed;
+  const shownTimed = moving ? days.map((d) => layoutDay(shownItems, d, minMinutes)) : timed;
   const shownLanes = moving ? allDayLanes(shownItems, days) : lanes;
 
   const creating =
@@ -447,8 +453,9 @@ export function TimeGrid({
                 {shownTimed[i]?.map((p) => {
                   const o = p.occ;
                   const top = (p.top / 60) * hour;
-                  const height = Math.max(hour / 4 - 2, ((p.bottom - p.top) / 60) * hour - 2);
-                  const short = height < 34;
+                  const height = Math.max(minBlock, ((p.bottom - p.top) / 60) * hour - 2);
+                  const short = height < 30;
+                  const mid = !short && height < 50;
                   const who = whoOf(o, addressOf);
                   const selected = selectedKey === o.key;
                   return (
@@ -456,7 +463,7 @@ export function TimeGrid({
                       type="button"
                       key={o.key}
                       aria-label={`${o.title || s["strings.calendar.untitled"]}, ${clock(new Date(o.start))} ${s["strings.calendar.to"]} ${clock(new Date(o.end))}`}
-                      className={`cal-ev cal-block ${toneOf(o, now)}${selected ? " on" : ""}${short ? " short" : ""}${moving?.occ.key === o.key ? " moving" : ""}${p.clippedStart ? " cut-t" : ""}${p.clippedEnd ? " cut-b" : ""}`}
+                      className={`cal-ev cal-block ${toneOf(o, now)}${selected ? " on" : ""}${short ? " short" : mid ? " mid" : ""}${moving?.occ.key === o.key ? " moving" : ""}${p.clippedStart ? " cut-t" : ""}${p.clippedEnd ? " cut-b" : ""}`}
                       style={
                         {
                           "--ev": colors.get(o.calendarId) ?? "var(--fg-muted)",
