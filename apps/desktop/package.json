@@ -8,7 +8,8 @@
     "build": "tsc --noEmit -p . && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "serve:fast": "vite build && vite preview --port 1420 --strictPort"
   },
   "dependencies": {
     "@assistant-ui/react": "0.14.24",
