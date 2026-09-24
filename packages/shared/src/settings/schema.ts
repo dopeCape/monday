@@ -1919,6 +1919,16 @@ export const settingsSchema = {
     label: "First sync check",
     help: "Seconds between the first sync screen's reads of the Server's progress. Per device.",
   }),
+  "sync.first_run_announced": setting({
+    type: z.record(z.string(), z.string()),
+    default: {},
+    scope: "global",
+    section: "accounts",
+    group: "Sync",
+    label: "Inbox ready told",
+    help: "Per Account: when monday said its first sync finished, so it says so only once.",
+    hidden: "Kept by the app; each Account is told once.",
+  }),
   "sync.first_run_eta_window_seconds": setting({
     type: z.int().min(10).max(600),
     default: 60,
@@ -2740,7 +2750,7 @@ export const settingsSchema = {
       "After the questions, at level automate: call propose_groups with three to five Groups drawn from the answers and the top senders, each with a plain-language sentence and a Predicate (senders or domains); the tool shows the list with the count of Threads that would move and asks for approval; nothing moves until the user approves. Then call propose_workflows with the tools the user named; it lists at most {workflows} catalog Workflows with their Dry run; then adopt_workflow for the one the user picks, one at a time, which asks before enabling. At level assist, skip Groups and Workflows entirely.",
       "If the user said monday may learn their voice from sent mail, call build_voice_profile once; it asks nothing more and can be undone.",
       "If the user said they get a lot of mail, or the Thread count is at least {focus}, offer a Focus view with propose_views.",
-      "End with the keymap: call set_keymap with the user's answer to Vim, Gmail or Natural (Vim when they do not care), then one line saying onboarding is done and that Set me up in the composer runs it again.",
+      "End with the keymap: call set_keymap with the keymap the user asked for, or, when they named none, the keymap in effect that onboarding_context reported (the user chose it before this conversation). Then one line saying onboarding is done and that Set me up in the composer runs it again.",
       "Never ask for a provider key or a runtime here. Keep every message to one or two short sentences.",
     ].join("\n"),
     scope: "global",
@@ -3065,6 +3075,46 @@ export const settingsSchema = {
     help: "Per Account: whether onboarding was offered, completed or skipped. Each new Account gets its own offer; nothing re-offers unasked.",
     hidden: "Kept by the onboarding screen; Set me up in the composer runs it again.",
   }),
+  "onboarding.defaults.level": setting({
+    type: z.enum(["auto", "off", "assist", "automate"]),
+    default: "auto",
+    scope: "global",
+    section: "accounts",
+    group: "First run",
+    tier: "advanced",
+    label: "Skipped onboarding: AI level",
+    help: "The AI level set when onboarding is skipped. Auto means Mail with an assistant when a runtime is already configured on this computer, Just mail otherwise.",
+  }),
+  "onboarding.defaults.keymap": setting({
+    type: keymap,
+    default: "vim",
+    scope: "global",
+    section: "accounts",
+    group: "First run",
+    tier: "advanced",
+    label: "Skipped onboarding: keymap",
+    help: "The keymap set when onboarding is skipped.",
+  }),
+  "onboarding.defaults.density": setting({
+    type: z.enum(["auto", "compact", "comfortable", "spacious"]),
+    default: "auto",
+    scope: "global",
+    section: "accounts",
+    group: "First run",
+    tier: "advanced",
+    label: "Skipped onboarding: density",
+    help: "The density set when onboarding is skipped. Auto picks it from the screen size.",
+  }),
+  "onboarding.defaults.notifications": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "accounts",
+    group: "First run",
+    tier: "advanced",
+    label: "Skipped onboarding: notifications",
+    help: "Whether desktop notifications are on when onboarding is skipped.",
+  }),
   "onboarding.questions_max": setting({
     type: z.int().min(1).max(10),
     default: 5,
@@ -3159,6 +3209,26 @@ export const settingsSchema = {
     tier: "primary",
     label: "Desktop notifications",
     help: "Show desktop notifications on this computer.",
+  }),
+  "notifications.inbox_ready": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "device",
+    section: "accounts",
+    group: "Notifications",
+    visibleWhen: { key: "notifications.enabled", truthy: true },
+    label: "Inbox ready",
+    help: "Tell me once when a new account's first sync finishes: a desktop notification, or a note in the window when it is in front.",
+  }),
+  "notifications.note_ms": setting({
+    type: z.int().min(1000),
+    default: 6000,
+    scope: "global",
+    section: "accounts",
+    group: "Notifications",
+    tier: "advanced",
+    label: "Note in the window",
+    help: "Milliseconds a note stays at the bottom of the window when monday tells you something while you are looking at it, instead of a desktop notification.",
   }),
   "notifications.calendar_lead_minutes": setting({
     type: z.int().min(0),
@@ -4142,6 +4212,22 @@ export const settingsSchema = {
   "strings.agent.collapse": str("ai", "Collapse button", "Collapse (Esc)"),
   "strings.agent.preview_threads": str("ai", "Preview count line", "{n} threads"),
   "strings.agent.preview_more": str("ai", "Preview overflow line", "and {n} more"),
+  "strings.agent.preview_groups.title": str("ai", "Groups card: heading", "{n} Groups to create"),
+  "strings.agent.preview_groups.moves": str(
+    "ai",
+    "Groups card: threads that would move",
+    "{n} would move",
+  ),
+  "strings.agent.preview_groups.none": str(
+    "ai",
+    "Groups card: no thread would move yet",
+    "New mail only",
+  ),
+  "strings.agent.preview_groups.note": str(
+    "ai",
+    "Groups card: what approving does",
+    "Counted over your newest {n} threads. Nothing moves until you approve, and one Undo puts it all back.",
+  ),
   "strings.agent.preview_send": str("ai", "Send preview heading", "To {to}: {subject}"),
   "strings.agent.preview_setting": str("ai", "Setting preview line", "{key}: {from} to {to}"),
   "strings.agent.preview_event.schedule": str("ai", "Event card: schedule", "Schedule"),
@@ -6397,12 +6483,22 @@ export const settingsSchema = {
   "strings.ai.level.off_sub": str(
     "ai",
     "AI level card: off, body",
+    "No AI. Fast mail, search, keys and the calendar.",
+  ),
+  "strings.ai.level.off_detail": str(
+    "ai",
+    "AI level card: off, what's included",
     "No AI at all. A fast mail client with Groups you make by hand, search, keymaps and the calendar. No provider key asked for.",
   ),
   "strings.ai.level.assist": str("ai", "AI level card: assist", "Mail with an assistant"),
   "strings.ai.level.assist_sub": str(
     "ai",
     "AI level card: assist, body",
+    "An agent that drafts, finds and summarizes when you ask.",
+  ),
+  "strings.ai.level.assist_detail": str(
+    "ai",
+    "AI level card: assist, what's included",
     "The agent bar and what it reaches: draft, find, summarize, change settings, undo. Briefs when you open a thread. Nothing runs without you asking. With a TypeSafe key the palette also answers typed sentences.",
   ),
   "strings.ai.level.automate": str(
@@ -6413,6 +6509,11 @@ export const settingsSchema = {
   "strings.ai.level.automate_sub": str(
     "ai",
     "AI level card: automate, body",
+    "Sorts mail into Groups and runs Workflows, with your approval.",
+  ),
+  "strings.ai.level.automate_detail": str(
+    "ai",
+    "AI level card: automate, what's included",
     "Everything: routing into Groups and Sections you describe in your own words, Briefs in the background, custom actions, Workflows with their approvals. Sorting runs on TypeSafe when its key exists, on the language model otherwise.",
   ),
   "strings.ai.level.change_note": str(
@@ -6476,7 +6577,43 @@ export const settingsSchema = {
   "strings.onboarding.intro": str(
     "accounts",
     "Onboarding intro",
-    "Pick how much monday should do. The choice is yours and you can change it any time.",
+    "Pick one. You can change it any time.",
+  ),
+  "strings.onboarding.included": str("accounts", "Onboarding: what's included", "What's included"),
+  "strings.onboarding.skip_defaults": str(
+    "accounts",
+    "Onboarding: skip with the defaults",
+    "Skip, use sensible defaults",
+  ),
+  "strings.onboarding.defaults_line": str(
+    "accounts",
+    "Onboarding: what the defaults are",
+    "Defaults: {level}, {keymap} keys, {density} density, notifications {notifications}.",
+  ),
+  "strings.onboarding.defaults_on": str("accounts", "Onboarding defaults: on", "on"),
+  "strings.onboarding.defaults_off": str("accounts", "Onboarding defaults: off", "off"),
+  "strings.onboarding.density.compact": str("accounts", "Onboarding density: compact", "compact"),
+  "strings.onboarding.density.comfortable": str(
+    "accounts",
+    "Onboarding density: comfortable",
+    "comfortable",
+  ),
+  "strings.onboarding.density.spacious": str(
+    "accounts",
+    "Onboarding density: spacious",
+    "spacious",
+  ),
+  "strings.onboarding.back": str("accounts", "Onboarding back", "Back"),
+  "strings.onboarding.runtime_intro": str(
+    "accounts",
+    "Onboarding runtime step intro",
+    "Pick where monday runs. You can add the others later in Settings.",
+  ),
+  "strings.onboarding.step": str("accounts", "Onboarding progress", "Step {n} of {total}"),
+  "strings.onboarding.keys_hint": str(
+    "accounts",
+    "Onboarding keyboard hint",
+    "Enter to continue, Esc to go back",
   ),
   "strings.onboarding.connect_title": str(
     "accounts",
@@ -6487,7 +6624,7 @@ export const settingsSchema = {
   "strings.onboarding.connect_intro": str(
     "accounts",
     "Onboarding connect intro",
-    "Fastmail or any JMAP server, IMAP, Gmail or Microsoft. Mail starts syncing as soon as one is connected.",
+    "Fastmail, JMAP, IMAP, Gmail or Microsoft. Sync starts right away.",
   ),
   "strings.onboarding.set_me_up": str("accounts", "Onboarding rerun", "Set me up"),
   "strings.onboarding.continue": str("accounts", "Onboarding continue", "Continue"),
@@ -6502,7 +6639,7 @@ export const settingsSchema = {
   "strings.onboarding.keymap_intro": str(
     "accounts",
     "Keymap question body",
-    "Every binding can be changed later under Settings, Shortcuts.",
+    "Any binding can be changed later in Settings.",
   ),
   "strings.onboarding.keymap.vim": str("accounts", "Keymap card: Vim", "Vim"),
   "strings.onboarding.keymap.vim_sub": str(
@@ -6526,7 +6663,23 @@ export const settingsSchema = {
   "strings.onboarding.chat_intro": str(
     "accounts",
     "Onboarding chat body",
-    "Five at most, each answerable in a sentence or a chip. Skip any of them; closing skips the rest.",
+    "Answer in a few words or tap a chip. Skip anything.",
+  ),
+  "strings.onboarding.chat_progress": str(
+    "accounts",
+    "Onboarding chat: which question",
+    "Question {n} of {total}",
+  ),
+  "strings.onboarding.chat_review": str(
+    "accounts",
+    "Onboarding chat: proposals waiting",
+    "Review what monday proposes",
+  ),
+  "strings.onboarding.chat_finished": str("accounts", "Onboarding chat: finished", "All set"),
+  "strings.onboarding.chat_starting": str(
+    "accounts",
+    "Onboarding chat: before the first question",
+    "Getting started",
   ),
   "strings.onboarding.kickoff": str(
     "accounts",
@@ -6547,6 +6700,16 @@ export const settingsSchema = {
   ),
   "strings.palette.nav.onboarding": str("accounts", "Palette: Set me up", "Set me up"),
   "strings.first_sync.title": str("accounts", "First sync title", "Getting your inbox ready"),
+  "strings.first_sync.ready_title": str(
+    "accounts",
+    "Inbox ready notification title",
+    "Your inbox is ready",
+  ),
+  "strings.first_sync.ready_body": str(
+    "accounts",
+    "Inbox ready notification body",
+    "{count} emails synced for {address}.",
+  ),
   "strings.first_sync.why": str(
     "accounts",
     "First sync reason",

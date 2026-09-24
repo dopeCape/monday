@@ -642,16 +642,23 @@ export function useRuntimeConfigured(level: AiLevel = "assist"): boolean | null 
 /** The three AI level cards' copy, from the strings Settings. */
 export function levelCards(s: Settings): ChoiceCard<AiLevel>[] {
   return [
-    { value: "off", title: s["strings.ai.level.off"], body: s["strings.ai.level.off_sub"] },
+    {
+      value: "off",
+      title: s["strings.ai.level.off"],
+      body: s["strings.ai.level.off_sub"],
+      detail: s["strings.ai.level.off_detail"],
+    },
     {
       value: "assist",
       title: s["strings.ai.level.assist"],
       body: s["strings.ai.level.assist_sub"],
+      detail: s["strings.ai.level.assist_detail"],
     },
     {
       value: "automate",
       title: s["strings.ai.level.automate"],
       body: s["strings.ai.level.automate_sub"],
+      detail: s["strings.ai.level.automate_detail"],
     },
   ];
 }
@@ -696,10 +703,13 @@ export function RuntimeStep({
   level,
   onContinue,
   onBack,
+  bare = false,
 }: {
   level: AiLevel;
   onContinue: () => void;
   onBack?: (() => void) | undefined;
+  /** Onboarding's own step: its title, intro and actions are the screen's, not this panel's. */
+  bare?: boolean | undefined;
 }) {
   const s = useShell().settings;
   const state = useRuntimeState();
@@ -717,9 +727,17 @@ export function RuntimeStep({
           ? s["strings.ai.level.runtime_missing"]
           : null;
   return (
-    <div className="level-runtime" data-panel="runtime-step" data-way={way}>
-      <h4>{s["strings.ai.level.runtime_title"]}</h4>
-      <p>{s["strings.ai.level.runtime_intro"]}</p>
+    <div
+      className={bare ? "level-runtime bare" : "level-runtime"}
+      data-panel="runtime-step"
+      data-way={way}
+    >
+      {bare ? null : (
+        <>
+          <h4>{s["strings.ai.level.runtime_title"]}</h4>
+          <p>{s["strings.ai.level.runtime_intro"]}</p>
+        </>
+      )}
       <ChoiceCards cards={runtimeCards(s, level)} value={way} onChange={setWay} />
       {way !== "llm" ? (
         <div className="runtime-way" data-way="typesafe">
@@ -745,12 +763,14 @@ export function RuntimeStep({
           {note}
         </p>
       ) : null}
-      <div className="actions">
-        <Btn primary disabled={!configured} onClick={onContinue}>
-          {s["strings.ai.level.runtime_continue"]}
-        </Btn>
-        {onBack ? <Btn onClick={onBack}>{s["strings.ai.level.runtime_back"]}</Btn> : null}
-      </div>
+      {bare ? null : (
+        <div className="actions">
+          <Btn primary disabled={!configured} onClick={onContinue}>
+            {s["strings.ai.level.runtime_continue"]}
+          </Btn>
+          {onBack ? <Btn onClick={onBack}>{s["strings.ai.level.runtime_back"]}</Btn> : null}
+        </div>
+      )}
     </div>
   );
 }

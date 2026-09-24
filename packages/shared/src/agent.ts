@@ -139,7 +139,17 @@ export type ToolPreview =
   | { kind: "send"; to: Person[]; cc: Person[]; subject: string; text: string }
   | { kind: "setting"; key: string; from: unknown; to: unknown }
   | { kind: "event"; event: EventPreview }
+  | { kind: "groups"; groups: GroupProposalPreview[]; considered: number }
   | { kind: "text"; text: string };
+
+/** One Group onboarding proposes, as its card shows it before anything is created. */
+export interface GroupProposalPreview {
+  name: string;
+  /** The plain-language Routing rule. */
+  sentence: string;
+  /** Existing Threads that would move into it on approval. */
+  moves: number;
+}
 
 /** An Event as the scheduling card shows it before it exists (slice 18). */
 export interface EventPreview {

@@ -345,13 +345,14 @@ describe("a fresh Fastmail account ends onboarding with approved Groups and one 
       tier: "reversible",
       inputSummary: "Northwind, Lumen, Nobody",
     });
-    const listed = textOf(proposal.preview);
-    expect(listed).toMatch(
-      /Northwind: Everything from Aoife at Northwind\. \(\d+ threads? would move\)/,
-    );
-    expect(listed).toMatch(/Lumen: Mail from anyone at Lumen\. \(\d+ threads? would move\)/);
-    expect(listed).toContain("Nobody: A rule that matches nothing yet. (0 threads would move)");
-    const counted = [...listed.matchAll(/\((\d+) threads? would move\)/g)].map((m) => Number(m[1]));
+    // The card lists each Group as its own row: name, sentence and move count.
+    const listed = proposal.preview?.kind === "groups" ? proposal.preview.groups : [];
+    expect(listed.map((g) => [g.name, g.sentence])).toEqual([
+      ["Northwind", "Everything from Aoife at Northwind."],
+      ["Lumen", "Mail from anyone at Lumen."],
+      ["Nobody", "A rule that matches nothing yet."],
+    ]);
+    const counted = listed.map((g) => g.moves);
     expect(counted).toHaveLength(3);
     expect(counted[0]).toBeGreaterThan(0);
     expect(counted[1]).toBeGreaterThan(0);

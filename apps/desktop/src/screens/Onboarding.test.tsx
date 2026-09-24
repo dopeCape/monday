@@ -1,13 +1,16 @@
 /// <reference types="bun-types" />
 // The onboarding screen through the DOM with happy-dom (docs/spec/onboarding.md,
-// slice 20): the three cards; `off` ends with the keymap question and seeds
-// density; moving up from `off` with no runtime configured shows the runtime
-// step first; with a CLI detected the conversation runs on the fake Agent
-// client with the onboarding context, sender and tool chips per question,
-// Skip, the Groups proposal card with its move counts and Approve, and Done
-// once the keymap landed; every step writes onboarding.state for the Account.
-// The App offers it once per Account, renders no agent bar at `off`, and
-// runs it again from "Set me up".
+// slice 20): the three cards with their details on demand; `off` ends with the
+// keymap question and seeds density; moving up from `off` with no runtime
+// configured shows the runtime step first; "Skip, use sensible defaults" on
+// every step sets what was not chosen and moves on to connecting an Account;
+// Enter continues, Esc goes back, the arrows move between cards; with a CLI
+// detected the conversation runs on the fake Agent client with the onboarding
+// context, the question count, sender and tool chips per question, Skip, the
+// Groups proposal as rows with their move counts and Apply, and Done once the
+// keymap landed; every step writes onboarding.state for the Account. The App
+// offers it once per Account, renders no agent bar at `off`, and runs it again
+// from "Set me up".
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { defaultSettings, type KeyProvider, type PartialSettings } from "@monday/shared";
@@ -19,7 +22,14 @@ import { type FakeAgentClient, fakeAgentClient, toolEvent } from "../agent/clien
 import { type Api, ApiError, createApi } from "../platform/api.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
-import { chipsForQuestion, densityFor, Onboarding, type OnboardingProps } from "./Onboarding.tsx";
+import {
+  chipsForQuestion,
+  defaultsLine,
+  densityFor,
+  Onboarding,
+  type OnboardingProps,
+  skipDefaults,
+} from "./Onboarding.tsx";
 
 let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
 beforeAll(async () => {
@@ -46,14 +56,29 @@ async function click(el: Element | null | undefined) {
   await act(async () => (el as HTMLElement).click());
   await settle();
 }
-async function clickText(label: string, within: ParentNode = document) {
+/** A button's words without the key it shows (Continue [Enter] reads "Continue"). */
+const label = (b: Element) =>
+  [...b.childNodes]
+    .filter((n) => !(n instanceof Element && n.classList.contains("kbd")))
+    .map((n) => n.textContent ?? "")
+    .join("")
+    .trim();
+async function clickText(name: string, within: ParentNode = document) {
   const el = [...within.querySelectorAll<HTMLButtonElement>("button")].find(
-    (b) => (b.textContent ?? "").trim() === label,
+    (b) => label(b) === name,
   );
-  if (!el) throw new Error(`no button ${label}`);
+  if (!el) throw new Error(`no button ${name}`);
   await click(el);
 }
 const card = (value: string) => q(`.choice-card[data-value="${value}"]`);
+const step = () => q('[data-screen="onboarding"]')?.dataset.step;
+const cont = () => q<HTMLButtonElement>('[data-action="continue"]');
+async function key(k: string, target: EventTarget = document.body) {
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+  });
+  await settle();
+}
 
 /** What the Shell holds now, for assertions on Settings written by the screen. */
 let captured: ReturnType<typeof useShell> | null = null;
@@ -188,8 +213,7 @@ describe("onboarding: the first screen and the AI level", () => {
     ]);
     expect(text()).not.toContain("sparkle");
     // Nothing chosen yet: Continue waits.
-    const cont = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Continue");
-    expect(cont?.disabled).toBe(true);
+    expect(cont()?.disabled).toBe(true);
     await click(card("off"));
     await clickText("Continue");
     expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("keymap");
@@ -206,12 +230,111 @@ describe("onboarding: the first screen and the AI level", () => {
     });
   });
 
-  test("Skip on the first screen records skipped and leaves the level alone", async () => {
-    const { done } = await mount({});
-    await clickText("Skip");
+  test("Skip, use sensible defaults: says what the defaults are, sets them, records skipped", async () => {
+    const { done } = await mount(
+      { screenWidth: 1024 },
+      { "keyboard.keymap": "gmail", "notifications.enabled": false },
+    );
+    // No runtime here: the sensible level is Just mail; density from the 1024 px screen.
+    expect(q(".onb-defaults")?.textContent).toBe(
+      "Defaults: Just mail, Vim keys, compact density, notifications on.",
+    );
+    await click(q('[data-action="skip"]'));
     expect(done).toEqual(["done"]);
     expect(captured?.settings["onboarding.state"]?.["acct-1"]?.status).toBe("skipped");
     expect(captured?.settings["ai.level"]).toBe("off");
+    expect(captured?.settings["keyboard.keymap"]).toBe("vim");
+    expect(captured?.settings["appearance.density"]).toBe("compact");
+    expect(captured?.settings["notifications.enabled"]).toBe(true);
+  });
+
+  test("the defaults are Settings: auto picks an assistant when a runtime is ready, and the line follows", () => {
+    const s = defaultSettings();
+    expect(skipDefaults(s, true, 1440)).toEqual({
+      level: "assist",
+      keymap: "vim",
+      density: "comfortable",
+      notifications: true,
+    });
+    const pinned = {
+      ...s,
+      "onboarding.defaults.level": "automate" as const,
+      "onboarding.defaults.keymap": "natural" as const,
+      "onboarding.defaults.density": "spacious" as const,
+      "onboarding.defaults.notifications": false,
+    };
+    const d = skipDefaults(pinned, false, 1024);
+    expect(d).toEqual({
+      level: "automate",
+      keymap: "natural",
+      density: "spacious",
+      notifications: false,
+    });
+    expect(defaultsLine(s, d)).toBe(
+      "Defaults: Mail that sorts and acts for me, Natural keys, spacious density, notifications off.",
+    );
+  });
+
+  test("with a runtime detected, skipping sets Mail with an assistant", async () => {
+    await mount({ runtimes: detected }, { "ai.mode": "local", "ai.local.cli": "claude-code" });
+    expect(q(".onb-defaults")?.textContent).toContain("Mail with an assistant");
+    await click(q('[data-action="skip"]'));
+    expect(captured?.settings["ai.level"]).toBe("assist");
+  });
+
+  test("a choice made before skipping stays: the keymap picked on its step is not reset", async () => {
+    await mount({});
+    await click(card("off"));
+    await clickText("Continue");
+    await click(card("natural"));
+    await click(q('[data-action="skip"]'));
+    expect(captured?.settings["keyboard.keymap"]).toBe("natural");
+    expect(captured?.settings["onboarding.state"]?.["acct-1"]?.status).toBe("skipped");
+  });
+
+  test("Set me up again: Skip changes nothing", async () => {
+    const { done } = await mount(
+      { rerun: true },
+      { "ai.level": "automate", "keyboard.keymap": "gmail", "appearance.density": "spacious" },
+    );
+    expect(q('[data-action="skip"]')?.textContent).toBe("Skip");
+    expect(q(".onb-defaults")).toBeNull();
+    await click(q('[data-action="skip"]'));
+    expect(done).toEqual(["done"]);
+    expect(captured?.settings["ai.level"]).toBe("automate");
+    expect(captured?.settings["keyboard.keymap"]).toBe("gmail");
+    expect(captured?.settings["appearance.density"]).toBe("spacious");
+  });
+
+  test("the cards are short; What's included opens each one's details", async () => {
+    await mount({});
+    expect(q(".choice-card .detail")).toBeNull();
+    expect(card("assist")?.textContent).toContain("An agent that drafts, finds and summarizes");
+    await click(q(".onb-disclose"));
+    expect(q(".onb-disclose")?.getAttribute("aria-expanded")).toBe("true");
+    expect(qa(".choice-card .detail")).toHaveLength(3);
+    expect(card("assist")?.querySelector(".detail")?.textContent).toContain("Briefs when you open");
+  });
+
+  test("keys: the arrows move between the cards, Enter continues, Esc goes back", async () => {
+    await mount({});
+    await key("ArrowRight");
+    expect(q(".choice-card.on")?.dataset.value).toBe("off");
+    await key("ArrowRight");
+    await key("ArrowLeft");
+    expect(q(".choice-card.on")?.dataset.value).toBe("off");
+    // The progress says where the user is.
+    expect(q('.onb-progress[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("1");
+    await key("Enter");
+    expect(step()).toBe("keymap");
+    expect(q('.onb-progress[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("2");
+    await key("Escape");
+    expect(step()).toBe("level");
+    // Typing in a field never moves the screen.
+    const input = document.createElement("input");
+    q(".onb-step")?.appendChild(input);
+    await key("Escape", input);
+    expect(step()).toBe("level");
   });
 
   test("moving up from off with no runtime configured shows the runtime step first; the level is saved after it", async () => {
@@ -224,10 +347,7 @@ describe("onboarding: the first screen and the AI level", () => {
     expect(q('[data-setting="ai.local.cli"]')).not.toBeNull();
     // Not saved: nothing was configured, so Continue waits and the level is still off.
     expect(captured?.settings["ai.level"]).toBe("off");
-    const cont = qa('[data-panel="runtime-step"] button').find(
-      (b) => b.textContent?.trim() === "Continue",
-    );
-    expect((cont as HTMLButtonElement | undefined)?.disabled).toBe(true);
+    expect(cont()?.disabled).toBe(true);
     await clickText("Back");
     expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("level");
   });
@@ -269,10 +389,6 @@ describe("onboarding: the first screen and the AI level", () => {
     // Both cards' controls are on screen: the TypeSafe key row and the language model's.
     expect(q('[data-setting="ai.share_key.typesafe"]')).not.toBeNull();
     expect(q('[data-setting="ai.mode"]')).not.toBeNull();
-    const cont = () =>
-      qa<HTMLButtonElement>('[data-panel="runtime-step"] button').find(
-        (b) => b.textContent?.trim() === "Continue",
-      );
     expect(cont()?.disabled).toBe(true);
 
     // TypeSafe alone: the card shows only the key row, with the share switch on by default.
@@ -326,10 +442,7 @@ describe("onboarding: the first screen and the AI level", () => {
     expect(step?.querySelector("[data-note]")?.textContent).toContain(
       "Mail with an assistant needs a language model",
     );
-    const cont = qa<HTMLButtonElement>('[data-panel="runtime-step"] button').find(
-      (b) => b.textContent?.trim() === "Continue",
-    );
-    expect(cont?.disabled).toBe(true);
+    expect(cont()?.disabled).toBe(true);
     expect(captured?.settings["ai.level"]).toBe("off");
   });
 
@@ -337,12 +450,10 @@ describe("onboarding: the first screen and the AI level", () => {
     const pending = { detect: () => new Promise<never>(() => {}) };
     await mount({ runtimes: pending });
     await click(card("assist"));
-    const cont = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Continue");
-    expect(cont?.disabled).toBe(true);
+    expect(cont()?.disabled).toBe(true);
     // Just mail needs no runtime: Continue is live at once.
     await click(card("off"));
-    const again = qa<HTMLButtonElement>("button").find((b) => b.textContent?.trim() === "Continue");
-    expect(again?.disabled).toBe(false);
+    expect(cont()?.disabled).toBe(false);
   });
 });
 
@@ -370,6 +481,24 @@ describe("onboarding: the welcome before any Account", () => {
     expect(captured?.settings["onboarding.state"]).toEqual({
       welcome: { status: "skipped", at: NOW.toISOString() },
     });
+  });
+
+  test("skipping the welcome sets the defaults and goes straight to connecting the first Account, with no Skip there", async () => {
+    const { done } = await mount({
+      mode: "welcome",
+      accountId: "welcome",
+      workspaceId: "",
+      address: "",
+    });
+    await click(q('[data-action="skip"]'));
+    expect(step()).toBe("connect");
+    expect(done).toEqual([]);
+    // Recorded only once the user leaves the connect step, so the gate keeps the welcome up.
+    expect(captured?.settings["onboarding.state"]).toEqual({});
+    expect(q('[data-action="skip"]')).toBeNull();
+    expect(text()).toContain("Connect an account");
+    await clickText("Connect later");
+    expect(captured?.settings["onboarding.state"]?.welcome?.status).toBe("skipped");
   });
 
   test("with an assistant chosen the welcome still goes to the keymap and the Account, never the conversation", async () => {
@@ -408,8 +537,13 @@ describe("onboarding: the conversation", () => {
               status: "waiting",
             },
             {
-              kind: "text",
-              text: "Northwind: Everything from Aoife. (4 threads would move)\nLumen: Mail from Lumen. (2 threads would move)\nOver the newest 24 threads. Nothing moves until you approve; one Undo puts it all back.",
+              kind: "groups",
+              groups: [
+                { name: "Northwind", sentence: "Everything from Aoife.", moves: 4 },
+                { name: "Lumen", sentence: "Mail from Lumen.", moves: 2 },
+                { name: "Later", sentence: "Nothing yet.", moves: 0 },
+              ],
+              considered: 24,
             },
           ),
         ],
@@ -445,6 +579,7 @@ describe("onboarding: the conversation", () => {
       context: { onboarding: true },
     });
     expect(text()).toContain("Who are you and what do you do?");
+    expect(q(".onb-convo-progress > span")?.textContent).toBe("Question 1 of 5");
     // Question 1: no chips but Skip; the user types.
     expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual(["Skip"]);
     const input = q<HTMLTextAreaElement>(".agent-bar textarea");
@@ -460,6 +595,7 @@ describe("onboarding: the conversation", () => {
     });
     await settle();
     expect(client.sent[1]?.text).toBe("I run a small studio");
+    expect(q(".onb-convo-progress > span")?.textContent).toBe("Question 2 of 5");
     // Question 2: the top senders already synced, plus lots of mail, plus Skip.
     expect(qa(".onboarding-chat .agent-suggest .chip").map((c) => c.textContent)).toEqual([
       "Aoife Byrne",
@@ -488,9 +624,21 @@ describe("onboarding: the conversation", () => {
     await clickText("Skip", q(".onboarding-chips") ?? document);
     expect(client.sent[4]?.text).toBe("Skip");
     await clickText("Yes", q(".onboarding-chips") ?? document);
-    // The proposal card: sentences with counts, waiting for Approve; nothing done yet.
-    expect(text()).toContain("4 threads would move");
-    expect(text()).toContain("2 threads would move");
+    // The proposal card: one row per Group with its count, waiting for Apply; nothing done yet.
+    expect(q(".onb-convo-progress > span")?.textContent).toBe("Review what monday proposes");
+    expect(qa(".group-proposal b").map((b) => b.textContent)).toEqual([
+      "Northwind",
+      "Lumen",
+      "Later",
+    ]);
+    expect(qa(".group-proposal .moves").map((m) => m.textContent)).toEqual([
+      "4 would move",
+      "2 would move",
+      "New mail only",
+    ]);
+    expect(text()).toContain("Counted over your newest 24 threads.");
+    // While a card waits, the quick replies step aside.
+    expect(qa(".onboarding-chat .agent-suggest .chip")).toHaveLength(0);
     expect(qa("button").some((b) => b.textContent?.trim() === "Done")).toBe(false);
     expect(qa("button").some((b) => b.textContent?.trim() === "Skip the rest")).toBe(true);
     await clickText("Apply");
@@ -499,6 +647,7 @@ describe("onboarding: the conversation", () => {
     ]);
     // The keymap landed: Done shows and finishes with the state completed.
     expect(text()).toContain("Propose groups Applied");
+    expect(q(".onb-convo-progress > span")?.textContent).toBe("All set");
     await clickText("Done");
     expect(done).toEqual(["done"]);
     expect(captured?.settings["onboarding.state"]?.["acct-1"]?.status).toBe("completed");
@@ -589,6 +738,28 @@ describe("onboarding in the App", () => {
     root = null;
     host?.remove();
     await mountApp({ "onboarding.state": welcomed, "ai.level": "assist" }, [fresh]);
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
+  });
+
+  test("a skipped welcome skips the first Account's conversation too; a later Account still gets its offer", async () => {
+    const skipped = { welcome: { status: "skipped" as const, at: NOW.toISOString() } };
+    await mountApp({ "onboarding.state": skipped, "ai.level": "assist" }, [fresh]);
+    expect(q('[data-screen="onboarding"]')).toBeNull();
+    expect(captured?.settings["onboarding.state"]?.["acct-new"]?.status).toBe("skipped");
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+    const later = { ...fresh, id: "acct-later" };
+    await mountApp(
+      {
+        "onboarding.state": {
+          ...skipped,
+          "acct-new": { status: "skipped", at: NOW.toISOString() },
+        },
+        "ai.level": "assist",
+      },
+      [fresh, later],
+    );
     expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
   });
 

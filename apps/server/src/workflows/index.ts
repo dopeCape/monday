@@ -603,7 +603,9 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
               ? `${preview.preview.action} ${preview.preview.count} thread${preview.preview.count === 1 ? "" : "s"}`
               : preview.preview.kind === "event"
                 ? `${preview.preview.event.action} "${preview.preview.event.title}" ${preview.preview.event.start.replace("T", " ").slice(0, 16)}`
-                : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
+                : preview.preview.kind === "groups"
+                  ? `create ${preview.preview.groups.map((g) => g.name).join(", ")}`
+                  : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }
     try {

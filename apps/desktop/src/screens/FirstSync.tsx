@@ -134,94 +134,101 @@ export function FirstSyncView(props: FirstSyncViewProps) {
       data-leaving={props.leaving ? "true" : undefined}
     >
       <div className="first-sync">
-        <div className="first-sync-in">
-          <div className="first-sync-top">
-            <button
-              ref={accountButton}
-              type="button"
-              className="first-sync-account"
-              aria-label={s["strings.switcher.label"]}
-              aria-haspopup="menu"
-              aria-expanded={switcherOpen}
-              onClick={() => setSwitcherOpen((open) => !open)}
-            >
+        <div className="first-sync-top">
+          <button
+            ref={accountButton}
+            type="button"
+            className="first-sync-account"
+            aria-label={s["strings.switcher.label"]}
+            aria-haspopup="menu"
+            aria-expanded={switcherOpen}
+            onClick={() => setSwitcherOpen((open) => !open)}
+          >
+            <ProviderMark provider={props.provider} />
+            <div>
+              <b>{props.address}</b>
+              <span>{providerName(props.provider, s)}</span>
+            </div>
+            <Icon icon={CaretUpDownIcon} />
+          </button>
+          <Btn onClick={props.onSettings}>
+            <GearSixIcon /> {s["strings.switcher.settings"]}
+          </Btn>
+          {switcherOpen ? (
+            <WorkspaceMenu
+              className="first-sync-menu"
+              accounts={accounts}
+              labels={{
+                label: s["strings.switcher.label"],
+                title: s["strings.switcher.title"],
+                add: s["strings.switcher.add"],
+                settings: s["strings.switcher.settings"],
+              }}
+              anchor={accountButton}
+              onPick={(id) => {
+                setSwitcherOpen(false);
+                props.onPick?.(id);
+              }}
+              onAdd={() => {
+                setSwitcherOpen(false);
+                props.onAdd?.();
+              }}
+              onSettings={() => {
+                setSwitcherOpen(false);
+                props.onSettings();
+              }}
+              onClose={() => setSwitcherOpen(false)}
+            />
+          ) : null}
+        </div>
+        <div className="first-sync-stage">
+          <div className="first-sync-in">
+            <header className="first-sync-head">
               <ProviderMark provider={props.provider} />
-              <div>
-                <b>{props.address}</b>
-                <span>{providerName(props.provider, s)}</span>
+              <h1>{s["strings.first_sync.title"]}</h1>
+              <p>{s["strings.first_sync.why"]}</p>
+            </header>
+            <div className="first-sync-lines">
+              {props.lines.map((line) => (
+                <Line key={line.phase} line={line} />
+              ))}
+            </div>
+            {props.later && props.later > 0 ? (
+              <p className="first-sync-note" data-note="later">
+                {fill(s["strings.first_sync.later"], {
+                  count: props.later.toLocaleString("en-US"),
+                })}
+              </p>
+            ) : null}
+            {failed ? (
+              <div className="first-sync-error" role="alert">
+                <WarningCircleIcon />
+                <div>
+                  <b>{s["strings.first_sync.error_title"]}</b>
+                  <span>{props.error}</span>
+                </div>
               </div>
-              <Icon icon={CaretUpDownIcon} />
-            </button>
-            <Btn onClick={props.onSettings}>
-              <GearSixIcon /> {s["strings.switcher.settings"]}
-            </Btn>
-            {switcherOpen ? (
-              <WorkspaceMenu
-                className="first-sync-menu"
-                accounts={accounts}
-                labels={{
-                  label: s["strings.switcher.label"],
-                  title: s["strings.switcher.title"],
-                  add: s["strings.switcher.add"],
-                  settings: s["strings.switcher.settings"],
-                }}
-                anchor={accountButton}
-                onPick={(id) => {
-                  setSwitcherOpen(false);
-                  props.onPick?.(id);
-                }}
-                onAdd={() => {
-                  setSwitcherOpen(false);
-                  props.onAdd?.();
-                }}
-                onSettings={() => {
-                  setSwitcherOpen(false);
-                  props.onSettings();
-                }}
-                onClose={() => setSwitcherOpen(false)}
-              />
+            ) : props.pacing ? (
+              <p className="first-sync-note" data-note="pacing">
+                {fill(s["strings.first_sync.pacing"], {
+                  provider: providerName(props.provider, s),
+                })}
+              </p>
+            ) : props.eta ? (
+              <p className="first-sync-note" data-note="eta">
+                {props.eta}
+              </p>
+            ) : null}
+            {failed ? (
+              <div className="actions">
+                <span className="sp" />
+                {/* Retry takes the focus: it is what the screen asks for. */}
+                <Btn primary autoFocus disabled={props.retrying} onClick={props.onRetry}>
+                  {s["strings.first_sync.retry"]}
+                </Btn>
+              </div>
             ) : null}
           </div>
-          <h1>{s["strings.first_sync.title"]}</h1>
-          <p>{s["strings.first_sync.why"]}</p>
-          <div className="first-sync-lines">
-            {props.lines.map((line) => (
-              <Line key={line.phase} line={line} />
-            ))}
-          </div>
-          {props.later && props.later > 0 ? (
-            <p className="first-sync-note" data-note="later">
-              {fill(s["strings.first_sync.later"], { count: props.later.toLocaleString("en-US") })}
-            </p>
-          ) : null}
-          {failed ? (
-            <div className="first-sync-error" role="alert">
-              <WarningCircleIcon />
-              <div>
-                <b>{s["strings.first_sync.error_title"]}</b>
-                <span>{props.error}</span>
-              </div>
-            </div>
-          ) : props.pacing ? (
-            <p className="first-sync-note" data-note="pacing">
-              {fill(s["strings.first_sync.pacing"], {
-                provider: providerName(props.provider, s),
-              })}
-            </p>
-          ) : props.eta ? (
-            <p className="first-sync-note" data-note="eta">
-              {props.eta}
-            </p>
-          ) : null}
-          {failed ? (
-            <div className="actions">
-              <span className="sp" />
-              {/* Retry takes the focus: it is what the screen asks for. */}
-              <Btn primary autoFocus disabled={props.retrying} onClick={props.onRetry}>
-                {s["strings.first_sync.retry"]}
-              </Btn>
-            </div>
-          ) : null}
         </div>
       </div>
     </div>
