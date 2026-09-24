@@ -80,6 +80,9 @@ describe("the Store's folders", () => {
 
   test("each folder follows the Cache after an action, and hands out a stable list", async () => {
     const inbox = await open();
+    // Each folder reads its own query on first use.
+    for (const key of ["starred", "archive", "snoozed", "sent"] as const) inbox.folder(key);
+    await settled(() => inbox.folder("starred").length > 0);
     const starredBefore = inbox.folder("starred").map((t) => t.id);
     expect(starredBefore).toEqual(threads.filter((t) => t.starred).map((t) => t.id));
     expect(inbox.folder("starred")).toBe(inbox.folder("starred"));

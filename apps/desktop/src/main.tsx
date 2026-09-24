@@ -162,6 +162,9 @@ function Root() {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],
         level: () => settingsRef.current["ai.level"],
+        // Each list holds its newest Threads, not the whole Cache (per Workspace, and every one stays open).
+        memoryWindow: () => settingsRef.current["inbox.memory_window"],
+        memoryLookups: () => settingsRef.current["inbox.memory_lookups"],
         // The Section rules run here, on the client, over the Cache (CONTEXT.md "Section rule").
         sections: {
           rules: () => settingsRef.current["sections.rules"],

@@ -21,7 +21,9 @@ import {
   threads as fixtureThreads,
   messagesOf,
 } from "@monday/ui/fixtures";
-import { type FolderKey, folderThreads } from "./folders.ts";
+import { type FolderKey, folderThreads, type ThreadListKey } from "./folders.ts";
+
+export type { ThreadListKey } from "./folders.ts";
 
 export type UndoToken = string;
 
@@ -42,11 +44,51 @@ export interface InboxActions {
   undo(token: UndoToken): Promise<void>;
 }
 
+/**
+ * The Inbox's totals over every Thread the Cache holds, not only the ones a
+ * list holds in memory: the nav's counts read these.
+ */
+export interface InboxCounts {
+  /** Threads in the Inbox. */
+  inbox: number;
+  /** Snoozed Threads outside the trash. */
+  snoozed: number;
+  /**
+   * Unread Inbox Threads by nav key: "inbox", "starred" and each Group id (a
+   * Sub-group's count also rolls up into its parent). Sections are not here:
+   * they are decided on the client, over the Threads held.
+   */
+  unread: Readonly<Record<string, number>>;
+}
+
 export interface InboxSource {
-  /** Threads in the Inbox: not archived, not snoozed, not deleted. Stable between changes. */
+  /**
+   * Threads in the Inbox: not archived, not snoozed, not deleted, newest
+   * first. A seam over a large Cache may hold only the newest of them (the
+   * inbox.memory_window Setting) and read more on more("inbox"). Stable
+   * between changes.
+   */
   threads(): readonly Thread[];
-  /** One Thread by id, wherever it is. */
+  /**
+   * One Thread by id, wherever it is. A seam that holds only part of the
+   * Cache reads a Thread it does not hold in the background and answers
+   * undefined meanwhile; its subscribers hear when it lands, and resolve()
+   * waits for it.
+   */
   thread(id: string): Thread | undefined;
+  /** The Thread by id, read from the Cache when the seam does not hold it; undefined when there is none. */
+  resolve?(id: string): Promise<Thread | undefined>;
+  /** The Inbox Threads in a Group or Sub-group, newest first, held like threads(). Stable between changes. */
+  group?(groupId: string): readonly Thread[];
+  /** Reads the next Threads of a list the seam holds only in part; nothing once it holds them all. */
+  more?(list: ThreadListKey): void;
+  /**
+   * Subscribes to one list, so the seam holds it while someone shows it and
+   * lets it go after the last one leaves. The same notifications as subscribe().
+   */
+  watchList?(list: ThreadListKey, listener: () => void): () => void;
+  /** Totals over the whole Cache. Stable between changes; the same subscription as threads(). */
+  counts?(): InboxCounts;
   /** Every Group of the Workspace, top-level first, for the move picker. Stable between changes. */
   groups(): readonly Group[];
   /** Every Tag of the Workspace, so a row can name the ones its Thread carries. Stable between changes. */

@@ -18,6 +18,13 @@
 // one batched request through the content transport, and the stream is
 // re-sectioned when they land. The same answers say where a judged custom
 // action shows.
+// The seam never holds the whole Cache: a large Account has tens of thousands
+// of Threads, and every warmed Workspace stays open. Each list (the Inbox, a
+// Mail folder, a Group lens) holds the newest rows of its own bounded query,
+// the inbox.memory_window Setting's worth, and reads the next page when the
+// list nears its end (more()); a Thread outside every list (a search result,
+// a link, the agent's) is read by id and kept while it is open or watched.
+// The totals the nav shows come from one aggregate over the whole Cache.
 
 import type {
   AiLevel,
@@ -36,6 +43,7 @@ import {
   ALL_THREADS_SQL,
   BRIEF_OF_THREAD_SQL,
   GROUPS_SQL,
+  INBOX_COUNTS_SQL,
   type LiveQuery,
   MESSAGES_OF_THREAD_SQL,
   rowToBrief,
@@ -46,12 +54,14 @@ import {
   type Store,
   type StoreIntent,
   TAGS_SQL,
+  type ThreadListOrder,
   tablesRead,
+  threadPageSql,
   threadsByIdsSql,
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
-import type { BodyUnavailable, Inbox, UndoToken } from "./actions.ts";
-import { type FolderEntry, type FolderKey, folderThreads } from "./folders.ts";
+import type { BodyUnavailable, Inbox, InboxCounts, UndoToken } from "./actions.ts";
+import { type FolderKey, type ThreadList, type ThreadListKey, threadList } from "./folders.ts";
 
 /**
  * What an undo puts back: the inverse intents, in the order the action ran.
@@ -65,8 +75,15 @@ export interface StoreInbox extends Inbox {
   resection(): void;
   /** The judged answers held for a Thread, by Section or custom action id; empty when none yet. */
   judged(threadId: string): SectionJudged;
-  /** A Mail folder's Threads (Starred, Snoozed, Sent, Archive), from the same rows as the stream. */
+  /** A Mail folder's Threads (Starred, Snoozed, Sent, Archive), from its own bounded query. */
   folder(key: FolderKey): readonly Thread[];
+  group(groupId: string): readonly Thread[];
+  more(list: ThreadListKey): void;
+  watchList(list: ThreadListKey, listener: () => void): () => void;
+  counts(): InboxCounts;
+  resolve(id: string): Promise<Thread | undefined>;
+  /** How many Thread rows the seam holds in memory, over every list and every Thread read by id. */
+  held(): number;
   close(): void;
 }
 
@@ -97,6 +114,10 @@ export interface StoreInboxOptions {
   level?: (() => AiLevel) | undefined;
   /** The owner's address, for the Sent folder; defaults to the Section rules' owner. */
   owner?: string | undefined;
+  /** The inbox.memory_window Setting: the rows each list holds at first and reads per page. */
+  memoryWindow?: (() => number) | undefined;
+  /** The inbox.memory_lookups Setting: Threads read by id kept once nothing shows them. */
+  memoryLookups?: (() => number) | undefined;
   log?: ((message: string) => void) | undefined;
 }
 
@@ -376,7 +397,7 @@ export async function createStoreInbox(
       // What did not come back (the Judge was away) is not asked again until the rules change.
       for (const id of ids) if (!answered.has(id)) unanswered.add(id);
       for (const id of answered) projectedById.delete(id);
-      project(lastRows);
+      project();
     } catch (error) {
       log(`judge sections: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -391,139 +412,394 @@ export async function createStoreInbox(
     judgeTimer = setTimeout(() => void askJudgments(), 0);
   };
 
-  let lastRows: Record<string, unknown>[] = [];
+  // Groups and Tags as the Cache holds them (the feed keeps both current); read below.
+  let groups: readonly Group[] = [];
+  let tags: readonly Tag[] = [];
+
   /**
    * Each row's projection, kept while the row object is the same and the
    * rules have not changed (generation), so a write that touched ten Threads
-   * sections ten, not the whole Cache.
+   * sections ten, not every row held. Only rows some list (or a lookup) holds
+   * have one.
    */
-  type Projected = { thread: Thread; deleted: boolean; lastSender: string | null };
+  type RawRow = Record<string, unknown>;
   const projectedById = new Map<
     string,
-    {
-      row: Record<string, unknown>;
-      generation: number;
-      projected: Projected;
-      judgments: ThreadJudgments | null;
-    }
+    { row: RawRow; generation: number; thread: Thread; judgments: ThreadJudgments | null }
   >();
   let generation = 0;
   /** The Threads in the trash, which the domain type does not carry. */
   const deletedIds = new Set<string>();
-  /** The Judgments per Thread, as the Cache holds them. */
+  /** The Judgments per Thread held, as the Cache holds them. */
   const judgmentsById = new Map<string, ThreadJudgments>();
-  /** Every row as the folders read it, and each folder's list, computed on first read after a change. */
-  let folderEntries: readonly FolderEntry[] = [];
-  const folders = new Map<FolderKey, readonly Thread[]>();
   const owner = options.owner ?? options.sections?.owner ?? "";
-  const project = (rows: Record<string, unknown>[]) => {
-    lastRows = rows;
-    byId.clear();
-    deletedIds.clear();
-    judgmentsById.clear();
-    folders.clear();
-    const all = rows.map((r) => {
-      const id = String(r.id);
-      const held = projectedById.get(id);
-      if (held && held.row === r && held.generation === generation) {
-        if (held.judgments) judgmentsById.set(id, held.judgments);
-        return held.projected;
-      }
-      const entry = rowToCachedThread(r, store.workspaceId);
-      if (entry.judgments) judgmentsById.set(entry.thread.id, entry.judgments);
-      const projected = {
-        thread: sectioned(entry),
-        deleted: entry.deleted,
-        lastSender: entry.lastSender,
-      };
-      projectedById.set(id, { row: r, generation, projected, judgments: entry.judgments });
-      return projected;
-    });
-    folderEntries = all;
-    for (const { thread, deleted } of all) {
-      byId.set(thread.id, thread);
-      if (deleted) deletedIds.add(thread.id);
-    }
-    stream = all
-      .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
-      .map(({ thread }) => thread);
-    for (const l of [...listeners]) l();
-    scheduleJudgments();
-  };
 
-  // The Thread list: read whole once, then only the Threads each write names
-  // are read again and put in place. Re-reading the whole Cache on every sync
-  // page and every body that lands is what made a large Account lag.
-  const listTables = tablesRead(ALL_THREADS_SQL);
-  const rowIndex = new Map<string, Record<string, unknown>>();
-  const newer = (a: Record<string, unknown>, b: Record<string, unknown>) => {
-    const la = String(a.last_activity ?? "");
-    const lb = String(b.last_activity ?? "");
-    if (la !== lb) return la > lb ? -1 : 1;
-    return Number(b.rid ?? 0) - Number(a.rid ?? 0);
+  /**
+   * One list held in part: the first rows of its query, in its order. The
+   * rows are always a prefix of the whole list, so the next page is read
+   * after the last one held and a re-read row is placed by comparing it with
+   * the last row the write did not touch.
+   */
+  interface Held {
+    key: ThreadListKey;
+    list: ThreadList;
+    compare: (a: RawRow, b: RawRow) => number;
+    rows: RawRow[];
+    byId: Map<string, RawRow>;
+    /** How many rows the list is asked to hold: the window, plus a window per more(). */
+    want: number;
+    /** Whether the rows are the whole list. */
+    complete: boolean;
+    loaded: boolean;
+    threads: readonly Thread[];
+    /** The screens showing it; the last one to leave lets it go (the Inbox is always held). */
+    watchers: number;
+  }
+  const lists = new Map<ThreadListKey, Held>();
+  const windowSize = () => Math.max(1, Math.floor(options.memoryWindow?.() ?? 1500));
+  /** How far under its window a list may fall (Threads archived away) before it reads more. */
+  const slack = () => Math.floor(windowSize() / 4);
+  /** Threads read by id outside every list (a search result, a link), with the ones asked for since the last pass. */
+  const extras = new Map<string, RawRow>();
+  const touched = new Set<string>();
+  /** Ids asked for that the Cache does not hold: not asked again until a write names them. */
+  const absent = new Set<string>();
+  const lookups = new Set<string>();
+  const needFill = new Set<Held>();
+  const EMPTY_THREADS: readonly Thread[] = Object.freeze([]);
+
+  const valueOrder = (x: unknown, y: unknown): number => {
+    if (x === y) return 0;
+    if (x === null || x === undefined) return -1;
+    if (y === null || y === undefined) return 1;
+    if (typeof x === "number" && typeof y === "number") return x - y;
+    const a = String(x);
+    const b = String(y);
+    return a < b ? -1 : a > b ? 1 : 0;
   };
-  const sameRow = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+  const comparer =
+    (order: readonly ThreadListOrder[]) =>
+    (a: RawRow, b: RawRow): number => {
+      for (const o of order) {
+        const c = valueOrder(a[o.column], b[o.column]);
+        if (c !== 0) return o.desc ? -c : c;
+      }
+      return 0;
+    };
+  const sameRow = (a: RawRow, b: RawRow) => {
     const keys = Object.keys(a);
     if (keys.length !== Object.keys(b).length) return false;
     return keys.every((k) => a[k] === b[k]);
   };
+  const inAnyList = (id: string) => {
+    for (const h of lists.values()) if (h.byId.has(id)) return true;
+    return false;
+  };
+  /** The row object already held for the same content, so every list shares one projection. */
+  const canon = (r: RawRow): RawRow => {
+    const held = projectedById.get(String(r.id))?.row;
+    return held && sameRow(held, r) ? held : r;
+  };
+
+  const project = () => {
+    byId.clear();
+    deletedIds.clear();
+    judgmentsById.clear();
+    const live = new Set<string>();
+    const one = (r: RawRow): Thread => {
+      const id = String(r.id);
+      live.add(id);
+      const held = projectedById.get(id);
+      let thread: Thread;
+      let judgments: ThreadJudgments | null;
+      if (held && held.row === r && held.generation === generation) {
+        thread = held.thread;
+        judgments = held.judgments;
+      } else {
+        const entry = rowToCachedThread(r, store.workspaceId);
+        thread = sectioned(entry);
+        judgments = entry.judgments;
+        projectedById.set(id, { row: r, generation, thread, judgments });
+      }
+      byId.set(id, thread);
+      if (r.deleted === 1 || r.deleted === true) deletedIds.add(id);
+      if (judgments) judgmentsById.set(id, judgments);
+      return thread;
+    };
+    for (const h of lists.values()) {
+      if (!h.loaded) continue;
+      const next = h.rows.map(one);
+      const same = next.length === h.threads.length && next.every((t, i) => t === h.threads[i]);
+      if (!same) h.threads = next;
+    }
+    // A Thread read by id is let go once a list holds it, or once nothing
+    // shows it and more are kept than the Setting allows.
+    for (const id of [...extras.keys()]) if (inAnyList(id)) extras.delete(id);
+    const cap = Math.max(0, Math.floor(options.memoryLookups?.() ?? 200));
+    for (const id of [...extras.keys()]) {
+      if (extras.size <= cap) break;
+      if (touched.has(id) || watched.has(id) || warmHolds.has(id)) continue;
+      extras.delete(id);
+    }
+    touched.clear();
+    for (const r of extras.values()) one(r);
+    for (const id of [...projectedById.keys()]) if (!live.has(id)) projectedById.delete(id);
+    stream = lists.get("inbox")?.threads ?? EMPTY_THREADS;
+    for (const l of [...listeners]) l();
+    scheduleJudgments();
+  };
+
+  const readPage = (h: Held, after: RawRow | null, limit: number) => {
+    const { sql, params } = threadPageSql(h.list.query, after, limit);
+    return store.query<RawRow>(sql, params);
+  };
+  const readById = async (ids: readonly string[]): Promise<Map<string, RawRow>> => {
+    const fresh = new Map<string, RawRow>();
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const rows = await store.query<RawRow>(threadsByIdsSql(chunk.length), chunk);
+      for (const r of rows) fresh.set(String(r.id), r);
+    }
+    return fresh;
+  };
+  const setRows = (h: Held, rows: RawRow[]) => {
+    h.rows = rows;
+    h.byId = new Map(rows.map((r) => [String(r.id), r]));
+  };
+
+  /** Reads a list's first page, or the rows it lacks up to what it is asked to hold. */
+  const fill = async (h: Held): Promise<boolean> => {
+    if (lists.get(h.key) !== h) return false;
+    if (!h.loaded) {
+      const rows = (await readPage(h, null, h.want)).map(canon);
+      setRows(h, rows);
+      h.complete = rows.length < h.want;
+      h.loaded = true;
+      return true;
+    }
+    if (h.complete || h.rows.length >= h.want) return false;
+    const need = h.want - h.rows.length;
+    const page = await readPage(h, h.rows.at(-1) ?? null, need);
+    if (page.length < need) h.complete = true;
+    let added = false;
+    for (const r of page) {
+      const id = String(r.id);
+      if (h.byId.has(id)) continue;
+      const row = canon(r);
+      h.rows.push(row);
+      h.byId.set(id, row);
+      added = true;
+    }
+    return added;
+  };
+
+  /** Re-reads every list from its start (a write that could touch any Thread). */
+  const reloadAll = async (): Promise<boolean> => {
+    for (const h of [...lists.values()]) {
+      if (!h.loaded) continue;
+      const limit = Math.max(h.want, h.rows.length);
+      const rows = (await readPage(h, null, limit)).map((r) => {
+        const before = h.byId.get(String(r.id));
+        return before && sameRow(before, r) ? before : canon(r);
+      });
+      setRows(h, rows);
+      h.complete = rows.length < limit;
+    }
+    if (extras.size > 0) await applyRows([...extras.keys()], await readById([...extras.keys()]));
+    return true;
+  };
+
+  /**
+   * Puts the re-read rows of the named Threads in place in every list and
+   * among the lookups. A row enters a list when the list's filter keeps it
+   * and it sorts before the last row the write left alone (or the list holds
+   * everything); it leaves when it no longer does. Returns whether anything
+   * held changed.
+   */
+  const applyRows = (ids: readonly string[], fresh: ReadonlyMap<string, RawRow>): boolean => {
+    let changed = false;
+    const named = new Set(ids);
+    for (const h of lists.values()) {
+      if (!h.loaded) continue;
+      let boundary: RawRow | undefined;
+      for (let i = h.rows.length - 1; i >= 0; i--) {
+        const r = h.rows[i] as RawRow;
+        if (!named.has(String(r.id))) {
+          boundary = r;
+          break;
+        }
+      }
+      const keep: RawRow[] = [];
+      let moved = false;
+      for (const id of named) {
+        const before = h.byId.get(id);
+        const after = fresh.get(id);
+        const belongs =
+          after !== undefined &&
+          h.list.keepsRow(after) &&
+          (h.complete || (boundary !== undefined && h.compare(after, boundary) < 0));
+        if (!belongs) {
+          if (before) moved = true;
+          continue;
+        }
+        const row = before && sameRow(before, after) ? before : canon(after);
+        if (row !== before) moved = true;
+        keep.push(row);
+      }
+      if (!moved) continue;
+      changed = true;
+      const rows = h.rows.filter((r) => !named.has(String(r.id)));
+      for (const r of keep) {
+        let lo = 0;
+        let hi = rows.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (h.compare(rows[mid] as RawRow, r) <= 0) lo = mid + 1;
+          else hi = mid;
+        }
+        rows.splice(lo, 0, r);
+      }
+      // New mail grows a list past its window; the oldest rows beyond it are let go.
+      if (rows.length > h.want + slack()) {
+        rows.length = h.want;
+        h.complete = false;
+      }
+      setRows(h, rows);
+      if (!h.complete && h.rows.length < h.want - slack()) needFill.add(h);
+    }
+    for (const id of named) {
+      const before = extras.get(id);
+      if (!before) continue;
+      const after = fresh.get(id);
+      if (!after) {
+        extras.delete(id);
+        changed = true;
+      } else if (!sameRow(before, after)) {
+        extras.set(id, after);
+        changed = true;
+      }
+    }
+    return changed;
+  };
+
+  /** Reads Threads asked for by id; the ones no list holds are kept as lookups. */
+  const lookUp = async (ids: readonly string[]): Promise<boolean> => {
+    const fresh = await readById(ids);
+    let found = false;
+    for (const id of ids) {
+      const r = fresh.get(id);
+      if (!r) {
+        absent.add(id);
+        continue;
+      }
+      touched.add(id);
+      if (inAnyList(id) || extras.has(id)) continue;
+      extras.set(id, canon(r));
+      found = true;
+    }
+    return found;
+  };
+
+  /** The Inbox totals over the whole Cache, from one aggregate read. */
+  type CountRow = {
+    k: string;
+    group_id: string | null;
+    subgroup_id: string | null;
+    starred: number;
+    n: number;
+  };
+  let countRows: CountRow[] = [];
+  const EMPTY_COUNTS: InboxCounts = Object.freeze({ inbox: 0, snoozed: 0, unread: {} });
+  let counts: InboxCounts = EMPTY_COUNTS;
+  /** The unread keys a Thread counts toward, as the nav names them; a Sub-group rolls up into its parent. */
+  const unreadKeys = (
+    group: string | null,
+    subgroup: string | null,
+    starred: boolean,
+    parentOf: ReadonlyMap<string, string | null>,
+  ): string[] => {
+    const keys = ["inbox"];
+    if (starred) keys.push("starred");
+    if (group) {
+      keys.push(group);
+      const parent = parentOf.get(group);
+      if (parent) keys.push(parent);
+    }
+    if (subgroup && subgroup !== group) keys.push(subgroup);
+    return keys;
+  };
+  const parents = () => new Map(groups.map((g) => [g.id, g.parentId]));
+  const deriveCounts = (): InboxCounts => {
+    const parentOf = parents();
+    const unread: Record<string, number> = {};
+    let inbox = 0;
+    let snoozed = 0;
+    for (const r of countRows) {
+      const n = Number(r.n ?? 0);
+      if (r.k === "inbox") inbox = n;
+      else if (r.k === "snoozed") snoozed = n;
+      else {
+        for (const key of unreadKeys(r.group_id, r.subgroup_id, Boolean(r.starred), parentOf)) {
+          unread[key] = (unread[key] ?? 0) + n;
+        }
+      }
+    }
+    return { inbox, snoozed, unread };
+  };
+  let countsStale = true;
+  const readCounts = async (): Promise<boolean> => {
+    countRows = await store.query<CountRow>(INBOX_COUNTS_SQL);
+    const next = deriveCounts();
+    if (JSON.stringify(next) === JSON.stringify(counts)) return false;
+    counts = next;
+    return true;
+  };
+
+  // The lists: each read in pages, then only the Threads each write names are
+  // read again and put in place. Re-reading on every sync page and every body
+  // that lands is what made a large Account lag; holding every row is what
+  // made it heavy.
+  const listTables = tablesRead(ALL_THREADS_SQL);
   let pendingIds = new Set<string>();
   let pendingAll = false;
   let reading: Promise<void> | null = null;
   let listClosed = false;
-  const readAll = async () => {
-    const rows = await store.query<Record<string, unknown>>(ALL_THREADS_SQL);
-    rowIndex.clear();
-    for (const r of rows) rowIndex.set(String(r.id), r);
-    project(rows);
-  };
-  const readSome = async (ids: string[]) => {
-    const fresh = new Map<string, Record<string, unknown>>();
-    for (let i = 0; i < ids.length; i += 400) {
-      const chunk = ids.slice(i, i + 400);
-      const rows = await store.query<Record<string, unknown>>(threadsByIdsSql(chunk.length), chunk);
-      for (const r of rows) fresh.set(String(r.id), r);
-    }
-    const changed = ids.filter((id) => {
-      const before = rowIndex.get(id);
-      const after = fresh.get(id);
-      return before === undefined || after === undefined
-        ? before !== after
-        : !sameRow(before, after);
-    });
-    if (changed.length === 0) return;
-    const gone = new Set(changed);
-    const rows = lastRows.filter((r) => !gone.has(String(r.id)));
-    for (const id of changed) {
-      const r = fresh.get(id);
-      if (r) rowIndex.set(id, r);
-      else rowIndex.delete(id);
-    }
-    for (const id of changed) {
-      const r = fresh.get(id);
-      if (!r) continue;
-      let lo = 0;
-      let hi = rows.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (newer(rows[mid] as Record<string, unknown>, r) <= 0) lo = mid + 1;
-        else hi = mid;
-      }
-      rows.splice(lo, 0, r);
-    }
-    project(rows);
-  };
-  const drain = () => {
-    if (reading || listClosed) return;
+  const readSome = async (ids: string[]) => applyRows(ids, await readById(ids));
+  const busy = () =>
+    pendingAll || pendingIds.size > 0 || needFill.size > 0 || lookups.size > 0 || countsStale;
+  /** Runs the queued reads one after another; resolves once none is left. */
+  const drain = (): Promise<void> => {
+    if (listClosed) return Promise.resolve();
+    if (reading) return reading;
+    if (!busy()) return Promise.resolve();
     reading = (async () => {
+      // A turn first, so `reading` is set before the loop can finish and clear it.
+      await Promise.resolve();
       try {
-        while ((pendingAll || pendingIds.size > 0) && !listClosed) {
+        while (busy() && !listClosed) {
+          let changed = false;
           const all = pendingAll;
           const ids = [...pendingIds];
           pendingAll = false;
           pendingIds = new Set();
-          if (all || ids.length > 2000) await readAll();
-          else await readSome(ids);
+          if (all || ids.length > 2000) changed = (await reloadAll()) || changed;
+          else if (ids.length > 0) changed = (await readSome(ids)) || changed;
+          for (const h of [...needFill]) {
+            needFill.delete(h);
+            if (await fill(h)) changed = true;
+          }
+          if (lookups.size > 0) {
+            const ask = [...lookups];
+            lookups.clear();
+            if (await lookUp(ask)) changed = true;
+          }
+          let countsChanged = false;
+          if (countsStale) {
+            countsStale = false;
+            countsChanged = await readCounts();
+          }
+          if (changed) project();
+          else if (countsChanged) for (const l of [...listeners]) l();
         }
       } catch (error) {
         log(`thread list: ${error instanceof Error ? error.message : String(error)}`);
@@ -531,18 +807,67 @@ export async function createStoreInbox(
         reading = null;
       }
     })();
+    return reading;
+  };
+  let drainQueued = false;
+  const drainSoon = () => {
+    if (drainQueued) return;
+    drainQueued = true;
+    queueMicrotask(() => {
+      drainQueued = false;
+      void drain();
+    });
   };
   const stopWrites = store.onWrite((tables, threadIds) => {
     if (![...tables].some((t) => listTables.has(t))) return;
-    if (threadIds === undefined) pendingAll = true;
-    else for (const id of threadIds) pendingIds.add(id);
-    drain();
+    if (tables.has("threads")) countsStale = true;
+    if (threadIds === undefined) {
+      pendingAll = true;
+      absent.clear();
+    } else {
+      for (const id of threadIds) {
+        pendingIds.add(id);
+        absent.delete(id);
+      }
+    }
+    void drain();
   });
-  await readAll();
 
-  // Groups and Tags as the Cache holds them (the feed keeps both current).
-  let groups: readonly Group[] = [];
-  let tags: readonly Tag[] = [];
+  /** The list for a key, made (and its first page asked for) on first use. */
+  const ensureList = (key: ThreadListKey): Held => {
+    let h = lists.get(key);
+    if (h) return h;
+    const list = threadList(key, owner);
+    h = {
+      key,
+      list,
+      compare: comparer(list.query.order),
+      rows: [],
+      byId: new Map(),
+      want: windowSize(),
+      complete: false,
+      loaded: false,
+      threads: EMPTY_THREADS,
+      watchers: 0,
+    };
+    lists.set(key, h);
+    needFill.add(h);
+    if (!listClosed) drainSoon();
+    return h;
+  };
+
+  // The Inbox's first window and the totals, together: the screen renders once both are in.
+  const inboxList = ensureList("inbox");
+  needFill.delete(inboxList);
+  countsStale = false;
+  const [, firstCounts] = await Promise.all([
+    fill(inboxList),
+    store.query<CountRow>(INBOX_COUNTS_SQL),
+  ]);
+  countRows = firstCounts;
+  counts = deriveCounts();
+  project();
+
   const groupsLive = store.live<Record<string, unknown>>(GROUPS_SQL);
   const tagsLive = store.live<Record<string, unknown>>(TAGS_SQL);
   await Promise.all([
@@ -551,8 +876,8 @@ export async function createStoreInbox(
         groups = rows.map((r) => rowToGroup(r, store.workspaceId));
         // A rule may name a Group by name: a renamed Group sections again.
         generation += 1;
-        if (lastRows.length > 0) project(lastRows);
-        for (const l of [...listeners]) l();
+        counts = deriveCounts();
+        project();
         resolve();
       });
     }),
@@ -588,18 +913,55 @@ export async function createStoreInbox(
         return null;
     }
   };
+  /** The totals as the changed Threads leave them, until the aggregate reads them again. */
+  const countsAfter = (changed: ReadonlyMap<string, Thread>): InboxCounts => {
+    const parentOf = parents();
+    const unread = { ...counts.unread };
+    let inbox = counts.inbox;
+    const inInbox = (t: Thread) => !t.archived && t.snoozedUntil === null;
+    const tally = (t: Thread, sign: 1 | -1) => {
+      if (!inInbox(t)) return;
+      inbox += sign;
+      if (!t.unread) return;
+      for (const key of unreadKeys(t.group, t.subgroup, t.starred, parentOf)) {
+        unread[key] = Math.max(0, (unread[key] ?? 0) + sign);
+      }
+    };
+    for (const [id, next] of changed) {
+      const before = byId.get(id);
+      if (!before || deletedIds.has(id)) continue;
+      tally(before, -1);
+      tally(next, 1);
+    }
+    return { inbox: Math.max(0, inbox), snoozed: counts.snoozed, unread };
+  };
   const showNow = (changed: ReadonlyMap<string, Thread>) => {
     if (changed.size === 0) return;
+    counts = countsAfter(changed);
     for (const [id, t] of changed) byId.set(id, t);
-    folderEntries = folderEntries.map((e) => {
-      const next = changed.get(e.thread.id);
-      return next ? { ...e, thread: next } : e;
-    });
-    folders.clear();
-    stream = folderEntries
-      .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
-      .map(({ thread }) => thread);
+    for (const h of lists.values()) {
+      if (!h.threads.some((t) => changed.has(t.id))) continue;
+      h.threads = h.threads.flatMap((t) => {
+        const next = changed.get(t.id);
+        if (!next) return [t];
+        return h.list.keepsThread(next) ? [next] : [];
+      });
+    }
+    stream = lists.get("inbox")?.threads ?? EMPTY_THREADS;
     for (const l of [...listeners]) l();
+  };
+
+  /** A Thread by id, read from the Cache when no list holds it. */
+  const resolveThread = async (id: string): Promise<Thread | undefined> => {
+    const held = byId.get(id);
+    if (held) {
+      if (extras.has(id)) touched.add(id);
+      return held;
+    }
+    absent.delete(id);
+    lookups.add(id);
+    await drain();
+    return byId.get(id);
   };
 
   /** Runs `make` for every known id and files the inverses under a new token. */
@@ -607,6 +969,15 @@ export async function createStoreInbox(
     ids: readonly string[],
     make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent | null },
   ): Promise<UndoToken> => {
+    // A Thread no list holds (a search result, the agent's) is read first.
+    const missing = ids.filter((id) => !byId.has(id));
+    if (missing.length > 0) {
+      for (const id of missing) {
+        absent.delete(id);
+        lookups.add(id);
+      }
+      await drain();
+    }
     const reversal: Reversal = [];
     const planned: StoreIntent[] = [];
     const changed = new Map<string, Thread>();
@@ -663,14 +1034,52 @@ export async function createStoreInbox(
 
   return {
     threads: () => stream,
-    thread: (id) => byId.get(id),
-    folder(key) {
-      let list = folders.get(key);
-      if (!list) {
-        list = folderThreads(key, folderEntries, owner);
-        folders.set(key, list);
+    thread(id) {
+      const held = byId.get(id);
+      if (held) {
+        if (extras.has(id)) touched.add(id);
+        return held;
       }
-      return list;
+      // Not held: read in the background; the subscribers hear when it lands.
+      if (!listClosed && !absent.has(id) && !lookups.has(id)) {
+        lookups.add(id);
+        drainSoon();
+      }
+      return undefined;
+    },
+    resolve: resolveThread,
+    folder: (key) => ensureList(key).threads,
+    group: (groupId) => ensureList(`group:${groupId}`).threads,
+    more(key) {
+      const h = lists.get(key);
+      if (!h?.loaded || h.complete || needFill.has(h)) return;
+      h.want = Math.max(h.want, h.rows.length) + windowSize();
+      needFill.add(h);
+      void drain();
+    },
+    watchList(key, listener) {
+      const h = ensureList(key);
+      h.watchers += 1;
+      const own = () => listener();
+      listeners.add(own);
+      return () => {
+        listeners.delete(own);
+        h.watchers -= 1;
+        if (h.watchers > 0 || key === "inbox") return;
+        // Let go once no screen shows it, after a turn: a re-render subscribes again at once.
+        setTimeout(() => {
+          if (h.watchers > 0 || lists.get(key) !== h || listClosed) return;
+          lists.delete(key);
+          needFill.delete(h);
+          project();
+        }, 0);
+      };
+    },
+    counts: () => counts,
+    held() {
+      const ids = new Set<string>(extras.keys());
+      for (const h of lists.values()) for (const id of h.byId.keys()) ids.add(id);
+      return ids.size;
     },
     groups: () => groups,
     tags: () => tags,
@@ -775,7 +1184,7 @@ export async function createStoreInbox(
       // Reworded rules may need new answers; the Server re-asks only for a changed statement.
       unanswered.clear();
       generation += 1;
-      project(lastRows);
+      project();
     },
     judged: (threadId) => judgedById.get(threadId) ?? EMPTY_JUDGED,
     close() {
@@ -785,6 +1194,11 @@ export async function createStoreInbox(
       waiting.clear();
       listClosed = true;
       stopWrites();
+      lists.clear();
+      extras.clear();
+      needFill.clear();
+      lookups.clear();
+      projectedById.clear();
       groupsLive.close();
       tagsLive.close();
       listeners.clear();

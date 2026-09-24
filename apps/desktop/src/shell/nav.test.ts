@@ -173,6 +173,28 @@ describe("navModel", () => {
     expect(nav.automation.map((a) => a.label)).toEqual(["Workflows", "Routing"]);
   });
 
+  test("counts over the whole Cache replace the held Threads' for folders and Groups; Sections still count the held ones", () => {
+    const nav = navModel({
+      address: "a@b.c",
+      status: "online",
+      // The Inbox holds two Threads of a much bigger Cache.
+      threads: [
+        thread("a", { section: "needs-reply", group: "finance" }),
+        thread("b", { section: "needs-reply", starred: true }),
+      ],
+      unread: { inbox: 4210, starred: 12, finance: 300, hiring: 0 },
+      groups,
+      sections: strings["sections.rules"],
+      sectionOrder: strings["sections.order"],
+      strings,
+    });
+    expect(nav.counts.inbox).toBe(4210);
+    expect(nav.counts.starred).toBe(12);
+    expect(nav.counts.finance).toBe(300);
+    expect("hiring" in nav.counts).toBe(false);
+    expect(nav.counts["section:needs-reply"]).toBe(2);
+  });
+
   test("Drafts and Snoozed carry their totals; an empty folder shows no count, not zero", () => {
     const base = { address: "a@b.c", status: "online" as const, threads: [], groups: [], strings };
     expect(navModel({ ...base, folderCounts: { drafts: 3, snoozed: 2 } }).counts).toEqual({

@@ -63,7 +63,7 @@ import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/a
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
 import { createCustomActionRunner, customActionTier } from "./inbox/custom-actions.ts";
-import type { FolderKey } from "./inbox/folders.ts";
+import type { FolderKey, ThreadListKey } from "./inbox/folders.ts";
 import { useHeldSections } from "./inbox/held-sections.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
 import {
@@ -382,12 +382,29 @@ function InboxBody({
 
   /* ------------------------------ Data ------------------------------ */
 
-  // A folder lens reads its own query (inbox/folders.ts); the Inbox reads every Thread.
+  // A folder lens and a Group lens read their own bounded query
+  // (inbox/folders.ts); the Inbox and a Section lens read the Inbox's. A seam
+  // over a large Cache holds the newest part of each list and reads more as
+  // the list nears its end (listKey names which).
+  const groupList = group !== undefined && inbox.group !== undefined;
+  const listKey: ThreadListKey = folder ? folder : groupList ? `group:${group}` : "inbox";
   const streamOf = useCallback(
-    () => (folder ? (inbox.folder?.(folder) ?? NO_THREADS) : inbox.threads()),
-    [inbox, folder],
+    () =>
+      folder
+        ? (inbox.folder?.(folder) ?? NO_THREADS)
+        : group !== undefined && inbox.group
+          ? inbox.group(group)
+          : inbox.threads(),
+    [inbox, folder, group],
   );
-  const liveThreads = useSyncExternalStore(inbox.subscribe, streamOf, streamOf);
+  const subscribeList = useCallback(
+    (listener: () => void) =>
+      inbox.watchList ? inbox.watchList(listKey, listener) : inbox.subscribe(listener),
+    [inbox, listKey],
+  );
+  const liveThreads = useSyncExternalStore(subscribeList, streamOf, streamOf);
+  const growAt = settings["inbox.memory_grow_rows"];
+  const readMore = useCallback(() => inbox.more?.(listKey), [inbox, listKey]);
   // A row stays in the Section it was rendered in until the stream is rebuilt
   // (inbox/held-sections.ts): opening a Thread reads it, and reading must not
   // move it under the cursor. The rows under the cursor survive even a rebuild.
@@ -618,10 +635,22 @@ function InboxBody({
   const toastSeq = useRef(0);
 
   // The focus follows the list: a focus that left it (without an action moving
-  // it first) lands on the first row.
+  // it first) lands on the first row. A Thread the list does not hold (a
+  // link, a notification) is read from the Cache first: it stays in focus
+  // when the Cache has it.
   useEffect(() => {
-    if (focus !== null && !order.includes(focus) && !inbox.thread(focus))
+    if (focus === null || order.includes(focus) || inbox.thread(focus)) return;
+    if (!inbox.resolve) {
       setFocus(order[0] ?? null);
+      return;
+    }
+    let live = true;
+    void inbox.resolve(focus).then((found) => {
+      if (live && !found) setFocus((f) => (f === focus ? (order[0] ?? null) : f));
+    });
+    return () => {
+      live = false;
+    };
   }, [order, focus, inbox]);
 
   // Search keeps the stream's place: the focus and the multi-select are put
@@ -1207,7 +1236,14 @@ function InboxBody({
   const acting = () => targets(focus, selection);
 
   const handlers: KeyHandlers = {
-    "move.down": () => !overlay && setFocus(neighbor(order, focus, 1)),
+    "move.down": () => {
+      if (overlay) return false;
+      // Walking near the end of what the list holds reads its next Threads.
+      if (!searching && focus !== null && order.indexOf(focus) >= order.length - 1 - growAt) {
+        readMore();
+      }
+      setFocus(neighbor(order, focus, 1));
+    },
     "move.up": () => !overlay && setFocus(neighbor(order, focus, -1)),
     "thread.open": () => !overlay && focus && setReaderOpen(true),
     "sheet.close": () => {
@@ -1290,8 +1326,7 @@ function InboxBody({
         onNavigate?.(command.target);
         break;
       case "open":
-        if (inbox.thread(command.threadId)) open(command.threadId);
-        else onNavigate?.(`thread:${command.threadId}`);
+        openAnywhere(command.threadId);
         break;
       case "search":
         openSearch(command.text);
@@ -1458,6 +1493,15 @@ function InboxBody({
     setFocus(id);
     setReaderOpen(true);
   }
+  /** Opens a Thread here, read from the Cache when the list does not hold it; elsewhere when there is none. */
+  function openAnywhere(id: string) {
+    if (inbox.thread(id)) return open(id);
+    if (!inbox.resolve) return onNavigate?.(`thread:${id}`);
+    void inbox.resolve(id).then((found) => {
+      if (found) open(id);
+      else onNavigate?.(`thread:${id}`);
+    });
+  }
   const runtime = runtimeLine(agent.runtimeInfo, s, ws.address);
   const agentStrings = useMemo(() => composerStrings(s), [s]);
   const chips = useMemo(
@@ -1466,6 +1510,7 @@ function InboxBody({
         settings: s,
         waiting: agent.waiting,
         external: externalPending,
+        // Sections are decided on the client, so this counts within the Threads the list holds.
         needsReply: threads.filter((th) => th.section === "needs-reply"),
       }),
     [s, agent.waiting, externalPending, threads],
@@ -1730,6 +1775,8 @@ function InboxBody({
           overscan={s["inbox.overscan_rows"]}
           focusKey={focus}
           scrollKey={searching ? "search" : `stream:${filter ?? ""}`}
+          onNearEnd={searching ? undefined : readMore}
+          nearEnd={growAt}
           layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
           before={
             <>
@@ -1965,10 +2012,7 @@ function InboxBody({
           }
           text={agentText}
           onTextChange={setAgentText}
-          onOpenThread={(id) => {
-            if (inbox.thread(id)) open(id);
-            else onNavigate?.(`thread:${id}`);
-          }}
+          onOpenThread={openAnywhere}
           onSuggest={applySuggestionLayout}
           onOpenRuntime={() => onNavigate?.("settings:ai")}
           card={intentCardNode}

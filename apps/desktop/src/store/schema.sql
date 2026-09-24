@@ -36,6 +36,13 @@ create table if not exists threads (
 create index if not exists threads_list_idx on threads (archived, deleted, last_activity desc);
 create index if not exists threads_section_idx on threads (section);
 create index if not exists threads_group_idx on threads (group_id);
+-- The Inbox reads a window of its newest Threads and counts the rest: the
+-- window walks threads_inbox_idx in order (which also counts the Inbox), and
+-- each folder walks its own.
+create index if not exists threads_inbox_idx on threads (archived, deleted, snoozed_until, last_activity desc, rid desc);
+create index if not exists threads_recent_idx on threads (last_activity desc, rid desc);
+create index if not exists threads_starred_idx on threads (starred, deleted, last_activity desc, rid desc);
+create index if not exists threads_snoozed_idx on threads (snoozed_until, last_activity desc, rid desc) where snoozed_until is not null;
 
 -- Bodies are nullable: only Messages inside the Cache window carry them.
 -- `rid` is the stable rowid the FTS index points at. `body_at` is when the

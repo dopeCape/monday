@@ -205,11 +205,16 @@ export function App({
   );
   // The nav's Groups and counts follow the Store; without a routing seam there are no Groups.
   const navGroups = routing ? storeGroups : NO_GROUPS;
+  // The Threads the Inbox holds: the newest of them on a large Account
+  // (inbox.memory_window). Mentions and the onboarding's senders read the
+  // newest; every total reads inboxCounts, over the whole Cache.
   const inboxThreads = useSyncExternalStore(
     inbox?.subscribe ?? noSubscribe,
     inbox?.threads ?? noThreads,
     inbox?.threads ?? noThreads,
   );
+  const countsOf = useCallback(() => inbox?.counts?.() ?? null, [inbox]);
+  const inboxCounts = useSyncExternalStore(inbox?.subscribe ?? noSubscribe, countsOf, countsOf);
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
@@ -377,6 +382,7 @@ export function App({
         waiting: agent.waiting,
         pausedRuns,
         external: externalPending,
+        // Sections are decided on the client: this counts within the Threads the Inbox holds.
         needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
       }),
     [shell.settings, agent.waiting, pausedRuns, externalPending, inbox],
@@ -492,12 +498,18 @@ export function App({
   // Drafts and Snoozed carry their totals in the nav (none when empty).
   const drafts = useSyncExternalStore(composer.subscribe, composer.drafts, composer.drafts);
   const draftCount = useMemo(() => openDrafts(drafts).length, [drafts]);
-  const snoozedOf = useCallback(() => inbox?.folder?.("snoozed") ?? NO_FOLDER, [inbox]);
-  const snoozedCount = useSyncExternalStore(
+  // A seam that holds only part of the Cache counts the whole of it for the
+  // nav; one that holds everything (the fixtures) is counted here.
+  const snoozedOf = useCallback(
+    () => (inbox?.counts ? NO_FOLDER : (inbox?.folder?.("snoozed") ?? NO_FOLDER)),
+    [inbox],
+  );
+  const snoozedHeld = useSyncExternalStore(
     inbox?.subscribe ?? noSubscribe,
     snoozedOf,
     snoozedOf,
   ).length;
+  const snoozedCount = inboxCounts ? inboxCounts.snoozed : snoozedHeld;
   const groupIcons = shell.settings["routing.group_icons"];
   const groupIconFallback = shell.settings["routing.group_icon_fallback"];
   const groupIcon = useMemo(
@@ -510,6 +522,7 @@ export function App({
         address: ws.address,
         status: !online ? "offline" : syncing ? "syncing" : "online",
         threads: inboxThreads,
+        unread: inboxCounts?.unread,
         groups: navGroups,
         groupIcon,
         scheduled: { count: pending, label: strings.scheduled.title },
@@ -523,6 +536,7 @@ export function App({
       online,
       syncing,
       inboxThreads,
+      inboxCounts,
       navGroups,
       groupIcon,
       pending,
@@ -836,7 +850,7 @@ export function App({
           runtimes={detection}
           keys={keys}
           senders={fixtureChat ? ONBOARDING_FIXTURE_SENDERS : senders}
-          threadCount={inbox?.threads().length ?? 0}
+          threadCount={inboxCounts?.inbox ?? inboxThreads.length}
           rerun={onboarding?.rerun ?? false}
           now={now}
           onDone={() => setActive("inbox")}
