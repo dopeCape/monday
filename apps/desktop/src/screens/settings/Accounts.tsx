@@ -10,7 +10,7 @@
 // settings shared by every Account live in the groups below this one.
 
 import { describeSetting, settingsSchema } from "@monday/shared";
-import { formatWhen, Tag } from "@monday/ui";
+import { Btn, formatWhen, Tag } from "@monday/ui";
 import {
   EnvelopeSimpleIcon,
   GoogleLogoIcon,
@@ -227,6 +227,20 @@ export function AccountsPanel(_: PanelProps) {
                 <span>{s["strings.accounts.remove_help"]}</span>
               )}
               <span className="sp" />
+              {a.lastError && (a.provider === "gmail" || a.provider === "graph") ? (
+                // Signing in again to the same address replaces the refused sign-in in place.
+                <Btn
+                  primary
+                  onClick={() => {
+                    const view: AddAccountView = a.provider === "gmail" ? "google" : "microsoft";
+                    setAdded(null);
+                    setOpened(view);
+                    setAdding(view);
+                  }}
+                >
+                  {s["strings.accounts.reconnect"]}
+                </Btn>
+              ) : null}
               <DangerAction
                 label={s["strings.accounts.remove"]}
                 confirm={fill(s["strings.accounts.remove_confirm"], { address: a.address })}

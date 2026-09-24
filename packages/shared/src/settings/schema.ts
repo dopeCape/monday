@@ -5098,6 +5098,11 @@ export const settingsSchema = {
   ),
   "strings.accounts.empty": str("accounts", "No accounts line", "No accounts yet."),
   "strings.accounts.add": str("accounts", "Add account button", "Add account"),
+  "strings.accounts.reconnect": str(
+    "accounts",
+    "Accounts: sign in again to an Account the provider stopped accepting",
+    "Reconnect",
+  ),
   "strings.accounts.remove": str("accounts", "Remove account button", "Remove"),
   "strings.accounts.remove_confirm": str(
     "accounts",

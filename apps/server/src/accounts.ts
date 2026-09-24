@@ -4,7 +4,7 @@
 // the token paste and the IMAP form all end here.
 
 import type { Account, AccountCapabilities, Provider as ProviderKind } from "@monday/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "./db/client.ts";
 import { accounts, syncState, workspaces } from "./db/schema.ts";
 import type { Mailstore } from "./mailstore/index.ts";
@@ -96,6 +96,28 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       const session = await providers(input.provider).connect(input.credentials);
       const caps = session.capabilities();
       await session.close();
+      // Signing in again to an address monday already has reconnects it: the
+      // new sign-in replaces the one the Provider stopped accepting, the error
+      // clears, and its Jobs are re-armed. Never a second Workspace for it.
+      const address = input.credentials.address.toLowerCase();
+      const existing = await db.query.accounts.findFirst({
+        where: and(eq(accounts.provider, input.provider), eq(accounts.address, address)),
+      });
+      if (existing) {
+        const workspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.accountId, existing.id),
+        });
+        if (workspace) {
+          await credentials.store(workspace.id, existing.id, { ...input.credentials, address });
+          await db
+            .update(syncState)
+            .set({ lastError: null })
+            .where(eq(syncState.workspaceId, workspace.id));
+          await options.onAdded?.(existing.id, input.provider);
+          const reconnected = await view(existing.id);
+          if (reconnected) return reconnected;
+        }
+      }
       const account: Account = {
         id: crypto.randomUUID(),
         provider: input.provider,

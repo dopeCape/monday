@@ -12,7 +12,12 @@ import { type AppEnv, createApp } from "../../src/app.ts";
 import { createAuth } from "../../src/auth/index.ts";
 import { randomKey } from "../../src/crypto/aead.ts";
 import { createKeys } from "../../src/crypto/keys.ts";
-import { jobs as jobsTable } from "../../src/db/schema.ts";
+import {
+  accounts as accountsTable,
+  jobs as jobsTable,
+  syncState as syncStateTable,
+  workspaces as workspacesTable,
+} from "../../src/db/schema.ts";
 import { createJobs, type Jobs } from "../../src/jobs/index.ts";
 import { createMailstore } from "../../src/mailstore/index.ts";
 import { type CredentialStore, createCredentialStore } from "../../src/providers/credentials.ts";
@@ -556,6 +561,35 @@ describe("push registrations, webhooks and the OAuth routes", () => {
     expect(after.auth.kind === "oauth" && after.auth.accessToken).toBe(gmail.accessToken);
     expect(gmail.accessToken).not.toBe(before);
     expect(refreshedAuths).toBeGreaterThanOrEqual(1);
+  });
+
+  test("signing in again to an address already here reconnects it: same Account, new sign-in, error cleared", async () => {
+    const before = await db.handle.db.select().from(accountsTable);
+    const account = before.find((r) => r.id === gmailAccountId);
+    if (!account) throw new Error("no gmail account");
+    const workspace = await db.handle.db.query.workspaces.findFirst({
+      where: eq(workspacesTable.accountId, gmailAccountId),
+    });
+    if (!workspace) throw new Error("no workspace");
+    await db.handle.db
+      .update(syncStateTable)
+      .set({ lastError: "token endpoint: invalid_grant" })
+      .where(eq(syncStateTable.workspaceId, workspace.id));
+    const stored = await credentials.load(gmailAccountId);
+    if (stored.auth.kind !== "oauth") throw new Error("not oauth");
+    const again = await accounts.add({
+      provider: "gmail",
+      credentials: {
+        ...stored,
+        address: stored.address.toUpperCase(),
+        auth: { ...stored.auth, refreshToken: "signed-in-again" },
+      },
+    });
+    expect(again.id).toBe(gmailAccountId);
+    expect(again.lastError).toBeNull();
+    expect(await db.handle.db.select().from(accountsTable)).toHaveLength(before.length);
+    const after = await credentials.load(gmailAccountId);
+    expect(after.auth.kind === "oauth" && after.auth.refreshToken).toBe("signed-in-again");
   });
 
   test("removing an Account clears its credentials and cancels its Jobs", async () => {

@@ -440,8 +440,16 @@ export class GmailSession implements Session {
   ): AsyncIterable<SyncEvent> {
     const limit = Math.min(MAX_PAGE, options.limit ?? this.page);
     const stored = decodeState(state);
-    if (!stored || stored.pageToken !== undefined) {
-      yield* this.fullSync(mailboxId, limit, stored);
+    if (stored && stored.pageToken !== undefined) {
+      // A long first pass pages back through older mail for hours. What
+      // arrived or changed since the last pass comes first, from the history
+      // the pass started at, so new mail never waits for the backfill.
+      const historyId = yield* this.catchUp(mailboxId, stored, limit);
+      yield* this.fullSync(mailboxId, limit, { ...stored, historyId });
+      return;
+    }
+    if (!stored) {
+      yield* this.fullSync(mailboxId, limit, null);
       return;
     }
     try {
@@ -488,6 +496,43 @@ export class GmailSession implements Session {
       ...(list.nextPageToken ? { pageToken: list.nextPageToken } : {}),
     };
     yield { type: "state", state: JSON.stringify(next), complete: !list.nextPageToken };
+  }
+
+  /**
+   * The changes since `stored.historyId`, without a state event, returning
+   * the history id to resume from. When Gmail no longer holds that history
+   * (about a week), the newest page of the mailbox stands in for it.
+   */
+  private async *catchUp(
+    mailboxId: string,
+    stored: GmailState,
+    limit: number,
+  ): AsyncGenerator<SyncEvent, string> {
+    try {
+      let historyId = stored.historyId;
+      for await (const event of this.incrementalSync(mailboxId, stored)) {
+        if (event.type === "state") {
+          historyId = (decodeState(event.state) ?? stored).historyId;
+          continue;
+        }
+        yield event;
+      }
+      return historyId;
+    } catch (error) {
+      if (!(error instanceof GmailApiError && error.status === 404)) throw error;
+      const historyId = await this.currentHistoryId();
+      const list = await this.client.request<{ messages?: { id: string }[] }>("messages", {
+        cost: "messages.list",
+        query: { labelIds: mailboxId, maxResults: String(limit), includeSpamTrash: "true" },
+      });
+      const ids = (list.messages ?? []).map((m) => m.id);
+      const found = await this.getSummaries(ids);
+      for (const id of ids) {
+        const message = found.get(id);
+        if (message) yield { type: "added", message: summaryOfMessage(message) };
+      }
+      return historyId;
+    }
   }
 
   private async *incrementalSync(mailboxId: string, stored: GmailState): AsyncIterable<SyncEvent> {

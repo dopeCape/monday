@@ -257,6 +257,57 @@ describe("Gmail adapter", () => {
     expect(session.pacing()).toBe(false);
   });
 
+  test("mail that arrives during a long first pass comes in on the next page, not after the backfill", async () => {
+    const server = createGmailServer(fixture);
+    const session = await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+    }).connect(credentialsFor(server));
+    const first = await collect(session.syncMailbox("INBOX", null, { limit: 3 }));
+    expect(stateOf(first).complete).toBe(false);
+    const template = fixture.messages[0];
+    if (!template) throw new Error("no fixture");
+    server.deliver({
+      ...template,
+      id: "arrived-1",
+      mailbox: "inbox",
+      messageId: "arrived-1@x.test",
+    });
+    // The next page of the backfill brings the new mail first.
+    const second = await collect(session.syncMailbox("INBOX", stateOf(first).state, { limit: 3 }));
+    const ids = addedOf(second).map((m) => m.id);
+    expect(ids[0]).toBe("arrived-1");
+    expect(stateOf(second).complete).toBe(false);
+    // The pass still reaches every message (a repeat across pages is only an update).
+    const rest = await syncAll(session, "INBOX", stateOf(second).state, 3);
+    const all = new Set(
+      [...addedOf(first), ...addedOf(second), ...addedOf(rest.events)].map((m) => m.id),
+    );
+    const inInbox = [...server.emails.values()].filter((e) => e.labelIds.includes("INBOX")).length;
+    expect(all.size).toBe(inInbox);
+  });
+
+  test("when Gmail has forgotten the history, the newest page stands in for it", async () => {
+    const server = createGmailServer(fixture);
+    const session = await createGmailProvider({
+      fetch: server.fetch,
+      tokens: staticTokenBroker(),
+    }).connect(credentialsFor(server));
+    const first = await collect(session.syncMailbox("INBOX", null, { limit: 3 }));
+    const template = fixture.messages[0];
+    if (!template) throw new Error("no fixture");
+    server.deliver({
+      ...template,
+      id: "arrived-2",
+      mailbox: "inbox",
+      messageId: "arrived-2@x.test",
+      date: "2030-01-01T00:00:00Z",
+    });
+    server.forgetHistory();
+    const second = await collect(session.syncMailbox("INBOX", stateOf(first).state, { limit: 3 }));
+    expect(addedOf(second).map((m) => m.id)).toContain("arrived-2");
+  });
+
   test("every Session of one user spends one quota; another user has their own", async () => {
     const server = createGmailServer(fixture);
     const clock = virtualClock();
