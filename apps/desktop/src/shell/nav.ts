@@ -16,32 +16,46 @@ import type { IconComponent, NavItem, NavLabels, NavWorkspace, RailItem } from "
 import {
   AirplaneIcon,
   ArchiveIcon,
+  BellIcon,
+  BookOpenIcon,
   BriefcaseIcon,
   CalendarBlankIcon,
   CalendarIcon,
+  ChartLineIcon,
+  ChatCircleIcon,
   CheckCircleIcon,
   ClockIcon,
+  CodeIcon,
+  CurrencyDollarIcon,
   FlowArrowIcon,
   FolderSimpleIcon,
   GearSixIcon,
   GitBranchIcon,
   GithubLogoIcon,
+  GraduationCapIcon,
   HandshakeIcon,
   HeartIcon,
   HouseIcon,
   LifebuoyIcon,
+  MegaphoneIcon,
   MicrophoneIcon,
   NewspaperIcon,
   NotePencilIcon,
   PaperPlaneTiltIcon,
   ReceiptIcon,
+  RocketIcon,
   ScalesIcon,
+  ShieldCheckIcon,
+  ShoppingBagIcon,
   StackIcon,
   StarIcon,
   TagIcon,
   TrayIcon,
+  TruckIcon,
   UserPlusIcon,
+  UsersIcon,
   UsersThreeIcon,
+  WarningIcon,
 } from "@phosphor-icons/react";
 
 export type NavStringKey = Extract<keyof Settings, `strings.nav.${string}`>;
@@ -69,6 +83,21 @@ export const GROUP_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
   heart: HeartIcon,
   tag: TagIcon,
   folder: FolderSimpleIcon,
+  "git-branch": GitBranchIcon,
+  code: CodeIcon,
+  bell: BellIcon,
+  warning: WarningIcon,
+  users: UsersIcon,
+  "book-open": BookOpenIcon,
+  "shopping-bag": ShoppingBagIcon,
+  shield: ShieldCheckIcon,
+  megaphone: MegaphoneIcon,
+  "chat-circle": ChatCircleIcon,
+  rocket: RocketIcon,
+  "currency-dollar": CurrencyDollarIcon,
+  "graduation-cap": GraduationCapIcon,
+  "chart-line": ChartLineIcon,
+  truck: TruckIcon,
 };
 
 /**
@@ -78,14 +107,18 @@ export const GROUP_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
  */
 export function groupIconFor(
   icons: Readonly<Record<string, string>>,
+  /** routing.group_icon_fallback: the icon for a Group no word matches. */
+  fallbackIcon = "folder",
 ): (group: Group) => IconComponent | undefined {
   const entries = Object.entries(icons).map(([word, icon]) => [word.toLowerCase(), icon] as const);
+  const fallback = GROUP_ICON_CATALOG[fallbackIcon] ?? FolderSimpleIcon;
   return (group) => {
     const id = group.id.toLowerCase();
     const name = group.name.toLowerCase();
     const exact = entries.find(([word]) => word === id || word === name);
     const partial = exact ?? entries.find(([word]) => name.includes(word));
-    return partial ? GROUP_ICON_CATALOG[partial[1]] : undefined;
+    // Every Group carries an icon: a word match, else the fallback.
+    return (partial ? GROUP_ICON_CATALOG[partial[1]] : undefined) ?? fallback;
   };
 }
 

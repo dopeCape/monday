@@ -241,9 +241,20 @@ describe("Drafts", () => {
     expect(full?.textContent).toContain("Re: Term sheet redline, v3");
     expect(full?.querySelector(".when")?.textContent).toBe("09:58");
 
+    // The Draft opens in the compose window right here, over the Drafts page.
     await click(q('.draft-row[data-draft="d1"] .draft-open'));
-    expect(listTitle()).toBe("Inbox");
+    expect(document.title).toBe("Drafts · monday");
     expect(q(".compose")).not.toBeNull();
+  });
+
+  test("New message on another screen opens the compose window there, without going to the Inbox", async () => {
+    await mount({ calendar: true });
+    await click(navItem("Calendar"));
+    expect(document.title).toBe("Calendar · monday");
+    await click(navItem("New message"));
+    expect(document.title).toBe("Calendar · monday");
+    expect(q(".compose")).not.toBeNull();
+    expect(q(".col.list")).toBeNull();
   });
 
   test("a row's delete removes the Draft with an undo toast, and Undo saves it back", async () => {

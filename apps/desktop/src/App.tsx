@@ -49,15 +49,19 @@ import { useAgentSession } from "./agent/useAgentSession.ts";
 import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
 import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
+import { chordLabel } from "./keyboard/keymaps.ts";
+import { useActiveKeymap } from "./keyboard/useKeymap.ts";
 import type { AccountView } from "./platform/api.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "./platform/providerKeys.ts";
 import { platform } from "./platform/tauri.ts";
 import { Calendar } from "./screens/Calendar.tsx";
 import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { dayKey } from "./screens/calendar/dates.ts";
+import { ComposeLayer } from "./screens/compose/ComposeLayer.tsx";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
+import { useCompose } from "./screens/compose/useCompose.ts";
 import { Drafts, openDrafts } from "./screens/Drafts.tsx";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
@@ -186,6 +190,10 @@ export function App({
   const shell = useShell();
   const ws = useWorkspace();
   const now = nowProp ?? new Date();
+  // Compose belongs to the window, not the Inbox: its windows open over any screen.
+  const composeNow = useCallback(() => nowProp ?? new Date(), [nowProp]);
+  const compose = useCompose({ composer, settings: shell.settings, now: composeNow });
+  const composeKeymap = useActiveKeymap();
   // Just mail (CONTEXT.md "AI level"): no agent column, no bar, no Session.
   const aiOff = shell.settings["ai.level"] === "off";
   // Desktop notifications before an Event starts (Settings: notifications.*).
@@ -205,7 +213,6 @@ export function App({
   const [active, setActive] = useState(
     () => new URLSearchParams(location.search).get("screen") ?? "inbox",
   );
-  const [composeRequest, setComposeRequest] = useState(0);
   /** Bumped by Search in the nav, the rail or the palette: the stream opens its inline search. */
   const [searchRequest, setSearchRequest] = useState(0);
   /** A Thread another screen asked to open; the inbox reads it on mount. */
@@ -216,8 +223,6 @@ export function App({
     n: number;
     view?: "day" | "week" | "month" | "agenda";
   } | null>(null);
-  /** A Draft the Drafts folder asked to open; the inbox opens the composer on it on mount. */
-  const [composeDraft, setComposeDraft] = useState<string | null>(null);
   /** The workspace switcher under the workspace button. */
   // `?overlay=ws` opens it on the dev server, as the mock's state does.
   const [switcherOpen, setSwitcherOpen] = useState(
@@ -494,7 +499,11 @@ export function App({
     snoozedOf,
   ).length;
   const groupIcons = shell.settings["routing.group_icons"];
-  const groupIcon = useMemo(() => groupIconFor(groupIcons), [groupIcons]);
+  const groupIconFallback = shell.settings["routing.group_icon_fallback"];
+  const groupIcon = useMemo(
+    () => groupIconFor(groupIcons, groupIconFallback),
+    [groupIcons, groupIconFallback],
+  );
   const nav = useMemo(
     () =>
       navModel({
@@ -542,10 +551,8 @@ export function App({
         : [],
     [mentionsOn, mentionLimit, nav.sections, inboxThreads, navGroups, ws.address],
   );
-  const onCompose = () => {
-    setActive("inbox");
-    setComposeRequest((n) => n + 1);
-  };
+  // New message opens the compose window over the screen that is open.
+  const onCompose = () => compose.openNew();
 
   /** The stream is the Inbox and its lenses; everything else is a page with no stream under it. */
   const onStream = (key: string) =>
@@ -695,11 +702,6 @@ export function App({
     setBottomOpen(false);
     setSwitcherOpen(false);
   }, [active]);
-
-  // The composer opened on a Draft once; a later visit to the Inbox opens nothing.
-  useEffect(() => {
-    if (composeDraft !== null && active === "inbox") setComposeDraft(null);
-  }, [composeDraft, active]);
 
   /* ------------------------------ The workspace switcher ------------------------------ */
 
@@ -981,10 +983,7 @@ export function App({
         key="screen"
         composer={composer}
         now={now}
-        onOpen={(draftId) => {
-          setComposeDraft(draftId);
-          setActive("inbox");
-        }}
+        onOpen={(draftId) => void compose.openDraft(draftId, null)}
       />
     ) : (
       <Inbox
@@ -993,11 +992,10 @@ export function App({
         key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}`}
         inbox={inbox}
         composer={composer}
+        compose={compose}
         online={online}
         syncing={syncing}
-        composeRequest={composeRequest}
         searchRequest={searchRequest}
-        initialCompose={composeDraft ?? undefined}
         search={search}
         workspaceId={ws.id}
         initialOpen={openThread ?? undefined}
@@ -1052,6 +1050,17 @@ export function App({
       >
         {parts}
         {reauth}
+        <ComposeLayer
+          compose={compose}
+          composer={composer}
+          now={composeNow}
+          toastMs={shell.settings["inbox.undo_toast_ms"]}
+          undoKey={chordLabel(
+            composeKeymap.undo,
+            typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+          )}
+          undoLabel={shell.settings["strings.inbox.undo"]}
+        />
       </div>
     </ComposerMentionsContext.Provider>
   );

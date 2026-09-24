@@ -58,7 +58,7 @@ import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
 import { type Composer, fixtureComposer } from "./compose/composer.ts";
 import { ReplyCompose } from "./compose/ReplyCompose.tsx";
 import { UndoBar } from "./compose/UndoBar.tsx";
-import { useCompose } from "./compose/useCompose.ts";
+import { type ComposeController, useCompose } from "./compose/useCompose.ts";
 import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/actions.ts";
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
@@ -111,6 +111,11 @@ export interface SyncProgress {
 }
 
 export interface InboxProps {
+  /**
+   * Compose, owned by the App so its windows open over any screen. Absent (a
+   * test, the dev server) the Inbox keeps its own and renders its windows.
+   */
+  compose?: ComposeController | undefined;
   /** The data seam. Defaults to the in-memory fixtures. */
   inbox?: InboxData | undefined;
   /** The compose seam. Defaults to an in-memory one. */
@@ -305,7 +310,30 @@ function isMac(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
 
-export function Inbox({
+export function Inbox(props: InboxProps) {
+  return props.compose ? (
+    <InboxBody {...props} compose={props.compose} ownsCompose={false} />
+  ) : (
+    <InboxOwnCompose {...props} />
+  );
+}
+
+/** An Inbox without the App's compose: it keeps its own and draws its windows. */
+function InboxOwnCompose(props: InboxProps) {
+  const { settings } = useShell();
+  const nowProp = props.now;
+  const nowFn = useCallback(() => nowProp ?? new Date(), [nowProp]);
+  const compose = useCompose({
+    composer: props.composer ?? defaultComposer,
+    settings,
+    now: nowFn,
+  });
+  return <InboxBody {...props} compose={compose} ownsCompose />;
+}
+
+function InboxBody({
+  compose,
+  ownsCompose,
   inbox = defaultInbox,
   composer = defaultComposer,
   syncing = null,
@@ -329,7 +357,7 @@ export function Inbox({
   section,
   folder,
   judge,
-}: InboxProps) {
+}: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
   const ws = useWorkspace();
   const workspaceId = workspaceIdProp ?? ws.id;
@@ -661,7 +689,6 @@ export function Inbox({
   // Compose runs on the real clock unless a test pins one: a send counts down
   // from the Server's run time, never from the fixtures' day.
   const nowFn = useCallback(() => nowProp ?? new Date(), [nowProp]);
-  const compose = useCompose({ composer, settings, now: nowFn });
   const cs = compose.strings;
   const overlayExit = useExitValue(compose.overlay);
   const openNew = compose.openNew;
@@ -1727,13 +1754,31 @@ export function Inbox({
                 <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
               ) : null}
               {items.length === 0 && !syncing ? (
-                <div className="empty-line">
-                  {searching
-                    ? t("strings.search.empty")
-                    : filter && rows.length > 0
-                      ? t("strings.inbox.filter.empty")
-                      : t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
-                </div>
+                lens && !searching && !(filter && rows.length > 0) ? (
+                  // A Group routes new mail as it arrives; what was already here moves
+                  // only when it is sorted, which the Agent does with a preview first.
+                  <div className="empty-line group-empty">
+                    <span>{fill(t("strings.inbox.group_empty"), { group: lens.name })}</span>
+                    {!aiOff ? (
+                      <Btn
+                        sm
+                        onClick={() =>
+                          askAgent(fill(t("strings.inbox.group_sort_prompt"), { group: lens.name }))
+                        }
+                      >
+                        {fill(t("strings.inbox.group_sort"), { group: lens.name })}
+                      </Btn>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="empty-line">
+                    {searching
+                      ? t("strings.search.empty")
+                      : filter && rows.length > 0
+                        ? t("strings.inbox.filter.empty")
+                        : t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
+                  </div>
+                )
               ) : null}
             </>
           }
@@ -1903,7 +1948,7 @@ export function Inbox({
         />
       ) : null}
 
-      {compose.pending ? (
+      {ownsCompose && compose.pending ? (
         <UndoBar
           key={compose.pending.sendId}
           runAt={compose.pending.runAt}
@@ -1915,7 +1960,7 @@ export function Inbox({
           onUndo={() => void compose.undo(openThreadId)}
           onElapsed={compose.elapsed}
         />
-      ) : compose.notice ? (
+      ) : ownsCompose && compose.notice ? (
         <Toast
           key={`n${compose.notice.id}`}
           text={compose.notice.text}
@@ -1936,7 +1981,7 @@ export function Inbox({
         />
       ) : null}
 
-      {overlayExit.value ? (
+      {ownsCompose && overlayExit.value ? (
         <ComposeOverlay
           key={overlayExit.value.draftId}
           composer={composer}

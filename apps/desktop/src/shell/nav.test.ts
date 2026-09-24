@@ -84,17 +84,19 @@ describe("unreadCounts", () => {
 });
 
 describe("groupIconFor", () => {
-  test("matches the Setting's words against the id and the name, else nothing", () => {
+  test("matches the Setting's words against the id and the name, else the fallback icon", () => {
     const icon = groupIconFor(defaultSettings()["routing.group_icons"]);
     expect(icon(group("hiring", "Hiring"))).toBe(UsersThreeIcon);
     expect(icon(group("g-42", "Q3 invoices"))).toBe(ReceiptIcon);
-    expect(icon(group("ops", "Operations"))).toBeUndefined();
+    // Every Group carries an icon: one no word matches shows the fallback.
+    expect(icon(group("ops", "Operations"))).toBe(FolderSimpleIcon);
     // Every shipped icon name is in the catalog.
     for (const name of Object.values(defaultSettings()["routing.group_icons"])) {
       expect(GROUP_ICON_CATALOG[name], name).toBeDefined();
     }
     // An icon name the catalog lacks reads as none rather than throwing.
-    expect(groupIconFor({ ops: "not-an-icon" })(group("ops", "Operations"))).toBeUndefined();
+    // An icon name the catalog does not know falls back too.
+    expect(groupIconFor({ ops: "not-an-icon" })(group("ops", "Operations"))).toBe(FolderSimpleIcon);
   });
 });
 
@@ -158,9 +160,9 @@ describe("navModel", () => {
     ]);
     expect(nav.rail[0]?.title).toBe("Posteingang");
     expect(nav.rail[6]?.icon).toBe(UsersThreeIcon);
-    // A Group with no icon shows a folder in the rail, and none in the sidebar.
+    // A Group no word matches shows the fallback folder, in the rail and the sidebar alike.
     expect(nav.rail[8]?.icon).toBe(FolderSimpleIcon);
-    expect(nav.groupIcon(groups[3] as Group)).toBeUndefined();
+    expect(nav.groupIcon(groups[3] as Group)).toBe(FolderSimpleIcon);
     expect(nav.railTail.map((r) => r.key)).toEqual([
       "calendar",
       "workflows",
