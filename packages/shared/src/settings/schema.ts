@@ -6821,6 +6821,16 @@ export const settingsSchema = {
   ),
   "strings.crash.retry": str("appearance", "Try drawing the failed part again", "Try again"),
   "strings.crash.reload": str("appearance", "Reload the whole window", "Reload"),
+  "strings.store.opening": str(
+    "accounts",
+    "While an account's saved mail opens on this device",
+    "Opening {address}",
+  ),
+  "strings.store.failed": str(
+    "accounts",
+    "An account's saved mail on this device could not open",
+    "monday could not open the mail saved on this device for {address}.",
+  ),
   "strings.first_sync.settings": str("accounts", "First sync: open settings", "Open settings"),
   "strings.first_sync.back": str("accounts", "First sync: back from settings", "Back to sync"),
   "strings.first_sync.provider.gmail": str("accounts", "Provider name: Gmail", "Gmail"),

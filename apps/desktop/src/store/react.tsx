@@ -26,20 +26,35 @@ export interface StoreProviderProps {
   children: ReactNode;
   /** Rendered until the Store is open; nothing by default. */
   fallback?: ReactNode;
+  /**
+   * Rendered when the Store could not open, with its reason and a retry. The
+   * default rethrows during render, so the nearest error boundary shows it:
+   * never an empty window that waits forever.
+   */
+  failed?: ((message: string, retry: () => void) => ReactNode) | undefined;
 }
 
-export function StoreProvider({ workspaceId, children, fallback = null }: StoreProviderProps) {
+export function StoreProvider({
+  workspaceId,
+  children,
+  fallback = null,
+  failed,
+}: StoreProviderProps) {
   const shell = useShell();
   const [store, setStore] = useState<Store | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [content, setContent] = useState<ContentTransport | null>(null);
   const caps = useRef<Capabilities | null>(null);
   // The transport reads its Settings live, so a change applies on the next connection.
   const settingsRef = useRef(shell.settings);
   settingsRef.current = shell.settings;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is Try again
   useEffect(() => {
     let disposed = false;
     let opened: Store | null = null;
+    setError(null);
     void (async () => {
       const p = await platform();
       if (p.isTauri) {
@@ -75,12 +90,17 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
         return;
       }
       setStore(opened);
-    })();
+    })().catch((e: unknown) => {
+      // A Cache that cannot open (a failed migration, a locked file) says so.
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`[store] opening Workspace ${workspaceId} failed:`, e);
+      if (!disposed) setError(message);
+    });
     return () => {
       disposed = true;
       void opened?.close();
     };
-  }, [workspaceId, shell.api]);
+  }, [workspaceId, shell.api, attempt]);
 
   // The wake transport follows the Server the Shell picked (the Sidecar or the
   // Cloud): its capabilities choose WebSocket, SSE or polling, and a switch of
@@ -126,6 +146,11 @@ export function StoreProvider({ workspaceId, children, fallback = null }: StoreP
     };
   }, [store, shell.server, shell.api, probeSeconds]);
 
+  if (error !== null) {
+    const retry = () => setAttempt((n) => n + 1);
+    if (failed) return <>{failed(error, retry)}</>;
+    throw new Error(error);
+  }
   if (!store) return <>{fallback}</>;
   return (
     <StoreContext.Provider value={store}>

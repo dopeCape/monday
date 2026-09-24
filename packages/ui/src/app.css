@@ -8815,3 +8815,23 @@ button.prov {
   background: var(--hover);
   color: var(--fg);
 }
+
+/* An account's saved mail opening on this device, or failing to (store/react.tsx). */
+.store-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 100vh;
+  padding: 32px;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+  background: var(--bg);
+  animation: fade-in var(--t-slow) var(--ease);
+}
+.store-state.failed b {
+  color: var(--fg);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}

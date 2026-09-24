@@ -1,5 +1,6 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
+import { Btn } from "@monday/ui";
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
@@ -337,7 +338,29 @@ function WorkspaceGate() {
   }
   const app = (
     <WorkspaceProvider key={current.id} value={current}>
-      <StoreProvider workspaceId={current.id}>
+      <StoreProvider
+        workspaceId={current.id}
+        fallback={
+          <div className="store-state" role="status">
+            <span className="live" />
+            {shell.settings["strings.store.opening"].replace("{address}", current.address)}
+          </div>
+        }
+        failed={(message, retry) => (
+          <div className="store-state failed" role="alert">
+            <b>{shell.settings["strings.store.failed"].replace("{address}", current.address)}</b>
+            <span className="crash-detail">{message}</span>
+            <div className="crash-actions">
+              <Btn sm onClick={retry}>
+                {shell.settings["strings.crash.retry"]}
+              </Btn>
+              <Btn sm primary onClick={() => window.location.reload()}>
+                {shell.settings["strings.crash.reload"]}
+              </Btn>
+            </div>
+          </div>
+        )}
+      >
         <Root />
       </StoreProvider>
     </WorkspaceProvider>

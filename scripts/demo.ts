@@ -7,6 +7,7 @@
 //   bun scripts/demo.ts            fresh start: onboarding from the beginning
 //   bun scripts/demo.ts --keep     keep the last demo's data
 //   DEMO_LATENCY_MS=1500 bun ...   slower fake mailbox
+//   DEMO_PORT=8801 DEMO_DIR=/tmp/x  a second demo beside the first
 //
 // It prints the URL to open against the Vite dev server (bun run dev in
 // apps/desktop, port 1420). Ctrl-C stops the Server and its Postgres.
@@ -16,7 +17,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const root = new URL("../", import.meta.url).pathname;
-const dataDir = join(root, ".demo");
+const dataDir = process.env.DEMO_DIR ?? join(root, ".demo");
 const port = Number(process.env.DEMO_PORT ?? 8799);
 const keep = process.argv.includes("--keep");
 
