@@ -35,14 +35,31 @@ export function bindParams(params: SqlParam[] | undefined): BoundParam[] {
   });
 }
 
+/**
+ * `db_query` answers with raw JSON bytes, `{"c": columns, "r": rows as arrays}`,
+ * so a large read names each column once instead of once per row; this turns
+ * it back into objects keyed by column name.
+ */
+export function unpackRows(body: ArrayBuffer | Uint8Array): Row[] {
+  const packed = JSON.parse(new TextDecoder().decode(body)) as { c: string[]; r: unknown[][] };
+  const columns = packed.c;
+  return packed.r.map((values) => {
+    const row: Row = {};
+    for (let i = 0; i < columns.length; i++) row[columns[i] as string] = values[i] ?? null;
+    return row;
+  });
+}
+
 /** The Rust command layer: one connection per Workspace held by Tauri. */
 export async function tauriDriver(workspace: string): Promise<SqlDriver> {
   const { invoke } = await import("@tauri-apps/api/core");
   return {
     exec: (sql, params) =>
       invoke<number>("db_exec", { workspace, sql, params: bindParams(params) }),
-    query: (sql, params) =>
-      invoke<Row[]>("db_query", { workspace, sql, params: bindParams(params) }),
+    query: async (sql, params) =>
+      unpackRows(
+        await invoke<ArrayBuffer>("db_query", { workspace, sql, params: bindParams(params) }),
+      ),
     batch: (statements) =>
       invoke("db_batch", {
         workspace,

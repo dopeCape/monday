@@ -51,7 +51,7 @@ import { createUpgrade } from "../src/upgrade/index.ts";
 import { fileAttachStore, readAttachedUrl } from "./attach.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { createCheckpointer } from "./checkpointer.ts";
-import { startEmbeddedPostgres } from "./embedded-postgres.ts";
+import { rememberBuffersMb, startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
 import { findPgDump, pgDump } from "./pg-dump.ts";
 import { migrationsFolder } from "./resources.ts";
@@ -119,6 +119,13 @@ async function main() {
       process.exit(3);
     }
     throw error;
+  }
+  if (embedded) {
+    // The built-in database's memory is a Setting that lives in it: kept for the next start.
+    const buffersMb = await readGlobalSetting(handle.db, "server.postgres_buffers_mb");
+    if (await rememberBuffersMb(dataDir, buffersMb)) {
+      log(`database memory set to ${buffersMb} MB; takes effect at the next start`);
+    }
   }
   const services = await createServices({
     db: handle.db,

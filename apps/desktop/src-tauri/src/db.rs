@@ -128,6 +128,60 @@ pub fn query(conn: &Connection, sql: &str, params: &[Value]) -> Result<Vec<Row>,
     Ok(out)
 }
 
+/// Runs one statement and returns its rows packed as JSON bytes:
+/// `{"c":[column names],"r":[[values], ...]}`. The names go once, not once per
+/// row, and no intermediate map is built, so a large read costs the webview
+/// and this process a fraction of `query`'s memory. The webview's driver
+/// turns it back into objects keyed by column name.
+pub fn query_packed(conn: &Connection, sql: &str, params: &[Value]) -> Result<Vec<u8>, String> {
+    let bound: Vec<SqlValue> = params.iter().map(to_sql).collect();
+    let mut stmt = conn.prepare_cached(sql).map_err(|e| e.to_string())?;
+    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let mut out = Vec::with_capacity(4096);
+    out.extend_from_slice(b"{\"c\":");
+    serde_json::to_writer(&mut out, &names).map_err(|e| e.to_string())?;
+    out.extend_from_slice(b",\"r\":[");
+    let mut rows = stmt.query(params_from_iter(bound.iter())).map_err(|e| e.to_string())?;
+    let mut first = true;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        if !first {
+            out.push(b',');
+        }
+        first = false;
+        out.push(b'[');
+        for i in 0..names.len() {
+            if i > 0 {
+                out.push(b',');
+            }
+            match row.get_ref(i).map_err(|e| e.to_string())? {
+                ValueRef::Null => out.extend_from_slice(b"null"),
+                ValueRef::Integer(n) => out.extend_from_slice(n.to_string().as_bytes()),
+                ValueRef::Text(t) => {
+                    serde_json::to_writer(&mut out, &String::from_utf8_lossy(t)).map_err(|e| e.to_string())?
+                }
+                other => serde_json::to_writer(&mut out, &from_sql(other)).map_err(|e| e.to_string())?,
+            }
+        }
+        out.push(b']');
+    }
+    out.extend_from_slice(b"]}");
+    Ok(out)
+}
+
+/// A response this big leaves the allocator holding the freed pages; the next
+/// call hands them back to the OS (glibc keeps them otherwise).
+const TRIM_AFTER_BYTES: usize = 1 << 20;
+static TRIM_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn trim_if_pending() {
+    if TRIM_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    }
+}
+
 /// Runs every statement in one transaction; any failure rolls all of them back.
 pub fn batch(conn: &mut Connection, statements: &[Statement]) -> Result<(), String> {
     let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -219,8 +273,13 @@ pub async fn db_query(
     workspace: String,
     sql: String,
     params: Vec<Value>,
-) -> Result<Vec<Row>, String> {
-    with_conn(&app, &state, &workspace, |c| query(c, &sql, &params))
+) -> Result<tauri::ipc::Response, String> {
+    trim_if_pending();
+    let bytes = with_conn(&app, &state, &workspace, |c| query_packed(c, &sql, &params))?;
+    if bytes.len() >= TRIM_AFTER_BYTES {
+        TRIM_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -274,6 +333,21 @@ mod tests {
         assert_eq!(row["meta"], json!("{\"a\":[1,2]}"));
         let none = query(&conn, "select * from t where name = ?", &[json!("nobody")]).unwrap();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn packed_rows_name_columns_once_and_keep_json_types() {
+        let conn = memory();
+        exec(&conn, "create table t (id integer primary key, name text, score real, gone text)", &[]).unwrap();
+        exec(&conn, "insert into t (name, score) values (?, ?)", &[json!("a\"b\u{e9}"), json!(1.5)]).unwrap();
+        exec(&conn, "insert into t (name, score) values (?, ?)", &[json!("c"), json!(2)]).unwrap();
+        let packed: Value =
+            serde_json::from_slice(&query_packed(&conn, "select * from t order by id", &[]).unwrap()).unwrap();
+        assert_eq!(packed["c"], json!(["id", "name", "score", "gone"]));
+        assert_eq!(packed["r"], json!([[1, "a\"b\u{e9}", 1.5, null], [2, "c", 2.0, null]]));
+        let empty: Value =
+            serde_json::from_slice(&query_packed(&conn, "select * from t where id = 9", &[]).unwrap()).unwrap();
+        assert_eq!(empty["r"], json!([]));
     }
 
     #[test]

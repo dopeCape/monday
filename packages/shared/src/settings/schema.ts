@@ -3858,6 +3858,16 @@ export const settingsSchema = {
     label: "Job lease",
     help: "Seconds a claimed Job step may run before its lease expires and another server may take it over. Cloud functions shorten it to what their platform allows.",
   }),
+  "server.postgres_buffers_mb": setting({
+    type: z.int().min(8).max(4096),
+    default: 32,
+    scope: "global",
+    section: "server",
+    group: "Storage",
+    tier: "advanced",
+    label: "Database memory",
+    help: "Megabytes the built-in database keeps in memory for recently read mail. Lower uses less memory; higher can make large searches faster. Takes effect the next time monday starts.",
+  }),
   "server.job_workers": setting({
     type: z.int().min(1).max(32),
     default: 6,

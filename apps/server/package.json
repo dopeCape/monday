@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
-    "compile": "bun build --compile entry/bun.ts --outfile dist/monday-server",
+    "compile": "bun build --compile --compile-exec-argv=--smol entry/bun.ts --outfile dist/monday-server",
     "check:vercel": "bun scripts/check-entry.ts vercel",
     "check:netlify": "bun scripts/check-entry.ts netlify netlify-tick"
   },

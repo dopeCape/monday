@@ -8,7 +8,9 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { settingsSchema } from "@monday/shared";
 import postgres from "postgres";
+
 import { type PgBinaries, postgresBinaries } from "./resources.ts";
 
 export interface EmbeddedOptions {
@@ -96,7 +98,7 @@ export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<E
       log(`initialising embedded postgres in ${dbDir}`);
       await initdb(bin, dbDir, user, password, log);
     }
-    child = await startPostgres(bin, dbDir, port, log);
+    child = await startPostgres(bin, dbDir, port, log, await readBuffersMb(options.dataDir));
   }
   const adminUrl = `postgres://${user}:${encodeURIComponent(password)}@127.0.0.1:${port}/postgres`;
   const admin = postgres(adminUrl, { max: 1, onnotice: () => {} });
@@ -174,11 +176,37 @@ async function initdb(
   void password;
 }
 
+const BUFFERS_FILE = "postgres.buffers";
+
+/**
+ * The shared buffer size this start uses: the server.postgres_buffers_mb
+ * Setting as the last run saw it (the Setting lives in this database, so it
+ * is read after the start and kept here for the next one), else its default.
+ */
+async function readBuffersMb(dataDir: string): Promise<number> {
+  try {
+    const n = Number((await readFile(join(dataDir, BUFFERS_FILE), "utf8")).trim());
+    if (Number.isInteger(n) && n >= 8) return n;
+  } catch {
+    // First start: the default.
+  }
+  return settingsSchema["server.postgres_buffers_mb"].default;
+}
+
+/** Keeps the Setting for the next start; true when it differs from what runs now. */
+export async function rememberBuffersMb(dataDir: string, mb: number): Promise<boolean> {
+  const before = await readBuffersMb(dataDir);
+  if (before === mb) return false;
+  await writeFile(join(dataDir, BUFFERS_FILE), `${mb}\n`);
+  return true;
+}
+
 async function startPostgres(
   bin: PgBinaries,
   dbDir: string,
   port: number,
   log: (m: string) => void,
+  buffersMb: number,
 ): Promise<ChildProcess> {
   const p = spawn(
     bin.postgres,
@@ -191,6 +219,8 @@ async function startPostgres(
       "listen_addresses=127.0.0.1",
       "-c",
       "log_min_messages=warning",
+      "-c",
+      `shared_buffers=${buffersMb}MB`,
     ],
     { env: libEnv(bin), stdio: ["ignore", "pipe", "pipe"] },
   );

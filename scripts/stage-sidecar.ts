@@ -46,7 +46,9 @@ const out = join(tauri, "binaries", `monday-server-${rustTriple}${exe}`);
 mkdirSync(join(tauri, "binaries"), { recursive: true });
 
 console.log(`compiling server for ${bunTarget}`);
-await $`bun build --compile --target=${bunTarget} ${join(root, "apps/server/entry/bun.ts")} --outfile ${out}`.cwd(root);
+// --smol: Bun collects garbage sooner and keeps a smaller heap; the Sidecar
+// runs all day beside the app, where memory matters more than peak speed.
+await $`bun build --compile --compile-exec-argv=--smol --target=${bunTarget} ${join(root, "apps/server/entry/bun.ts")} --outfile ${out}`.cwd(root);
 
 const pgSrc = join(root, "apps/server/node_modules/@embedded-postgres", pgPackage, "native");
 if (!existsSync(pgSrc)) throw new Error(`postgres binaries for ${pgPackage} not installed at ${pgSrc}`);
