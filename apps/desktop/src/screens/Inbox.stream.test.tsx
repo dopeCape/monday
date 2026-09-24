@@ -279,6 +279,34 @@ describe("a long stream renders only what is near the view", () => {
     expect(scroller()?.scrollTop ?? 0).toBeGreaterThan(44 * 1980);
   }, 120_000);
 
+  test("a list held in part asks for more when a scroll or J nears its end, not before", async () => {
+    restore = fakeLayout();
+    const asked: string[] = [];
+    const data: InboxData = { ...bigInbox(300), more: (list) => asked.push(list) };
+    await mount({ inbox: data }, { "inbox.memory_grow_rows": 20 });
+    const el = scroller();
+    if (!el) throw new Error("no scroller");
+    // Near the top: nothing asked.
+    el.scrollTop = 44 * 50;
+    await act(async () => {
+      el.dispatchEvent(new Event("scroll"));
+    });
+    expect(asked).toEqual([]);
+    // Within 20 rows of the end.
+    el.scrollTop = 44 * 270;
+    await act(async () => {
+      el.dispatchEvent(new Event("scroll"));
+    });
+    expect(asked).toContain("inbox");
+    asked.length = 0;
+    await act(async () => root?.unmount());
+    root = null;
+    await mount({ inbox: data, initialOpen: "t295" }, { "inbox.memory_grow_rows": 20 });
+    await press("Escape");
+    await press("j");
+    expect(asked).toEqual(["inbox"]);
+  });
+
   test("opening a Thread 500 rows down scrolls it into view", async () => {
     restore = fakeLayout();
     await mount({ inbox: bigInbox(), initialOpen: "t500" });

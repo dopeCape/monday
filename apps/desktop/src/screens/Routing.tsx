@@ -203,7 +203,11 @@ export function Routing({
   const { locked, levelName } = useLevelLock();
   const groups = useSyncExternalStore(routing.subscribe, routing.groups, routing.groups);
   const decisions = useSyncExternalStore(routing.subscribe, routing.decisions, routing.decisions);
+  // The newest Inbox Threads (a large Account's Inbox holds only these), for the recent list.
   const threads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
+  // The unread totals over the whole Cache, when the seam counts them.
+  const countsOf = useCallback(() => inbox.counts?.() ?? null, [inbox]);
+  const counts = useSyncExternalStore(inbox.subscribe, countsOf, countsOf);
 
   /** The Server's view: Examples, counts and Confidence. Null until it answers, or when it cannot. */
   const [views, setViews] = useState<Map<string, GroupView> | null>(null);
@@ -261,7 +265,9 @@ export function Routing({
     t.subgroup ? nameOfGroup(t.subgroup) : t.group ? nameOfGroup(t.group) : null;
 
   const unreadIn = (id: string) =>
-    threads.filter((t) => t.unread && (t.group === id || t.subgroup === id)).length;
+    counts
+      ? (counts.unread[id] ?? 0)
+      : threads.filter((t) => t.unread && (t.group === id || t.subgroup === id)).length;
   const confidenceOf = (id: string): number | null => views?.get(id)?.confidence ?? null;
 
   const recent = useMemo(

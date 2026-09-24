@@ -118,6 +118,10 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
     undoTokens.push(token);
   };
 
+  /** A Thread by id, read from the Cache when the Inbox does not hold it. */
+  const lookUp = async (id: string): Promise<Thread | undefined> =>
+    inbox.thread(id) ?? (inbox.resolve ? await inbox.resolve(id) : undefined);
+
   const host: ClientToolHost = {
     workspaceId,
     undoTokens,
@@ -132,6 +136,7 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
         });
         candidates = result.hits.map((h) => h.thread);
       } else {
+        // The Threads the Inbox holds: its newest, on a large Account (inbox.memory_window).
         candidates = [...inbox.threads()];
       }
       return candidates
@@ -145,14 +150,12 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
     },
 
     async threadsById(ids) {
-      return ids.flatMap((id) => {
-        const t = inbox.thread(id);
-        return t ? [threadSummary(t)] : [];
-      });
+      const found = await Promise.all(ids.map(lookUp));
+      return found.flatMap((t) => (t ? [threadSummary(t)] : []));
     },
 
     async readThread(threadId) {
-      const t = inbox.thread(threadId);
+      const t = await lookUp(threadId);
       if (!t) return null;
       await inbox.openThread(threadId);
       return {
@@ -199,7 +202,7 @@ export function createClientToolHost(options: ClientToolHostOptions): ClientTool
       >();
       let applied = 0;
       for (const intent of intents) {
-        if (!inbox.thread(intent.threadId)) continue;
+        if (!(await lookUp(intent.threadId))) continue;
         applied += 1;
         const key =
           intent.kind === "snooze"

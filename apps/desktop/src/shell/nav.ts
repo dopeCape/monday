@@ -129,6 +129,13 @@ export interface NavInput {
   status: "online" | "syncing" | "offline";
   /** Threads in the Inbox (not archived, not snoozed, not deleted), for the counts. */
   threads: readonly Thread[];
+  /**
+   * Unread counts over the whole Cache ("inbox", "starred", Group ids), when
+   * the Inbox holds only its newest Threads: these replace the counts over
+   * `threads`, except the Sections', which are decided on the client and so
+   * count within `threads`.
+   */
+  unread?: Readonly<Record<string, number>> | undefined;
   /** Groups and Sub-groups of the Workspace. */
   groups: readonly Group[];
   /** Icons for top-level Groups, when the caller has some; the rail falls back to a folder. */
@@ -236,6 +243,22 @@ export function navSections(
     });
 }
 
+/**
+ * The counts over the Threads held, or, when the whole Cache was counted,
+ * those instead for every key but the Sections' (which only the held Threads
+ * can say). A zero is left out, as unreadCounts leaves it.
+ */
+function heldOrWhole(
+  held: Record<string, number>,
+  whole: Readonly<Record<string, number>> | undefined,
+): Record<string, number> {
+  if (!whole) return held;
+  const out: Record<string, number> = {};
+  for (const [key, n] of Object.entries(held)) if (key.startsWith("section:")) out[key] = n;
+  for (const [key, n] of Object.entries(whole)) if (n > 0) out[key] = n;
+  return out;
+}
+
 /** The Drafts and Snoozed totals as nav counts; an empty folder shows no count, not zero. */
 function totals(folderCounts: NavInput["folderCounts"]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -296,10 +319,13 @@ export function navModel(input: NavInput): NavModel {
     ],
     sections,
     counts: {
-      ...unreadCounts(
-        input.threads,
-        input.groups,
-        sections.map((item) => item.key.slice("section:".length)),
+      ...heldOrWhole(
+        unreadCounts(
+          input.threads,
+          input.groups,
+          sections.map((item) => item.key.slice("section:".length)),
+        ),
+        input.unread,
       ),
       ...totals(input.folderCounts),
     },

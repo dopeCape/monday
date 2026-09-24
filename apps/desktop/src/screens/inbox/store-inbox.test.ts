@@ -45,7 +45,8 @@ describe("storeInbox", () => {
     const e5 = inbox.thread("e5");
     await store.intent({ kind: "star", threadId: "e1" });
     await settled(inbox, () => inbox.thread("e1")?.starred === true);
-    const listReads = sqls.filter((q) => q.includes("from threads t"));
+    // The Thread rows read, not the totals the nav counts.
+    const listReads = sqls.filter((q) => q.includes("from threads t") && !q.includes("count(*)"));
     // The unnamed write reads the whole list once; the star reads e1 alone.
     expect(listReads.some((q) => q.includes("where t.id in (?)"))).toBe(true);
     expect(listReads.filter((q) => !q.includes("where t.id in")).length).toBeLessThanOrEqual(1);

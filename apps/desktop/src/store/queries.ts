@@ -20,7 +20,7 @@ import type {
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
-import type { Row } from "./driver.ts";
+import type { Row, SqlParam } from "./driver.ts";
 
 const json = <T>(value: unknown, fallback: T): T => {
   if (typeof value !== "string") return fallback;
@@ -44,28 +44,118 @@ export const INBOX_THREADS_SQL = `
   order by t.last_activity desc, t.rid desc`;
 
 /**
- * Every Thread the Cache holds, trash included, newest first, with the
- * newest Message's sender for the Section rules ("lastFrom") and the
- * Thread's Judgments (slice 25) for the judged conditions and the chips.
+ * The columns a Thread list row carries: the Thread, its tag and label ids in
+ * the order they were applied, the newest Message's sender for the Section
+ * rules ("lastFrom") and the Thread's Judgments (slice 25) as `j_*` columns.
+ * Read over `threads t left join thread_judgments j`.
  */
-export const ALL_THREADS_SQL = `
-  select t.*,
+const THREAD_LIST_COLUMNS = `t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
     (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids,
     (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender,
     j.needs_reply as j_needs_reply, j.waiting_on_others as j_waiting_on_others, j.newsletter as j_newsletter,
     j.automated as j_automated, j.brief_worth as j_brief_worth, j.urgency as j_urgency,
-    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at
+    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at`;
+
+/**
+ * Every Thread the Cache holds, trash included, newest first, with the
+ * newest Message's sender for the Section rules ("lastFrom") and the
+ * Thread's Judgments (slice 25) for the judged conditions and the chips.
+ * The Inbox reads it in pages (threadPageSql) or by id, never whole.
+ */
+export const ALL_THREADS_SQL = `
+  select ${THREAD_LIST_COLUMNS}
   from threads t
   left join thread_judgments j on j.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
 
-/** ALL_THREADS_SQL for some Threads only: the rows a write named, re-read on their own. */
+/** ALL_THREADS_SQL for some Threads only: the rows a write named, or Threads asked for by id. */
 export function threadsByIdsSql(count: number): string {
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const marks = Array.from({ length: count }, () => "?").join(", ");
   return `${ALL_THREADS_SQL.slice(0, at)}where t.id in (${marks}) ${ALL_THREADS_SQL.slice(at)}`;
 }
+
+/** The Inbox: not archived, not in the trash, not snoozed (over `threads t`). */
+export const INBOX_WHERE = "t.archived = 0 and t.deleted = 0 and t.snoozed_until is null";
+
+/** The newest Message's sender address, as a correlated expression over `threads t`. */
+export const LAST_SENDER_SQL =
+  "(select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1)";
+
+/** One key of a Thread list's order: a column of `threads`, and its direction. */
+export interface ThreadListOrder {
+  column: "last_activity" | "rid" | "snoozed_until";
+  desc: boolean;
+}
+
+/** Newest activity first, the rowid breaking ties: the Inbox's order and every folder's but Snoozed. */
+export const NEWEST_FIRST: readonly ThreadListOrder[] = [
+  { column: "last_activity", desc: true },
+  { column: "rid", desc: true },
+];
+
+/** A Thread list as SQL: which rows (over `threads t`), with what params, in what order. */
+export interface ThreadListQuery {
+  where: string;
+  params: readonly SqlParam[];
+  order: readonly ThreadListOrder[];
+}
+
+/**
+ * One page of a Thread list: the `limit` rows after `after` (a row of the
+ * list, or null for the first page), in the list's order. The rows are
+ * chosen through the index first and only those are read whole, so the
+ * per-row subqueries run for the page alone, never for the whole Cache.
+ */
+export function threadPageSql(
+  list: ThreadListQuery,
+  after: Row | null,
+  limit: number,
+): { sql: string; params: SqlParam[] } {
+  const orderBy = list.order.map((o) => `t.${o.column} ${o.desc ? "desc" : "asc"}`).join(", ");
+  const keyParams: SqlParam[] = [];
+  let keyset = "";
+  if (after) {
+    // (a < ?) or (a = ? and ((b < ?) or (b = ? and c < ?))): built from the last key outwards,
+    // bound in reading order, every key but the last twice.
+    let expr = "";
+    for (let i = list.order.length - 1; i >= 0; i--) {
+      const o = list.order[i] as ThreadListOrder;
+      const cmp = `t.${o.column} ${o.desc ? "<" : ">"} ?`;
+      expr = expr ? `(${cmp} or (t.${o.column} = ? and ${expr}))` : cmp;
+    }
+    keyset = ` and ${expr}`;
+    list.order.forEach((o, i) => {
+      const value = (after[o.column] ?? null) as SqlParam;
+      keyParams.push(value);
+      if (i < list.order.length - 1) keyParams.push(value);
+    });
+  }
+  const sql = `
+  select ${THREAD_LIST_COLUMNS}
+  from threads t
+  left join thread_judgments j on j.thread_id = t.id
+  where t.rid in (select t.rid from threads t where (${list.where})${keyset} order by ${orderBy} limit ?)
+  order by ${orderBy}`;
+  return { sql, params: [...list.params, ...keyParams, limit] };
+}
+
+/**
+ * The Inbox's totals over the whole Cache, in one read: how many Threads are
+ * in the Inbox ('inbox'), how many are snoozed ('snoozed'), and the unread
+ * Inbox Threads per Group, Sub-group and star ('unread' rows).
+ */
+export const INBOX_COUNTS_SQL = `
+  select 'inbox' as k, null as group_id, null as subgroup_id, 0 as starred, count(*) as n
+    from threads t where ${INBOX_WHERE}
+  union all
+  select 'snoozed', null, null, 0, count(*)
+    from threads t where t.deleted = 0 and t.snoozed_until is not null
+  union all
+  select 'unread', t.group_id, t.subgroup_id, t.starred, count(*)
+    from threads t where t.unread = 1 and ${INBOX_WHERE}
+    group by t.group_id, t.subgroup_id, t.starred`;
 
 /** The Judgments joined onto a Thread row as `j_*` columns, or null when the Thread is not judged yet. */
 export function rowToJudgments(r: Row): ThreadJudgments | null {

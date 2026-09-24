@@ -44,6 +44,14 @@ export interface VirtualListProps<T extends VirtualItem> {
   scrollKey?: string | undefined;
   /** What changes every height at once (density, list layout): a change forgets the measurements. */
   layoutKey?: string | undefined;
+  /**
+   * Called when a scroll brings the rendered window within `nearEnd` items of
+   * the last one, so the caller can read more (a list held in part). Only a
+   * scroll calls it: a list too short to scroll never asks on its own.
+   */
+  onNearEnd?: (() => void) | undefined;
+  /** How many items before the end counts as near it (the inbox.memory_grow_rows Setting). */
+  nearEnd?: number | undefined;
   /** Content above the items, inside the scroller. */
   before?: ReactNode;
   className?: string | undefined;
@@ -76,6 +84,8 @@ export function VirtualList<T extends VirtualItem>({
   revealWithPrevious,
   scrollKey = "",
   layoutKey = "",
+  onNearEnd,
+  nearEnd = 0,
   before,
   className,
   role,
@@ -253,7 +263,14 @@ export function VirtualList<T extends VirtualItem>({
     return () => ro.disconnect();
   }, [sync]);
 
-  const onScroll = (_e: UIEvent<HTMLDivElement>) => sync();
+  const onScroll = (_e: UIEvent<HTMLDivElement>) => {
+    sync();
+    const el = scroller.current;
+    if (!onNearEnd || !el || n === 0) return;
+    const listTop = mark.current?.offsetTop ?? 0;
+    const w = windowOf(latest.current.offsets, el.scrollTop - listTop, el.clientHeight, 0);
+    if (w.end >= n - Math.max(0, nearEnd)) onNearEnd();
+  };
 
   return (
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: the caller gives the role (a listbox) with its label
