@@ -163,7 +163,10 @@ create table if not exists calendars (
   "primary" integer not null default 0,
   writable integer not null default 1,
   visible integer not null default 1,
-  color text
+  color text,
+  access text,
+  shared_by text,
+  error text
 );
 
 create table if not exists events (

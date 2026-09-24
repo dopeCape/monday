@@ -88,6 +88,12 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   rsvp: "leaves_mailbox",
   update_event: "leaves_mailbox",
   delete_event: "destructive",
+  list_calendars: "read",
+  search_events: "read",
+  find_free_time: "read",
+  move_event: "leaves_mailbox",
+  propose_calendar_draft: "read",
+  get_calendar_draft: "read",
   // Organizing mail by talking (slice 26, docs/spec/agent-composer.md): Sections,
   // Groups and custom actions from a sentence, every one reversible; Undo puts
   // the previous Setting or Group back. Routing existing mail previews above

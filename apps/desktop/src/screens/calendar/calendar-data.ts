@@ -32,6 +32,11 @@ export interface Occurrence extends CalendarEvent {
   key: string;
   /** The instance's own start when it was expanded here from a master; null otherwise. */
   instanceStart: string | null;
+  /**
+   * Part of a calendar draft shown over the views: what it adds, a moved
+   * Event's new place, its old one, or an Event it removes.
+   */
+  draft?: { changeId: string; kind: "add" | "after" | "before" | "delete" } | undefined;
 }
 
 /** An Account whose calendars the views show. */
@@ -101,6 +106,9 @@ export function rowToCalendar(r: Row, workspaceId: string): Calendar {
     writable: bool(r.writable),
     visible: bool(r.visible),
     color: nullable(r.color),
+    access: (nullable(r.access) ?? undefined) as Calendar["access"],
+    sharedBy: json<Calendar["sharedBy"]>(r.shared_by, null),
+    error: nullable(r.error),
   };
 }
 

@@ -217,6 +217,10 @@ const REBUILD_SQL = `
 const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; type: string }> = [
   // Per-Event reminders (the calendar redo): null keeps the calendar's default.
   { table: "events", column: "reminders", type: "text" },
+  // Shared calendars and a calendar that cannot be read (the calendar's second batch).
+  { table: "calendars", column: "access", type: "text" },
+  { table: "calendars", column: "shared_by", type: "text" },
+  { table: "calendars", column: "error", type: "text" },
 ];
 
 async function addColumns(driver: SqlDriver): Promise<void> {
@@ -570,13 +574,26 @@ export function changeStatements(change: Change): Statement[] {
 function calendarUpsert(c: CalendarChange): Statement {
   if (c.deleted) return { sql: "delete from calendars where id = ?", params: [c.id] };
   return {
-    sql: `insert into calendars (id, source, provider_id, name, "primary", writable, visible, color)
-          values (?, ?, ?, ?, ?, ?, ?, ?)
+    sql: `insert into calendars (id, source, provider_id, name, "primary", writable, visible, color, access, shared_by, error)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict (id) do update set
             source = excluded.source, provider_id = excluded.provider_id, name = excluded.name,
             "primary" = excluded."primary", writable = excluded.writable, visible = excluded.visible,
-            color = excluded.color`,
-    params: [c.id, c.source, c.providerId, c.name, c.primary, c.writable, c.visible, c.color],
+            color = excluded.color, access = excluded.access, shared_by = excluded.shared_by,
+            error = excluded.error`,
+    params: [
+      c.id,
+      c.source,
+      c.providerId,
+      c.name,
+      c.primary,
+      c.writable,
+      c.visible,
+      c.color,
+      c.access ?? null,
+      c.sharedBy ?? null,
+      c.error ?? null,
+    ],
   };
 }
 

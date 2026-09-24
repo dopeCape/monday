@@ -125,6 +125,22 @@ function toolVerb(call: ToolCall): string {
       return done ? "Created section" : "Create section";
     case "organize_existing":
       return done ? "Sorted existing mail" : "Sort existing mail";
+    case "list_events":
+      return done ? "Read the calendar" : "Reading the calendar";
+    case "list_calendars":
+      return done ? "Listed calendars" : "Listing calendars";
+    case "search_events":
+      return done ? "Searched the calendar" : "Searching the calendar";
+    case "find_free_time":
+      return done ? "Found free time" : "Finding free time";
+    case "schedule_event":
+      return done ? "Scheduled event" : "Schedule event";
+    case "move_event":
+      return done ? "Moved event" : "Move event";
+    case "propose_calendar_draft":
+      return done ? "Proposed calendar changes" : "Proposing calendar changes";
+    case "get_calendar_draft":
+      return "Read the calendar draft";
     default: {
       const words = call.tool.replaceAll("_", " ");
       return words.charAt(0).toUpperCase() + words.slice(1);

@@ -7,15 +7,21 @@
 // change reaches; one with guests asks before they are emailed (ADR 0002).
 // Keys come from the keymap (t, j/k, d/w/m/a, c, mod+f), search looks
 // through the Events held, and the palette jumps to a typed date. An
-// Account whose calendar cannot be read says why and how to fix it.
+// Account whose calendar cannot be read says why and how to fix it. A
+// calendar draft the Agent proposes is laid over the views like a diff,
+// with a bar to review it and apply all or some of it, then undo.
+// Which calendars show is the calendar.shown Setting, per Workspace.
 // Recurring masters are expanded on the client. Every string and behavior
 // is a Setting (strings.calendar.*, calendar.*).
 
 import type {
+  CalendarDraft,
+  CalendarDraftChange,
   CalendarEvent,
   Calendar as CalendarRow,
   CalendarStatus,
   EventPatch,
+  Person,
   RecurrenceScope,
   Settings,
 } from "@monday/shared";
@@ -27,6 +33,7 @@ import {
   MagnifyingGlassIcon,
   PlusIcon,
   SidebarSimpleIcon,
+  SparkleIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import {
@@ -38,6 +45,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useCalendarDrafts, useDraftEntries } from "../calendar/DraftsContext.tsx";
 import { chordLabel, type KeyAction } from "../keyboard/keymaps.ts";
 import { type KeyContext, type KeyHandlers, useKeymap } from "../keyboard/useKeymap.ts";
 import { openExternal } from "../platform/open.ts";
@@ -51,6 +59,7 @@ import {
   type Occurrence,
   occurrencesIn,
 } from "./calendar/calendar-data.ts";
+import { DraftBar, DraftChangeDetail, DraftReview, DraftsWaiting } from "./calendar/DraftBar.tsx";
 import {
   addDays,
   addMonths,
@@ -70,7 +79,15 @@ import {
 import { type Draft, draftForSlot, draftOf, inputOf, patchOf } from "./calendar/draft.ts";
 import { EventDetail } from "./calendar/EventDetail.tsx";
 import { EventEditor, QuickCreate } from "./calendar/EventForm.tsx";
-import { calendarColors, eventsOnDay, monthWeeks, searchOccurrences } from "./calendar/layout.ts";
+import {
+  calendarColors,
+  calendarShown,
+  draftOverlay,
+  eventsOnDay,
+  monthWeeks,
+  searchOccurrences,
+  withShown,
+} from "./calendar/layout.ts";
 import { MonthGrid } from "./calendar/MonthGrid.tsx";
 import { canAnswer, canEdit, errorText, guestsOf, isOwn } from "./calendar/model.ts";
 import { type AnchorRect, type Ask, AskDialog, Popover, rectOf } from "./calendar/overlay.tsx";
@@ -94,8 +111,10 @@ export interface CalendarProps {
   /** A fixed clock (tests); absent, the screen keeps its own that ticks. */
   now?: Date | undefined;
   initialView?: CalendarView | undefined;
-  /** A day to open on ("2026-10-03"), bumped by `n` each time it is asked for. */
-  jumpTo?: { day: string; n: number } | undefined;
+  /** A day to open on ("2026-10-03"), bumped by `n` each time it is asked for; with a view to show it in. */
+  jumpTo?: { day: string; n: number; view?: CalendarView | undefined } | undefined;
+  /** The people in the mail, most recent first, for the guest suggestions. */
+  people?: readonly Person[] | undefined;
   /**
    * The bottom agent the App owns, so asking here opens it here without
    * leaving the page; absent, a bar that hands off to the Inbox's.
@@ -105,7 +124,8 @@ export interface CalendarProps {
 
 type Pop =
   | { kind: "detail"; key: string; rect: AnchorRect }
-  | { kind: "create"; rect: AnchorRect; slot: Slot };
+  | { kind: "create"; rect: AnchorRect; slot: Slot }
+  | { kind: "draft"; changeId: string; key: string; rect: AnchorRect };
 
 interface EditorState {
   draft: Draft;
@@ -144,6 +164,7 @@ export function Calendar({
   now: nowProp,
   initialView,
   jumpTo,
+  people,
   agent,
 }: CalendarProps) {
   const shell = useShell();
@@ -153,7 +174,7 @@ export function Calendar({
   // Just mail (CONTEXT.md "AI level"): no agent bar and no Schedule handoff; the calendar stays.
   const aiOff = s["ai.level"] === "off";
   const now = useClock(nowProp);
-  const calendars = useSyncExternalStore(source.subscribe, source.calendars, source.calendars);
+  const rawCalendars = useSyncExternalStore(source.subscribe, source.calendars, source.calendars);
   const events = useSyncExternalStore(source.subscribe, source.events, source.events);
   const accounts = useSyncExternalStore(source.subscribe, source.accounts, source.accounts);
   const [view, setView] = useState<CalendarView>(initialView ?? s["calendar.default_view"]);
@@ -191,6 +212,7 @@ export function Calendar({
     jumped.current = jumpTo.n;
     const day = fromDayKey(jumpTo.day);
     if (day) setAnchor(day);
+    if (jumpTo.view) setView(jumpTo.view);
   }, [jumpTo]);
 
   // The Events changed under the moves: the Cache has caught up.
@@ -215,6 +237,17 @@ export function Calendar({
     };
   }, [source]);
 
+  // What this Workspace shows: the calendar.shown Setting over the Server's visibility.
+  const shownSetting = s["calendar.shown"];
+  const otherAccounts = s["calendar.other_accounts"];
+  const calendars = useMemo(
+    () =>
+      rawCalendars.map((c) => {
+        const visible = calendarShown(shownSetting, workspace.id, c, otherAccounts);
+        return visible === c.visible ? c : { ...c, visible };
+      }),
+    [rawCalendars, shownSetting, workspace.id, otherAccounts],
+  );
   const byId = useMemo(() => new Map(calendars.map((c) => [c.id, c])), [calendars]);
   const colors = useMemo(
     () => calendarColors(calendars, s["calendar.colors"]),
@@ -229,6 +262,44 @@ export function Calendar({
     (workspaceId: string) => accounts.find((a) => a.workspaceId === workspaceId)?.address ?? null,
     [accounts],
   );
+
+  // Who the guest field suggests: the people in the mail, then everyone on an Event, once each.
+  const directory = useMemo(() => {
+    const mine = new Set(accounts.map((a) => a.address.toLowerCase()));
+    mine.add(workspace.address.toLowerCase());
+    const seen = new Map<string, Person>();
+    const add = (p: Person) => {
+      const k = p.email.toLowerCase();
+      if (!k.includes("@") || mine.has(k)) return;
+      const had = seen.get(k);
+      if (!had || (!had.name && p.name)) seen.set(k, { name: p.name, email: p.email });
+    };
+    for (const p of people ?? []) add(p);
+    const recent = [...events].sort((a, b) => b.start.localeCompare(a.start));
+    for (const e of recent) for (const a of e.attendees) if (!a.self) add(a);
+    return [...seen.values()];
+  }, [people, events, accounts, workspace.address]);
+
+  /* ------------------------------ The Agent's calendar draft ------------------------------ */
+
+  const drafts = useCalendarDrafts();
+  const { entries: draftEntries, active: activeDraftId } = useDraftEntries();
+  const activeDraft =
+    draftEntries.find(
+      (e) => e.draft.id === activeDraftId && (e.status === "open" || e.status === "partial"),
+    ) ?? null;
+  const waitingDrafts = draftEntries.filter(
+    (e) => (e.status === "open" || e.status === "partial") && e.draft.id !== activeDraftId,
+  );
+  /** Changes of the active draft left out of the next apply. */
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(() => new Set());
+  const [reviewing, setReviewing] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new draft starts with every change in
+  useEffect(() => {
+    setSkipped(new Set());
+    setPop((p) => (p?.kind === "draft" ? null : p));
+  }, [activeDraftId]);
 
   /* ------------------------------ The window on screen ------------------------------ */
 
@@ -279,6 +350,15 @@ export function Calendar({
       return m ? { ...o, ...m } : o;
     });
   }, [events, calendars, range, showDeclined, moved]);
+
+  const hiddenChanges = useMemo(
+    () => new Set([...(activeDraft?.applied ?? []), ...skipped]),
+    [activeDraft, skipped],
+  );
+  const shownItems = useMemo(
+    () => (activeDraft ? draftOverlay(items, activeDraft.draft, hiddenChanges) : items),
+    [items, activeDraft, hiddenChanges],
+  );
 
   const todays = useMemo(
     () =>
@@ -699,12 +779,75 @@ export function Calendar({
         waiting.find((o) => o.key === pop.key))
       : undefined;
   const selectedKey = pop?.kind === "detail" ? pop.key : null;
-  const editable = (o: Occurrence) => canEdit(o, byId, addressOf);
+  const editable = (o: Occurrence) => !o.draft && canEdit(o, byId, addressOf);
   const openDetail = (o: Occurrence, rect: AnchorRect) => {
     setQuick(null);
+    if (o.draft && o.draft.kind !== "before") {
+      setPop({ kind: "draft", changeId: o.draft.changeId, key: o.key, rect });
+      return;
+    }
     setPop({ kind: "detail", key: o.key, rect });
   };
+  const draftChange =
+    pop?.kind === "draft"
+      ? (activeDraft?.draft.changes.find((c) => c.id === pop.changeId) ?? null)
+      : null;
+
+  /** Opens the Calendar's view on a draft: the week of its first change, or a month for a long one. */
+  const focusDraft = (d: CalendarDraft) => {
+    const from = new Date(d.from);
+    const to = new Date(d.to);
+    if (!Number.isNaN(from.getTime())) setAnchor(startOfDay(from));
+    const span = (to.getTime() - from.getTime()) / DAY_MS;
+    if (view === "agenda" || view === "month") return;
+    if (span > 7) setView("month");
+    else if (span > 1 && view === "day") setView("week");
+  };
+  const applyDraft = async () => {
+    if (!drafts || !activeDraft) return;
+    const ids = activeDraft.draft.changes
+      .filter((c) => !activeDraft.applied.includes(c.id) && !skipped.has(c.id))
+      .map((c) => c.id);
+    setDraftBusy(true);
+    setLineError(null);
+    try {
+      const r = await drafts.apply(activeDraft.draft.id, ids);
+      if (r.declined) return;
+      if (r.failed.length) {
+        setLineError(
+          fill(s["strings.calendar.draft.some_failed"], {
+            n: r.failed.length,
+            message: errorText(new Error(r.failed[0]?.message ?? "")),
+          }),
+        );
+      }
+      if (r.applied.length) {
+        const id = activeDraft.draft.id;
+        showToast(fill(s["strings.calendar.draft.done"], { n: r.applied.length }), () => {
+          setToast(null);
+          void drafts.store.undo(id).then(() => drafts.store.setActive(id));
+        });
+        setReviewing(false);
+      }
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+  const toggleChange = (id: string, include: boolean) =>
+    setSkipped((prev) => {
+      const next = new Set(prev);
+      if (include) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const loading = statuses === null && calendars.length === 0;
+  const focusedDraft = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per draft made active
+  useEffect(() => {
+    if (!activeDraft || focusedDraft.current === activeDraft.draft.id) return;
+    focusedDraft.current = activeDraft.draft.id;
+    focusDraft(activeDraft.draft);
+  }, [activeDraft]);
 
   const agendaGroups = (list: readonly Occurrence[], from: Date, to: Date) => {
     const out: Array<readonly [Date, Occurrence[]]> = [];
@@ -751,7 +894,7 @@ export function Calendar({
   } else if (view === "agenda") {
     body = (
       <Agenda
-        groups={agendaGroups(items, range.from, range.to)}
+        groups={agendaGroups(shownItems, range.from, range.to)}
         now={now}
         s={s}
         colors={colors}
@@ -778,7 +921,7 @@ export function Calendar({
       <MonthGrid
         weeks={weeks}
         month={anchor}
-        items={items}
+        items={shownItems}
         now={now}
         s={s}
         colors={colors}
@@ -795,7 +938,7 @@ export function Calendar({
     body = (
       <TimeGrid
         days={days}
-        items={items}
+        items={shownItems}
         now={now}
         s={s}
         colors={colors}
@@ -905,9 +1048,14 @@ export function Calendar({
             </Btn>
           </span>
           {onAsk && !aiOff ? (
-            <Btn onClick={() => onAsk(s["strings.calendar.schedule_ask"])}>
-              <Icon icon={CalendarBlankIcon} /> {s["strings.calendar.schedule"]}
-            </Btn>
+            <>
+              <Btn onClick={() => onAsk(s["strings.calendar.schedule_ask"])}>
+                <Icon icon={CalendarBlankIcon} /> {s["strings.calendar.schedule"]}
+              </Btn>
+              <Btn onClick={() => onAsk(s["strings.calendar.plan_week_ask"])}>
+                <Icon icon={SparkleIcon} /> {s["strings.calendar.plan_week"]}
+              </Btn>
+            </>
           ) : null}
           <Btn
             icon
@@ -942,11 +1090,49 @@ export function Calendar({
             </button>
           </p>
         ) : null}
-        <div className="cal-body">
+        {activeDraft && drafts ? (
+          <DraftBar
+            entry={activeDraft}
+            s={s}
+            skipped={skipped}
+            reviewing={reviewing}
+            busy={draftBusy}
+            onReview={() => setReviewing((r) => !r)}
+            onApply={() => void applyDraft()}
+            onDiscard={() => {
+              setReviewing(false);
+              void drafts.store.discard(activeDraft.draft.id);
+            }}
+            onClose={() => {
+              setReviewing(false);
+              drafts.store.setActive(null);
+            }}
+          />
+        ) : waitingDrafts.length > 0 && drafts ? (
+          <DraftsWaiting
+            n={waitingDrafts.length}
+            s={s}
+            onOpen={() => drafts.store.setActive(waitingDrafts[0]?.draft.id ?? null)}
+          />
+        ) : null}
+        <div className={`cal-body${activeDraft && reviewing ? " reviewing" : ""}`}>
           <div className="cal-view" key={searching ? "search" : view}>
             {body}
           </div>
-          {sidebar ? (
+          {activeDraft && reviewing ? (
+            <DraftReview
+              draft={activeDraft.draft}
+              applied={activeDraft.applied}
+              skipped={skipped}
+              s={s}
+              focus={pop?.kind === "draft" ? pop.changeId : null}
+              onToggle={toggleChange}
+              onPick={(c: CalendarDraftChange) => {
+                const f = c.after ?? c.before;
+                if (f) setAnchor(startOfDay(new Date(f.start)));
+              }}
+            />
+          ) : sidebar ? (
             <Sidebar
               anchor={anchor}
               now={now}
@@ -957,6 +1143,8 @@ export function Calendar({
               calendars={calendars}
               accounts={accounts}
               colors={colors}
+              workspaceId={workspace.id}
+              problems={new Set(problems.map((st) => st.workspaceId))}
               loading={loading}
               s={s}
               onPick={(d) => {
@@ -968,11 +1156,42 @@ export function Calendar({
                 if (r) openDetail(o, r);
               }}
               onJoin={(o) => open(o.link as string)}
-              onToggle={(c: CalendarRow, visible) =>
-                void source
-                  .setVisible(c.id, visible)
-                  .catch((e) => failed(s["strings.calendar.visible_failed"], e))
+              onToggle={(c: CalendarRow, visible) => {
+                void shell.set(
+                  "calendar.shown",
+                  withShown(shownSetting, workspace.id, { [c.id]: visible }),
+                );
+                // Hidden everywhere on the Server (an older choice): shown again there too.
+                const raw = rawCalendars.find((r) => r.id === c.id);
+                if (visible && raw && !raw.visible) {
+                  void source
+                    .setVisible(c.id, true)
+                    .catch((e) => failed(s["strings.calendar.visible_failed"], e));
+                }
+              }}
+              onOnly={(c: CalendarRow) =>
+                void shell.set(
+                  "calendar.shown",
+                  withShown(
+                    shownSetting,
+                    workspace.id,
+                    Object.fromEntries(rawCalendars.map((r) => [r.id, r.id === c.id])),
+                  ),
+                )
               }
+              onShowAll={() => {
+                void shell.set(
+                  "calendar.shown",
+                  withShown(
+                    shownSetting,
+                    workspace.id,
+                    Object.fromEntries(rawCalendars.map((r) => [r.id, true])),
+                  ),
+                );
+                for (const r of rawCalendars) {
+                  if (!r.visible) void source.setVisible(r.id, true).catch(() => {});
+                }
+              }}
               onColor={(c, color) => {
                 const next = { ...s["calendar.colors"] };
                 if (color) next[c.id] = color;
@@ -1010,6 +1229,25 @@ export function Calendar({
           />
         </Popover>
       ) : null}
+      {pop?.kind === "draft" && draftChange ? (
+        <Popover
+          anchor={pop.rect}
+          onClose={() => setPop(null)}
+          label={(draftChange.after ?? draftChange.before)?.title ?? ""}
+          className="cal-pop-detail"
+        >
+          <DraftChangeDetail
+            change={draftChange}
+            s={s}
+            skipped={skipped.has(draftChange.id)}
+            onToggle={(include) => {
+              toggleChange(draftChange.id, include);
+              setPop(null);
+            }}
+            onClose={() => setPop(null)}
+          />
+        </Popover>
+      ) : null}
       {pop?.kind === "create" && quick ? (
         <Popover
           anchor={pop.rect}
@@ -1026,7 +1264,9 @@ export function Calendar({
             calendars={calendars}
             accounts={accounts}
             colors={colors}
+            directory={directory}
             s={s}
+            now={now}
             busy={busy}
             error={formError}
             onSave={() => void saveQuick()}
@@ -1051,7 +1291,9 @@ export function Calendar({
           calendars={calendars}
           accounts={accounts}
           colors={colors}
+          directory={directory}
           s={s}
+          now={now}
           busy={busy}
           error={formError}
           onSave={() => void saveEditor()}

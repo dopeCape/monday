@@ -353,6 +353,7 @@ describe("the Calendar screen", () => {
     const form = document.querySelector<HTMLFormElement>(".cal-quick");
     expect(form).not.toBeNull();
     await typeInto(form?.querySelector(".cal-quick-title"), "Dentist");
+    await click(button(form as Element, "Add guests"));
     await typeInto(form?.querySelector(".cal-people-input"), "Kenji <kenji@meridian.test>,");
     expect(form?.querySelector(".cal-chip")?.textContent).toContain("Kenji");
     await act(async () => {
@@ -382,7 +383,13 @@ describe("the Calendar screen", () => {
     const el = host as HTMLElement;
     await click(button(el.querySelector(".col-head") as Element, "Event"));
     const form = document.querySelector<HTMLFormElement>(".cal-quick");
-    await typeInto(form?.querySelector('input[aria-label="End"]'), "09:00");
+    const end = form?.querySelector<HTMLInputElement>('input[aria-label="End"]');
+    await typeInto(end, "9");
+    // The typed time lands on Enter.
+    await act(async () => {
+      end?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await act(tick);
     expect(form?.querySelector(".cal-error")?.textContent).toBe(
       "The end has to come after the start.",
     );
@@ -391,7 +398,11 @@ describe("the Calendar screen", () => {
     expect(document.querySelector(".cal-quick")).toBeNull();
     const editor = document.querySelector(".cal-editor");
     expect(editor).not.toBeNull();
-    expect(editor?.querySelector('select[aria-label="Repeat"]')).not.toBeNull();
+    expect(editor?.querySelector('button[aria-label="Repeat"]')).not.toBeNull();
+    // monday's own controls, never the browser's.
+    expect(editor?.querySelectorAll('select, input[type="date"], input[type="time"]')).toHaveLength(
+      0,
+    );
     expect(editor?.querySelector('textarea[aria-label="Notes"]')).not.toBeNull();
     await click(button(editor as Element, "Cancel"));
     expect(document.querySelector(".cal-editor")).toBeNull();
@@ -568,7 +579,8 @@ describe("the Calendar screen", () => {
     const boxes = [...el.querySelectorAll<HTMLInputElement>(".cal-list input")];
     expect(boxes).toHaveLength(2);
     await click(boxes[1]);
-    expect(source.log).toContain("visible cal-2 false");
+    // What this Workspace shows is a Setting (calendar.shown); the Server's own flag is left alone.
+    expect(source.log).not.toContain("visible cal-2 false");
     expect(el.querySelector(".cal-allday-cells .cal-bar")).toBeNull();
     await click(
       [...el.querySelectorAll(".col-head button")].find((b) => b.textContent?.includes("Schedule")),

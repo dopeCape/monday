@@ -3,6 +3,7 @@ import "@monday/ui/app.css";
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import type { DraftMemory, DraftStatus } from "./calendar/drafts.ts";
 import type { AccountView } from "./platform/api.ts";
 import { platform } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
@@ -104,6 +105,30 @@ function Root() {
   }, [store, fetchBodies, shell.sidecar]);
 
   const browser = shell.host === "browser";
+  // What became of the Agent's calendar drafts, in the Cache's meta table so a reload keeps it.
+  const draftMemory = useMemo<DraftMemory>(
+    () => ({
+      async get(id) {
+        const rows = await store
+          .query<{ value: string }>("select value from meta where key = ?", [
+            `calendar_draft:${id}`,
+          ])
+          .catch(() => []);
+        return (rows[0]?.value as DraftStatus | "seen" | undefined) ?? null;
+      },
+      async set(id, status) {
+        await store
+          .write([
+            {
+              sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+              params: [`calendar_draft:${id}`, status],
+            },
+          ])
+          .catch(() => {});
+      },
+    }),
+    [store],
+  );
   useEffect(() => {
     if (!content) return;
     let closed = false;
@@ -195,6 +220,7 @@ function Root() {
   if (!seams) return null;
   return (
     <App
+      draftMemory={draftMemory}
       inbox={seams.inbox}
       composer={seams.composer}
       routing={seams.routing}
