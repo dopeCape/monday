@@ -334,9 +334,14 @@ export interface SessionSummary {
  * `delta` is streamed only; every other kind is persisted in order.
  */
 export type AgentEvent =
-  | { kind: "user"; id: Id; text: string }
-  | { kind: "delta"; id: Id; text: string }
-  | { kind: "text"; id: Id; text: string }
+  /**
+   * `at` on user and text events: when the turn was sent or the answer began.
+   * A loaded transcript carries it from the Server; a live one is stamped by
+   * the Device as it arrives. The composer shows it on hover.
+   */
+  | { kind: "user"; id: Id; text: string; at?: IsoDate | undefined }
+  | { kind: "delta"; id: Id; text: string; at?: IsoDate | undefined }
+  | { kind: "text"; id: Id; text: string; at?: IsoDate | undefined }
   | { kind: "tool"; call: ToolCall; preview: ToolPreview | null; threads?: PreviewThread[] }
   | { kind: "error"; id: Id; message: string; code?: string | undefined }
   | { kind: "done"; id: Id; waiting: string | null }

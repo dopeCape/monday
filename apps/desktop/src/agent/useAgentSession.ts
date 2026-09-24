@@ -15,7 +15,13 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentClient } from "./client.ts";
 import { sameRuntime } from "./runtimeLine.ts";
-import { applyEvent, applyEvents, type TranscriptEvent, waitingCalls } from "./transcript.ts";
+import {
+  applyEvent,
+  applyEvents,
+  stampLive,
+  type TranscriptEvent,
+  waitingCalls,
+} from "./transcript.ts";
 
 export interface AgentSessionOptions {
   client: AgentClient | null;
@@ -128,16 +134,19 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
   const runRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const runSeq = useRef(0);
 
-  const onEvent = useCallback((event: AgentEvent) => {
-    setEvents((current) => applyEvent(current, event));
-    if (
-      event.kind === "tool" &&
-      event.call.status === "done" &&
-      SETTINGS_TOOLS.has(event.call.tool)
-    ) {
-      settingsChangedRef.current?.();
-    }
-  }, []);
+  const onEvent = useCallback(
+    (event: AgentEvent) => {
+      setEvents((current) => applyEvent(current, stampLive(event, now())));
+      if (
+        event.kind === "tool" &&
+        event.call.status === "done" &&
+        SETTINGS_TOOLS.has(event.call.tool)
+      ) {
+        settingsChangedRef.current?.();
+      }
+    },
+    [now],
+  );
 
   const refreshHistory = useCallback(async () => {
     if (!client) return;

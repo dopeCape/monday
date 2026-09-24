@@ -342,6 +342,10 @@ describe("the Agent host over Postgres", () => {
       events: AgentEvent[];
     };
     expect(loaded.session.title).toBe("archive every newsletter older than a week");
+    // The user's turn carries when it was stored, for the composer's timestamp.
+    expect(loaded.events.find((e) => e.kind === "user")).toMatchObject({
+      at: expect.any(String),
+    });
     const cards = loaded.events.filter((e) => e.kind === "tool");
     expect(cards.map((e) => (e.kind === "tool" ? [e.call.tool, e.call.status] : null))).toEqual([
       ["search_threads", "done"],

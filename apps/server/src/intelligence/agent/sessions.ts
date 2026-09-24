@@ -27,14 +27,30 @@ export interface SessionStore {
   /** A Runtime switch mid-Session (docs/spec/agent-composer.md, Sessions). */
   setRuntime(id: string, runtime: Runtime): Promise<void>;
   append(id: string, event: AgentEvent): Promise<void>;
-  /** The transcript in order, with each tool card collapsed to its latest state. */
-  events(id: string): Promise<AgentEvent[]>;
+  /**
+   * The transcript in order, with each tool card collapsed to its latest
+   * state. With `at`, a user or text event carries when it was stored, for
+   * the composer's timestamps; the transcript a runtime reads leaves it out.
+   */
+  events(id: string, options?: EventsOptions): Promise<AgentEvent[]>;
   /**
    * Seals the transcript rows written before migration 0014, up to `limit`
    * of them, and returns how many it moved. Needs the root key; the entry
    * runs it at boot and after an unlock until it returns 0.
    */
   sealLegacy(limit?: number): Promise<number>;
+}
+
+export interface EventsOptions {
+  at?: boolean | undefined;
+}
+
+/** A user or text event with the time it was stored, unless it already says. */
+export function stampEvent(event: AgentEvent, at: Date): AgentEvent {
+  if ((event.kind === "user" || event.kind === "text") && !event.at) {
+    return { ...event, at: at.toISOString() };
+  }
+  return event;
 }
 
 /** Every tool card once, at its first position, in its latest state. */
@@ -150,7 +166,7 @@ export function createSessionStore(db: Db, options: SessionStoreOptions): Sessio
       const sealed = await seal(workspaceId, event);
       await db.insert(sessionEvents).values({ sessionId: id, event: null, ...sealed, at: now() });
     },
-    async events(id) {
+    async events(id, options = {}) {
       const workspaceId = await workspaceOf(id);
       if (!workspaceId) return [];
       const rows = await db
@@ -158,6 +174,7 @@ export function createSessionStore(db: Db, options: SessionStoreOptions): Sessio
           event: sessionEvents.event,
           eventEnc: sessionEvents.eventEnc,
           eventKey: sessionEvents.eventKey,
+          at: sessionEvents.at,
         })
         .from(sessionEvents)
         .where(eq(sessionEvents.sessionId, id))
@@ -165,7 +182,7 @@ export function createSessionStore(db: Db, options: SessionStoreOptions): Sessio
       const out: AgentEvent[] = [];
       for (const row of rows) {
         const event = await open(workspaceId, row);
-        if (event) out.push(event);
+        if (event) out.push(options.at ? stampEvent(event, row.at) : event);
       }
       return collapseEvents(out);
     },
@@ -199,7 +216,7 @@ export function createSessionStore(db: Db, options: SessionStoreOptions): Sessio
 export function createMemorySessionStore(options: { now?: () => Date } = {}): SessionStore {
   const now = options.now ?? (() => new Date());
   const rows = new Map<string, SessionSummary>();
-  const events = new Map<string, AgentEvent[]>();
+  const events = new Map<string, { event: AgentEvent; at: Date }[]>();
   return {
     async create(workspaceId, runtime) {
       const session: SessionSummary = {
@@ -236,10 +253,11 @@ export function createMemorySessionStore(options: { now?: () => Date } = {}): Se
       s.lastActivity = now().toISOString();
     },
     async append(id, event) {
-      events.get(id)?.push(event);
+      events.get(id)?.push({ event, at: now() });
     },
-    async events(id) {
-      return collapseEvents(events.get(id) ?? []);
+    async events(id, options = {}) {
+      const rows = events.get(id) ?? [];
+      return collapseEvents(rows.map((r) => (options.at ? stampEvent(r.event, r.at) : r.event)));
     },
     async sealLegacy() {
       return 0;

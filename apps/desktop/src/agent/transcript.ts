@@ -36,11 +36,17 @@ export function applyEvent(
         if (current?.kind !== "text") return [...events];
         return replaceAt(events, at, { ...current, text: current.text + event.text });
       }
-      return [...events, { kind: "text", id: event.id, text: event.text }];
+      return [
+        ...events,
+        { kind: "text", id: event.id, text: event.text, ...(event.at ? { at: event.at } : {}) },
+      ];
     }
     case "text": {
       const at = events.findIndex((e) => e.kind === "text" && e.id === event.id);
-      return at >= 0 ? replaceAt(events, at, event) : [...events, event];
+      if (at < 0) return [...events, event];
+      // The answer began when its first token came; the final text keeps that time.
+      const began = events[at]?.kind === "text" ? (events[at] as { at?: string }).at : undefined;
+      return replaceAt(events, at, began ? { ...event, at: began } : event);
     }
     case "tool": {
       const at = events.findIndex((e) => e.kind === "tool" && e.call.id === event.call.id);
@@ -49,6 +55,14 @@ export function applyEvent(
     default:
       return [...events, event];
   }
+}
+
+/** A live user, delta or text event with the time it arrived, unless the Server said. */
+export function stampLive(event: AgentEvent, now: Date): AgentEvent {
+  if ((event.kind === "user" || event.kind === "delta" || event.kind === "text") && !event.at) {
+    return { ...event, at: now.toISOString() };
+  }
+  return event;
 }
 
 export function applyEvents(
