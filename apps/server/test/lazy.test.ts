@@ -355,9 +355,8 @@ describe("IMAP and SMTP through the lazy imapflow and nodemailer paths", () => {
           (e: unknown) => e,
         );
       expect(error).toBeInstanceOf(ProviderError);
-      // imapflow 2 rejects a refused LOGIN with a plain Error (authenticationFailed: true), not
-      // AuthenticationFailure, so it reaches connectClient as a network failure today.
-      expect((error as ProviderError).message).toContain("Command failed");
+      // A refused LOGIN is a sign-in problem (the Account asks to sign in again), not the network.
+      expect((error as ProviderError).code).toBe("auth");
       expect(imap.lines.some((l) => / LOGIN /i.test(l))).toBe(true);
     } finally {
       imap.server.close();

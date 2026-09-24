@@ -126,7 +126,12 @@ async function connectClient(create: CreateClient, options: ImapFlowOptions): Pr
   try {
     await client.connect();
   } catch (cause) {
-    if (cause instanceof (await loadImapflow()).AuthenticationFailure) {
+    // imapflow 2 rejects a refused LOGIN with a plain Error flagged
+    // authenticationFailed, not always an AuthenticationFailure.
+    if (
+      cause instanceof (await loadImapflow()).AuthenticationFailure ||
+      (cause as { authenticationFailed?: unknown } | null)?.authenticationFailed === true
+    ) {
       throw new ProviderError("IMAP server refused the credentials", "auth", { cause });
     }
     const message = cause instanceof Error ? cause.message : String(cause);
