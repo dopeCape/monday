@@ -1,9 +1,12 @@
 // The thread and the composer bar on Assistant UI's primitives (Mosaic's
-// thread.tsx, in monday's CSS): user turns as bubbles, the agent's turns as
-// streamed Markdown with the tool UIs in the order they happened, read-only
-// steps folded into one line, a quiet "Working" while nothing streams, Copy
-// on a finished answer, a jump to the latest turn, and the bar: a growing
-// input (Enter sends, Shift-Enter is a new line, Up recalls what was sent),
+// thread.tsx, in monday's CSS): user turns as bubbles with their mentions as
+// chips, the agent's turns as streamed Markdown with the tool UIs in the
+// order they happened, read-only steps folded into one line, a quiet
+// "Working" (with the time once a turn runs long) while nothing streams, an
+// action bar per turn (Copy and Edit and resend on the user's, Copy and Ask
+// again on the last answer), the time on hover, Continue after a Stop, a
+// jump to the latest turn, and the bar: a growing input (Enter sends,
+// Shift-Enter is a new line, Up recalls what was sent), the / and @ menus,
 // Send, and Stop while a turn runs.
 
 import {
@@ -22,30 +25,115 @@ import {
 import type { SessionSummary } from "@monday/shared";
 import { Btn, Chip, formatListTime, Icon, Mark, type Suggestion } from "@monday/ui";
 import {
+  ArrowClockwiseIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
   CopyIcon,
+  PencilSimpleIcon,
   StopIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { type Ref, useEffect, useRef } from "react";
 import { fill } from "../composerStrings.ts";
 import { runtimeLabel } from "../runtimeLine.ts";
-import { useComposerEnv } from "./context.tsx";
+import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
 import { AgentText } from "./Markdown.tsx";
-import type { LineData } from "./messages.ts";
+import { MentionText } from "./mentions.tsx";
+import { type LineData, messageTime } from "./messages.ts";
 import { groupSteps, StepsGroup, ToolFallback } from "./tools.tsx";
+import { Mentions, SlashCommands } from "./triggers.tsx";
 
 /* ------------------------------ Messages ------------------------------ */
 
+/** When the turn was sent or the answer began, shown on hover; the full date in its title. */
+function TurnTime() {
+  const { strings, now } = useComposerEnv();
+  const at = useAuiState((s) => messageTime(s.message.metadata));
+  if (!at || !strings["ai.composer.timestamps"]) return null;
+  return (
+    <time className="agent-time" dateTime={at} title={new Date(at).toLocaleString()}>
+      {formatListTime(at, now)}
+    </time>
+  );
+}
+
+/** Copy, flipping to a check once copied. */
+function CopyAction() {
+  const { strings } = useComposerEnv();
+  return (
+    <ActionBarPrimitive.Copy asChild>
+      <Btn icon sm title={strings["strings.agent.copy"]}>
+        <AuiIf condition={(s) => s.message.isCopied}>
+          <Icon icon={CheckIcon} />
+        </AuiIf>
+        <AuiIf condition={(s) => !s.message.isCopied}>
+          <Icon icon={CopyIcon} />
+        </AuiIf>
+      </Btn>
+    </ActionBarPrimitive.Copy>
+  );
+}
+
+/**
+ * Edit and resend: the turn goes back into the bar, focused, to change and
+ * send as a new turn. The Server's transcript is linear, so nothing already
+ * answered is thrown away.
+ */
+function EditAction() {
+  const { strings, actions } = useComposerEnv();
+  const aui = useAui();
+  const text = useAuiState((s) =>
+    s.message.parts
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("\n")
+      .trim(),
+  );
+  const edit = () => {
+    aui.thread().composer().setText(text);
+    actions.recall(text);
+  };
+  return (
+    <Btn icon sm title={strings["strings.agent.edit"]} onClick={edit}>
+      <Icon icon={PencilSimpleIcon} />
+    </Btn>
+  );
+}
+
 function UserMessage() {
   return (
-    <MessagePrimitive.Root className="u">
-      <MessagePrimitive.Parts>
-        {({ part }) => (part.type === "text" ? <span className="ut">{part.text}</span> : null)}
-      </MessagePrimitive.Parts>
+    <MessagePrimitive.Root className="u-turn">
+      <div className="u">
+        <MessagePrimitive.Parts>
+          {({ part }) =>
+            part.type === "text" ? (
+              <span className="ut">
+                <MentionText text={part.text} />
+              </span>
+            ) : null
+          }
+        </MessagePrimitive.Parts>
+      </div>
+      <div className="agent-meta">
+        <TurnTime />
+        <ActionBarPrimitive.Root className="agent-msg-acts" hideWhenRunning>
+          <CopyAction />
+          <EditAction />
+        </ActionBarPrimitive.Root>
+      </div>
     </MessagePrimitive.Root>
+  );
+}
+
+/** Continue after a Stop: one tap sends the Setting's words as the next turn. */
+function ContinueAction() {
+  const { strings, actions } = useComposerEnv();
+  const show = useAuiState((s) => s.message.isLast && !s.thread.isRunning);
+  if (!show) return null;
+  return (
+    <Chip onClick={() => actions.send(strings["strings.agent.continue_prompt"])}>
+      {strings["strings.agent.continue"]}
+    </Chip>
   );
 }
 
@@ -53,7 +141,12 @@ function UserMessage() {
 function Line({ data }: { data: LineData }) {
   const { strings } = useComposerEnv();
   if (data.kind === "stopped") {
-    return <div className="line stopped">{strings["strings.agent.stopped"]}</div>;
+    return (
+      <div className="line stopped">
+        <span>{strings["strings.agent.stopped"]}</span>
+        <ContinueAction />
+      </div>
+    );
   }
   return (
     <div className="line">
@@ -65,10 +158,9 @@ function Line({ data }: { data: LineData }) {
 /**
  * "Working" while the turn runs and nothing streams: before the first token,
  * and in the gap after a card before the next one. Streaming text and a
- * running card are their own feedback.
+ * running card are their own feedback. A long turn counts its time.
  */
 function Working() {
-  const { strings } = useComposerEnv();
   const show = useAuiState((s) => {
     if (s.message.status?.type !== "running") return false;
     const last = s.message.parts.at(-1);
@@ -77,28 +169,33 @@ function Working() {
     return true;
   });
   if (!show) return null;
+  return <WorkingLine />;
+}
+
+function WorkingLine() {
+  const { strings, runStartedAt } = useComposerEnv();
+  const seconds = useElapsedSeconds(runStartedAt);
   return (
     <div className="agent-working" role="status">
-      <span className="label">{strings["strings.agent.working"]}</span>
+      <span className="label">{workingLabel(strings, seconds)}</span>
     </div>
   );
 }
 
-/** Copy under a finished answer, shown on hover and always on the last one. */
+/** Under a finished answer: Copy, Ask again on the last one, and its time. Shown on hover, always on the last. */
 function AnswerActions() {
   const { strings } = useComposerEnv();
   return (
     <ActionBarPrimitive.Root className="agent-answer-acts" hideWhenRunning autohide="not-last">
-      <ActionBarPrimitive.Copy asChild>
-        <Btn icon sm title={strings["strings.agent.copy"]}>
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <Icon icon={CheckIcon} />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <Icon icon={CopyIcon} />
-          </AuiIf>
-        </Btn>
-      </ActionBarPrimitive.Copy>
+      <CopyAction />
+      <AuiIf condition={(s) => s.message.isLast}>
+        <ActionBarPrimitive.Reload asChild>
+          <Btn icon sm title={strings["strings.agent.reload"]}>
+            <Icon icon={ArrowClockwiseIcon} />
+          </Btn>
+        </ActionBarPrimitive.Reload>
+      </AuiIf>
+      <TurnTime />
     </ActionBarPrimitive.Root>
   );
 }
@@ -283,46 +380,59 @@ export interface BarProps {
   onTextChange: (text: string) => void;
   onFocus?: (() => void) | undefined;
   inputRef?: Ref<HTMLTextAreaElement> | undefined;
+  /** The / menu; off in a one-conversation composer (onboarding), where /new has no place. */
+  commands?: boolean | undefined;
 }
 
-export function Bar({ placeholder, text, onTextChange, onFocus, inputRef }: BarProps) {
+export function Bar({
+  placeholder,
+  text,
+  onTextChange,
+  onFocus,
+  inputRef,
+  commands = true,
+}: BarProps) {
   const { strings } = useComposerEnv();
   const history = unstable_useComposerInputHistory();
   return (
-    <ComposerPrimitive.Root className="agent-bar">
-      <TextBridge text={text} onTextChange={onTextChange} />
-      <Mark />
-      <ComposerPrimitive.Input
-        ref={inputRef}
-        name="ask"
-        rows={1}
-        maxRows={strings["ai.composer.max_rows"]}
-        placeholder={placeholder}
-        aria-label={placeholder}
-        submitMode="enter"
-        cancelOnEscape={false}
-        unstable_focusOnRunStart={false}
-        unstable_focusOnScrollToBottom={false}
-        unstable_focusOnThreadSwitched={false}
-        addAttachmentOnPaste={false}
-        onFocus={onFocus}
-        {...(strings["ai.composer.input_history"] ? history : {})}
-      />
-      <AuiIf condition={(s) => !s.thread.isRunning}>
-        <ComposerPrimitive.Send asChild>
-          <Btn icon className="send" title={strings["strings.agent.send"]}>
-            <Icon icon={ArrowUpIcon} />
-          </Btn>
-        </ComposerPrimitive.Send>
-      </AuiIf>
-      <AuiIf condition={(s) => s.thread.isRunning}>
-        <ComposerPrimitive.Cancel asChild>
-          <Btn icon className="stop" title={strings["strings.agent.stop"]}>
-            <Icon icon={StopIcon} weight="fill" />
-          </Btn>
-        </ComposerPrimitive.Cancel>
-      </AuiIf>
-    </ComposerPrimitive.Root>
+    <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+      <ComposerPrimitive.Root className="agent-bar">
+        <TextBridge text={text} onTextChange={onTextChange} />
+        {commands ? <SlashCommands /> : null}
+        <Mentions />
+        <Mark />
+        <ComposerPrimitive.Input
+          ref={inputRef}
+          name="ask"
+          rows={1}
+          maxRows={strings["ai.composer.max_rows"]}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          submitMode="enter"
+          cancelOnEscape={false}
+          unstable_focusOnRunStart={false}
+          unstable_focusOnScrollToBottom={false}
+          unstable_focusOnThreadSwitched={false}
+          addAttachmentOnPaste={false}
+          onFocus={onFocus}
+          {...(strings["ai.composer.input_history"] ? history : {})}
+        />
+        <AuiIf condition={(s) => !s.thread.isRunning}>
+          <ComposerPrimitive.Send asChild>
+            <Btn icon className="send" title={strings["strings.agent.send"]}>
+              <Icon icon={ArrowUpIcon} />
+            </Btn>
+          </ComposerPrimitive.Send>
+        </AuiIf>
+        <AuiIf condition={(s) => s.thread.isRunning}>
+          <ComposerPrimitive.Cancel asChild>
+            <Btn icon className="stop" title={strings["strings.agent.stop"]}>
+              <Icon icon={StopIcon} weight="fill" />
+            </Btn>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
+      </ComposerPrimitive.Root>
+    </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
 }
 

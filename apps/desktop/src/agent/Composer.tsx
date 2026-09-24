@@ -8,8 +8,17 @@
 // adapter in aui/runtime.ts only projects them into Assistant UI.
 
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { AgentColumn, AgentDock, AgentPanel, Chip, motionMs, type Suggestion } from "@monday/ui";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  AgentColumn,
+  AgentDock,
+  AgentPanel,
+  Chip,
+  Icon,
+  motionMs,
+  type Suggestion,
+} from "@monday/ui";
+import { WarningCircleIcon } from "@phosphor-icons/react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { openExternal } from "../platform/open.ts";
 import { ComposerEnvContext, useComposerEnvValue } from "./aui/context.tsx";
 import { useMondayRuntime } from "./aui/runtime.ts";
@@ -25,6 +34,11 @@ import { MondayToolUIs } from "./aui/tools.tsx";
 import type { ComposerStrings } from "./composerStrings.ts";
 import { type AgentSession, NO_CLIENT } from "./useAgentSession.ts";
 
+export {
+  ComposerMentionsContext,
+  type MentionItem,
+  mentionItems,
+} from "./aui/mentions.tsx";
 export { PreviewView } from "./aui/tools.tsx";
 export { type ComposerStrings, composerStrings } from "./composerStrings.ts";
 
@@ -71,18 +85,33 @@ export function Composer(props: ComposerProps) {
     void agent.send(value);
   };
   const runtime = useMondayRuntime(agent, { onSend });
-  const env = useComposerEnvValue(agent, strings, now, onOpenThread, props.onOpenLink ?? openLink);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const env = useComposerEnvValue(agent, strings, now, onOpenThread, props.onOpenLink ?? openLink, {
+    // Edit and resend: the turn's words go back in the bar, focused at their end.
+    recall: (value) => {
+      onTextChange(value);
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      });
+    },
+    // Continue: a turn of its own that leaves the bar's draft alone.
+    send: (value) => void agent.send(value),
+  });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <MondayToolUIs />
       <ComposerEnvContext.Provider value={env}>
-        <ComposerBody {...props} text={text} />
+        <ComposerBody {...props} text={text} inputRef={inputRef} />
       </ComposerEnvContext.Provider>
     </AssistantRuntimeProvider>
   );
 }
 
 function ComposerBody({
+  inputRef,
   agent,
   mode,
   runtime,
@@ -98,10 +127,9 @@ function ComposerBody({
   plain = false,
   onOpenRuntime,
   card,
-}: ComposerProps) {
+}: ComposerProps & { inputRef: RefObject<HTMLTextAreaElement | null> }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const newThread = useNewThread();
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   // Bottom bar: a collapsing panel stays mounted for one sink (--t-med), then goes.
   const [shown, setShown] = useState(open);
   const leaving = shown && !open;
@@ -126,7 +154,7 @@ function ComposerBody({
       if (input && document.activeElement !== input) input.focus();
     }
     wasOpen.current = open;
-  }, [open, mode]);
+  }, [open, mode, inputRef]);
 
   const onNew = () => {
     setHistoryOpen(false);
@@ -144,6 +172,7 @@ function ComposerBody({
   const local = agent.runtimeInfo?.runtime.kind === "local";
   const error = agent.error ? (
     <div className="agent-error" role="alert">
+      <Icon icon={WarningCircleIcon} />
       <span>{agent.error === NO_CLIENT ? strings["strings.agent.no_session"] : agent.error}</span>
       {agent.error !== NO_CLIENT ? (
         <Chip onClick={() => void agent.retry()}>{strings["strings.agent.retry"]}</Chip>
@@ -206,6 +235,7 @@ function ComposerBody({
           onTextChange={onTextChange}
           onFocus={() => onOpenChange?.(true)}
           inputRef={inputRef}
+          commands={!plain}
         />
       </AgentDock>
     );
@@ -223,7 +253,13 @@ function ComposerBody({
     >
       {body}
       {chips}
-      <Bar placeholder={placeholder} text={text} onTextChange={onTextChange} inputRef={inputRef} />
+      <Bar
+        placeholder={placeholder}
+        text={text}
+        onTextChange={onTextChange}
+        inputRef={inputRef}
+        commands={!plain}
+      />
     </AgentColumn>
   );
 }

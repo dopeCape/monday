@@ -471,7 +471,7 @@ export function createAgentHost(options: AgentHostOptions): AgentHost {
     async getSession(id) {
       const session = await sessions.get(id);
       if (!session) return null;
-      return { session, events: await sessions.events(id) };
+      return { session, events: await sessions.events(id, { at: true }) };
     },
 
     async turn(sessionId, text, context, onEvent) {

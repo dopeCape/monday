@@ -34,7 +34,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { Composer as AgentComposer, composerStrings } from "./agent/Composer.tsx";
+import {
+  Composer as AgentComposer,
+  ComposerMentionsContext,
+  composerStrings,
+  mentionItems,
+} from "./agent/Composer.tsx";
 import { type AgentClient, apiAgentClient } from "./agent/client.ts";
 import { deviceAgentClient } from "./agent/deviceClient.ts";
 import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
@@ -498,6 +503,25 @@ export function App({
       snoozedCount,
     ],
   );
+  // What @ in the composer offers: the newest Threads and their people, every Group, the nav's Sections.
+  const mentionsOn = shell.settings["ai.composer.mentions"];
+  const mentionLimit = shell.settings["ai.composer.mention_threads"];
+  const mentions = useMemo(
+    () =>
+      mentionsOn
+        ? mentionItems({
+            threads: inboxThreads,
+            groups: navGroups,
+            sections: nav.sections.map((s) => ({
+              id: s.key.replace(/^section:/, ""),
+              name: s.label,
+            })),
+            limit: mentionLimit,
+            self: ws.address,
+          })
+        : [],
+    [mentionsOn, mentionLimit, nav.sections, inboxThreads, navGroups, ws.address],
+  );
   const onCompose = () => {
     setActive("inbox");
     setComposeRequest((n) => n + 1);
@@ -939,13 +963,15 @@ export function App({
     ) : null;
 
   return (
-    <div
-      className="app"
-      data-online={online ? "true" : "false"}
-      style={{ gridTemplateColumns: cols.join(" ") }}
-    >
-      {parts}
-      {reauth}
-    </div>
+    <ComposerMentionsContext.Provider value={mentions}>
+      <div
+        className="app"
+        data-online={online ? "true" : "false"}
+        style={{ gridTemplateColumns: cols.join(" ") }}
+      >
+        {parts}
+        {reauth}
+      </div>
+    </ComposerMentionsContext.Provider>
   );
 }

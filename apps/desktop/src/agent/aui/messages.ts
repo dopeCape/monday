@@ -139,7 +139,24 @@ function build(draft: Draft): ThreadMessageLike {
     const part = partOf(e);
     return part ? [part] : [];
   });
-  return { id: draft.id, role: draft.role, content };
+  const at = timeOf(draft.sources);
+  return at
+    ? { id: draft.id, role: draft.role, content, metadata: { custom: { at } } }
+    : { id: draft.id, role: draft.role, content };
+}
+
+/** When a message began: its user turn's time, or its answer's first token. */
+function timeOf(sources: readonly TranscriptEvent[]): string | null {
+  for (const e of sources) {
+    if ((e.kind === "user" || e.kind === "text") && e.at) return e.at;
+  }
+  return null;
+}
+
+/** The time a message carries (metadata.custom.at), when the transcript knew it. */
+export function messageTime(metadata: { custom?: Record<string, unknown> } | undefined) {
+  const at = metadata?.custom?.at;
+  return typeof at === "string" ? at : null;
 }
 
 const sameSources = (a: readonly TranscriptEvent[], b: readonly TranscriptEvent[]) =>
