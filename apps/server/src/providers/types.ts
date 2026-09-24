@@ -13,6 +13,7 @@
 import type {
   AccountCapabilities,
   Attendee,
+  CalendarAccess,
   CalendarInfo,
   EventInput,
   EventStatus,
@@ -260,6 +261,10 @@ export interface ProviderCalendar {
   primary: boolean;
   writable: boolean;
   color: string | null;
+  /** What the Account may do on it, as the Provider says; absent means owner when writable, else reader. */
+  access?: CalendarAccess | undefined;
+  /** Someone else's calendar shared with the Account: who shares it. Null or absent for its own. */
+  sharedBy?: Person | null | undefined;
 }
 
 /** An Event as the Provider holds it; ids are the Provider's own. */

@@ -52,6 +52,10 @@ export interface FakeCalendar extends CalendarSession {
   /** What the Provider mailed, in order. */
   mailed: MailedNotice[];
   calls: Record<string, number>;
+  /** The calendars the Provider lists; a test may add, change or remove one. */
+  calendars: ProviderCalendar[];
+  /** Calendar ids whose sync the Provider refuses, with the words it refuses with. */
+  failing: Map<string, string>;
 }
 
 const LINKS: Record<"google" | "graph" | "caldav", MeetingLinkKind[]> = {
@@ -82,9 +86,26 @@ export function createFakeCalendar(
     log.push({ seq, id, removed });
   };
   const calendars: ProviderCalendar[] = [
-    { id: "primary", name: address, primary: true, writable: true, color: null },
-    { id: "team", name: "Team (shared)", primary: false, writable: false, color: "#4a7" },
+    {
+      id: "primary",
+      name: address,
+      primary: true,
+      writable: true,
+      color: null,
+      access: "owner",
+      sharedBy: null,
+    },
+    {
+      id: "team",
+      name: "Team (shared)",
+      primary: false,
+      writable: false,
+      color: "#4a7",
+      access: "reader",
+      sharedBy: { name: "Team", email: "team@northwind.test" },
+    },
   ];
+  const failing = new Map<string, string>();
   const require = (id: string) => {
     const e = events.get(id);
     if (!e) throw new ProviderError(`event ${id} not found`, "not-found");
@@ -128,6 +149,8 @@ export function createFakeCalendar(
   const session: FakeCalendar = {
     mailed,
     calls,
+    calendars,
+    failing,
     info(): CalendarInfo {
       count("info");
       return {
@@ -148,6 +171,8 @@ export function createFakeCalendar(
       window: EventWindow,
     ): AsyncIterable<CalendarSyncEvent> {
       count("syncEvents");
+      const refusal = failing.get(calendarId);
+      if (refusal) throw new ProviderError(refusal, "unsupported");
       // Google and Graph expand series: the master itself never comes through a sync.
       const hidden = (e: ProviderEvent) => expands && e.recurrence !== null && !e.recurringEventId;
       const inCalendar = () =>

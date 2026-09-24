@@ -328,6 +328,8 @@ export async function createCalDavSession(options: CalDavOptions): Promise<Calen
           primary: out.length === 0,
           writable,
           color: color ? color.slice(0, 7) : null,
+          access: writable ? "owner" : "reader",
+          sharedBy: null,
         });
       }
       if (out.length === 0)

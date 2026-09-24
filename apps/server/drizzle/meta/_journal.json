@@ -127,6 +127,13 @@
       "when": 1790229804459,
       "tag": "0018_calendar_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790234629470,
+      "tag": "0019_calendar_sharing",
+      "breakpoints": true
     }
   ]
 }
