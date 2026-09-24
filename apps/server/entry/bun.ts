@@ -128,7 +128,7 @@ async function main() {
     log,
     debug,
   });
-  const { auth, keys, jobs, mailstore, sync, push, accounts, calendar, judge } = services;
+  const { auth, keys, jobs, mailstore, sync, push, accounts, calendar, judge, demo } = services;
   await services.startAccounts();
   // Drafts saved before their Provider could hold them reach its Drafts folder now.
   await backfillDraftMirrors(handle.db, jobs)
@@ -188,6 +188,7 @@ async function main() {
     changes: changeBus,
     checkpointer,
     judge,
+    ...(demo ? { demo } : {}),
     serverId,
     staleMs: async () => (await readHeartbeatTiming(handle.db)).staleMs,
     remoteAddress: (c) => {

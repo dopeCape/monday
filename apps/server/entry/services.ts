@@ -60,6 +60,12 @@ export interface Services {
   calendar: CalendarModule;
   /** The judge (ADR 0012): TypeSafe over fetch, handed to the intelligence module through createApp. */
   judge: JudgeModel;
+  /**
+   * MONDAY_DEMO=1 only (scripts/demo.ts): the scripted demo assistant holds a
+   * placeholder key for this provider, so the setup conversation runs without
+   * a real key. Null everywhere else.
+   */
+  demo: { provider: "anthropic" } | null;
   /** The setup code printed at first boot, when this boot generated one. */
   setupCode: string | null;
   /** Enqueues every connected Account's sync, watch and push Jobs (idempotent ids). */
@@ -179,6 +185,7 @@ export async function createServices(options: ServicesOptions): Promise<Services
     accounts,
     calendar,
     judge,
+    demo: env.MONDAY_DEMO === "1" ? { provider: "anthropic" } : null,
     setupCode: firstBoot ? setupCode : null,
     async startAccounts() {
       for (const row of await db.query.accounts.findMany()) {
