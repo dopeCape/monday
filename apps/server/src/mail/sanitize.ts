@@ -38,6 +38,7 @@ import {
   stripControls,
   type UrlVerdict,
 } from "./css.ts";
+import { escapeHtml } from "./escape.ts";
 
 export { MAIL_SCOPE } from "./css.ts";
 
@@ -253,17 +254,7 @@ const OUTLOOK_SEPARATORS = new Set(["divrplyfwdmsg", "appendonsend"]);
 /** The largest data: image kept inline. */
 const MAX_DATA_IMAGE = 2_000_000;
 
-const ENTITIES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ENTITIES[c] ?? c);
-}
+export { escapeHtml };
 
 /** A safe href: http, https or mailto with no control characters; null otherwise. */
 export function safeHref(value: string): string | null {

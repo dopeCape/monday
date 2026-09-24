@@ -27,7 +27,6 @@
 //   POST   /external/consents/approve       {id} or {code}, workspaceIds? -> the consent
 //   POST   /external/consents/:id/deny      204
 
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { ExternalCredential } from "@monday/shared";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -35,6 +34,7 @@ import { z } from "zod";
 import { parseBearer } from "../auth/index.ts";
 import type { AppEnv } from "../auth/middleware.ts";
 import { type ConsentPageInput, consentPage, type External } from "../external/index.ts";
+import { createMcpHttpTransport } from "../intelligence/agent/index.ts";
 import { parseBody } from "./validate.ts";
 
 /** Paths the Device middleware lets through: the credential is checked in these routes. */
@@ -142,7 +142,7 @@ export function externalRoutes(options: ExternalRoutesOptions): Hono<AppEnv> {
       }
       workspaceId = (reachable[0] as { id: string }).id;
     }
-    const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+    const transport = await createMcpHttpTransport();
     const server = await external.mcpServer(credential, workspaceId);
     await server.connect(transport);
     try {

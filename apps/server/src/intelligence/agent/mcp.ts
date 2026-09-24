@@ -4,7 +4,8 @@
 // are the tool's own. A tool above the free tier blocks the MCP call until
 // the composer's card is answered; the CLI sees only the result. One server
 // per transport connection: the streamable HTTP route on the Sidecar builds
-// one per request, the stdio launcher one per process.
+// one per request, the stdio launcher one per process. The SDK loads on the
+// first MCP request, not at boot.
 //
 // Slice 19: the same server for an external credential (docs/spec/external-mcp.md),
 // with its scope filtering the listing (read: read-only tools; act: every
@@ -12,14 +13,11 @@
 // every Activity row, and the external search cap. Developer mode never
 // applies here: this server only ever serves monday's tools.
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  type CallToolResult,
-  ListToolsRequestSchema,
-  type Tool as McpTool,
-} from "@modelcontextprotocol/sdk/types.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { CallToolResult, Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import type { ExternalScope } from "@monday/shared";
+import { lazy } from "../../lazy.ts";
 import type { AgentHost } from "./index.ts";
 import type { ToolOutcome } from "./tools/index.ts";
 
@@ -77,8 +75,40 @@ export function scopeError(name: string, scope: ExternalScope): CallToolResult {
   };
 }
 
-export function createMondayMcpServer(agent: AgentHost, context: McpContext): Server {
-  const server = new Server(
+type McpSdk = [
+  typeof import("@modelcontextprotocol/sdk/server/index.js"),
+  typeof import("@modelcontextprotocol/sdk/types.js"),
+  typeof import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
+];
+
+/** The SDK's server side, imported by the first MCP request and reused after it. */
+const loadSdk = lazy(
+  (): Promise<McpSdk> =>
+    Promise.all([
+      import("@modelcontextprotocol/sdk/server/index.js"),
+      import("@modelcontextprotocol/sdk/types.js"),
+      import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
+    ]),
+);
+
+export type McpServer = Server;
+
+/**
+ * A stateless streamable HTTP transport for one request: no MCP session id,
+ * the JSON answer once the tool returns. The SDK loads on the first request.
+ */
+export async function createMcpHttpTransport(): Promise<WebStandardStreamableHTTPServerTransport> {
+  const [, , http] = await loadSdk();
+  return new http.WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true });
+}
+
+export async function createMondayMcpServer(
+  agent: AgentHost,
+  context: McpContext,
+): Promise<Server> {
+  const [{ Server: SdkServer }, { CallToolRequestSchema, ListToolsRequestSchema }] =
+    await loadSdk();
+  const server = new SdkServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } },
   );

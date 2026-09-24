@@ -1,11 +1,11 @@
 // MIME in and out for the adapters that move raw RFC 5322 bytes: IMAP and the
 // fake's send path. Parsing is postal-mime (pure JS, runs on Bun, Node and
-// workers); building is nodemailer's MailComposer. Nothing here knows a wire
-// protocol.
+// workers); building is nodemailer's MailComposer, loaded by the first build.
+// Nothing here knows a wire protocol.
 
 import type { Person } from "@monday/shared";
-import MailComposer from "nodemailer/lib/mail-composer";
 import PostalMime, { type Address, type Email } from "postal-mime";
+import { lazy } from "../lazy.ts";
 import {
   type Flags,
   type MessageSummary,
@@ -187,8 +187,12 @@ function formatPerson(p: Person): string {
   return p.name ? `"${p.name.replace(/"/g, "'")}" <${p.email}>` : p.email;
 }
 
+/** nodemailer's MailComposer, imported by the first build and reused after it. */
+const loadMailComposer = lazy(() => import("nodemailer/lib/mail-composer"));
+
 /** Builds RFC 5322 bytes. Used by tests and by callers that own a Draft. */
 export async function composeMime(input: ComposeInput): Promise<Uint8Array> {
+  const { default: MailComposer } = await loadMailComposer();
   const composer = new MailComposer({
     from: formatPerson(input.from),
     to: input.to.map(formatPerson),

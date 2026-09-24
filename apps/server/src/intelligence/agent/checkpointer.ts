@@ -228,7 +228,12 @@ export async function createSealedCheckpointer(
   const saver = new SealedPostgresSaver(pool, sealer, {
     ...(options.schema ? { schema: options.schema } : {}),
   });
-  await saver.setup();
+  try {
+    await saver.setup();
+  } catch (error) {
+    await pool.end().catch(() => {});
+    throw error;
+  }
   return saver;
 }
 

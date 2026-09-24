@@ -177,7 +177,7 @@ function pipeClientTransport(input: PassThrough, output: PassThrough): Transport
 async function mcpOverStdio(agent: AgentHost, workspaceId: string, sessionId: string) {
   const toServer = new PassThrough();
   const toClient = new PassThrough();
-  const server = createMondayMcpServer(agent, { workspaceId, sessionId });
+  const server = await createMondayMcpServer(agent, { workspaceId, sessionId });
   await server.connect(new StdioServerTransport(toServer, toClient));
   const client = new Client({ name: "claude-code", version: "2.1.223" });
   await client.connect(pipeClientTransport(toClient, toServer));

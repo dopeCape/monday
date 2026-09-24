@@ -95,7 +95,7 @@ export function comparable(row: ActivityRecord) {
 
 async function connected(agent: AgentHost, sessionId: string | null) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const server = createMondayMcpServer(agent, { workspaceId: "ws-fake", sessionId });
+  const server = await createMondayMcpServer(agent, { workspaceId: "ws-fake", sessionId });
   await server.connect(serverSide);
   const client = new Client({ name: "test-cli", version: "0.0.0" });
   await client.connect(clientSide);

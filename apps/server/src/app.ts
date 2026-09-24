@@ -2,7 +2,6 @@
 // here; the entry under entry/ supplies the database, the loopback test and
 // the process-level pieces (research 22, section 2.1).
 
-import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { DeploymentMode, HostedProvider } from "@monday/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
@@ -40,7 +39,7 @@ import {
   type Notifier,
 } from "./external/index.ts";
 import { currentTopology, HEARTBEAT_STALE_MS } from "./heartbeat.ts";
-import { LocalSessionError } from "./intelligence/agent/index.ts";
+import { type CheckpointerSource, LocalSessionError } from "./intelligence/agent/index.ts";
 import {
   AiOffError,
   BriefNotReadyError,
@@ -145,8 +144,8 @@ export interface AppOptions {
    * built on the fake seam.
    */
   intelligence?: Intelligence;
-  /** LangGraph's checkpointer for the Agent host's paused turns; the entry passes PostgresSaver. */
-  checkpointer?: BaseCheckpointSaver;
+  /** LangGraph's checkpointer for the Agent host's paused turns; the entry passes a loader for PostgresSaver, run by the first turn. */
+  checkpointer?: CheckpointerSource;
   /** The judge under the default intelligence module (ADR 0012); the entries pass TypeSafe. Ignored when `intelligence` is given. */
   judge?: JudgeModel;
   /** The browser demo's scripted assistant (MONDAY_DEMO=1 only); ignored when `intelligence` is given. */

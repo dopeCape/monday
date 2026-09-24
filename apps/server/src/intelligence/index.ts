@@ -9,7 +9,6 @@
 // need it back, so the module is made here and handed to the tool server's
 // extension slot after both exist.
 
-import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type {
   AiLevel,
   HostedProvider,
@@ -47,6 +46,7 @@ import {
   type ActivityLog,
   type AgentHost,
   type CalendarSeam,
+  type CheckpointerSource,
   createActivityLog,
   createAgentHost,
   createServerToolHost,
@@ -73,7 +73,7 @@ import {
   type JudgeModel,
   type KeysResolver,
 } from "./runtime/index.ts";
-import { createLangChainChat, createLangChainConverse } from "./runtime/langchain.ts";
+import { lazyLangChainChat, lazyLangChainConverse } from "./runtime/langchain-lazy.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
@@ -196,8 +196,8 @@ export interface IntelligenceOptions {
   policy?: BriefPolicyRule;
   /** The Drafts module the Agent's draft and send tools go through; defaults to one over `db`. */
   drafts?: Drafts;
-  /** LangGraph's checkpointer; the entry passes PostgresSaver, the default keeps checkpoints in memory. */
-  checkpointer?: BaseCheckpointSaver;
+  /** LangGraph's checkpointer; the entry passes a loader for PostgresSaver, the default keeps checkpoints in memory. */
+  checkpointer?: CheckpointerSource;
   /** The integrations the Workflow steps post through; HTTP by default, the fake in tests. */
   integrations?: Integrations;
   /** The MCP servers as steps; the SDK client by default, the fake in tests. */
@@ -434,8 +434,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       return validateTypeSafeKey(key, { baseUrl: s["ai.endpoint.typesafe"] });
     });
   const runtime = createHostedRuntime({
-    chat: demoChat(options.chat ?? createLangChainChat()),
-    converse: demoConverse(options.converse ?? createLangChainConverse()),
+    chat: demoChat(options.chat ?? lazyLangChainChat()),
+    converse: demoConverse(options.converse ?? lazyLangChainConverse()),
     ...(options.judge ? { judge: options.judge } : {}),
     keys: resolveKey,
     settings: hostedSettings,

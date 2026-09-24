@@ -141,8 +141,9 @@ async function main() {
   await backfillDraftMirrors(handle.db, jobs)
     .then((n) => n > 0 && debug(`draft mirrors queued at boot: ${n}`))
     .catch((error) => log(`draft mirror backfill failed: ${error}`));
-  // LangGraph's checkpoints for paused Agent turns, sealed under the Workspace keys, set up right after our migrations.
-  const checkpointer = await createCheckpointer(databaseUrl, handle.db, mailstore);
+  // LangGraph's checkpoints for paused Agent turns, sealed under the Workspace keys; loaded and set
+  // up by the first Hosted turn, so an idle Sidecar never carries LangGraph or its pool.
+  const checkpointer = createCheckpointer(databaseUrl, handle.db, mailstore);
 
   const timing = await readHeartbeatTiming(handle.db);
   const kicker = createProcessKicker({
@@ -193,7 +194,7 @@ async function main() {
     jobs,
     sync,
     changes: changeBus,
-    checkpointer,
+    checkpointer: checkpointer.load,
     judge,
     ...(demo ? { demo } : {}),
     serverId,
