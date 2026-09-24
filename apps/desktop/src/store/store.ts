@@ -161,6 +161,19 @@ export interface StoreOptions {
   log?: (message: string) => void;
   /** Told when the feed says Settings changed on the Server (the Agent's change_setting). */
   onSettingsChanged?: ((keys: string[]) => void) | undefined;
+  /**
+   * Told about Messages the Cache did not hold before this pull (new mail, and
+   * on a first pull every Message: the listener keeps only the recent ones).
+   */
+  onNewMessages?: ((messages: NewMessage[]) => void) | undefined;
+}
+
+/** A Message that just reached the Cache, for new mail notifications. */
+export interface NewMessage {
+  id: Id;
+  threadId: Id;
+  from: { name: string; email: string };
+  date: string;
 }
 
 const CURSOR_KEY = "cursor";
@@ -1024,6 +1037,19 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   };
 
   const applyChanges = async (changes: Change[], cursor: number) => {
+    // Which Messages are new to the Cache, asked before the write lands.
+    const incoming = options.onNewMessages
+      ? changes.flatMap((c) => (c.kind === "message" && !c.payload.removed ? [c.payload] : []))
+      : [];
+    const known = new Set<string>();
+    for (let i = 0; i < incoming.length; i += 400) {
+      const ids = incoming.slice(i, i + 400).map((m) => m.id);
+      const rows = (await driver.query(
+        `select id from messages where id in (${ids.map(() => "?").join(", ")})`,
+        ids,
+      )) as unknown as { id: string }[];
+      for (const r of rows) known.add(r.id);
+    }
     const statements: Statement[] = [];
     for (const c of changes) statements.push(...changeStatements(c));
     // Intents still in the Outbox are the truth for their Threads until the
@@ -1045,6 +1071,17 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     await driver.exec(FTS_MERGE_SQL);
     const settingKeys = changes.flatMap((c) => (c.kind === "settings" ? c.payload.keys : []));
     if (settingKeys.length > 0) options.onSettingsChanged?.(settingKeys);
+    const fresh = incoming.filter((m) => !known.has(m.id));
+    if (fresh.length > 0) {
+      options.onNewMessages?.(
+        fresh.map((m) => ({
+          id: m.id,
+          threadId: m.threadId,
+          from: { name: m.from.name ?? "", email: m.from.email },
+          date: m.date,
+        })),
+      );
+    }
   };
 
   const drainOutbox = async (result: SyncResult) => {

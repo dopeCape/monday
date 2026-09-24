@@ -11,10 +11,12 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { platform } from "../platform/tauri.ts";
 import { useShell } from "../shell/Shell.tsx";
 import type { SqlParam } from "./driver.ts";
+import { createStorePool, type StorePool } from "./pool.ts";
 import type { Store, StoreStatus, SyncProgress } from "./store.ts";
 import type { ContentTransport } from "./transport.ts";
 
@@ -34,131 +36,171 @@ export interface StoreProviderProps {
   failed?: ((message: string, retry: () => void) => ReactNode) | undefined;
 }
 
-export function StoreProvider({
-  workspaceId,
-  children,
-  fallback = null,
-  failed,
-}: StoreProviderProps) {
+/* ------------------------------ The pool ------------------------------ */
+
+const PoolContext = createContext<StorePool | null>(null);
+
+/** The pool of every Workspace's Store; null outside a StorePoolProvider. */
+export function useStorePool(): StorePool | null {
+  return useContext(PoolContext);
+}
+
+/**
+ * Keeps every Workspace's Store open and syncing for the life of the window,
+ * so switching Workspaces is instant and each one already holds its new mail.
+ * A new pool (and fresh Stores) only when the Shell's api itself changes.
+ */
+export function StorePoolProvider({ children }: { children: ReactNode }) {
   const shell = useShell();
-  const [store, setStore] = useState<Store | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  const [content, setContent] = useState<ContentTransport | null>(null);
-  const caps = useRef<Capabilities | null>(null);
-  // The transport reads its Settings live, so a change applies on the next connection.
   const settingsRef = useRef(shell.settings);
   settingsRef.current = shell.settings;
   const refreshRef = useRef(shell.refresh);
   refreshRef.current = shell.refresh;
+  const serverRef = useRef(shell.server);
+  serverRef.current = shell.server;
+  const api = shell.api;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is Try again
-  useEffect(() => {
-    let disposed = false;
-    let opened: Store | null = null;
-    setError(null);
-    void (async () => {
-      const p = await platform();
-      if (p.isTauri) {
-        const [{ createStore }, { tauriDriver }, { apiContent, apiTransport }] = await Promise.all([
-          import("./store.ts"),
-          import("./driver.ts"),
-          import("./transport.ts"),
-        ]);
-        const log = (m: string) => console.warn(`[store] ${m}`);
-        opened = await createStore({
-          workspaceId,
-          driver: await tauriDriver(workspaceId),
-          transport: apiTransport(shell.api, {
-            capabilities: () => caps.current,
-            pollSeconds: () => settingsRef.current["server.poll_seconds"],
-            fallbackAfter: () => settingsRef.current["server.wake_fallback_after"],
+  const pool = useMemo(() => {
+    const caps = new Map<string, Capabilities | null>();
+    const log = (m: string) => console.warn(`[store] ${m}`);
+    return createStorePool({
+      log,
+      async open(workspaceId, hooks) {
+        const p = await platform();
+        if (p.isTauri) {
+          const [{ createStore }, { tauriDriver }, { apiContent, apiTransport }] =
+            await Promise.all([
+              import("./store.ts"),
+              import("./driver.ts"),
+              import("./transport.ts"),
+            ]);
+          const store = await createStore({
+            workspaceId,
+            driver: await tauriDriver(workspaceId),
+            transport: apiTransport(api, {
+              capabilities: () => caps.get(workspaceId) ?? null,
+              pollSeconds: () => settingsRef.current["server.poll_seconds"],
+              fallbackAfter: () => settingsRef.current["server.wake_fallback_after"],
+              log,
+            }),
             log,
-          }),
-          log,
-          // The Agent changed a Setting on the Server: read them again so it shows now.
-          onSettingsChanged: () => void refreshRef.current(),
-        });
-        if (!disposed) setContent(apiContent(shell.api));
-      } else {
+            // The Agent changed a Setting on the Server: read them again so it shows now.
+            onSettingsChanged: () => void refreshRef.current(),
+            onNewMessages: hooks.onNewMessages,
+          });
+          return { store, content: apiContent(api) };
+        }
         const [{ createFakeStore }, { wasmDriver }] = await Promise.all([
           import("./fake.ts"),
           import("./wasm-driver.ts"),
         ]);
-        const fake = await createFakeStore({ workspaceId, driver: await wasmDriver() });
-        opened = fake.store;
-        if (!disposed) setContent(fake.content);
-      }
-      if (disposed) {
-        await opened.close();
-        return;
-      }
-      setStore(opened);
-    })().catch((e: unknown) => {
-      // A Cache that cannot open (a failed migration, a locked file) says so.
-      const message = e instanceof Error ? e.message : String(e);
-      console.error(`[store] opening Workspace ${workspaceId} failed:`, e);
-      if (!disposed) setError(message);
-    });
-    return () => {
-      disposed = true;
-      void opened?.close();
-    };
-  }, [workspaceId, shell.api, attempt]);
-
-  // The wake transport follows the Server the Shell picked (the Sidecar or the
-  // Cloud): its capabilities choose WebSocket, SSE or polling, and a switch of
-  // target reconnects.
-  const probeSeconds = shell.settings["server.probe_seconds"];
-  useEffect(() => {
-    if (!store) return;
-    let cancelled = false;
-    let unsubscribe: (() => void) | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    // Unknown capabilities (the Server was down when asked) read as polling;
-    // they are asked for again every reachability check, and once they answer
-    // the wake connection is remade so the offered push mode takes over.
-    const learn = async (): Promise<boolean> => {
-      if (!shell.server) return false;
-      caps.current = await shell.api.capabilities().catch(() => null);
-      return caps.current !== null;
-    };
-    const keepLearning = () => {
-      if (cancelled || caps.current !== null || !shell.server) return;
-      retry = setTimeout(() => {
-        void learn().then((known) => {
-          if (cancelled) return;
-          if (known) {
-            unsubscribe?.();
-            unsubscribe = store.subscribe();
-          } else {
-            keepLearning();
-          }
+        const fake = await createFakeStore({
+          workspaceId,
+          driver: await wasmDriver(),
+          onNewMessages: hooks.onNewMessages,
         });
-      }, probeSeconds * 1000);
-    };
-    void (async () => {
-      const known = await learn();
-      if (cancelled) return;
-      unsubscribe = store.subscribe();
-      if (!known) keepLearning();
-    })();
-    return () => {
-      cancelled = true;
-      if (retry) clearTimeout(retry);
-      unsubscribe?.();
-    };
-  }, [store, shell.server, shell.api, probeSeconds]);
+        return { store: fake.store, content: fake.content };
+      },
+      // The wake transport follows the Server the Shell picked (the Sidecar or
+      // the Cloud): its capabilities choose WebSocket, SSE or polling. Unknown
+      // capabilities (the Server was down when asked) read as polling and are
+      // asked for again every reachability check; once they answer the wake
+      // connection is remade so the offered push mode takes over.
+      connect(store) {
+        let cancelled = false;
+        let unsubscribe: (() => void) | null = null;
+        let retry: ReturnType<typeof setTimeout> | null = null;
+        const learn = async (): Promise<boolean> => {
+          if (!serverRef.current) return false;
+          const known = await api.capabilities().catch(() => null);
+          caps.set(store.workspaceId, known);
+          return known !== null;
+        };
+        const keepLearning = () => {
+          if (cancelled || caps.get(store.workspaceId) || !serverRef.current) return;
+          retry = setTimeout(() => {
+            void learn().then((known) => {
+              if (cancelled) return;
+              if (known) {
+                unsubscribe?.();
+                unsubscribe = store.subscribe();
+              } else {
+                keepLearning();
+              }
+            });
+          }, settingsRef.current["server.probe_seconds"] * 1000);
+        };
+        void (async () => {
+          const known = await learn();
+          if (cancelled) return;
+          unsubscribe = store.subscribe();
+          if (!known) keepLearning();
+        })();
+        return () => {
+          cancelled = true;
+          if (retry) clearTimeout(retry);
+          unsubscribe?.();
+        };
+      },
+    });
+  }, [api]);
 
-  if (error !== null) {
-    const retry = () => setAttempt((n) => n + 1);
-    if (failed) return <>{failed(error, retry)}</>;
-    throw new Error(error);
+  useEffect(() => () => void pool.close(), [pool]);
+  // A new Server target remakes every wake connection.
+  const server = shell.server;
+  const first = useRef(true);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `server` is the trigger
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    pool.reconnect();
+  }, [server, pool]);
+
+  return <PoolContext.Provider value={pool}>{children}</PoolContext.Provider>;
+}
+
+/* ------------------------------ One Workspace's Store ------------------------------ */
+
+export function StoreProvider(props: StoreProviderProps) {
+  const pool = useContext(PoolContext);
+  // Without a pool (a test, a lone screen) the provider brings its own.
+  if (!pool) {
+    return (
+      <StorePoolProvider>
+        <StoreProvider {...props} />
+      </StorePoolProvider>
+    );
   }
-  if (!store) return <>{fallback}</>;
+  return <PooledStore pool={pool} {...props} />;
+}
+
+function PooledStore({
+  pool,
+  workspaceId,
+  children,
+  fallback = null,
+  failed,
+}: StoreProviderProps & { pool: StorePool }) {
+  useEffect(() => {
+    pool.acquire(workspaceId);
+  }, [pool, workspaceId]);
+  const entry = useSyncExternalStore(
+    pool.subscribe,
+    () => pool.get(workspaceId),
+    () => pool.get(workspaceId),
+  );
+  if (entry?.status === "failed") {
+    const message = entry.error ?? "";
+    const retry = () => pool.retry(workspaceId);
+    if (failed) return <>{failed(message, retry)}</>;
+    throw new Error(message);
+  }
+  if (!entry || entry.status !== "open" || !entry.store) return <>{fallback}</>;
   return (
-    <StoreContext.Provider value={store}>
-      <ContentContext.Provider value={content}>{children}</ContentContext.Provider>
+    <StoreContext.Provider value={entry.store}>
+      <ContentContext.Provider value={entry.content}>{children}</ContentContext.Provider>
     </StoreContext.Provider>
   );
 }

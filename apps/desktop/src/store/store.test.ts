@@ -461,6 +461,40 @@ describe("Settings changed on the Server", () => {
   });
 });
 
+describe("new Messages", () => {
+  test("a Message new to the Cache is reported once; one it already held is not", async () => {
+    const heard: string[][] = [];
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      backoff: { minMs: 5, maxMs: 20 },
+      onNewMessages: (m) => heard.push(m.map((x) => x.id)),
+    });
+    const message = (id: string) =>
+      ({
+        kind: "message",
+        entityId: id,
+        payload: {
+          id,
+          threadId: "t-new",
+          from: { name: "Aoife", email: "aoife@x.test" },
+          to: [],
+          cc: [],
+          date: "2026-09-24T10:00:00.000Z",
+          hasAttachments: false,
+        },
+      }) as unknown as Omit<Change, "seq" | "workspaceId" | "at">;
+    server.record(message("m-1"));
+    await store.sync();
+    expect(heard).toEqual([["m-1"]]);
+    // The same Message again (an edit to its headers) is not new; another one is.
+    server.record(message("m-1"));
+    server.record(message("m-2"));
+    await store.sync();
+    expect(heard).toEqual([["m-1"], ["m-2"]]);
+  });
+});
+
 describe("conflicts (ADR 0005)", () => {
   test("archive while offline, then a server move: both land and the user's archive wins", async () => {
     const { store, server } = await open();

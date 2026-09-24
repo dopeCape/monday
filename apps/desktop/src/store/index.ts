@@ -9,10 +9,12 @@ export { tauriDriver } from "./driver.ts";
 // "./seed.ts" directly.
 export * from "./queries.ts";
 export {
+  StorePoolProvider,
   StoreProvider,
   useContent,
   useLive,
   useStore,
+  useStorePool,
   useStoreStatus,
   useSyncProgress,
 } from "./react.tsx";

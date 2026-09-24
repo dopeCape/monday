@@ -5,6 +5,7 @@ import { type ReactNode, StrictMode, useEffect, useMemo, useRef, useState } from
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import type { DraftMemory, DraftStatus } from "./calendar/drafts.ts";
+import { newMailNotice } from "./notifications/new-mail.ts";
 import type { AccountView } from "./platform/api.ts";
 import { platform, platformNotifier } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
@@ -21,9 +22,11 @@ import { createPrewarm } from "./search/prewarm.ts";
 import { ErrorBoundary } from "./shell/ErrorBoundary.tsx";
 import { Shell, useShell } from "./shell/Shell.tsx";
 import {
+  StorePoolProvider,
   StoreProvider,
   useContent,
   useStore,
+  useStorePool,
   useStoreStatus,
   useSyncProgress,
 } from "./store/index.ts";
@@ -315,6 +318,46 @@ function Gate(): ReactNode {
 
   // The workspace switcher writes workspace.current; the Account it names opens here.
   const picked = pickAccount(accounts, shell.settings["workspace.current"]);
+
+  // Every account's saved mail open and syncing in the background: switching is
+  // instant and new mail is already there (sync.warm_workspaces).
+  const pool = useStorePool();
+  const warm = shell.settings["sync.warm_workspaces"];
+  const workspaceIds = (accounts ?? []).map((a) => a.workspaceId).join(",");
+  useEffect(() => {
+    if (!pool || !server || !warm || !workspaceIds) return;
+    pool.warm(workspaceIds.split(","));
+  }, [pool, server, warm, workspaceIds]);
+
+  // New mail in any account, told once it lands in that account's saved mail.
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
+  const currentRef = useRef(picked?.workspaceId);
+  currentRef.current = picked?.workspaceId;
+  const settingsRef = useRef(shell.settings);
+  settingsRef.current = shell.settings;
+  useEffect(() => {
+    if (!pool) return;
+    return pool.onNewMessages((workspaceId, messages) => {
+      const store = pool.get(workspaceId)?.store;
+      const address = accountsRef.current?.find((a) => a.workspaceId === workspaceId)?.address;
+      if (!store || address === undefined) return;
+      // The window in front, on this account: the list shows it, nothing pops up.
+      if (windowInFront() && currentRef.current === workspaceId) return;
+      void newMailNotice({
+        workspaceId,
+        address,
+        messages,
+        store,
+        settings: settingsRef.current,
+        now: new Date(),
+      })
+        .then((notice) => {
+          if (notice) void platformNotifier.notify(notice.title, notice.body).catch(() => {});
+        })
+        .catch(() => {});
+    });
+  }, [pool]);
   const pickedId = picked?.id;
   const pickedWorkspace = picked?.workspaceId;
   const pickedAddress = picked?.address;
@@ -425,7 +468,9 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <ErrorBoundary area="app">
       <Shell>
-        <WorkspaceGate />
+        <StorePoolProvider>
+          <WorkspaceGate />
+        </StorePoolProvider>
       </Shell>
     </ErrorBoundary>
   </StrictMode>,
