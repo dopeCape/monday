@@ -60,6 +60,13 @@ export const ALL_THREADS_SQL = `
   left join thread_judgments j on j.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
 
+/** ALL_THREADS_SQL for some Threads only: the rows a write named, re-read on their own. */
+export function threadsByIdsSql(count: number): string {
+  const at = ALL_THREADS_SQL.lastIndexOf("order by");
+  const marks = Array.from({ length: count }, () => "?").join(", ");
+  return `${ALL_THREADS_SQL.slice(0, at)}where t.id in (${marks}) ${ALL_THREADS_SQL.slice(at)}`;
+}
+
 /** The Judgments joined onto a Thread row as `j_*` columns, or null when the Thread is not judged yet. */
 export function rowToJudgments(r: Row): ThreadJudgments | null {
   if (typeof r.j_judged_at !== "string" || r.j_judged_at === "") return null;

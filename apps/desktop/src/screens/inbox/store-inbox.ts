@@ -46,6 +46,8 @@ import {
   type Store,
   type StoreIntent,
   TAGS_SQL,
+  tablesRead,
+  threadsByIdsSql,
 } from "../../store/index.ts";
 import type { ContentTransport } from "../../store/transport.ts";
 import type { BodyUnavailable, Inbox, UndoToken } from "./actions.ts";
@@ -136,8 +138,12 @@ export async function createStoreInbox(
   const watch = (threadId: string): Watched => {
     let w = watched.get(threadId);
     if (w) return w;
-    const live = store.live<Record<string, unknown>>(MESSAGES_OF_THREAD_SQL, [threadId]);
-    const briefLive = store.live<Record<string, unknown>>(BRIEF_OF_THREAD_SQL, [threadId]);
+    const live = store.live<Record<string, unknown>>(MESSAGES_OF_THREAD_SQL, [threadId], {
+      threadId,
+    });
+    const briefLive = store.live<Record<string, unknown>>(BRIEF_OF_THREAD_SQL, [threadId], {
+      threadId,
+    });
     const entry: Watched = {
       live,
       briefLive,
@@ -369,6 +375,7 @@ export async function createStoreInbox(
       }
       // What did not come back (the Judge was away) is not asked again until the rules change.
       for (const id of ids) if (!answered.has(id)) unanswered.add(id);
+      for (const id of answered) projectedById.delete(id);
       project(lastRows);
     } catch (error) {
       log(`judge sections: ${error instanceof Error ? error.message : String(error)}`);
@@ -385,6 +392,22 @@ export async function createStoreInbox(
   };
 
   let lastRows: Record<string, unknown>[] = [];
+  /**
+   * Each row's projection, kept while the row object is the same and the
+   * rules have not changed (generation), so a write that touched ten Threads
+   * sections ten, not the whole Cache.
+   */
+  type Projected = { thread: Thread; deleted: boolean; lastSender: string | null };
+  const projectedById = new Map<
+    string,
+    {
+      row: Record<string, unknown>;
+      generation: number;
+      projected: Projected;
+      judgments: ThreadJudgments | null;
+    }
+  >();
+  let generation = 0;
   /** The Threads in the trash, which the domain type does not carry. */
   const deletedIds = new Set<string>();
   /** The Judgments per Thread, as the Cache holds them. */
@@ -400,9 +423,21 @@ export async function createStoreInbox(
     judgmentsById.clear();
     folders.clear();
     const all = rows.map((r) => {
+      const id = String(r.id);
+      const held = projectedById.get(id);
+      if (held && held.row === r && held.generation === generation) {
+        if (held.judgments) judgmentsById.set(id, held.judgments);
+        return held.projected;
+      }
       const entry = rowToCachedThread(r, store.workspaceId);
       if (entry.judgments) judgmentsById.set(entry.thread.id, entry.judgments);
-      return { thread: sectioned(entry), deleted: entry.deleted, lastSender: entry.lastSender };
+      const projected = {
+        thread: sectioned(entry),
+        deleted: entry.deleted,
+        lastSender: entry.lastSender,
+      };
+      projectedById.set(id, { row: r, generation, projected, judgments: entry.judgments });
+      return projected;
     });
     folderEntries = all;
     for (const { thread, deleted } of all) {
@@ -416,17 +451,94 @@ export async function createStoreInbox(
     scheduleJudgments();
   };
 
-  const live = store.live<Record<string, unknown>>(ALL_THREADS_SQL);
-  await new Promise<void>((resolve) => {
-    let first = true;
-    live.subscribe((rows) => {
-      project(rows);
-      if (first) {
-        first = false;
-        resolve();
-      }
+  // The Thread list: read whole once, then only the Threads each write names
+  // are read again and put in place. Re-reading the whole Cache on every sync
+  // page and every body that lands is what made a large Account lag.
+  const listTables = tablesRead(ALL_THREADS_SQL);
+  const rowIndex = new Map<string, Record<string, unknown>>();
+  const newer = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const la = String(a.last_activity ?? "");
+    const lb = String(b.last_activity ?? "");
+    if (la !== lb) return la > lb ? -1 : 1;
+    return Number(b.rid ?? 0) - Number(a.rid ?? 0);
+  };
+  const sameRow = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((k) => a[k] === b[k]);
+  };
+  let pendingIds = new Set<string>();
+  let pendingAll = false;
+  let reading: Promise<void> | null = null;
+  let listClosed = false;
+  const readAll = async () => {
+    const rows = await store.query<Record<string, unknown>>(ALL_THREADS_SQL);
+    rowIndex.clear();
+    for (const r of rows) rowIndex.set(String(r.id), r);
+    project(rows);
+  };
+  const readSome = async (ids: string[]) => {
+    const fresh = new Map<string, Record<string, unknown>>();
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const rows = await store.query<Record<string, unknown>>(threadsByIdsSql(chunk.length), chunk);
+      for (const r of rows) fresh.set(String(r.id), r);
+    }
+    const changed = ids.filter((id) => {
+      const before = rowIndex.get(id);
+      const after = fresh.get(id);
+      return before === undefined || after === undefined
+        ? before !== after
+        : !sameRow(before, after);
     });
+    if (changed.length === 0) return;
+    const gone = new Set(changed);
+    const rows = lastRows.filter((r) => !gone.has(String(r.id)));
+    for (const id of changed) {
+      const r = fresh.get(id);
+      if (r) rowIndex.set(id, r);
+      else rowIndex.delete(id);
+    }
+    for (const id of changed) {
+      const r = fresh.get(id);
+      if (!r) continue;
+      let lo = 0;
+      let hi = rows.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (newer(rows[mid] as Record<string, unknown>, r) <= 0) lo = mid + 1;
+        else hi = mid;
+      }
+      rows.splice(lo, 0, r);
+    }
+    project(rows);
+  };
+  const drain = () => {
+    if (reading || listClosed) return;
+    reading = (async () => {
+      try {
+        while ((pendingAll || pendingIds.size > 0) && !listClosed) {
+          const all = pendingAll;
+          const ids = [...pendingIds];
+          pendingAll = false;
+          pendingIds = new Set();
+          if (all || ids.length > 2000) await readAll();
+          else await readSome(ids);
+        }
+      } catch (error) {
+        log(`thread list: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        reading = null;
+      }
+    })();
+  };
+  const stopWrites = store.onWrite((tables, threadIds) => {
+    if (![...tables].some((t) => listTables.has(t))) return;
+    if (threadIds === undefined) pendingAll = true;
+    else for (const id of threadIds) pendingIds.add(id);
+    drain();
   });
+  await readAll();
 
   // Groups and Tags as the Cache holds them (the feed keeps both current).
   let groups: readonly Group[] = [];
@@ -437,6 +549,9 @@ export async function createStoreInbox(
     new Promise<void>((resolve) => {
       groupsLive.subscribe((rows) => {
         groups = rows.map((r) => rowToGroup(r, store.workspaceId));
+        // A rule may name a Group by name: a renamed Group sections again.
+        generation += 1;
+        if (lastRows.length > 0) project(lastRows);
         for (const l of [...listeners]) l();
         resolve();
       });
@@ -659,6 +774,7 @@ export async function createStoreInbox(
     resection() {
       // Reworded rules may need new answers; the Server re-asks only for a changed statement.
       unanswered.clear();
+      generation += 1;
       project(lastRows);
     },
     judged: (threadId) => judgedById.get(threadId) ?? EMPTY_JUDGED,
@@ -667,7 +783,8 @@ export async function createStoreInbox(
       judgeTimer = null;
       stopStatus();
       waiting.clear();
-      live.close();
+      listClosed = true;
+      stopWrites();
       groupsLive.close();
       tagsLive.close();
       listeners.clear();

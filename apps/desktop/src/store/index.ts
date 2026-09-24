@@ -24,12 +24,14 @@ export {
   createStore,
   type DraftStoreIntent,
   type LiveQuery,
+  type LiveScope,
   type Store,
   type StoreIntent,
   type StoreOptions,
   type StoreStatus,
   type SyncProgress,
   type SyncResult,
+  tablesRead,
 } from "./store.ts";
 export {
   apiContent,

@@ -243,6 +243,23 @@ describe("a long stream renders only what is near the view", () => {
     expect(Math.max(...at)).toBeLessThan(1100);
   });
 
+  test("a list mounted hidden (a Workspace kept behind the one on show) stays windowed", async () => {
+    // Styled (the --row-h token is there) but no height: display none.
+    restore = fakeLayout();
+    const proto = HTMLElement.prototype;
+    const client = Object.getOwnPropertyDescriptor(proto, "clientHeight");
+    Object.defineProperty(proto, "clientHeight", { configurable: true, get: () => 0 });
+    document.documentElement.style.setProperty("--row-h", "44px");
+    try {
+      await mount({ inbox: bigInbox() });
+      expect(rowIds().length).toBeLessThan(40);
+      expect(rowIds()[0]).toBe("t0");
+    } finally {
+      if (client) Object.defineProperty(proto, "clientHeight", client);
+      document.documentElement.style.removeProperty("--row-h");
+    }
+  });
+
   test("a missing overscan Setting (a stale settings object) still renders rows", async () => {
     restore = fakeLayout();
     await mount({ inbox: bigInbox() }, { "inbox.overscan_rows": undefined as unknown as number });

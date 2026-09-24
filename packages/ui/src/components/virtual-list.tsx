@@ -4,7 +4,8 @@
 // layout and remembered by key, items not yet rendered are estimated from
 // the average of their kind (a row, a Section heading), and before the first
 // measurement from the density's --row-h token. Where there is no layout at
-// all (a DOM without CSS, as in render tests) every item renders.
+// all (a DOM without CSS, as in render tests) every item renders; a hidden
+// list (no height, but styled) keeps the window it had.
 //
 // The render callback must return exactly one element per item; the list
 // finds them by position after its start marker. A change of `focusKey`
@@ -162,7 +163,10 @@ export function VirtualList<T extends VirtualItem>({
     if (!el) return;
     const height = el.clientHeight;
     if (height === 0) {
-      if (!noLayout) setNoLayout(true);
+      // No height is either no layout at all (no stylesheet: render everything)
+      // or a list that is hidden for now (a Workspace kept mounted behind the
+      // one on show): that one keeps its window, or it would render every row.
+      if (!noLayout && rowToken() === 0) setNoLayout(true);
       return;
     }
     if (noLayout) setNoLayout(false);

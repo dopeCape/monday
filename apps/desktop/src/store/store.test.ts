@@ -214,6 +214,32 @@ describe("live queries", () => {
     await tick(20);
     expect(threadRuns).toEqual([11, 10]);
   });
+
+  test("scoped to a Thread, skip writes that name other Threads", async () => {
+    const { store } = await open();
+    // The result changes with any star; scoped to e1, only e1's writes re-run it.
+    const starred = store.live<{ n: number }>(
+      "select count(*) as n from threads where starred = 1",
+      [],
+      { threadId: "e1" },
+    );
+    const runs: number[] = [];
+    starred.subscribe((rows) => runs.push(rows[0]?.n ?? 0));
+    await until(() => runs.length === 1);
+    const base = runs[0] ?? 0;
+    const seen: Array<readonly string[] | undefined> = [];
+    const stop = store.onWrite((_tables, ids) => seen.push(ids));
+    await store.intent({ kind: "star", threadId: "e2" });
+    await tick(20);
+    expect(runs).toEqual([base]);
+    await store.intent({ kind: "unstar", threadId: "e1" });
+    await store.intent({ kind: "star", threadId: "e1" });
+    await tick(20);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(seen).toEqual([["e2"], ["e1"], ["e1"]]);
+    stop();
+    starred.close();
+  });
 });
 
 describe("intents", () => {

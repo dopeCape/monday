@@ -53,6 +53,37 @@ export interface LiveQuery<T> {
   close(): void;
 }
 
+/** What a live query is about, so writes elsewhere pass it by. */
+export interface LiveScope {
+  threadId?: Id | undefined;
+}
+
+/** The Cache tables whose rows belong to one Thread; a write to them can name its Threads. */
+const THREAD_SCOPED_TABLES = new Set([
+  "threads",
+  "messages",
+  "thread_tags",
+  "thread_labels",
+  "thread_judgments",
+  "briefs",
+]);
+
+/** The Thread a change is about, when it only touches that Thread's rows. */
+function threadOfChange(c: Change): Id | undefined {
+  switch (c.kind) {
+    case "thread":
+      return c.payload.id;
+    case "message":
+    case "thread_tags":
+    case "thread_labels":
+    case "judgments":
+    case "brief":
+      return c.payload.threadId;
+    default:
+      return undefined;
+  }
+}
+
 /** An intent as a screen raises it; the Store stamps time and actor. */
 export type StoreIntent = IntentArgs & { threadId: Id; actor?: Actor; at?: IsoDate };
 /** A Draft or send intent as the compose surface raises it (ADR 0010). */
@@ -102,7 +133,20 @@ export interface SyncProgress {
 export interface Store {
   readonly workspaceId: Id;
   query<T = Row>(sql: string, params?: SqlParam[]): Promise<T[]>;
-  live<T = Row>(sql: string, params?: SqlParam[]): LiveQuery<T>;
+  /**
+   * Re-runs when a write touches a table it reads. Scoped to one Thread
+   * (`threadId`), it skips writes that name other Threads, so a sync page
+   * does not re-read every open reader.
+   */
+  live<T = Row>(sql: string, params?: SqlParam[], scope?: LiveScope): LiveQuery<T>;
+  /**
+   * Called after every write with the tables it touched and the Threads it
+   * named, or undefined when the write could touch any Thread. A screen that
+   * holds many rows re-reads only those (the Inbox's Thread list).
+   */
+  onWrite(
+    listener: (tables: ReadonlySet<string>, threadIds: readonly Id[] | undefined) => void,
+  ): () => void;
   /** Applies locally, appends to the Outbox, returns. The network happens in sync. */
   intent(action: StoreIntent | DraftStoreIntent | InviteStoreIntent): Promise<void>;
   /**
@@ -965,13 +1009,19 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   /* Live queries */
   interface LiveEntry {
     tables: Set<string>;
+    threadId: Id | undefined;
     refresh: () => Promise<unknown>;
   }
   const lives = new Set<LiveEntry>();
+  const writeListeners = new Set<
+    (tables: ReadonlySet<string>, threadIds: readonly Id[] | undefined) => void
+  >();
 
-  const invalidate = (tables: Iterable<string>) => {
+  const invalidate = (tables: Iterable<string>, threadIds?: readonly Id[]) => {
     const touched = new Set(tables);
+    const named = threadIds ? new Set(threadIds) : undefined;
     for (const entry of lives) {
+      if (named && entry.threadId !== undefined && !named.has(entry.threadId)) continue;
       for (const t of entry.tables) {
         if (touched.has(t)) {
           void entry.refresh();
@@ -979,15 +1029,20 @@ export async function createStore(options: StoreOptions): Promise<Store> {
         }
       }
     }
+    for (const l of [...writeListeners]) l(touched, threadIds);
   };
 
-  /** Every write goes through here so live queries learn what changed. */
-  const write = async (statements: Statement[]) => {
+  /**
+   * Every write goes through here so live queries learn what changed.
+   * `threadIds` names every Thread whose rows it touches; undefined when it
+   * could be any.
+   */
+  const write = async (statements: Statement[], threadIds?: readonly Id[]) => {
     if (statements.length === 0) return;
     await driver.batch(statements);
     const touched = new Set<string>();
     for (const s of statements) for (const t of tablesWritten(s.sql)) touched.add(t);
-    invalidate(touched);
+    invalidate(touched, threadIds);
   };
 
   const readCursor = async () => {
@@ -1051,7 +1106,20 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       for (const r of rows) known.add(r.id);
     }
     const statements: Statement[] = [];
-    for (const c of changes) statements.push(...changeStatements(c));
+    // The Threads this page touches; any change that writes Thread rows
+    // without naming one makes it every Thread.
+    const named = new Set<Id>();
+    let anyThread = false;
+    for (const c of changes) {
+      const own = changeStatements(c);
+      statements.push(...own);
+      const id = threadOfChange(c);
+      if (id !== undefined) named.add(id);
+      else if (
+        own.some((st) => [...tablesWritten(st.sql)].some((t) => THREAD_SCOPED_TABLES.has(t)))
+      )
+        anyThread = true;
+    }
     // Intents still in the Outbox are the truth for their Threads until the
     // Server has them: replay their local effect over whatever the feed said.
     const touched = changes.flatMap((c) => {
@@ -1062,12 +1130,16 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       if (c.kind === "invite") return [c.payload.id];
       return [];
     });
-    for (const intent of await pendingFor(touched)) statements.push(...localOf(intent));
+    for (const intent of await pendingFor(touched)) {
+      statements.push(...localOf(intent));
+      if ("threadId" in intent) named.add(intent.threadId);
+      else anyThread = true;
+    }
     statements.push({
       sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
       params: [CURSOR_KEY, String(cursor)],
     });
-    await write(statements);
+    await write(statements, anyThread ? undefined : [...named]);
     await driver.exec(FTS_MERGE_SQL);
     const settingKeys = changes.flatMap((c) => (c.kind === "settings" ? c.payload.keys : []));
     if (settingKeys.length > 0) options.onSettingsChanged?.(settingKeys);
@@ -1158,10 +1230,13 @@ export async function createStore(options: StoreOptions): Promise<Store> {
         try {
           const brief = await fetchBrief.call(transport, threadId);
           if (brief) {
-            await write(cachedBriefStatements(brief));
+            await write(cachedBriefStatements(brief), [threadId]);
             landed += 1;
           } else {
-            await write([{ sql: "delete from briefs where thread_id = ?", params: [threadId] }]);
+            await write(
+              [{ sql: "delete from briefs where thread_id = ?", params: [threadId] }],
+              [threadId],
+            );
           }
         } catch (error) {
           log(`brief ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1335,7 +1410,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       return driver.query(sql, params) as Promise<T[]>;
     },
 
-    live<T = Row>(sql: string, params: SqlParam[] = []): LiveQuery<T> {
+    live<T = Row>(sql: string, params: SqlParam[] = [], scope: LiveScope = {}): LiveQuery<T> {
       const listeners = new Set<(rows: T[]) => void>();
       let rows: T[] | undefined;
       let last = "";
@@ -1369,7 +1444,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
         })();
         return running;
       };
-      const entry: LiveEntry = { tables: tablesRead(sql), refresh };
+      const entry: LiveEntry = { tables: tablesRead(sql), threadId: scope.threadId, refresh };
       lives.add(entry);
       void refresh();
       return {
@@ -1415,30 +1490,37 @@ export async function createStore(options: StoreOptions): Promise<Store> {
         const { kind: _k, threadId: _t, at: _x, actor: _y, ...rest } = intent;
         payload = rest;
       }
-      await write([
-        ...localOf(intent),
-        {
-          sql: "insert into outbox (thread_id, kind, payload, at, actor) values (?, ?, ?, ?, ?)",
-          params: [entityId, intent.kind, payload, intent.at, intent.actor],
-        },
-      ]);
+      await write(
+        [
+          ...localOf(intent),
+          {
+            sql: "insert into outbox (thread_id, kind, payload, at, actor) values (?, ?, ?, ?, ?)",
+            params: [entityId, intent.kind, payload, intent.at, intent.actor],
+          },
+        ],
+        "threadId" in intent ? [intent.threadId] : undefined,
+      );
       // The row is already on screen; a subscribed Store tells the Server in the
       // background, an unsubscribed one (tests, offline by choice) waits for sync().
       if (subscribed) void sync();
     },
 
     async cacheMessages(rows) {
-      await write(cachedMessageStatements(rows));
+      await write(cachedMessageStatements(rows), [...new Set(rows.map((r) => r.threadId))]);
     },
 
     async cacheBody(messageId, body) {
       // `body_at` is the read clock the pre-warm Job's eviction orders by (ADR 0011).
-      await write([
-        {
-          sql: "update messages set body_text = ?, body_html = ?, body_at = ? where id = ?",
-          params: [body.text, body.html, now().toISOString(), messageId],
-        },
-      ]);
+      const owner = await driver.query("select thread_id from messages where id = ?", [messageId]);
+      await write(
+        [
+          {
+            sql: "update messages set body_text = ?, body_html = ?, body_at = ? where id = ?",
+            params: [body.text, body.html, now().toISOString(), messageId],
+          },
+        ],
+        owner.map((r) => String(r.thread_id)),
+      );
       await driver.exec(FTS_MERGE_SQL);
     },
 
@@ -1447,11 +1529,16 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     },
 
     async cacheBrief(brief) {
-      await write(cachedBriefStatements(brief));
+      await write(cachedBriefStatements(brief), [brief.threadId]);
     },
 
     warmBriefs,
     warmEvents,
+
+    onWrite(listener) {
+      writeListeners.add(listener);
+      return () => writeListeners.delete(listener);
+    },
 
     async setReplyAll(threadId, replyAll) {
       await write([
@@ -1481,7 +1568,10 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       const landing = bodies.filter(
         (b) => known.has(b.id) && (b.bodyState === undefined || b.bodyState === "fetched"),
       );
-      await write(landing.flatMap((b) => bodyStatements(b, at)));
+      await write(
+        landing.flatMap((b) => bodyStatements(b, at)),
+        [...new Set(landing.map((b) => b.threadId))],
+      );
       if (landing.length > 0) await driver.exec(FTS_MERGE_SQL);
       return landing.length;
     },

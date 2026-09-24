@@ -29,6 +29,32 @@ async function settled(inbox: StoreInbox, check: () => boolean): Promise<void> {
 }
 
 describe("storeInbox", () => {
+  test("a write re-reads only the Threads it names; the rest keep their objects", async () => {
+    const { inbox, store } = await open();
+    const sqls: string[] = [];
+    const query = store.query.bind(store);
+    store.query = ((sql: string, params?: never[]) => {
+      sqls.push(sql);
+      return query(sql, params);
+    }) as typeof store.query;
+    await store.write([
+      { sql: "update messages set body_text = 'x' where thread_id = ?", params: ["e1"] },
+    ]);
+    await tick(20);
+    const before = inbox.threads();
+    const e5 = inbox.thread("e5");
+    await store.intent({ kind: "star", threadId: "e1" });
+    await settled(inbox, () => inbox.thread("e1")?.starred === true);
+    const listReads = sqls.filter((q) => q.includes("from threads t"));
+    // The unnamed write reads the whole list once; the star reads e1 alone.
+    expect(listReads.some((q) => q.includes("where t.id in (?)"))).toBe(true);
+    expect(listReads.filter((q) => !q.includes("where t.id in")).length).toBeLessThanOrEqual(1);
+    // Rows the write did not touch keep their objects.
+    expect(inbox.thread("e5")).toBe(e5);
+    expect(inbox.threads()).not.toBe(before);
+    inbox.close();
+  });
+
   test("starts with every fixture Thread newest first and hands out a stable array", async () => {
     const { inbox } = await open();
     expect(inbox.threads().map((t) => t.id)).toEqual(ids());
