@@ -3,6 +3,7 @@
 // only when one of these changes.
 
 import type { Settings } from "@monday/shared";
+import { type FlowStrings, flowStrings } from "../screens/workflows/flow.ts";
 import type { AgentStrings } from "./transcript.ts";
 
 const COMPOSER_KEYS = [
@@ -28,6 +29,12 @@ const COMPOSER_KEYS = [
   "strings.agent.preview_groups.none",
   "strings.agent.preview_groups.note",
   "strings.agent.preview_send",
+  "strings.agent.preview_workflow.create",
+  "strings.agent.preview_workflow.update",
+  "strings.agent.preview_workflow.enable",
+  "strings.agent.preview_workflow.disable",
+  "strings.agent.preview_workflow.renamed",
+  "strings.agent.preview_workflow.trigger",
   "strings.agent.preview_setting",
   "strings.agent.preview_event.schedule",
   "strings.agent.preview_event.update",
@@ -79,12 +86,15 @@ const COMPOSER_KEYS = [
   "ai.composer.elapsed_after_seconds",
 ] as const satisfies readonly (keyof Settings)[];
 
-export type ComposerStrings = AgentStrings & Pick<Settings, (typeof COMPOSER_KEYS)[number]>;
+/** The composer's Settings, and the words of the Workflow card's flow. */
+export type ComposerStrings = AgentStrings &
+  Pick<Settings, (typeof COMPOSER_KEYS)[number]> &
+  FlowStrings;
 
 export function composerStrings(settings: Settings): ComposerStrings {
   const out: Partial<Record<keyof Settings, unknown>> = {};
   for (const key of COMPOSER_KEYS) out[key] = settings[key];
-  return out as ComposerStrings;
+  return { ...flowStrings(settings), ...out } as ComposerStrings;
 }
 
 export const fill = (template: string, values: Record<string, string | number>) =>

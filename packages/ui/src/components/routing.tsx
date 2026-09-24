@@ -395,3 +395,188 @@ export function PreviewCard({
     </SideCard>
   );
 }
+
+/* ------------------------------ The Routing page, redone ------------------------------ */
+
+export interface RuleGroupCardProps {
+  id: string;
+  name: string;
+  icon?: IconComponent | undefined;
+  /** "6 unread", "12 threads": already worded, in order. */
+  stats: readonly string[];
+  /** Mean Confidence 0..1, drawn as a small meter; null until something was scored. */
+  confidence: number | null;
+  /** "94% confident", already worded. */
+  confidenceLabel?: string | undefined;
+  ruleLabel: string;
+  sentence: string;
+  predicate?: Predicate | undefined;
+  noRule?: string | undefined;
+  /** The Predicate as worded chips: "Anyone at careers.example.com". */
+  alwaysLabel: string;
+  always: readonly string[];
+  /** "Asks you below 70% sure", when the Group sets its own threshold. */
+  threshold?: string | undefined;
+  /** Set while the AI level keeps sorting paused: the rule is kept, and says so. */
+  pausedLabel?: string | undefined;
+  subgroups?: readonly SubgroupItem[] | undefined;
+  /** "Learned from 3 of your corrections", with the Examples behind a toggle. */
+  learned?:
+    | { label: string; toggle: string; open: boolean; onToggle: () => void; body: ReactNode }
+    | undefined;
+  changeRuleLabel: string;
+  onChangeRule?: ((id: string) => void) | undefined;
+  openLabel: string;
+  onOpen?: ((id: string) => void) | undefined;
+  onOpenSubgroup?: ((id: string) => void) | undefined;
+  /** The rule editor, when it is open on this Group. */
+  children?: ReactNode | undefined;
+  className?: string | undefined;
+}
+
+/** One Group as the Routing page shows it: who it is for in plain words, what always goes there, what it learned. */
+export function RuleGroupCard({
+  id,
+  name,
+  icon,
+  stats,
+  confidence,
+  confidenceLabel,
+  ruleLabel,
+  sentence,
+  predicate,
+  noRule,
+  alwaysLabel,
+  always,
+  threshold,
+  pausedLabel,
+  subgroups,
+  learned,
+  changeRuleLabel,
+  onChangeRule,
+  openLabel,
+  onOpen,
+  onOpenSubgroup,
+  children,
+  className,
+}: RuleGroupCardProps) {
+  const pct = confidence === null ? null : Math.round(Math.max(0, Math.min(1, confidence)) * 100);
+  return (
+    <article
+      className={cx("rgrp", className)}
+      data-group={id}
+      data-paused={pausedLabel ? "true" : undefined}
+    >
+      <header className="rgrp-h">
+        <span className="rgrp-icon" aria-hidden="true">
+          {icon ? <Icon icon={icon} /> : <span className="dot" />}
+        </span>
+        <div className="rgrp-name">
+          <b>{name}</b>
+          <span className="rgrp-stats">
+            {stats.map((s) => (
+              <span key={s}>{s}</span>
+            ))}
+          </span>
+        </div>
+        {pct !== null ? (
+          <span className="rgrp-conf" data-pct={pct}>
+            <span className="meter" aria-hidden="true">
+              <span style={{ width: `${pct}%` }} />
+            </span>
+            <span className="rgrp-conf-label">{confidenceLabel}</span>
+          </span>
+        ) : null}
+        <div className="acts">
+          <Btn sm onClick={() => onChangeRule?.(id)}>
+            {changeRuleLabel}
+          </Btn>
+          {onOpen ? (
+            <Btn sm onClick={() => onOpen(id)}>
+              {openLabel}
+            </Btn>
+          ) : null}
+        </div>
+      </header>
+      <div className="rgrp-rule">
+        <span className="rgrp-label">
+          {ruleLabel}
+          {pausedLabel ? <Tag>{pausedLabel}</Tag> : null}
+        </span>
+        {sentence ? (
+          <RuleText sentence={sentence} predicate={predicate} />
+        ) : (
+          <div className="rule empty">
+            <div>{noRule}</div>
+          </div>
+        )}
+      </div>
+      {always.length || threshold ? (
+        <div className="rgrp-always">
+          {always.length ? <span className="rgrp-label">{alwaysLabel}</span> : null}
+          {always.map((a) => (
+            <span key={a} className="rgrp-chip">
+              {a}
+            </span>
+          ))}
+          {threshold ? <span className="rgrp-threshold">{threshold}</span> : null}
+        </div>
+      ) : null}
+      {subgroups?.length ? (
+        <div className="rgrp-subs">
+          {subgroups.map((s) => (
+            <button
+              type="button"
+              key={s.id}
+              className="rgrp-sub"
+              data-group={s.id}
+              onClick={() => onOpenSubgroup?.(s.id)}
+            >
+              {s.icon ? <Icon icon={s.icon} /> : <span className="dot" aria-hidden="true" />}
+              <span className="rgrp-sub-main">
+                <b>{s.name}</b>
+                {s.description ? <span>{s.description}</span> : null}
+              </span>
+              {s.count ? <Tag>{s.count}</Tag> : null}
+              <Icon icon={CaretRightIcon} className="caret" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {learned ? (
+        <div className="rgrp-learned">
+          <span>{learned.label}</span>
+          <button type="button" className="link" onClick={learned.onToggle}>
+            {learned.toggle}
+          </button>
+          {learned.open ? <div className="rgrp-examples">{learned.body}</div> : null}
+        </div>
+      ) : null}
+      {children}
+    </article>
+  );
+}
+
+export interface RoutedRowProps {
+  name: string;
+  subject: string;
+  /** The Group it went to. */
+  target: string;
+  /** Why, in plain words: "Matched careers.example.com", "You put it here". */
+  why?: string | undefined;
+  className?: string | undefined;
+}
+
+/** A Thread routing placed, with where it went and why. */
+export function RoutedRow({ name, subject, target, why, className }: RoutedRowProps) {
+  return (
+    <div className={cx("routed", className)}>
+      <Avatar name={name} color="var(--fg-muted)" />
+      <div className="routed-main">
+        <span className="routed-subject">{subject}</span>
+        {why ? <span className="routed-why">{why}</span> : null}
+      </div>
+      <span className="tag">{target}</span>
+    </div>
+  );
+}
