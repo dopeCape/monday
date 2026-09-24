@@ -24,11 +24,12 @@ const NEW = "new";
 
 /** The commands as the menu lists them: the Setting's, in its order, then /new. */
 export function commandList(
-  commands: Readonly<Record<string, string>>,
+  commands: Readonly<Record<string, string>> | undefined,
   newLabel: string,
 ): { id: string; description: string; prompt: string | null }[] {
   return [
-    ...Object.entries(commands)
+    // A Settings object from before this key existed must not take the composer down.
+    ...Object.entries(commands ?? {})
       .filter(([id]) => id !== NEW)
       .map(([id, prompt]) => ({ id, description: prompt.trim(), prompt })),
     { id: NEW, description: newLabel, prompt: null },
@@ -109,7 +110,7 @@ const kindOf = (item: Unstable_TriggerItem): MentionKind =>
   (MENTION_KINDS as readonly string[]).includes(item.type) ? (item.type as MentionKind) : "thread";
 
 export function Mentions() {
-  const { strings } = useComposerEnv();
+  const { strings, actions } = useComposerEnv();
   const items = useMentionItems();
   const categories = useMemo(
     () =>
@@ -136,8 +137,10 @@ export function Mentions() {
       className="agent-menu"
       data-kind="mentions"
     >
-      <ComposerPrimitive.Unstable_TriggerPopover.Directive
-        formatter={mention.directive.formatter}
+      {/* A pick leaves the typed words alone: the @query goes and the pick waits above the input as a chip. */}
+      <ComposerPrimitive.Unstable_TriggerPopover.Action
+        onExecute={(item) => actions.attach({ id: item.id, type: kindOf(item), label: item.label })}
+        removeOnExecute
       />
       <ComposerPrimitive.Unstable_TriggerPopoverCategories className="items">
         {(list) =>

@@ -4071,6 +4071,7 @@ export const settingsSchema = {
   "strings.agent.copy_code": str("ai", "Copy a code block", "Copy code"),
   "strings.agent.copy_table": str("ai", "Copy a table", "Copy table"),
   "strings.agent.latest": str("ai", "Scroll to the newest turn", "Jump to the latest"),
+  "strings.agent.detach": str("ai", "Remove a dropped Thread before sending", "Remove {name}"),
   "strings.agent.drop_untitled": str(
     "ai",
     "A Thread dropped into the Agent without a subject",
@@ -6107,6 +6108,13 @@ export const settingsSchema = {
     "monday cannot reach its sync server to read the progress.",
   ),
   "strings.first_sync.retry": str("accounts", "First sync: retry", "Retry"),
+  "strings.crash.title": str(
+    "appearance",
+    "A part of the app failed to draw",
+    "Something went wrong here.",
+  ),
+  "strings.crash.retry": str("appearance", "Try drawing the failed part again", "Try again"),
+  "strings.crash.reload": str("appearance", "Reload the whole window", "Reload"),
   "strings.first_sync.settings": str("accounts", "First sync: open settings", "Open settings"),
   "strings.first_sync.back": str("accounts", "First sync: back from settings", "Back to sync"),
   "strings.first_sync.provider.gmail": str("accounts", "Provider name: Gmail", "Gmail"),

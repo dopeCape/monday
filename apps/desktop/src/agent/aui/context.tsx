@@ -22,6 +22,8 @@ export interface ComposerActions {
   send(text: string): void;
   /** Starts a new Session: /new. */
   newSession(): void;
+  /** Adds a mention (an @ pick) above the input as a chip; it travels with the next turn. */
+  attach(item: { id: string; type: string; label: string }): void;
 }
 
 export interface ComposerEnv {
@@ -43,6 +45,7 @@ export function useComposerEnv(): ComposerEnv {
 export interface BarActions {
   recall(text: string): void;
   send(text: string): void;
+  attach?: (item: { id: string; type: string; label: string }) => void;
 }
 
 export function useComposerEnvValue(
@@ -66,6 +69,7 @@ export function useComposerEnvValue(
       recall: (text) => latest.current.bar.recall(text),
       send: (text) => latest.current.bar.send(text),
       newSession: () => void latest.current.agent.newSession(),
+      attach: (item) => latest.current.bar.attach?.(item),
     }),
     [],
   );

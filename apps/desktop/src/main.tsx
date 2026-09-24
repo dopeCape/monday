@@ -15,6 +15,7 @@ import { createStoreRouting, type StoreRouting } from "./screens/routing/routing
 import { Settings } from "./screens/Settings.tsx";
 import { createSearch, type FetchBodies } from "./search/index.ts";
 import { createPrewarm } from "./search/prewarm.ts";
+import { ErrorBoundary } from "./shell/ErrorBoundary.tsx";
 import { Shell, useShell } from "./shell/Shell.tsx";
 import {
   StoreProvider,
@@ -326,8 +327,10 @@ function WorkspaceGate() {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <Shell>
-      <WorkspaceGate />
-    </Shell>
+    <ErrorBoundary area="app">
+      <Shell>
+        <WorkspaceGate />
+      </Shell>
+    </ErrorBoundary>
   </StrictMode>,
 );

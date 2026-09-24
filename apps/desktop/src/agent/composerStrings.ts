@@ -51,6 +51,7 @@ const COMPOSER_KEYS = [
   "strings.agent.copy_table",
   "strings.agent.latest",
   "strings.agent.drop_untitled",
+  "strings.agent.detach",
   "strings.agent.edit",
   "strings.agent.reload",
   "strings.agent.working_for",

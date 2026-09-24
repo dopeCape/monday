@@ -70,6 +70,21 @@ export function readThreadDrag(data: DataTransfer | null): DraggedThread[] {
   }
 }
 
+/** Mentions waiting above the input, as the directives the sent turn carries. */
+export function mentionDirectives(
+  items: readonly { id: string; type: string; label: string }[],
+): string {
+  return items
+    .map((i) =>
+      unstable_defaultDirectiveFormatter.serialize({
+        id: i.id,
+        type: i.type,
+        label: cleanLabel(i.label),
+      }),
+    )
+    .join(" ");
+}
+
 /** Dropped Threads as the same directives an @ pick inserts, so the Agent reads them alike. */
 export function threadDirectives(threads: readonly DraggedThread[], untitled: string): string {
   return threads

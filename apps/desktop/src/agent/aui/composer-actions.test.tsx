@@ -272,9 +272,14 @@ describe("the @ mention menu", () => {
       qa('.agent-menu[data-kind="mentions"] .agent-menu-item .name').map((n) => n.textContent),
     ).toEqual(["Hiring", "Finance"]);
     await click(menu()?.querySelector(".agent-menu-item"));
-    expect(bar()?.value).toBe("move these to :group[Hiring]{name=g1} ");
-    await send(bar()?.value ?? "");
+    // The pick waits above the input as a chip; the typed words stay plain, the @ is gone.
+    expect(bar()?.value.trim()).toBe("move these to");
+    expect(qa(".agent-attached-chip").map((c) => [c.dataset.type, c.textContent])).toEqual([
+      ["group", "Hiring"],
+    ]);
+    await send("move these to");
     expect(client.sent.at(-1)?.text).toBe("move these to :group[Hiring]{name=g1}");
+    expect(qa(".agent-attached-chip")).toHaveLength(0);
     const chip = q(".agent-thread .u .agent-mention");
     expect(chip?.dataset.type).toBe("group");
     expect(chip?.textContent).toBe("Hiring");
@@ -334,10 +339,23 @@ describe("Threads dropped into the Agent", () => {
     expect(document.documentElement.getAttribute("data-drop-over")).toBe("agent");
     fire(column, "drop", data);
     await settle();
-    expect(textState.value).toBe(
-      ":thread[Quarterly report draft]{name=t1} :thread[(no subject)]{name=t2} ",
-    );
     expect(document.documentElement.getAttribute("data-drop-over")).toBeNull();
+    // They wait above the input as chips; the typed words stay plain.
+    expect(textState.value).toBe("");
+    expect(qa(".agent-attached-chip .label").map((c) => c.textContent)).toEqual([
+      "Quarterly report draft",
+      "(no subject)",
+    ]);
+    // A chip can be taken off before sending.
+    await click(q('.agent-attached-chip [aria-label="Remove (no subject)"]'));
+    expect(qa(".agent-attached-chip")).toHaveLength(1);
+    // Sending carries the words and the Thread as a mention the Agent acts on, then clears the chips.
+    await send("summarize this");
+    expect(client.sent.at(-1)?.text).toBe(
+      "summarize this :thread[Quarterly report draft]{name=t1}",
+    );
+    expect(qa(".agent-attached-chip")).toHaveLength(0);
+    expect(q(".agent-thread .u .agent-mention")?.textContent).toBe("Quarterly report draft");
   });
 
   test("a drag without Threads (a file, some text) is left alone", async () => {

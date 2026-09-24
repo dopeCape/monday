@@ -6813,3 +6813,85 @@ button.prov {
 .row[draggable="true"] {
   -webkit-user-drag: element;
 }
+
+/* ------------------------------ A part that failed to draw (shell/ErrorBoundary.tsx) ------------------------------ */
+.crash {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 100vh;
+  padding: 32px;
+  background: var(--bg);
+  color: var(--fg);
+  text-align: center;
+}
+.crash.compact {
+  min-height: 0;
+  height: 100%;
+  border-left: 1px solid var(--border);
+}
+.crash b {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.crash-detail {
+  max-width: 420px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.crash-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Threads dropped into the Agent wait above the input as chips until the turn is sent. */
+.agent-bar[data-attached] {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: var(--bar-h);
+  row-gap: 6px;
+  padding-top: 8px;
+  padding-bottom: 6px;
+}
+.agent-attached {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  animation: fade-in var(--t-fast) var(--ease);
+}
+.agent-mention.agent-attached-chip {
+  gap: 5px;
+  max-width: 280px;
+  margin: 0;
+  padding: 2px 2px 2px 8px;
+  font-size: var(--fs-sm);
+}
+.agent-attached-chip .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-attached-chip .x {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.agent-attached-chip .x:hover {
+  background: var(--hover);
+  color: var(--fg);
+}

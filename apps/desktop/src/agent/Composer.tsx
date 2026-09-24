@@ -20,8 +20,23 @@ import {
 import { WarningCircleIcon } from "@phosphor-icons/react";
 import { type DragEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { openExternal } from "../platform/open.ts";
+import { ErrorBoundary } from "../shell/ErrorBoundary.tsx";
 import { ComposerEnvContext, useComposerEnvValue } from "./aui/context.tsx";
-import { carriesThreads, readThreadDrag, threadDirectives } from "./aui/mentions.tsx";
+import {
+  carriesThreads,
+  cleanLabel,
+  type DraggedThread,
+  mentionDirectives,
+  readThreadDrag,
+} from "./aui/mentions.tsx";
+
+/** A mention waiting above the input: a dropped Thread or an @ pick of any kind. */
+interface Attached {
+  id: string;
+  type: string;
+  label: string;
+}
+
 import { useMondayRuntime } from "./aui/runtime.ts";
 import {
   Bar,
@@ -78,12 +93,34 @@ export interface ComposerProps {
 
 const openLink = (href: string) => void openExternal(href);
 
+/** The composer in its own error boundary: a bug in it leaves the rest of the window working. */
 export function Composer(props: ComposerProps) {
+  return (
+    <ErrorBoundary area="agent" compact>
+      <ComposerRoot {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function ComposerRoot(props: ComposerProps) {
   const { agent, strings, now, text, onTextChange, onOpenThread } = props;
+  // Threads dropped from the list wait above the input as chips and travel
+  // with the next turn as mentions: the textarea only holds plain words.
+  const [attached, setAttached] = useState<readonly Attached[]>([]);
+  const attachedRef = useRef(attached);
+  attachedRef.current = attached;
+  const addAttached = (items: readonly Attached[]) =>
+    setAttached((now) => [
+      ...now,
+      ...items.filter((t) => !now.some((n) => n.id === t.id && n.type === t.type)),
+    ]);
   const onSend = (value: string) => {
-    if (!value.trim()) return;
+    const pending = attachedRef.current;
+    if (!value.trim() && pending.length === 0) return;
+    const mentions = mentionDirectives(pending);
     onTextChange("");
-    void agent.send(value);
+    setAttached([]);
+    void agent.send([value.trim(), mentions].filter(Boolean).join(" "));
   };
   const runtime = useMondayRuntime(agent, { onSend });
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -100,12 +137,29 @@ export function Composer(props: ComposerProps) {
     },
     // Continue: a turn of its own that leaves the bar's draft alone.
     send: (value) => void agent.send(value),
+    // An @ pick joins the chips a drop adds.
+    attach: (item) => addAttached([item]),
   });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <MondayToolUIs />
       <ComposerEnvContext.Provider value={env}>
-        <ComposerBody {...props} text={text} inputRef={inputRef} />
+        <ComposerBody
+          {...props}
+          text={text}
+          inputRef={inputRef}
+          attached={attached}
+          onAttach={(threads) =>
+            addAttached(
+              threads.map((t) => ({
+                id: t.id,
+                type: "thread",
+                label: cleanLabel(t.subject) || strings["strings.agent.drop_untitled"],
+              })),
+            )
+          }
+          onDetach={(id) => setAttached((now) => now.filter((t) => t.id !== id))}
+        />
       </ComposerEnvContext.Provider>
     </AssistantRuntimeProvider>
   );
@@ -128,7 +182,15 @@ function ComposerBody({
   plain = false,
   onOpenRuntime,
   card,
-}: ComposerProps & { inputRef: RefObject<HTMLTextAreaElement | null> }) {
+  attached,
+  onAttach,
+  onDetach,
+}: ComposerProps & {
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  attached: readonly Attached[];
+  onAttach: (threads: readonly DraggedThread[]) => void;
+  onDetach: (id: string) => void;
+}) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const newThread = useNewThread();
   // Bottom bar: a collapsing panel stays mounted for one sink (--t-med), then goes.
@@ -213,8 +275,8 @@ function ComposerBody({
     runtime: strings["strings.agent.open_runtime"],
   };
 
-  // Threads dragged from the list land in the bar as mentions, the same
-  // directives an @ pick inserts, ready for the user to say what to do.
+  // Threads dragged from the list wait above the bar as chips; the turn that
+  // is sent next carries them as mentions, the directives an @ pick inserts.
   const dropHandlers = {
     onDragOver: (e: DragEvent<HTMLDivElement>) => {
       if (!carriesThreads(e.dataTransfer)) return;
@@ -233,9 +295,7 @@ function ComposerBody({
       const threads = readThreadDrag(e.dataTransfer);
       if (threads.length === 0) return;
       e.preventDefault();
-      const directives = threadDirectives(threads, strings["strings.agent.drop_untitled"]);
-      const before = text.trim();
-      onTextChange(`${before ? `${before} ` : ""}${directives} `);
+      onAttach(threads);
       onOpenChange?.(true);
       requestAnimationFrame(() => {
         const input = inputRef.current;
@@ -271,6 +331,8 @@ function ComposerBody({
             onFocus={() => onOpenChange?.(true)}
             inputRef={inputRef}
             commands={!plain}
+            attached={attached}
+            onDetach={onDetach}
           />
         </AgentDock>
       </div>
@@ -296,6 +358,8 @@ function ComposerBody({
           onTextChange={onTextChange}
           inputRef={inputRef}
           commands={!plain}
+          attached={attached}
+          onDetach={onDetach}
         />
       </AgentColumn>
     </div>

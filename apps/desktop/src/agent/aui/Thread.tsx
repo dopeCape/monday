@@ -33,13 +33,14 @@ import {
   PencilSimpleIcon,
   StopIcon,
   WarningIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { type Ref, useEffect, useRef } from "react";
 import { fill } from "../composerStrings.ts";
 import { runtimeLabel } from "../runtimeLine.ts";
 import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
 import { AgentText } from "./Markdown.tsx";
-import { MentionText } from "./mentions.tsx";
+import { MENTION_ICONS, MentionText } from "./mentions.tsx";
 import { type LineData, messageTime } from "./messages.ts";
 import { groupSteps, StepsGroup, ToolFallback } from "./tools.tsx";
 import { Mentions, SlashCommands } from "./triggers.tsx";
@@ -382,6 +383,9 @@ export interface BarProps {
   inputRef?: Ref<HTMLTextAreaElement> | undefined;
   /** The / menu; off in a one-conversation composer (onboarding), where /new has no place. */
   commands?: boolean | undefined;
+  /** Threads dropped in, shown above the input until the turn is sent. */
+  attached?: readonly { id: string; type: string; label: string }[] | undefined;
+  onDetach?: ((id: string) => void) | undefined;
 }
 
 export function Bar({
@@ -391,12 +395,41 @@ export function Bar({
   onFocus,
   inputRef,
   commands = true,
+  attached = [],
+  onDetach,
 }: BarProps) {
   const { strings } = useComposerEnv();
   const history = unstable_useComposerInputHistory();
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-      <ComposerPrimitive.Root className="agent-bar">
+      <ComposerPrimitive.Root className="agent-bar" data-attached={attached.length || undefined}>
+        {attached.length ? (
+          <div className="agent-attached">
+            {attached.map((a) => (
+              <span
+                key={`${a.type}:${a.id}`}
+                className="agent-mention agent-attached-chip"
+                data-type={a.type}
+              >
+                <Icon
+                  icon={MENTION_ICONS[a.type as keyof typeof MENTION_ICONS] ?? MENTION_ICONS.thread}
+                />
+                <span className="label" title={a.label}>
+                  {a.label}
+                </span>
+                <button
+                  type="button"
+                  className="x"
+                  aria-label={fill(strings["strings.agent.detach"], { name: a.label })}
+                  title={fill(strings["strings.agent.detach"], { name: a.label })}
+                  onClick={() => onDetach?.(a.id)}
+                >
+                  <Icon icon={XIcon} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <TextBridge text={text} onTextChange={onTextChange} />
         {commands ? <SlashCommands /> : null}
         <Mentions />
