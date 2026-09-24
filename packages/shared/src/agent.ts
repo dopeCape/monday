@@ -4,6 +4,7 @@
 // the Server's tool server and a Device's ToolHost share one vocabulary.
 
 import type {
+  CalendarDraft,
   Draft,
   Id,
   IsoDate,
@@ -139,6 +140,8 @@ export type ToolPreview =
   | { kind: "send"; to: Person[]; cc: Person[]; subject: string; text: string }
   | { kind: "setting"; key: string; from: unknown; to: unknown }
   | { kind: "event"; event: EventPreview }
+  /** A calendar draft the Agent proposes: the card shows the summary with Apply and Discard. */
+  | { kind: "calendar-draft"; draft: CalendarDraft }
   | { kind: "text"; text: string };
 
 /** An Event as the scheduling card shows it before it exists (slice 18). */

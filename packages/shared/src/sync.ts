@@ -4,6 +4,7 @@
 
 import type {
   Attendee,
+  CalendarAccess,
   CalendarSource,
   DraftAttachment,
   DraftKind,
@@ -240,6 +241,9 @@ export interface CalendarChange {
   writable: boolean;
   visible: boolean;
   color: string | null;
+  access?: CalendarAccess | undefined;
+  sharedBy?: Person | null | undefined;
+  error?: string | null | undefined;
   deleted?: boolean | undefined;
 }
 
