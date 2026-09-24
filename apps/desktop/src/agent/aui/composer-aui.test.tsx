@@ -338,7 +338,9 @@ describe("the composer on Assistant UI", () => {
     expect(signal?.aborted).toBe(true);
     expect(q(".agent-bar .stop")).toBeNull();
     expect(q(".agent-bar .send")).not.toBeNull();
-    expect(q(".agent-thread .a .line.stopped")?.textContent).toBe("Stopped");
+    expect(q(".agent-thread .a .line.stopped span")?.textContent).toBe("Stopped");
+    // Continue is one tap away on the stopped turn.
+    expect(q(".agent-thread .a .line.stopped .chip")?.textContent).toBe("Continue");
     expect(q(".tool.step .st")?.textContent?.trim()).toBe("Stopped");
     expect(q(".agent-md")?.textContent).not.toContain("too late");
     expect(q(".agent-error")).toBeNull();

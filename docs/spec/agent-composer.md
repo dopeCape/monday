@@ -36,6 +36,18 @@ Behaviors a tester can check. Every default is a Setting (ADR 0004) unless marke
 - A card whose Runtime built-in tools were used in Developer mode is marked with a warning glyph and the tool name.
 - Errors render as a card with the failure and a Retry. Offline: hosted work shows one line, "Offline, hosted work paused", and Local runtime work continues.
 
+## Turn actions and menus
+
+Built on Assistant UI's headless primitives (action bar, composer trigger popover), styled with monday's tokens.
+
+- Each user turn shows, on hover or focus, its time, Copy, and Edit and resend, which puts the turn back in the bar, focused; sending it is a new turn (the transcript is linear, nothing is thrown away).
+- A finished answer shows Copy on hover; the last answer shows Copy and Ask again, which sends the turn it answered again as a new turn. Its time shows on hover (`ai.composer.timestamps`). Times come from the Server for a loaded Session and from the Device for a live one.
+- A stopped turn's line offers Continue while it is the last turn; it sends `strings.agent.continue_prompt`.
+- While a turn works, the Working line and the running steps line count the time once it passes `ai.composer.elapsed_after_seconds`.
+- `/` in the bar lists `ai.composer.commands` (name and words) and `/new`, filtered as the user types; picking one starts the message with its words, `/new` starts a new Session. Arrow keys, Enter and Esc work in the menu. Not offered in the onboarding conversation.
+- `@` in the bar lists Threads, Groups, Sections and people by kind (`ai.composer.mentions`; the newest `ai.composer.mention_threads` Threads and their people), and typing searches every kind. A pick inserts `:kind[Label]{name=id}`; the system prompt tells the Agent to act on the id. The sent turn shows it as a chip; a Thread chip opens the Thread.
+- A card that asks carries one line saying what approving means (`strings.agent.asks.always`, `strings.agent.asks.reversible`) and its tool's glyph; its status glyph is a raised hand while it waits, a cross once declined, a turn-back once undone.
+
 ## Suggestions
 
 - Up to four chips, shown when the Session is empty and when the panel first opens. Sources, in order: pending approvals and failed Runs, threads in Needs your reply, the current Thread's Brief actions, and two evergreen prompts. Chips are plain sentences, no icons.

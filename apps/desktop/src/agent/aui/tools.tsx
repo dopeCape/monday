@@ -20,11 +20,36 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import type { ToolCall, ToolPreview } from "@monday/shared";
-import { AgentSteps, formatListTime, formatSpan, ToolCard } from "@monday/ui";
+import { AgentSteps, formatListTime, formatSpan, type IconComponent, ToolCard } from "@monday/ui";
+import {
+  ArchiveIcon,
+  ArrowCounterClockwiseIcon,
+  CalendarCheckIcon,
+  CalendarIcon,
+  CalendarPlusIcon,
+  CalendarXIcon,
+  ClockIcon,
+  EnvelopeOpenIcon,
+  FlowArrowIcon,
+  FolderSimpleIcon,
+  FolderSimplePlusIcon,
+  FunnelIcon,
+  GearSixIcon,
+  LayoutIcon,
+  LightningIcon,
+  ListBulletsIcon,
+  MagnifyingGlassIcon,
+  PaperPlaneTiltIcon,
+  PencilSimpleIcon,
+  RowsIcon,
+  ShareFatIcon,
+  TagIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
-import { useComposerEnv } from "./context.tsx";
+import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
 import { ERROR_TOOL, isStep, type ToolArtifact } from "./messages.ts";
 
 /* ------------------------------ Previews ------------------------------ */
@@ -161,6 +186,57 @@ export function cardTitle(call: ToolCall, strings: ComposerStrings): string {
     : toolTitle(call);
 }
 
+/**
+ * What each tool does, as a glyph before its title (Assistant UI's tool
+ * timeline: a verb, an icon, a chip). A tool not listed has none.
+ */
+export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
+  search_threads: MagnifyingGlassIcon,
+  read_thread: EnvelopeOpenIcon,
+  list_groups_and_sections: ListBulletsIcon,
+  list_events: CalendarIcon,
+  list_workflows: FlowArrowIcon,
+  list_workflow_runs: FlowArrowIcon,
+  archive_threads: ArchiveIcon,
+  snooze_threads: ClockIcon,
+  tag_threads: TagIcon,
+  move_threads: FolderSimpleIcon,
+  trash_threads: TrashIcon,
+  organize_existing: FunnelIcon,
+  draft_message: PencilSimpleIcon,
+  send_draft: PaperPlaneTiltIcon,
+  forward_thread: ShareFatIcon,
+  schedule_event: CalendarPlusIcon,
+  update_event: CalendarIcon,
+  rsvp: CalendarCheckIcon,
+  delete_event: CalendarXIcon,
+  change_setting: GearSixIcon,
+  change_layout: LayoutIcon,
+  create_section: RowsIcon,
+  update_section: RowsIcon,
+  delete_section: RowsIcon,
+  create_group: FolderSimplePlusIcon,
+  update_group: FolderSimpleIcon,
+  create_action: LightningIcon,
+  update_action: LightningIcon,
+  delete_action: LightningIcon,
+  undo: ArrowCounterClockwiseIcon,
+};
+
+export const toolIcon = (tool: string): IconComponent | undefined => TOOL_ICONS[tool];
+
+/**
+ * The line an approval card carries while it asks (Assistant UI's approval
+ * card subtitle): an always-ask call waits for Approve, a reversible one
+ * applies with Undo. Nothing for a call that does not ask.
+ */
+export function approvalNote(call: ToolCall, strings: ComposerStrings): string | undefined {
+  if (call.status !== "waiting") return undefined;
+  return call.tier === "always-ask"
+    ? strings["strings.agent.asks.always"]
+    : strings["strings.agent.asks.reversible"];
+}
+
 const artifactOf = (props: { artifact?: unknown }): ToolArtifact | null => {
   const a = props.artifact as ToolArtifact | undefined;
   return a && typeof a === "object" && "call" in a ? a : null;
@@ -191,6 +267,8 @@ function MondayTool(props: ToolCallMessagePartProps) {
     <ToolCard
       call={shown}
       className={step ? (stopped ? "step stopped" : "step") : stopped ? "stopped" : undefined}
+      icon={toolIcon(call.tool)}
+      note={approvalNote(call, strings)}
       title={cardTitle(call, strings)}
       statusLabel={
         stopped
@@ -325,7 +403,7 @@ export function StepsGroup({
   indices: readonly number[];
   children: ReactNode;
 }) {
-  const { strings } = useComposerEnv();
+  const { strings, runStartedAt } = useComposerEnv();
   const parts = useAuiState((s) => s.message.parts) as readonly PartLike[];
   const running = useAuiState((s) => s.message.status?.type === "running");
   const last = indices.length ? Math.max(...indices) : -1;
@@ -344,13 +422,15 @@ export function StepsGroup({
     return artifact ? [artifact.call] : [];
   });
   const active = running && !answered;
+  // Only the active line ticks: a folded group reads as settled.
+  const seconds = useElapsedSeconds(active ? runStartedAt : null);
   const n = calls.length;
   return (
     <AgentSteps
       open={open}
       onToggle={() => setOpen((o) => !o)}
       active={active}
-      label={active ? strings["strings.agent.working"] : stepsSummary(calls, strings)}
+      label={active ? workingLabel(strings, seconds) : stepsSummary(calls, strings)}
       count={
         n === 1
           ? strings["strings.agent.steps_one"]

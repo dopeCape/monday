@@ -2,18 +2,21 @@
 // of turns, the panel that rises from the bar, and the column layouts.
 import type { Layout, Thread, ToolCall } from "@monday/shared";
 import {
+  ArrowCounterClockwiseIcon,
   CaretDownIcon,
   CaretRightIcon,
   CheckIcon,
   CircleNotchIcon,
   ClockCounterClockwiseIcon,
+  HandPalmIcon,
   PlusIcon,
   WarningCircleIcon,
   WarningIcon,
+  XCircleIcon,
 } from "@phosphor-icons/react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { cx, formatListTime, humanize } from "../format.ts";
-import { Icon } from "./icon.tsx";
+import { Icon, type IconComponent } from "./icon.tsx";
 import { Btn, Chip, ColHead, Kbd, Mark } from "./primitives.tsx";
 
 /* ------------------------------ ToolCard ------------------------------ */
@@ -44,6 +47,20 @@ export interface ToolCardProps {
   actions?: readonly string[] | undefined;
   onAction?: ((action: string, call: ToolCall) => void) | undefined;
   className?: string | undefined;
+  /** What the tool does, drawn before the title: a magnifier for a search, a plane for a send. */
+  icon?: IconComponent | undefined;
+  /** One line on a card that asks, saying what the approval means: "Nothing leaves your mailbox until you approve." */
+  note?: string | undefined;
+}
+
+/** The status glyph: a check, a spinner, a raised hand while it asks, a cross once declined, a turn-back once undone. */
+function statusIcon(call: ToolCall): IconComponent | null {
+  if (call.status === "running") return CircleNotchIcon;
+  if (call.status === "waiting") return HandPalmIcon;
+  if (call.status === "failed") return WarningCircleIcon;
+  if (call.declined) return XCircleIcon;
+  if (call.undoneAt) return ArrowCounterClockwiseIcon;
+  return CheckIcon;
 }
 
 export function ToolCard({
@@ -54,26 +71,34 @@ export function ToolCard({
   actions,
   onAction,
   className,
+  icon,
+  note,
 }: ToolCardProps) {
   const status =
     statusLabel ??
     (call.status === "done" && call.result ? call.result : STATUS_LABEL[call.status]);
+  const glyph = statusIcon(call);
   return (
     <div
       className={cx("tool", STATUS_CLASS[call.status], className)}
       data-tier={call.tier}
       data-builtin={call.builtin ? "true" : undefined}
+      data-declined={call.declined ? "true" : undefined}
+      data-undone={call.undoneAt ? "true" : undefined}
     >
       <span className="t">
-        {call.builtin ? <Icon icon={WarningIcon} /> : null}
+        {call.builtin ? (
+          <Icon icon={WarningIcon} />
+        ) : icon ? (
+          <Icon icon={icon} className="ti" />
+        ) : null}
         {title ?? humanize(call.tool)}
       </span>
       <span className="st">
-        {call.status === "done" ? <Icon icon={CheckIcon} /> : null}
-        {call.status === "running" ? <Icon icon={CircleNotchIcon} /> : null}
-        {call.status === "failed" ? <Icon icon={WarningCircleIcon} /> : null} {status}
+        {glyph ? <Icon icon={glyph} /> : null} {status}
       </span>
       <span className="d">{call.inputSummary}</span>
+      {note && call.status === "waiting" ? <span className="note">{note}</span> : null}
       {preview ? <div className="preview">{preview}</div> : null}
       {actions?.length ? (
         <div className="acts">

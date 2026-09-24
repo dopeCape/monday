@@ -5,6 +5,9 @@
 //
 //   send (Enter, a suggestion)  -> onNew     -> agent.send (a turn, or /new)
 //   Stop                        -> onCancel  -> agent.stop
+//   Ask again (the last answer) -> onReload  -> agent.send of the turn it answered,
+//                                  as a new turn: the Server's transcript is linear,
+//                                  so there are no branches to pick between
 //   the thread list             -> threadList: History is agent.history,
 //                                  "new" is agent.newSession, a row is agent.openSession
 //
@@ -31,6 +34,19 @@ export function textOf(message: AppendMessage): string {
     .trim();
 }
 
+/** The user text of the message an answer followed, for Ask again. */
+export function turnText(messages: readonly ThreadMessageLike[], id: string | null): string | null {
+  const message = messages.find((m) => m.id === id);
+  if (!message || message.role !== "user") return null;
+  const { content } = message;
+  if (typeof content === "string") return content.trim() || null;
+  const text = content
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
 export interface MondayRuntimeOptions {
   /** Sends one user text: the screen clears its own copy first, then the Session takes it. */
   onSend: (text: string) => void;
@@ -39,8 +55,8 @@ export interface MondayRuntimeOptions {
 export function useMondayRuntime(agent: AgentSession, options: MondayRuntimeOptions) {
   const toMessages = useMemo(() => createMessageCache(), []);
   const messages = useMemo(() => toMessages(agent.events), [toMessages, agent.events]);
-  const latest = useRef({ agent, options });
-  latest.current = { agent, options };
+  const latest = useRef({ agent, options, messages });
+  latest.current = { agent, options, messages };
 
   const threadList = useMemo<ExternalStoreThreadListAdapter>(
     () => ({
@@ -67,6 +83,11 @@ export function useMondayRuntime(agent: AgentSession, options: MondayRuntimeOpti
       if (text) latest.current.options.onSend(text);
     },
     onCancel: () => latest.current.agent.stop(),
+    // Ask again leaves the bar's draft alone: the Session sends the old turn as a new one.
+    onReload: async (parentId) => {
+      const text = turnText(latest.current.messages, parentId);
+      if (text) void latest.current.agent.send(text);
+    },
     adapters: { threadList },
     unstable_capabilities: { copy: true },
   });
