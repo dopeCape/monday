@@ -160,6 +160,47 @@ describe("storeInbox", () => {
   });
 });
 
+describe("storeInbox at the speed of the key", () => {
+  test("read, unread and star show on the row at once, before the Cache write lands", async () => {
+    const { inbox } = await open();
+    const unread = inbox.threads().find((t) => t.unread);
+    if (!unread) throw new Error("no unread fixture");
+    let told = 0;
+    const stop = inbox.subscribe(() => told++);
+    const pending = inbox.markRead([unread.id]);
+    // Not awaited: the row already reads as read, and the list was told.
+    expect(inbox.thread(unread.id)?.unread).toBe(false);
+    expect(inbox.threads().find((t) => t.id === unread.id)?.unread).toBe(false);
+    expect(told).toBeGreaterThan(0);
+    await pending;
+    const star = inbox.star([unread.id]);
+    expect(inbox.thread(unread.id)?.starred).toBe(true);
+    await star;
+    // The live query confirms both.
+    await settled(inbox, () => inbox.thread(unread.id)?.starred === true);
+    expect(inbox.thread(unread.id)?.unread).toBe(false);
+    stop();
+    inbox.close();
+  });
+
+  test("prefetch reads a neighbour's Messages ahead, and lets go of the ones not named again", async () => {
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { content: fake.content });
+    const [a, b] = inbox.threads();
+    if (!a || !b) throw new Error("fixtures");
+    inbox.prefetch?.([a.id, b.id]);
+    await settled(inbox, () => inbox.messages(a.id).length > 0 && inbox.messages(b.id).length > 0);
+    // Opening the neighbour finds its Messages already read.
+    let first: number | null = null;
+    const stop = inbox.watchMessages(b.id, () => {});
+    first = inbox.messages(b.id).length;
+    expect(first).toBeGreaterThan(0);
+    stop();
+    inbox.prefetch?.([]);
+    inbox.close();
+  });
+});
+
 describe("storeInbox bodies", () => {
   test("an open that finds no Server says why the bodies are missing, and the next open clears it", async () => {
     const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });

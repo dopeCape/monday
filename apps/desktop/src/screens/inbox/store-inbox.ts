@@ -126,6 +126,8 @@ export async function createStoreInbox(
   const listeners = new Set<() => void>();
   const undos = new Map<UndoToken, Reversal>();
   const watched = new Map<string, Watched>();
+  /** Threads kept warm for the reader's next move, with how to let each go. */
+  const warmHolds = new Map<string, () => void>();
   const opening = new Map<string, Promise<void>>();
   const log = options.log ?? (() => {});
   let tokenSeq = 0;
@@ -448,19 +450,62 @@ export async function createStoreInbox(
     }),
   ]);
 
+  /**
+   * The row as the intent leaves it, shown at once: the Cache write and the
+   * query that reads it back take a round trip or two, and the key press must
+   * not wait for them. The live query confirms (or corrects) it moments later.
+   */
+  const patched = (t: Thread, kind: StoreIntent["kind"]): Thread | null => {
+    switch (kind) {
+      case "read":
+        return t.unread ? { ...t, unread: false } : t;
+      case "unread":
+        return t.unread ? t : { ...t, unread: true };
+      case "star":
+        return t.starred ? t : { ...t, starred: true };
+      case "unstar":
+        return t.starred ? { ...t, starred: false } : t;
+      case "archive":
+        return t.archived ? t : { ...t, archived: true };
+      case "unarchive":
+        return t.archived ? { ...t, archived: false } : t;
+      default:
+        return null;
+    }
+  };
+  const showNow = (changed: ReadonlyMap<string, Thread>) => {
+    if (changed.size === 0) return;
+    for (const [id, t] of changed) byId.set(id, t);
+    folderEntries = folderEntries.map((e) => {
+      const next = changed.get(e.thread.id);
+      return next ? { ...e, thread: next } : e;
+    });
+    folders.clear();
+    stream = folderEntries
+      .filter(({ thread, deleted }) => !deleted && !thread.archived && thread.snoozedUntil === null)
+      .map(({ thread }) => thread);
+    for (const l of [...listeners]) l();
+  };
+
   /** Runs `make` for every known id and files the inverses under a new token. */
   const act = async (
     ids: readonly string[],
     make: (thread: Thread) => { intent: StoreIntent; reverse: StoreIntent | null },
   ): Promise<UndoToken> => {
     const reversal: Reversal = [];
+    const planned: StoreIntent[] = [];
+    const changed = new Map<string, Thread>();
     for (const id of ids) {
       const thread = byId.get(id);
       if (!thread) continue;
       const { intent, reverse } = make(thread);
-      await store.intent(intent);
+      planned.push(intent);
+      const next = patched(thread, intent.kind);
+      if (next && next !== thread) changed.set(id, next);
       if (reverse) reversal.push(reverse);
     }
+    showNow(changed);
+    for (const intent of planned) await store.intent(intent);
     const token = `u${++tokenSeq}`;
     undos.set(token, reversal);
     return token;
@@ -531,6 +576,31 @@ export async function createStoreInbox(
     brief: (threadId) => watch(threadId).brief,
     judgments: (threadId) => judgmentsById.get(threadId),
     unavailable: (threadId) => watch(threadId).unavailable,
+    prefetch(threadIds) {
+      const keep = new Set(threadIds);
+      for (const id of threadIds) {
+        if (warmHolds.has(id) || !byId.has(id)) continue;
+        const w = watch(id);
+        const hold = () => {};
+        w.listeners.add(hold);
+        warmHolds.set(id, () => {
+          w.listeners.delete(hold);
+          if (w.listeners.size === 0) {
+            w.live.close();
+            w.briefLive.close();
+            watched.delete(id);
+            waiting.delete(id);
+          }
+        });
+        // Bodies into the Cache ahead of the reader; no Brief asked for until it opens.
+        if (!opening.has(id)) void fetchThread(id).catch(() => {});
+      }
+      for (const [id, release] of [...warmHolds]) {
+        if (keep.has(id)) continue;
+        release();
+        warmHolds.delete(id);
+      }
+    },
     async openThread(threadId) {
       let pending = opening.get(threadId);
       if (!pending) {

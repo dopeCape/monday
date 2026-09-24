@@ -74,6 +74,12 @@ export interface ThreadReader {
    * none or a stale one (docs/spec/inbox.md, Briefs). Never throws.
    */
   openThread(threadId: string): Promise<void>;
+  /**
+   * Keeps these Threads' Messages read and their bodies fetched, so moving to
+   * one (j and k, the next row) shows it at once. The last call wins: ones not
+   * named again are let go. Optional: a seam without a Cache has nothing to warm.
+   */
+  prefetch?(threadIds: readonly string[]): void;
   /** The Brief the Cache holds for a Thread, computed before or after open; undefined when none. */
   brief(threadId: string): Brief | undefined;
   /**

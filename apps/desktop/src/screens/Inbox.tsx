@@ -263,6 +263,15 @@ function useThreadMessages(inbox: InboxData, threadId: string | null) {
 }
 const NO_MESSAGES: readonly never[] = [];
 
+/** The Thread the neighbours are counted from: the open one, else the focused row. */
+function openThreadIdForPrefetch(
+  readerOpen: boolean,
+  openId: string | null,
+  focus: string | null,
+): string | null {
+  return readerOpen && openId ? openId : focus;
+}
+
 /** The open Thread's Brief from the reader seam: the Cache's, before or after open. */
 function useThreadBrief(inbox: InboxData, threadId: string | null) {
   const subscribe = useCallback(
@@ -556,6 +565,7 @@ function InboxBody({
   );
 
   /** The list order the keyboard walks. Leaving rows are not in it. */
+  const prefetchReach = settings["inbox.prefetch_neighbors"];
   const order = useMemo(
     () => items.flatMap((it) => (it.row.leaving ? [] : [it.row.thread.id])),
     [items],
@@ -658,6 +668,23 @@ function InboxBody({
   const thread = focus ? inbox.thread(focus) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
+  // The rows next to the one in hand stay warm, so j and k (or a click on a
+  // neighbour) show a Thread without waiting on the Cache.
+  const prefetchAround = openThreadIdForPrefetch(showReader, thread?.id ?? null, focus);
+  useEffect(() => {
+    if (!inbox.prefetch || prefetchReach <= 0 || !prefetchAround) return;
+    const at = order.indexOf(prefetchAround);
+    if (at < 0) return;
+    const ids: string[] = [];
+    for (let d = 1; d <= prefetchReach; d++) {
+      const next = order[at + d];
+      const prev = order[at - d];
+      if (next) ids.push(next);
+      if (prev) ids.push(prev);
+    }
+    const timer = setTimeout(() => inbox.prefetch?.(ids), 80);
+    return () => clearTimeout(timer);
+  }, [inbox, order, prefetchAround, prefetchReach]);
   cursor.current = { focus, open: openThreadId, selection };
   // The sheet slides out over the Thread it showed, so that Thread's rows are
   // held until the leave ends; the split reader never leaves.

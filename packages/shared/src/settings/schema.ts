@@ -976,6 +976,16 @@ export const settingsSchema = {
     label: "Undo toast",
     help: "Milliseconds an undo toast stays before it fades.",
   }),
+  "inbox.prefetch_neighbors": setting({
+    type: z.int().min(0).max(10),
+    default: 2,
+    scope: "device",
+    section: "routing",
+    group: "Reading",
+    tier: "advanced",
+    label: "Threads kept ready",
+    help: "How many Threads above and below the one open (or focused) are read ahead, so moving to one with j and k shows it at once. 0 reads each only when opened.",
+  }),
   "inbox.overscan_rows": setting({
     type: z.int().min(0).max(500),
     default: 10,
