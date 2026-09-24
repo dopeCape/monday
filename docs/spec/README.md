@@ -9,7 +9,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 1. [`CONTEXT.md`](../../CONTEXT.md), the glossary. Every term in every document below is defined there.
 2. The eleven ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
 3. [`architecture.md`](./architecture.md), how the modules, deployments and data fit together, with the data model and API shape.
-4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
+4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
 5. [`slices.md`](./slices.md), the ordered implementation plan.
 6. The research under [`docs/research/`](../research/) on the `research/*` branches, for the provider and platform facts behind the decisions.
 
@@ -19,8 +19,9 @@ This directory is the spec. It is an index, not a restatement: every decision li
 |---|---|
 | Config file, settings, pinning | ADR 0001, ADR 0004, `settings.md` |
 | Agent tools, tiers, approvals, activity log | ADR 0002, `agent-composer.md` |
-| Workflows, triggers, steps, runs | ADR 0003 |
-| Routing, sections, briefs | ADR 0004, `inbox.md`, issue 11 |
+| Workflows, triggers, steps, runs | ADR 0003, `workflows.md` |
+| Routing, sections, briefs | ADR 0004, `routing.md`, `inbox.md`, issue 11 |
+| Pages locked by the AI level | `workflows.md`, `routing.md` |
 | Sync topology, jobs, cache, outbox | ADR 0005, `architecture.md` |
 | Client protocol, device pairing, TLS, versioning | ADR 0006 |
 | Hosted runtimes, model roles, meter, keys | ADR 0007 |

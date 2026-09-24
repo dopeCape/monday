@@ -37,6 +37,7 @@ Show what the user's current choices make relevant; everything else is one delib
 - Config file: live view of the file with the watcher state and the warnings above.
 
 ### Routing
+The Routing page itself is `routing.md`; this section of Settings holds the same pieces:
 - Groups tree with each Group's sentence, confidence threshold, Sub-groups, and Example count; the Needs a decision queue with its cap.
 - Sections, user-defined: each with its sentence, its deterministic conditions, its Judgment, where it shows (stream heading, nav entry, both), rename, hide, reorder, and "Ask monday to change". The shipped four are rows like any other.
 - Custom actions per Group or Section: label, condition, the tool and its arguments, the Tier it renders with; add, edit, remove, and "Ask monday for an action".
@@ -54,6 +55,7 @@ Show what the user's current choices make relevant; everything else is one delib
 - Activity log: searchable list of tool calls with tool, input summary, who approved, result, undo where still possible.
 
 ### Workflows
+The Workflows page is `workflows.md`; this section of Settings holds the defaults:
 - Default Placement, ask-before-enable, notify on failure, Run log retention, Budget defaults for agentic steps.
 - MCP servers: add by command or URL, auth, which tools become Workflow steps and Agent tools, remove.
 
