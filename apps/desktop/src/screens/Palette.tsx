@@ -23,6 +23,8 @@ import {
   CommandPalette,
   type CommandSection,
   type IconComponent,
+  MONTH_SHORT,
+  WEEKDAY_SHORT,
 } from "@monday/ui";
 import {
   ArchiveIcon,
@@ -53,7 +55,14 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { chordLabel, KEY_ACTIONS, type KeyAction, type Keymap } from "../keyboard/keymaps.ts";
+import {
+  chordLabel,
+  inScope,
+  KEY_ACTIONS,
+  type KeyAction,
+  type Keymap,
+  type KeyScope,
+} from "../keyboard/keymaps.ts";
 import type { SearchHit, SearchModule } from "../search/index.ts";
 import {
   type AgentAsk,
@@ -69,6 +78,8 @@ import {
   type PaletteSuggestion,
 } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { dayKey } from "./calendar/dates.ts";
+import { parseJumpDate } from "./calendar/jump.ts";
 import type { IntentJudge } from "./inbox/intents.ts";
 
 export type { PaletteCommand } from "../search/palette.ts";
@@ -151,11 +162,17 @@ export function localIso(d: Date): string {
 const NO_CONTACTS: readonly Person[] = [];
 const NO_SECTIONS: readonly IntentSectionOption[] = [];
 
-/** The action catalogue: every named action with its shortcut, plus the screen-level ones. */
-export function paletteActions(keymap: Keymap, settings: Settings, mac: boolean): PaletteAction[] {
+/** The action catalogue: every named action live on the screen with its shortcut, plus the screen-level ones. */
+export function paletteActions(
+  keymap: Keymap,
+  settings: Settings,
+  mac: boolean,
+  scope: Exclude<KeyScope, "global"> = "mail",
+): PaletteAction[] {
   const t = (k: string) => (k in settings ? String(settings[k as keyof Settings]) : k);
   const out: PaletteAction[] = [];
   for (const action of KEY_ACTIONS) {
+    if (!inScope(action, scope)) continue;
     const view = /^view\.(\d)$/.exec(action);
     const label = view
       ? fill(t("strings.action.view"), { n: view[1] ?? "" })
@@ -165,16 +182,19 @@ export function paletteActions(keymap: Keymap, settings: Settings, mac: boolean)
       action,
       label,
       kbd: chordLabel(keymap[action], mac),
-      icon: view ? "view" : ACTION_ICON[action],
+      icon: view
+        ? "view"
+        : (ACTION_ICON[action] ?? (action.startsWith("calendar.") ? "calendar" : undefined)),
       featured: FEATURED_ACTIONS.includes(action),
     });
   }
-  out.push({
-    action: "workflow.from_thread",
-    label: t("strings.palette.workflow_from_thread"),
-    icon: "workflow",
-    featured: true,
-  });
+  if (scope === "mail")
+    out.push({
+      action: "workflow.from_thread",
+      label: t("strings.palette.workflow_from_thread"),
+      icon: "workflow",
+      featured: true,
+    });
   return out.sort(
     (a, b) =>
       (a.featured ? FEATURED_ACTIONS.indexOf(a.action) : 99) -
@@ -289,6 +309,13 @@ export interface PaletteProps {
   /** On its way out (the screen's exit hook): the leave animation runs, then onLeft. */
   leaving?: boolean | undefined;
   onLeft?: (() => void) | undefined;
+  /** Which screen's actions to list: the mail screens' (default) or the Calendar's. */
+  scope?: Exclude<KeyScope, "global"> | undefined;
+}
+
+/** "Fri 3 Oct 2026" for the palette's date row. */
+function dayLabel(d: Date): string {
+  return `${WEEKDAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 function isMac(): boolean {
@@ -314,6 +341,7 @@ export function Palette({
   now,
   leaving,
   onLeft,
+  scope = "mail",
 }: PaletteProps) {
   const { settings } = useShell();
   const mac = isMac();
@@ -327,9 +355,24 @@ export function Palette({
 
   const agent = settings["ai.level"] !== "off";
   const actions = useMemo(
-    () => paletteActions(keymap, settings, mac).filter((a) => agent || a.action !== "agent.focus"),
-    [keymap, settings, mac, agent],
+    () =>
+      paletteActions(keymap, settings, mac, scope).filter(
+        (a) => agent || a.action !== "agent.focus",
+      ),
+    [keymap, settings, mac, agent, scope],
   );
+  // A typed date offers the Calendar on that day ("Jump to date").
+  const pinned = useMemo(() => {
+    const day = parseJumpDate(query, now ?? new Date(), settings["calendar.dates_month_first"]);
+    if (!day) return [];
+    return [
+      {
+        target: `calendar:${dayKey(day)}`,
+        label: fill(settings["strings.palette.calendar_jump"], { date: dayLabel(day) }),
+        icon: "calendar",
+      },
+    ];
+  }, [query, now, settings]);
   const navigation = useMemo(
     () => paletteNavigation(settings, mac, groups),
     [settings, mac, groups],
@@ -384,9 +427,10 @@ export function Palette({
         hits,
         strings,
         agent,
+        pinned,
         ...(now ? { now } : {}),
       }),
-    [query, actions, navigation, recentThreads, suggestions, hits, strings, now, agent],
+    [query, actions, navigation, recentThreads, suggestions, hits, strings, now, agent, pinned],
   );
 
   // A sentence that matches no entry goes to the judge after a pause (slice 27).
@@ -469,6 +513,7 @@ export function Palette({
             strings,
             agent,
             intent,
+            pinned,
             ...(now ? { now } : {}),
           })
         : base,
@@ -484,6 +529,7 @@ export function Palette({
       strings,
       now,
       agent,
+      pinned,
     ],
   );
 

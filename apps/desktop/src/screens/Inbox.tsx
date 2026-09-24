@@ -850,7 +850,9 @@ export function Inbox({
 
   const focusAgent = useCallback(() => {
     setAgentOpen(true);
-    queueMicrotask(() => document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.focus());
+    queueMicrotask(() =>
+      document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.focus(),
+    );
   }, []);
 
   const startReply = useCallback(

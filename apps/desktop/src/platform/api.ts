@@ -12,6 +12,7 @@ import type {
   Calendar,
   CalendarEvent,
   CalendarInfo,
+  CalendarStatus,
   Capabilities,
   ChangesPage,
   CorrectionResult,
@@ -25,6 +26,7 @@ import type {
   DryRunPreview,
   EventInput,
   EventPatch,
+  EventWriteOptions,
   ExternalConsent,
   ExternalCredential,
   ExternalKeyCreated,
@@ -675,15 +677,32 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           "/calendar/events",
           json("POST", { workspace: workspaceId, ...input }),
         ),
-      update: (eventId: Id, patch: EventPatch) =>
+      /** An update; `options` aims it at one instance, it and the later ones, or the series. */
+      update: (eventId: Id, patch: EventPatch, options: EventWriteOptions = {}) =>
         request<CalendarEvent>(
           `/calendar/events/${encodeURIComponent(eventId)}`,
-          json("PUT", patch),
+          json("PUT", { ...patch, ...options }),
         ),
-      remove: (eventId: Id) =>
-        raw(`/calendar/events/${encodeURIComponent(eventId)}`, { method: "DELETE" }).then(
-          () => undefined,
-        ),
+      remove: (eventId: Id, options: EventWriteOptions = {}) => {
+        const q = new URLSearchParams();
+        if (options.scope) q.set("scope", options.scope);
+        if (options.occurrence) q.set("occurrence", options.occurrence);
+        const qs = q.toString();
+        return raw(`/calendar/events/${encodeURIComponent(eventId)}${qs ? `?${qs}` : ""}`, {
+          method: "DELETE",
+        }).then(() => undefined);
+      },
+      /** Whether the Workspace's calendar is readable, and why not. */
+      status: (workspaceId: Id) =>
+        request<{ status: CalendarStatus }>(
+          `/calendar/status?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.status),
+      /** Reads the Workspace's calendar again now, for "Try again". */
+      sync: (workspaceId: Id) =>
+        request<{ status: CalendarStatus }>(
+          "/calendar/sync",
+          json("POST", { workspace: workspaceId }),
+        ).then((r) => r.status),
       respond: (eventId: Id, response: "accepted" | "tentative" | "declined") =>
         request<CalendarEvent>(
           `/calendar/events/${encodeURIComponent(eventId)}/respond`,

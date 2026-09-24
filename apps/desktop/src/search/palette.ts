@@ -122,6 +122,11 @@ export interface PaletteInput {
   agent?: boolean | undefined;
   /** The judge's reading of the current text, when the container has one for exactly this text. */
   intent?: PaletteIntent | undefined;
+  /**
+   * Places the typed text names, such as the Calendar on a date it reads as
+   * one ("Jump to Fri 3 Oct"): first under Go to, whatever else matched.
+   */
+  pinned?: readonly PaletteNav[] | undefined;
   now?: Date | undefined;
 }
 
@@ -253,16 +258,27 @@ export function buildPalette(input: PaletteInput): PaletteModel {
       command: { type: "action", action: a.action },
       score,
     }));
-  const go = fuzzyFilter(text, input.navigation, (n) => n.label)
-    .slice(0, limit)
-    .map<PaletteItem>(({ item: n, score }) => ({
-      key: `go:${n.target}`,
-      label: n.label,
-      kbd: n.kbd,
-      icon: n.icon,
-      command: { type: "navigate", target: n.target },
-      score,
-    }));
+  const pinned = (input.pinned ?? []).map<PaletteItem>((n) => ({
+    key: `go:${n.target}`,
+    label: n.label,
+    kbd: n.kbd,
+    icon: n.icon,
+    command: { type: "navigate", target: n.target },
+    score: Number.MAX_SAFE_INTEGER,
+  }));
+  const go = [
+    ...pinned,
+    ...fuzzyFilter(text, input.navigation, (n) => n.label)
+      .slice(0, limit)
+      .map<PaletteItem>(({ item: n, score }) => ({
+        key: `go:${n.target}`,
+        label: n.label,
+        kbd: n.kbd,
+        icon: n.icon,
+        command: { type: "navigate", target: n.target },
+        score,
+      })),
+  ];
   const threads = fuzzyFilter(
     text,
     input.threads,

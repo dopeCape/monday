@@ -124,3 +124,26 @@ describe("chords", () => {
     expect(chordLabel("z", false)).toBe("Z");
   });
 });
+
+describe("scopes", () => {
+  test("the Calendar's keys share chords with the mail screens' without clashing", () => {
+    expect(VIM["calendar.view.month"]).toBe(VIM["thread.move"]);
+    expect(actionFor(VIM, "m")).toBe("thread.move");
+    expect(actionFor(VIM, "m", "calendar")).toBe("calendar.view.month");
+    expect(actionFor(VIM, "j", "calendar")).toBe("calendar.next");
+    expect(actionFor(NATURAL, "arrowleft", "calendar")).toBe("calendar.previous");
+    // The global ones work on both.
+    expect(actionFor(VIM, "mod+k", "calendar")).toBe("palette.open");
+    expect(actionFor(VIM, "z", "calendar")).toBe("undo");
+    expect(actionFor(VIM, "e", "calendar")).toBeNull();
+  });
+
+  test("a clash is flagged only where both actions work", () => {
+    const map = resolveKeymap("vim", { "calendar.today": "/" });
+    expect(conflicts(map)).toEqual([{ chord: "/", actions: ["agent.focus", "calendar.today"] }]);
+    const both = resolveKeymap("vim", { "calendar.today": "d" });
+    expect(conflicts(both)).toEqual([
+      { chord: "d", actions: ["calendar.today", "calendar.view.day"] },
+    ]);
+  });
+});

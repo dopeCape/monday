@@ -191,6 +191,8 @@ export function App({
   const [searchRequest, setSearchRequest] = useState(0);
   /** A Thread another screen asked to open; the inbox reads it on mount. */
   const [openThread, setOpenThread] = useState<string | null>(null);
+  /** A day the palette asked the Calendar to open on, bumped per ask. */
+  const [calendarJump, setCalendarJump] = useState<{ day: string; n: number } | null>(null);
   /** A Draft the Drafts folder asked to open; the inbox opens the composer on it on mount. */
   const [composeDraft, setComposeDraft] = useState<string | null>(null);
   /** The workspace switcher under the workspace button. */
@@ -548,7 +550,11 @@ export function App({
       else if (target === "routing") setActive("routing");
       else if (target === "workflows") setActive("workflows");
       else if (target === "calendar") setActive("calendar");
-      else if (target === "activity") {
+      else if (target.startsWith("calendar:")) {
+        // A date from the palette's "Jump to date": the Calendar opens on that day.
+        setCalendarJump((j) => ({ day: target.slice("calendar:".length), n: (j?.n ?? 0) + 1 }));
+        setActive("calendar");
+      } else if (target === "activity") {
         setSettingsSection("ai");
         setActive("settings");
       } else if (target === "onboarding") openOnboarding(null, true);
@@ -838,7 +844,9 @@ export function App({
       <Calendar
         key="screen"
         source={calendar}
-        now={now}
+        // A fixed clock only when one was given (tests); otherwise the Calendar keeps its own that ticks.
+        now={nowProp}
+        jumpTo={calendarJump ?? undefined}
         onNavigate={navigate}
         onAsk={askHere}
         agent={bottomAgent}

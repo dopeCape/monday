@@ -118,7 +118,9 @@ function Root() {
         routingSeam = r;
         return r;
       }),
-      createStoreCalendar(store, shell.api),
+      createStoreCalendar(store, shell.api, {
+        otherAccounts: () => settingsRef.current["calendar.other_accounts"],
+      }),
       createStoreInbox(store, {
         content,
         remoteImages: () => settingsRef.current["reader.load_remote_images"],

@@ -1409,6 +1409,7 @@ const AREAS: Array<{ key: string; actions: KeyAction[] }> = [
     key: "views",
     actions: KEY_ACTIONS.filter((a) => a.startsWith("view.")),
   },
+  { key: "calendar", actions: KEY_ACTIONS.filter((a) => a.startsWith("calendar.")) },
 ];
 
 function actionLabel(settings: Settings, action: KeyAction): string {

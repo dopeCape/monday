@@ -209,6 +209,24 @@ const REBUILD_SQL = `
   delete from meta where key = 'cursor';
 `;
 
+/**
+ * Columns added to a table without changing what its rows mean: added in
+ * place to an older Cache instead of a rebuild. The feed fills them on the
+ * next change to each row.
+ */
+const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; type: string }> = [
+  // Per-Event reminders (the calendar redo): null keeps the calendar's default.
+  { table: "events", column: "reminders", type: "text" },
+];
+
+async function addColumns(driver: SqlDriver): Promise<void> {
+  for (const add of ADDED_COLUMNS) {
+    const columns = await driver.query(`pragma table_info(${add.table})`);
+    if (columns.some((c) => c.name === add.column)) continue;
+    await driver.exec(`alter table ${add.table} add column ${add.column} ${add.type}`);
+  }
+}
+
 /** Applies the schema, rebuilding the content tables first when the Cache predates this version. */
 export async function applySchema(driver: SqlDriver): Promise<void> {
   const versionRows = await driver
@@ -220,6 +238,7 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
   const version = Number(versionRows[0]?.value ?? 0) || 0;
   if (existing.length > 0 && version < SCHEMA_VERSION) await driver.exec(REBUILD_SQL);
   await driver.exec(schemaSql);
+  await addColumns(driver);
   await driver.exec(
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
     [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
@@ -570,14 +589,15 @@ function eventUpsert(e: EventChange): Statement {
   if (e.deleted) return { sql: "delete from events where id = ?", params: [e.id] };
   return {
     sql: `insert into events (id, calendar_id, provider_id, uid, start, "end", all_day, time_zone, organizer,
-            attendees, link, status, recurrence, recurring_event_id, response, created_by_agent, content_stale, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+            attendees, link, status, recurrence, recurring_event_id, response, created_by_agent, reminders, content_stale, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
           on conflict (id) do update set
             calendar_id = excluded.calendar_id, provider_id = excluded.provider_id, uid = excluded.uid,
             start = excluded.start, "end" = excluded."end", all_day = excluded.all_day, time_zone = excluded.time_zone,
             organizer = excluded.organizer, attendees = excluded.attendees, link = excluded.link,
             status = excluded.status, recurrence = excluded.recurrence, recurring_event_id = excluded.recurring_event_id,
             response = excluded.response, created_by_agent = excluded.created_by_agent,
+            reminders = excluded.reminders,
             content_stale = case when excluded.updated_at > events.updated_at or events.title = '' then 1 else events.content_stale end,
             updated_at = max(events.updated_at, excluded.updated_at)`,
     params: [
@@ -597,6 +617,7 @@ function eventUpsert(e: EventChange): Statement {
       e.recurringEventId,
       e.response,
       e.createdByAgent,
+      e.reminders ?? null,
       e.updatedAt,
     ],
   };

@@ -27,16 +27,28 @@ export function nextReminder(
   body: (title: string, time: string) => string,
 ): Reminder | null {
   const window = { from: now, to: new Date(now.getTime() + 2 * 86_400_000) };
-  const items = occurrencesIn(source.events(), source.calendars(), window);
+  // A day ahead of the window too, so a reminder set a day before still lands.
+  const longest = Math.max(leadMinutes, ...source.events().flatMap((e) => e.reminders ?? []));
+  const items = occurrencesIn(source.events(), source.calendars(), {
+    from: window.from,
+    to: new Date(Math.max(window.to.getTime(), now.getTime() + longest * 60_000 + 86_400_000)),
+  });
+  let next: Reminder | null = null;
   for (const o of items) {
     if (o.allDay || o.response === "declined") continue;
-    const at = new Date(Date.parse(o.start) - leadMinutes * 60_000);
-    if (at.getTime() < now.getTime() - 60_000) continue;
-    if (fired.has(o.key)) continue;
-    const time = new Date(o.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return { key: o.key, title: o.title, body: body(o.title, time), at };
+    // The Event's own reminders where it sets them; the Setting's lead otherwise.
+    const leads = o.reminders ?? [leadMinutes];
+    for (const lead of leads) {
+      const at = new Date(Date.parse(o.start) - lead * 60_000);
+      if (at.getTime() < now.getTime() - 60_000) continue;
+      const key = leads.length > 1 ? `${o.key}#${lead}` : o.key;
+      if (fired.has(key)) continue;
+      if (next && next.at.getTime() <= at.getTime()) continue;
+      const time = new Date(o.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      next = { key, title: o.title, body: body(o.title, time), at };
+    }
   }
-  return null;
+  return next;
 }
 
 export interface Notifier {

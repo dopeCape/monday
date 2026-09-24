@@ -186,6 +186,7 @@ create table if not exists events (
   recurring_event_id text,
   response text,
   created_by_agent integer not null default 0,
+  reminders text,
   content_stale integer not null default 1,
   updated_at text not null default ''
 );
