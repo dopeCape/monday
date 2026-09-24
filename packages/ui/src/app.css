@@ -9242,3 +9242,11 @@ button.prov {
   text-align: center;
   line-height: 1.5;
 }
+
+/* Each warmed account's screen stays mounted; only the one on show takes part in the layout. */
+.ws-pane[data-shown="true"] {
+  display: contents;
+}
+.ws-pane[data-shown="false"] {
+  display: none;
+}

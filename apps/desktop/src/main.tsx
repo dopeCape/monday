@@ -19,6 +19,7 @@ import { createStoreRouting, type StoreRouting } from "./screens/routing/routing
 import { Settings } from "./screens/Settings.tsx";
 import { createSearch, type FetchBodies } from "./search/index.ts";
 import { createPrewarm } from "./search/prewarm.ts";
+import { ActivePaneContext } from "./shell/active.ts";
 import { ErrorBoundary } from "./shell/ErrorBoundary.tsx";
 import { Shell, useShell } from "./shell/Shell.tsx";
 import {
@@ -329,6 +330,21 @@ function Gate(): ReactNode {
     pool.warm(workspaceIds.split(","));
   }, [pool, server, warm, workspaceIds]);
 
+  // The Accounts whose screens stay mounted: every one once warmed, and any one shown.
+  const [mountedPanes, setMountedPanes] = useState<string[]>([]);
+  const accountIds = (accounts ?? []).map((a) => a.id).join(",");
+  useEffect(() => {
+    if (!warm || !accountIds) return;
+    // After the first paint of the one on show, so it is never slowed by the rest.
+    const timer = setTimeout(() => {
+      setMountedPanes((now) => {
+        const next = [...new Set([...now, ...accountIds.split(",")])];
+        return next.length === now.length ? now : next;
+      });
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [warm, accountIds]);
+
   // New mail in any account, told once it lands in that account's saved mail.
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -419,48 +435,67 @@ function Gate(): ReactNode {
       </div>
     );
   }
-  const app = (
-    <WorkspaceProvider key={current.id} value={current}>
+  const storeFallback = (address: string) => (
+    <div className="store-state" role="status">
+      <span className="live" />
+      {shell.settings["strings.store.opening"].replace("{address}", address)}
+    </div>
+  );
+  const storeFailed = (address: string) => (message: string, retry: () => void) => (
+    <div className="store-state failed" role="alert">
+      <b>{shell.settings["strings.store.failed"].replace("{address}", address)}</b>
+      <span className="crash-detail">{message}</span>
+      <div className="crash-actions">
+        <Btn sm onClick={retry}>
+          {shell.settings["strings.crash.retry"]}
+        </Btn>
+        <Btn sm primary onClick={() => window.location.reload()}>
+          {shell.settings["strings.crash.reload"]}
+        </Btn>
+      </div>
+    </div>
+  );
+  const appFor = (workspace: CurrentWorkspace) => (
+    <WorkspaceProvider key={workspace.id} value={workspace}>
       <StoreProvider
-        workspaceId={current.id}
-        fallback={
-          <div className="store-state" role="status">
-            <span className="live" />
-            {shell.settings["strings.store.opening"].replace("{address}", current.address)}
-          </div>
-        }
-        failed={(message, retry) => (
-          <div className="store-state failed" role="alert">
-            <b>{shell.settings["strings.store.failed"].replace("{address}", current.address)}</b>
-            <span className="crash-detail">{message}</span>
-            <div className="crash-actions">
-              <Btn sm onClick={retry}>
-                {shell.settings["strings.crash.retry"]}
-              </Btn>
-              <Btn sm primary onClick={() => window.location.reload()}>
-                {shell.settings["strings.crash.reload"]}
-              </Btn>
-            </div>
-          </div>
-        )}
+        workspaceId={workspace.id}
+        fallback={storeFallback(workspace.address)}
+        failed={storeFailed(workspace.address)}
       >
         <Root />
       </StoreProvider>
     </WorkspaceProvider>
   );
   // The fixture Workspace has no Server to read a first sync from.
-  if (!picked) return app;
+  if (!picked) return appFor(current);
+  // Every warmed Account keeps its whole screen mounted, hidden behind the one
+  // on show: switching only changes which is shown, so it is instant, and each
+  // one's list already holds its new mail. A hidden one answers no keys and
+  // leaves the window's title and the compose dock alone (shell/active.ts).
+  const panes = (accounts ?? []).filter(
+    (a) => a.id === picked.id || (warm && mountedPanes.includes(a.id)),
+  );
   return (
-    <FirstSyncGate
-      key={picked.id}
-      account={{ id: picked.id, address: picked.address, provider: picked.provider }}
-      accounts={accounts ?? undefined}
-      onOpen={() => {
-        appOpen.current = true;
-      }}
-    >
-      {app}
-    </FirstSyncGate>
+    <>
+      {panes.map((a) => {
+        const shown = a.id === picked.id;
+        return (
+          <div key={a.id} className="ws-pane" data-shown={shown ? "true" : "false"}>
+            <ActivePaneContext.Provider value={shown}>
+              <FirstSyncGate
+                account={{ id: a.id, address: a.address, provider: a.provider }}
+                accounts={accounts ?? undefined}
+                onOpen={() => {
+                  if (shown) appOpen.current = true;
+                }}
+              >
+                {appFor(workspaceOf({ id: a.id, workspaceId: a.workspaceId, address: a.address }))}
+              </FirstSyncGate>
+            </ActivePaneContext.Provider>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

@@ -9,6 +9,7 @@
 // own undo in a field, a newline in the editor.
 
 import { useEffect, useMemo, useRef } from "react";
+import { useIsActivePane } from "../shell/active.ts";
 import { useShell } from "../shell/Shell.tsx";
 import {
   actionFor,
@@ -91,10 +92,13 @@ export function useKeymap(
   scope: Exclude<KeyScope, "global"> = "mail",
 ): Keymap {
   const map = useActiveKeymap();
-  const latest = useRef({ handlers, ctx, map, scope });
-  latest.current = { handlers, ctx, map, scope };
+  // A Workspace kept mounted behind the one on show answers no keys.
+  const active = useIsActivePane();
+  const latest = useRef({ handlers, ctx, map, scope, active });
+  latest.current = { handlers, ctx, map, scope, active };
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
+      if (!latest.current.active) return;
       if (e.defaultPrevented || e.isComposing) return;
       const { handlers: h, ctx: c, map: m, scope: sc } = latest.current;
       dispatchKey(

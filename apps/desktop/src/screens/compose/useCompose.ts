@@ -21,6 +21,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { chordOf, type KeymapName, resolveKeymap } from "../../keyboard/keymaps.ts";
+import { useIsActivePane } from "../../shell/active.ts";
 import { composeBus } from "./bus.ts";
 import type { Composer } from "./composer.ts";
 import { type Discarded, Dock } from "./Dock.tsx";
@@ -203,6 +204,9 @@ export function useCompose(o: UseComposeOptions): ComposeController {
   const mint = o.id ?? (() => crypto.randomUUID());
   const storage = o.storage === undefined ? defaultStorage() : o.storage;
   const strings = useMemo(() => composeStrings(settings), [settings]);
+  const active = useIsActivePane();
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const ws = useMemo(() => windowSettings(settings), [settings]);
   const wsRef = useRef(ws);
   wsRef.current = ws;
@@ -738,6 +742,7 @@ export function useCompose(o: UseComposeOptions): ComposeController {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const on = (e: KeyboardEvent) => {
+      if (!activeRef.current) return;
       if (e.defaultPrevented || e.isComposing) return;
       if (chordOf(e) !== cycleChord) return;
       if (cycleOrder(windowsRef.current).length === 0) return;
@@ -788,7 +793,8 @@ export function useCompose(o: UseComposeOptions): ComposeController {
       toastMs: settings["inbox.undo_toast_ms"],
       undoLabel: settings["strings.inbox.undo"],
     }),
-    dockShown,
+    // A Workspace behind the one on show keeps its windows but draws no dock.
+    dockShown && active,
   );
 
   return {
