@@ -318,7 +318,7 @@ export function draftOverlay(
         recurrence: null,
         recurringEventId: null,
         response: null,
-        createdByAgent: true,
+        createdByAgent: false,
         etag: null,
         updatedAt: draft.createdAt,
       }),
