@@ -15,6 +15,7 @@ import {
   escapeText,
   type ParsedEvent,
   parseICalendar,
+  seriesOf,
   unfold,
   writeICalendar,
 } from "../../calendar/ical.ts";
@@ -227,9 +228,10 @@ export async function createCalDavSession(options: CalDavOptions): Promise<Calen
       attendees: parsed.attendees.map((a) => (a.email === me ? { ...a, self: true } : a)),
       link: parsed.link,
       status: parsed.status,
-      recurrence: parsed.recurrence,
+      recurrence: seriesOf(parsed),
       recurringEventId: null,
       response: self?.response ?? null,
+      reminders: parsed.reminders,
       etag,
       updatedAt: (parsed.stamp ?? now()).toISOString(),
     };
@@ -447,6 +449,7 @@ export async function createCalDavSession(options: CalDavOptions): Promise<Calen
           status: "confirmed",
           recurrence: input.recurrence ?? null,
           link: input.meetingLink === "custom" ? (input.customLink ?? null) : null,
+          reminders: input.reminders ?? null,
         },
         null,
       );
@@ -489,7 +492,8 @@ export async function createCalDavSession(options: CalDavOptions): Promise<Calen
               ]
             : parsed.attendees,
           status: parsed.status,
-          recurrence: input.recurrence === undefined ? parsed.recurrence : input.recurrence,
+          recurrence: input.recurrence === undefined ? seriesOf(parsed) : input.recurrence,
+          reminders: input.reminders === undefined ? parsed.reminders : input.reminders,
           link:
             input.meetingLink === "custom"
               ? (input.customLink ?? parsed.link)

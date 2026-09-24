@@ -8,8 +8,10 @@
 //   POST   /calendar/events/content                            {workspace, ids} -> {events: [{id, title, description, location}]}
 //   GET    /calendar/events/:id
 //   POST   /calendar/events                                    {workspace, ...EventInput}
-//   PUT    /calendar/events/:id                                Partial<EventInput>
-//   DELETE /calendar/events/:id
+//   PUT    /calendar/events/:id                                Partial<EventInput> & {scope?, occurrence?}
+//   DELETE /calendar/events/:id?scope=&occurrence=             a recurring one aimed at this, following or all
+//   GET    /calendar/status?workspace=                         {status}: whether the calendar can be read, and why not
+//   POST   /calendar/sync                                      {workspace} -> {status}: read it again now
 //   POST   /calendar/events/:id/respond                        {response}
 //   GET    /calendar/busy?workspace=&from=&to=                 own busy slots
 //   GET    /threads/:id/invites                                {invites}
@@ -17,10 +19,15 @@
 //   POST   /invites/:id/rsvp                                   {at, actor, response}   the Outbox intent
 //   POST   /webhooks/calendar/:accountId?token=                Google channel or Graph subscription delivery (public)
 
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
-import type { CalendarModule } from "../calendar/index.ts";
+import {
+  type CalendarModule,
+  CalendarUnavailableError,
+  classifyCalendarError,
+} from "../calendar/index.ts";
+import { ProviderError } from "../providers/types.ts";
 import { parseBody } from "./validate.ts";
 
 const person = z.object({ name: z.string().default(""), email: z.string().min(3) });
@@ -39,11 +46,19 @@ const eventFields = {
   attendees: z.array(person).max(500).optional(),
   meetingLink: meetingLink.optional(),
   customLink: z.string().url().nullable().optional(),
-  recurrence: z.string().max(500).nullable().optional(),
+  recurrence: z.string().max(4000).nullable().optional(),
+  reminders: z.array(z.int().min(0).max(40320)).max(5).nullable().optional(),
+};
+const scope = z.enum(["this", "following", "all"]);
+const aim = {
+  scope: scope.optional(),
+  occurrence: z.iso.datetime({ offset: true }).optional(),
 };
 
 const createBody = z.object({ workspace: z.string().min(1), ...eventFields });
-const updateBody = z.object(eventFields).partial();
+const updateBody = z.object({ ...eventFields, ...aim }).partial();
+const deleteQuery = z.object(aim);
+const syncBody = z.object({ workspace: z.string().min(1) });
 const windowQuery = z.object({
   workspace: z.string().min(1),
   from: z.iso.datetime({ offset: true }),
@@ -69,6 +84,21 @@ const rsvpBody = z.object({
 
 export function calendarRoutes(calendar: CalendarModule): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+
+  /**
+   * A write the calendar refused, in words the screen can show: 409 when this
+   * calendar cannot do it, 502 with the classified problem when the Provider said no.
+   */
+  const refused = (c: Context<AppEnv>, error: unknown) => {
+    if (error instanceof CalendarUnavailableError) {
+      return c.json({ error: "unavailable", message: error.reason }, 409);
+    }
+    if (error instanceof ProviderError) {
+      const problem = classifyCalendarError(error, "google");
+      return c.json({ error: "provider", message: problem.message, problem }, 502);
+    }
+    throw error;
+  };
 
   app.get("/calendar/info", async (c) => {
     const q = workspaceQuery.safeParse(c.req.query());
@@ -130,7 +160,11 @@ export function calendarRoutes(calendar: CalendarModule): Hono<AppEnv> {
     const body = await parseBody(c, createBody);
     if (!body.ok) return body.response;
     const { workspace, ...input } = body.data;
-    return c.json(await calendar.createEvent(workspace, input), 201);
+    try {
+      return c.json(await calendar.createEvent(workspace, input), 201);
+    } catch (error) {
+      return refused(c, error);
+    }
   });
 
   app.get("/calendar/events/:id", async (c) => {
@@ -141,18 +175,53 @@ export function calendarRoutes(calendar: CalendarModule): Hono<AppEnv> {
   app.put("/calendar/events/:id", async (c) => {
     const body = await parseBody(c, updateBody);
     if (!body.ok) return body.response;
-    return c.json(await calendar.updateEvent(c.req.param("id"), body.data));
+    const { scope: s, occurrence, ...patch } = body.data;
+    try {
+      return c.json(
+        await calendar.updateEvent(c.req.param("id"), patch, {
+          ...(s ? { scope: s } : {}),
+          ...(occurrence ? { occurrence } : {}),
+        }),
+      );
+    } catch (error) {
+      return refused(c, error);
+    }
   });
 
   app.delete("/calendar/events/:id", async (c) => {
-    await calendar.deleteEvent(c.req.param("id"));
+    const q = deleteQuery.safeParse(c.req.query());
+    if (!q.success) return c.json({ error: "invalid_query", issues: q.error.issues }, 400);
+    try {
+      await calendar.deleteEvent(c.req.param("id"), {
+        ...(q.data.scope ? { scope: q.data.scope } : {}),
+        ...(q.data.occurrence ? { occurrence: q.data.occurrence } : {}),
+      });
+    } catch (error) {
+      return refused(c, error);
+    }
     return c.body(null, 204);
+  });
+
+  app.get("/calendar/status", async (c) => {
+    const q = workspaceQuery.safeParse(c.req.query());
+    if (!q.success) return c.json({ error: "invalid_query", issues: q.error.issues }, 400);
+    return c.json({ status: await calendar.status(q.data.workspace) });
+  });
+
+  app.post("/calendar/sync", async (c) => {
+    const body = await parseBody(c, syncBody);
+    if (!body.ok) return body.response;
+    return c.json({ status: await calendar.syncNow(body.data.workspace) });
   });
 
   app.post("/calendar/events/:id/respond", async (c) => {
     const body = await parseBody(c, respondBody);
     if (!body.ok) return body.response;
-    return c.json(await calendar.respond(c.req.param("id"), body.data.response));
+    try {
+      return c.json(await calendar.respond(c.req.param("id"), body.data.response));
+    } catch (error) {
+      return refused(c, error);
+    }
   });
 
   app.get("/calendar/busy", async (c) => {

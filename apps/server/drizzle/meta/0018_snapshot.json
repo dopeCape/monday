@@ -1,6 +1,6 @@
 {
-  "id": "7c25b0c6-302d-418f-b79e-9e071af26289",
-  "prevId": "9818c406-5c79-4345-b23a-b9b5735e5c43",
+  "id": "452c8a9c-b212-4dfc-a19e-279f8bc4c711",
+  "prevId": "7c25b0c6-302d-418f-b79e-9e071af26289",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1289,6 +1289,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "reminders": {
+          "name": "reminders",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         },
         "etag": {
           "name": "etag",

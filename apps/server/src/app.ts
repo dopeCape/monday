@@ -58,8 +58,8 @@ import {
 } from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
-import { createFirstSyncReader } from "./providers/first-sync.ts";
 import { createCredentialStore as createAccountCredentialStore } from "./providers/credentials.ts";
+import { createFirstSyncReader } from "./providers/first-sync.ts";
 import { createOAuthAppStore, legacyFromAccounts } from "./providers/oauth/apps.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";

@@ -15,13 +15,17 @@
 // on the Changes feed with the headers; titles stay behind the content routes.
 
 import type {
+  Attendee,
   Calendar,
   CalendarEvent,
   CalendarInfo,
+  CalendarProblem,
   CalendarSource,
+  CalendarStatus,
   EventChange,
   EventInput,
   EventPatch,
+  EventWriteOptions,
   IntentResult,
   Invite,
   InviteChange,
@@ -32,7 +36,13 @@ import type {
   Person,
   RsvpResponse,
 } from "@monday/shared";
-import { resolveWrite, settingsSchema } from "@monday/shared";
+import {
+  recurrenceFrom,
+  recurrenceUntil,
+  resolveWrite,
+  settingsSchema,
+  withExdate,
+} from "@monday/shared";
 import { and, asc, eq, gt, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import { timingSafeEqual } from "../auth/index.ts";
 import type { Db } from "../db/client.ts";
@@ -171,8 +181,22 @@ export interface CalendarModule {
     input: EventInput,
     options?: CreateEventOptions,
   ): Promise<CalendarEvent>;
-  updateEvent(eventId: string, patch: EventPatch): Promise<CalendarEvent>;
-  deleteEvent(eventId: string): Promise<void>;
+  /**
+   * Changes an Event. On a recurring one `options.scope` says which
+   * instances the change reaches (this one, it and the later ones, the
+   * series) and `options.occurrence` names the instance of a master the
+   * client expanded. Without options a single write, as before.
+   */
+  updateEvent(
+    eventId: string,
+    patch: EventPatch,
+    options?: EventWriteOptions,
+  ): Promise<CalendarEvent>;
+  deleteEvent(eventId: string, options?: EventWriteOptions): Promise<void>;
+  /** Whether the Workspace's calendar can be read, and why not: from the last sync, or one probe. */
+  status(workspaceId: string): Promise<CalendarStatus>;
+  /** Reads the Workspace's calendar again now ("Try again") and answers the status after. */
+  syncNow(workspaceId: string): Promise<CalendarStatus>;
   /** The Workspace's own answer on an Event; through the Provider or by mail. */
   respond(eventId: string, response: RsvpResponse): Promise<CalendarEvent>;
   /** The Outbox intent from the invite bar: last-writer-wins on the Invite, then `respond`. */
@@ -216,6 +240,59 @@ export class CalendarUnavailableError extends Error {
     super(reason);
     this.name = "CalendarUnavailableError";
   }
+}
+
+/** The Google Cloud console page where the Calendar API is enabled. */
+export const GOOGLE_CALENDAR_API_URL =
+  "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com";
+
+/**
+ * A Provider's refusal as a CalendarProblem the Calendar screen can explain:
+ * the API turned off in the sign-in's project, the sign-in not granting the
+ * calendar, the sign-in refused, offline, rate limited, or anything else.
+ */
+export function classifyCalendarError(error: unknown, source: CalendarSource): CalendarProblem {
+  const e = (error ?? {}) as {
+    status?: number;
+    reason?: string;
+    odataCode?: string;
+    code?: string;
+    message?: string;
+  };
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const message = raw.replace(/^(Gmail|Graph) \d{3}: /, "");
+  const said = `${e.reason ?? ""} ${e.odataCode ?? ""} ${raw}`;
+  if (
+    /accessNotConfigured|SERVICE_DISABLED|has not been used in project|API has not been used|is disabled/i.test(
+      said,
+    )
+  ) {
+    let fixUrl: string | null = null;
+    if (source === "google") {
+      const linked = /https:\/\/console\.(?:developers|cloud)\.google\.com\/[^\s"')]+/.exec(
+        raw,
+      )?.[0];
+      const project = /project[= ](\d+)/i.exec(raw)?.[1];
+      fixUrl =
+        linked?.replace(/[.,]$/, "") ??
+        (project ? `${GOOGLE_CALENDAR_API_URL}?project=${project}` : GOOGLE_CALENDAR_API_URL);
+    }
+    return { kind: "api-disabled", message, fixUrl };
+  }
+  if (
+    /insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|ErrorAccessDenied|Authorization_RequestDenied/i.test(
+      said,
+    )
+  ) {
+    return { kind: "scope", message, fixUrl: null };
+  }
+  if (e.code === "rate-limit" || e.status === 429)
+    return { kind: "rate-limit", message, fixUrl: null };
+  if (e.code === "auth" || e.status === 401 || e.status === 403) {
+    return { kind: "auth", message, fixUrl: null };
+  }
+  if (e.code === "network") return { kind: "network", message, fixUrl: null };
+  return { kind: "other", message, fixUrl: null };
 }
 
 interface AccountRow {
@@ -279,6 +356,7 @@ function eventChangeOf(row: EventRow): EventChange {
     createdByAgent: row.createdByAgent,
     updatedAt: row.updatedAt.toISOString(),
     deleted: row.deleted,
+    reminders: row.reminders ?? null,
   };
 }
 
@@ -326,6 +404,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
   /** CalDAV Sessions per Account; Provider ones are the mail Session's. */
   const caldavSessions = new Map<string, Promise<CalendarSession>>();
   let jobsRef: Jobs | null = null;
+  /** The last read of each Account's calendar: ok, or why not. */
+  const statuses = new Map<string, { problem: CalendarProblem | null; at: Date }>();
 
   /* ------------------------------ Accounts and Sessions ------------------------------ */
 
@@ -569,6 +649,7 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       createdByAgent: row.createdByAgent,
       etag: row.etag,
       updatedAt: row.updatedAt.toISOString(),
+      reminders: row.reminders ?? null,
     };
   }
 
@@ -630,6 +711,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       stale: false,
       updatedAt: new Date(ev.updatedAt),
       ...(extra.sequence !== undefined ? { sequence: extra.sequence } : {}),
+      // An adapter that does not say keeps what is stored.
+      ...(ev.reminders !== undefined ? { reminders: ev.reminders } : {}),
     };
     let row: EventRow | undefined;
     if (existing) {
@@ -944,6 +1027,312 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
     return { sleepMs: Number.isFinite(soonest) ? soonest : NO_PUBLIC_URL_SLEEP_MS };
   }
 
+  /* ------------------------------ One write, and writes aimed at instances ------------------------------ */
+
+  /** One Event written as it is: the Provider's, or the Local calendar's row and its iMIP REQUEST. */
+  async function updateOne(row: EventRow, patch: EventPatch): Promise<CalendarEvent> {
+    const calendar = await requireCalendar(row.calendarId);
+    const acct = await accountOfWorkspace(row.workspaceId);
+    const info = await infoFor(acct);
+    const s = await sessionFor(acct);
+    const link =
+      patch.meetingLink !== undefined || patch.customLink !== undefined
+        ? await resolveLink(acct, info, patch.meetingLink, patch.customLink)
+        : null;
+    if (s && calendar.source !== "local") {
+      const made = await s.updateEvent(
+        calendar.providerId,
+        row.providerId,
+        {
+          ...patch,
+          ...(patch.attendees
+            ? {
+                attendees: patch.attendees.filter(
+                  (p) => p.email.toLowerCase() !== acct.address.toLowerCase(),
+                ),
+              }
+            : {}),
+          ...(link ?? {}),
+        },
+        row.etag,
+      );
+      const updated = await applyProviderEvent(calendar, made);
+      if (!info.providerSendsInvites) await mailRequest(acct, updated);
+      return projectEvent(updated);
+    }
+    const content = await readContent(row);
+    const organizer: Person = { name: acct.displayName, email: acct.address };
+    const ev: ProviderEvent = {
+      id: row.providerId,
+      calendarId: calendar.providerId,
+      uid: row.uid,
+      title: patch.title ?? content.title,
+      description: patch.description ?? content.description,
+      location: patch.location ?? content.location,
+      start: patch.start ?? row.start.toISOString(),
+      end: patch.end ?? row.end.toISOString(),
+      allDay: patch.allDay ?? row.allDay,
+      timeZone: patch.timeZone === undefined ? row.timeZone : patch.timeZone,
+      organizer: row.organizer ?? organizer,
+      attendees: patch.attendees
+        ? [
+            ...row.attendees.filter((a) => a.self || a.email === acct.address.toLowerCase()),
+            ...patch.attendees
+              .filter((p) => p.email.toLowerCase() !== acct.address.toLowerCase())
+              .map((p) => ({
+                ...p,
+                response:
+                  row.attendees.find((a) => a.email === p.email)?.response ?? "needs-action",
+              })),
+          ]
+        : row.attendees,
+      link: link ? link.customLink : row.link,
+      status: row.status,
+      recurrence: patch.recurrence === undefined ? row.recurrence : patch.recurrence,
+      recurringEventId: row.recurringEventId,
+      response: row.response,
+      reminders: patch.reminders === undefined ? (row.reminders ?? null) : patch.reminders,
+      etag: null,
+      updatedAt: now().toISOString(),
+    };
+    const timesChanged = ev.start !== row.start.toISOString() || ev.end !== row.end.toISOString();
+    const updated = await applyProviderEvent(calendar, ev, {
+      sequence: timesChanged ? row.sequence + 1 : row.sequence,
+    });
+    await mailRequest(acct, updated);
+    return projectEvent(updated);
+  }
+
+  async function deleteOne(row: EventRow): Promise<void> {
+    const calendar = await requireCalendar(row.calendarId);
+    const acct = await accountOfWorkspace(row.workspaceId);
+    const info = await infoFor(acct);
+    const s = await sessionFor(acct);
+    if (s && calendar.source !== "local") {
+      await s.deleteEvent(calendar.providerId, row.providerId);
+      await markDeleted(row);
+      if (!info.providerSendsInvites) await mailCancel(acct, row);
+      return;
+    }
+    await markDeleted(row);
+    await mailCancel(acct, row);
+  }
+
+  /** Where a patch that moved an instance puts another instance of the series: shifted by as much. */
+  function shiftedTimes(
+    patch: EventPatch,
+    from: { start: Date; end: Date },
+    to: { start: Date; end: Date },
+  ): Pick<EventPatch, "start" | "end"> {
+    if (patch.start === undefined && patch.end === undefined) return {};
+    const startShift =
+      patch.start !== undefined ? Date.parse(patch.start) - from.start.getTime() : 0;
+    const start = new Date(to.start.getTime() + startShift);
+    const length =
+      patch.end !== undefined
+        ? Date.parse(patch.end) -
+          (patch.start !== undefined ? Date.parse(patch.start) : from.start.getTime())
+        : to.end.getTime() - to.start.getTime();
+    return { start: start.toISOString(), end: new Date(start.getTime() + length).toISOString() };
+  }
+
+  /** The guests of an Event, without the Account itself, for a new Event made from it. */
+  function guestsOf(attendees: readonly Attendee[], acct: AccountRow): Person[] {
+    const me = acct.address.toLowerCase();
+    return attendees
+      .filter((a) => !a.self && a.email.toLowerCase() !== me)
+      .map((a) => ({ name: a.name, email: a.email }));
+  }
+
+  async function syncCalendarNow(s: CalendarSession, calendar: CalendarRow, accountId: string) {
+    const report: CalendarSyncReport = { accountId, calendars: 1, upserted: 0, removed: 0 };
+    const fresh = await requireCalendar(calendar.id);
+    await syncCalendarEvents(s, fresh, report);
+  }
+
+  /** "All events" or "this and following" on an instance the Provider expanded (Google, Graph). */
+  async function writeSeriesOfInstance(
+    row: EventRow,
+    patch: EventPatch | null,
+    scope: "all" | "following",
+  ): Promise<CalendarEvent | null> {
+    const calendar = await requireCalendar(row.calendarId);
+    const acct = await accountOfWorkspace(row.workspaceId);
+    const s = await sessionFor(acct);
+    const masterId = row.recurringEventId;
+    if (!s || !masterId || calendar.source === "local") return null;
+    if (!s.readEvent) {
+      throw new CalendarUnavailableError("this calendar cannot change a whole series from here");
+    }
+    const master = await s.readEvent(calendar.providerId, masterId);
+    if (scope === "all") {
+      if (patch === null) {
+        await s.deleteEvent(calendar.providerId, masterId);
+        const rows = await db
+          .select()
+          .from(events)
+          .where(and(eq(events.calendarId, calendar.id), eq(events.recurringEventId, masterId)));
+        for (const r of rows) if (!r.deleted) await markDeleted(r);
+        return null;
+      }
+      const times = shiftedTimes(
+        patch,
+        { start: row.start, end: row.end },
+        { start: new Date(master.start), end: new Date(master.end) },
+      );
+      await s.updateEvent(
+        calendar.providerId,
+        masterId,
+        {
+          ...patch,
+          ...times,
+          ...(patch.attendees
+            ? {
+                attendees: patch.attendees.filter(
+                  (p) => p.email.toLowerCase() !== acct.address.toLowerCase(),
+                ),
+              }
+            : {}),
+        },
+        master.etag,
+      );
+    } else {
+      if (!master.recurrence) {
+        throw new CalendarUnavailableError(
+          "this calendar does not say how the series repeats, so it cannot be split here",
+        );
+      }
+      await s.updateEvent(
+        calendar.providerId,
+        masterId,
+        { recurrence: recurrenceUntil(master.recurrence, row.start, master.allDay) },
+        master.etag,
+      );
+      if (patch !== null) {
+        const content = await readContent(row);
+        await module.createEvent(acct.workspaceId, {
+          calendarId: calendar.id,
+          title: patch.title ?? content.title,
+          description: patch.description ?? content.description,
+          location: patch.location ?? content.location,
+          start: patch.start ?? row.start.toISOString(),
+          end: patch.end ?? row.end.toISOString(),
+          allDay: patch.allDay ?? row.allDay,
+          timeZone: patch.timeZone === undefined ? row.timeZone : patch.timeZone,
+          attendees: patch.attendees ?? guestsOf(row.attendees, acct),
+          recurrence:
+            patch.recurrence === undefined ? recurrenceFrom(master.recurrence) : patch.recurrence,
+          reminders: patch.reminders === undefined ? (row.reminders ?? null) : patch.reminders,
+          ...(patch.meetingLink !== undefined
+            ? { meetingLink: patch.meetingLink, customLink: patch.customLink ?? null }
+            : row.link
+              ? { meetingLink: "custom" as const, customLink: row.link }
+              : { meetingLink: "none" as const }),
+        });
+      }
+    }
+    await syncCalendarNow(s, calendar, acct.id);
+    const after = await db.query.events.findFirst({ where: eq(events.id, row.id) });
+    return after && !after.deleted ? projectEvent(after) : null;
+  }
+
+  /** One instance, or it and the later ones, of a master kept here (CalDAV, the Local calendar). */
+  async function writeMasterInstance(
+    row: EventRow,
+    patch: EventPatch | null,
+    scope: "this" | "following",
+    occurrence: Date,
+  ): Promise<CalendarEvent | null> {
+    const recurrence = row.recurrence as string;
+    const first = occurrence.getTime() <= row.start.getTime();
+    if (scope === "following" && first) {
+      // From the first instance on is the whole series.
+      if (patch === null) {
+        await deleteOne(row);
+        return null;
+      }
+      return writeMasterAll(row, patch, occurrence);
+    }
+    const cut =
+      scope === "this"
+        ? withExdate(recurrence, occurrence)
+        : recurrenceUntil(recurrence, occurrence, row.allDay);
+    const master = await updateOne(row, { recurrence: cut });
+    if (patch === null) return master;
+    const acct = await accountOfWorkspace(row.workspaceId);
+    const content = await readContent(row);
+    const length = row.end.getTime() - row.start.getTime();
+    return module.createEvent(acct.workspaceId, {
+      calendarId: row.calendarId,
+      title: patch.title ?? content.title,
+      description: patch.description ?? content.description,
+      location: patch.location ?? content.location,
+      start: patch.start ?? occurrence.toISOString(),
+      end:
+        patch.end ??
+        new Date(
+          (patch.start ? Date.parse(patch.start) : occurrence.getTime()) + length,
+        ).toISOString(),
+      allDay: patch.allDay ?? row.allDay,
+      timeZone: patch.timeZone === undefined ? row.timeZone : patch.timeZone,
+      attendees: patch.attendees ?? guestsOf(row.attendees, acct),
+      recurrence:
+        scope === "this"
+          ? null
+          : patch.recurrence === undefined
+            ? recurrenceFrom(recurrence)
+            : patch.recurrence,
+      reminders: patch.reminders === undefined ? (row.reminders ?? null) : patch.reminders,
+      ...(patch.meetingLink !== undefined
+        ? { meetingLink: patch.meetingLink, customLink: patch.customLink ?? null }
+        : row.link
+          ? { meetingLink: "custom" as const, customLink: row.link }
+          : { meetingLink: "none" as const }),
+    });
+  }
+
+  /** "All events" on a master kept here: the instance's move applied to the master. */
+  function writeMasterAll(row: EventRow, patch: EventPatch, occurrence: Date) {
+    const length = row.end.getTime() - row.start.getTime();
+    const times = shiftedTimes(
+      patch,
+      { start: occurrence, end: new Date(occurrence.getTime() + length) },
+      { start: row.start, end: row.end },
+    );
+    return updateOne(row, { ...patch, ...times });
+  }
+
+  /* ------------------------------ Status ------------------------------ */
+
+  function recordStatus(accountId: string, problem: CalendarProblem | null) {
+    statuses.set(accountId, { problem, at: now() });
+  }
+
+  async function statusOf(acct: AccountRow): Promise<CalendarStatus> {
+    const s = await sessionFor(acct);
+    const source: CalendarSource = s ? s.info().source : "local";
+    const rows = await calendarRows(acct.workspaceId);
+    const synced = rows.map((r) => r.lastSync?.getTime() ?? 0).reduce((a, b) => Math.max(a, b), 0);
+    let known = statuses.get(acct.id);
+    if (!known && s) {
+      try {
+        await s.listCalendars();
+        recordStatus(acct.id, null);
+      } catch (error) {
+        recordStatus(acct.id, classifyCalendarError(error, source));
+      }
+      known = statuses.get(acct.id);
+    }
+    return {
+      workspaceId: acct.workspaceId,
+      accountId: acct.id,
+      source,
+      problem: s ? (known?.problem ?? null) : null,
+      lastSync: synced > 0 ? new Date(synced).toISOString() : null,
+      checkedAt: (known?.at ?? now()).toISOString(),
+    };
+  }
+
   /* ------------------------------ The module ------------------------------ */
 
   const module: CalendarModule = {
@@ -1110,6 +1499,7 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         recurrence: create.recurrence ?? null,
         recurringEventId: null,
         response: "accepted",
+        reminders: create.reminders ?? null,
         etag: null,
         updatedAt: now().toISOString(),
       };
@@ -1121,93 +1511,52 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       return projectEvent(row);
     },
 
-    async updateEvent(eventId, patch) {
+    async updateEvent(eventId, patch, options = {}) {
       const row = await requireEvent(eventId);
-      const calendar = await requireCalendar(row.calendarId);
-      const acct = await accountOfWorkspace(row.workspaceId);
-      const info = await infoFor(acct);
-      const s = await sessionFor(acct);
-      const link =
-        patch.meetingLink !== undefined || patch.customLink !== undefined
-          ? await resolveLink(acct, info, patch.meetingLink, patch.customLink)
-          : null;
-      if (s && calendar.source !== "local") {
-        const made = await s.updateEvent(
-          calendar.providerId,
-          row.providerId,
-          {
-            ...patch,
-            ...(patch.attendees
-              ? {
-                  attendees: patch.attendees.filter(
-                    (p) => p.email.toLowerCase() !== acct.address.toLowerCase(),
-                  ),
-                }
-              : {}),
-            ...(link ?? {}),
-          },
-          row.etag,
-        );
-        const updated = await applyProviderEvent(calendar, made);
-        if (!info.providerSendsInvites) await mailRequest(acct, updated);
-        return projectEvent(updated);
+      const scope = options.scope;
+      if (row.recurringEventId && (scope === "all" || scope === "following")) {
+        const out = await writeSeriesOfInstance(row, patch, scope);
+        return out ?? projectEvent(row);
       }
-      const content = await readContent(row);
-      const organizer: Person = { name: acct.displayName, email: acct.address };
-      const ev: ProviderEvent = {
-        id: row.providerId,
-        calendarId: calendar.providerId,
-        uid: row.uid,
-        title: patch.title ?? content.title,
-        description: patch.description ?? content.description,
-        location: patch.location ?? content.location,
-        start: patch.start ?? row.start.toISOString(),
-        end: patch.end ?? row.end.toISOString(),
-        allDay: patch.allDay ?? row.allDay,
-        timeZone: patch.timeZone === undefined ? row.timeZone : patch.timeZone,
-        organizer: row.organizer ?? organizer,
-        attendees: patch.attendees
-          ? [
-              ...row.attendees.filter((a) => a.self || a.email === acct.address.toLowerCase()),
-              ...patch.attendees
-                .filter((p) => p.email.toLowerCase() !== acct.address.toLowerCase())
-                .map((p) => ({
-                  ...p,
-                  response:
-                    row.attendees.find((a) => a.email === p.email)?.response ?? "needs-action",
-                })),
-            ]
-          : row.attendees,
-        link: link ? link.customLink : row.link,
-        status: row.status,
-        recurrence: patch.recurrence === undefined ? row.recurrence : patch.recurrence,
-        recurringEventId: row.recurringEventId,
-        response: row.response,
-        etag: null,
-        updatedAt: now().toISOString(),
-      };
-      const timesChanged = ev.start !== row.start.toISOString() || ev.end !== row.end.toISOString();
-      const updated = await applyProviderEvent(calendar, ev, {
-        sequence: timesChanged ? row.sequence + 1 : row.sequence,
-      });
-      await mailRequest(acct, updated);
-      return projectEvent(updated);
+      if (row.recurrence && !row.recurringEventId && options.occurrence) {
+        const occurrence = new Date(options.occurrence);
+        if (scope === "this" || scope === "following") {
+          const out = await writeMasterInstance(row, patch, scope, occurrence);
+          return out ?? projectEvent(row);
+        }
+        return writeMasterAll(row, patch, occurrence);
+      }
+      return updateOne(row, patch);
     },
 
-    async deleteEvent(eventId) {
+    async deleteEvent(eventId, options = {}) {
       const row = await requireEvent(eventId);
-      const calendar = await requireCalendar(row.calendarId);
-      const acct = await accountOfWorkspace(row.workspaceId);
-      const info = await infoFor(acct);
-      const s = await sessionFor(acct);
-      if (s && calendar.source !== "local") {
-        await s.deleteEvent(calendar.providerId, row.providerId);
-        await markDeleted(row);
-        if (!info.providerSendsInvites) await mailCancel(acct, row);
+      const scope = options.scope;
+      if (row.recurringEventId && (scope === "all" || scope === "following")) {
+        await writeSeriesOfInstance(row, null, scope);
         return;
       }
-      await markDeleted(row);
-      await mailCancel(acct, row);
+      if (
+        row.recurrence &&
+        !row.recurringEventId &&
+        options.occurrence &&
+        scope &&
+        scope !== "all"
+      ) {
+        await writeMasterInstance(row, null, scope, new Date(options.occurrence));
+        return;
+      }
+      await deleteOne(row);
+    },
+
+    async status(workspaceId) {
+      return statusOf(await accountOfWorkspace(workspaceId));
+    },
+
+    async syncNow(workspaceId) {
+      const acct = await accountOfWorkspace(workspaceId);
+      await module.syncAccount(acct.id).catch(() => {});
+      return statusOf(acct);
     },
 
     async respond(eventId, response) {
@@ -1359,8 +1708,17 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         report.calendars = 1;
         return report;
       }
-      const list = await syncCalendarList(acct, s);
+      const source = s.info().source;
+      let list: CalendarRow[];
+      try {
+        list = await syncCalendarList(acct, s);
+      } catch (error) {
+        // The calendar list itself was refused (the API off, the sign-in without the calendar).
+        recordStatus(acct.id, classifyCalendarError(error, source));
+        throw error;
+      }
       report.calendars = list.length;
+      let problem: CalendarProblem | null = null;
       for (const calendar of list) {
         try {
           await syncCalendarEvents(s, calendar, report);
@@ -1371,9 +1729,15 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
             .update(calendars)
             .set({ lastError: message })
             .where(eq(calendars.id, calendar.id));
-          if ((error as ProviderError).code === "auth") throw error;
+          // A secondary calendar refusing is not the Account's problem; the primary is.
+          if (calendar.primary) problem = classifyCalendarError(error, source);
+          if ((error as ProviderError).code === "auth") {
+            recordStatus(acct.id, classifyCalendarError(error, source));
+            throw error;
+          }
         }
       }
+      recordStatus(acct.id, problem);
       return report;
     },
 

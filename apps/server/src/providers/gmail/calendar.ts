@@ -8,7 +8,7 @@
 // auth, retries and backoff; calendar calls cost no Gmail quota.
 
 import type { Attendee, CalendarInfo, IsoDate, Person, RsvpResponse } from "@monday/shared";
-import { meetingLinkIn } from "@monday/shared";
+import { meetingLinkIn, splitRecurrence } from "@monday/shared";
 import {
   type CalendarSession,
   type CalendarSyncEvent,
@@ -67,6 +67,7 @@ export interface GoogleEvent {
   };
   recurrence?: string[];
   recurringEventId?: string;
+  reminders?: { useDefault?: boolean; overrides?: { method?: string; minutes?: number }[] };
   etag?: string;
   updated?: string;
 }
@@ -147,6 +148,16 @@ export function eventOfGoogle(calendarId: string, e: GoogleEvent): ProviderEvent
     recurrence: e.recurrence?.find((r) => r.startsWith("RRULE:"))?.slice(6) ?? null,
     recurringEventId: e.recurringEventId ?? null,
     response: self?.response ?? null,
+    ...(e.reminders
+      ? {
+          reminders:
+            e.reminders.useDefault === false
+              ? (e.reminders.overrides ?? [])
+                  .map((o) => o.minutes)
+                  .filter((m): m is number => typeof m === "number")
+              : null,
+        }
+      : {}),
     etag: e.etag ?? null,
     updatedAt: e.updated ? new Date(e.updated).toISOString() : new Date().toISOString(),
   };
@@ -155,6 +166,18 @@ export function eventOfGoogle(calendarId: string, e: GoogleEvent): ProviderEvent
 function googleDate(at: IsoDate, allDay: boolean, zone: string | null): GoogleDate {
   if (allDay) return { date: at.slice(0, 10) };
   return { dateTime: at, ...(zone ? { timeZone: zone } : {}) };
+}
+
+/** Google's reminders block: the calendar's default for null, popups otherwise. */
+export function googleReminders(minutes: readonly number[] | null) {
+  return minutes === null
+    ? { useDefault: true }
+    : { useDefault: false, overrides: minutes.map((m) => ({ method: "popup", minutes: m })) };
+}
+
+/** The RRULE line for a recurrence value; EXDATE lines never reach Google (it expands instances). */
+function rruleLine(value: string): string {
+  return `RRULE:${splitRecurrence(value).rule}`;
 }
 
 function googleAttendees(people: readonly Person[]): GoogleAttendee[] {
@@ -286,7 +309,8 @@ export function createGoogleCalendar(
         start: googleDate(input.start, input.allDay ?? false, input.timeZone ?? null),
         end: googleDate(input.end, input.allDay ?? false, input.timeZone ?? null),
         attendees: googleAttendees(input.attendees ?? []),
-        ...(input.recurrence ? { recurrence: [`RRULE:${input.recurrence}`] } : {}),
+        ...(input.recurrence ? { recurrence: [rruleLine(input.recurrence)] } : {}),
+        ...(input.reminders !== undefined ? { reminders: googleReminders(input.reminders) } : {}),
         ...(wantMeet
           ? {
               conferenceData: {
@@ -338,13 +362,21 @@ export function createGoogleCalendar(
       }
       if (input.attendees !== undefined) body.attendees = googleAttendees(input.attendees);
       if (input.recurrence !== undefined) {
-        body.recurrence = input.recurrence ? [`RRULE:${input.recurrence}`] : [];
+        body.recurrence = input.recurrence ? [rruleLine(input.recurrence)] : [];
       }
+      if (input.reminders !== undefined) body.reminders = googleReminders(input.reminders);
       const updated = await api<GoogleEvent>(
         `${calendarPath(calendarId)}/events/${encodeURIComponent(eventId)}`,
         { method: "PATCH", query: { sendUpdates: "all", conferenceDataVersion: "1" }, body },
       );
       return eventOfGoogle(calendarId, updated);
+    },
+
+    async readEvent(calendarId, eventId) {
+      const e = await api<GoogleEvent>(
+        `${calendarPath(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      );
+      return eventOfGoogle(calendarId, e);
     },
 
     async deleteEvent(calendarId, eventId) {
