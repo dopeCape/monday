@@ -1,14 +1,16 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { Toast } from "@monday/ui";
+import { type ReactNode, StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import type { AccountView } from "./platform/api.ts";
-import { platform } from "./platform/tauri.ts";
+import { platform, platformNotifier } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { FirstSyncGate } from "./screens/FirstSync.tsx";
 import { FirstSyncFixture } from "./screens/first-sync/fixture.tsx";
+import { type ReadyNotice, useInboxReady, windowInFront } from "./screens/first-sync/ready.ts";
 import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.ts";
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
@@ -207,6 +209,45 @@ function Root() {
 }
 
 /**
+ * The gate below, and beside it "Your inbox is ready" once per Account
+ * (first-sync/ready.ts): a note in the window while it is in front, a
+ * desktop notification otherwise.
+ */
+function WorkspaceGate() {
+  const shell = useShell();
+  // "Your inbox is ready", once per Account: a note here while the window is in front.
+  const [note, setNote] = useState<ReadyNotice | null>(null);
+  useInboxReady(
+    {
+      list: () => shell.api.accounts.list().then((r) => r.accounts),
+      read: (id) => shell.api.accounts.sync(id).then((r) => r.progress),
+      settings: shell.settings,
+      record: (announced) => void shell.set("sync.first_run_announced", announced),
+      notify: (title, body) => platformNotifier.notify(title, body),
+      note: setNote,
+      inFront: windowInFront,
+    },
+    shell.server !== null,
+  );
+  return (
+    <>
+      <Gate />
+      {note ? (
+        <Toast
+          key={note.accountId}
+          className="ready-note"
+          text={`${note.title}. ${note.body}`}
+          undoLabel=""
+          undoKey=""
+          ms={shell.settings["notifications.note_ms"]}
+          onExpire={() => setNote(null)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
  * Picks the Workspace: the Account workspace.current names (else the first) in the app, the design
  * fixture's on the browser dev server (no Server there). In the app nothing
  * renders until the Sidecar (or the Cloud) answers, so the fixture Workspace
@@ -217,7 +258,7 @@ function Root() {
  * that screen's Settings takes the gate back to the Accounts screen, and one
  * added there shows in its switcher.
  */
-function WorkspaceGate() {
+function Gate(): ReactNode {
   const shell = useShell();
   const [accounts, setAccounts] = useState<AccountView[] | null>(null);
   const server = shell.server;
