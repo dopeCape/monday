@@ -1,12 +1,20 @@
 // Microsoft Graph v1.0 calendars behind the CalendarSession seam (slice 18;
-// research 6, "Microsoft Graph v1.0"): GET /me/calendars, calendarView/delta
-// per calendar for the window (occurrences expanded; @removed entries
-// outside the range filtered), POST /me/calendars/{id}/events with
+// research 6, "Microsoft Graph v1.0"): GET /me/calendars plus the other
+// calendar groups (where shared calendars sit), calendarView/delta per
+// calendar for the window (occurrences expanded; @removed entries outside
+// the range filtered), POST /me/calendars/{id}/events with
 // isOnlineMeeting for a Teams link (Graph mails the invitations, always),
 // PATCH for updates, DELETE, the accept/tentativelyAccept/decline actions
 // for the own answer, and a change notification subscription for push.
 
-import type { Attendee, CalendarInfo, IsoDate, Person, RsvpResponse } from "@monday/shared";
+import type {
+  Attendee,
+  CalendarAccess,
+  CalendarInfo,
+  IsoDate,
+  Person,
+  RsvpResponse,
+} from "@monday/shared";
 import { meetingLinkIn } from "@monday/shared";
 import {
   type CalendarSession,
@@ -20,11 +28,12 @@ import {
 } from "../types.ts";
 import { GRAPH_BASE, type GraphApiError, type GraphClient } from "./client.ts";
 
-interface GraphCalendar {
+export interface GraphCalendar {
   id: string;
   name?: string;
   isDefaultCalendar?: boolean;
   canEdit?: boolean;
+  owner?: { name?: string; address?: string };
   hexColor?: string;
   allowedOnlineMeetingProviders?: string[];
   defaultOnlineMeetingProvider?: string;
@@ -194,6 +203,27 @@ export interface GraphCalendarOptions {
   now?: () => Date;
 }
 
+/**
+ * One Graph calendar as monday keeps it. canEdit says whether the Account may
+ * write; the owner says whose it is: another person's address makes it a
+ * shared calendar, shared by that person.
+ */
+export function calendarOfGraph(c: GraphCalendar, me: string): ProviderCalendar {
+  const ownerAddress = c.owner?.address?.toLowerCase() ?? "";
+  const mine = ownerAddress === "" || ownerAddress === me.toLowerCase();
+  const writable = c.canEdit ?? true;
+  const access: CalendarAccess = writable ? (mine ? "owner" : "writer") : "reader";
+  return {
+    id: c.id,
+    name: c.name ?? "Calendar",
+    primary: c.isDefaultCalendar ?? false,
+    writable,
+    color: c.hexColor || null,
+    access,
+    sharedBy: mine ? null : { name: c.owner?.name ?? "", email: ownerAddress },
+  };
+}
+
 export function createGraphCalendar(
   client: GraphClient,
   address: string,
@@ -203,6 +233,17 @@ export function createGraphCalendar(
   const me = address.toLowerCase();
   let teamsAllowed: boolean | null = null;
   const utc = { prefer: 'outlook.timezone="UTC", outlook.body-content-type="text"' };
+
+  async function* pages<T>(first: string): AsyncIterable<T> {
+    let url: string | null = first;
+    while (url) {
+      const page: { value?: T[]; "@odata.nextLink"?: string } = await client.request(url, {
+        query: { $top: "100" },
+      });
+      for (const item of page.value ?? []) yield item;
+      url = page["@odata.nextLink"] ?? null;
+    }
+  }
 
   const eventsPath = (calendarId: string) =>
     `me/calendars/${encodeURIComponent(calendarId)}/events`;
@@ -220,25 +261,31 @@ export function createGraphCalendar(
 
     async listCalendars() {
       const out: ProviderCalendar[] = [];
-      let url: string | null = "me/calendars";
-      while (url) {
-        const page: { value: GraphCalendar[]; "@odata.nextLink"?: string } = await client.request(
-          url,
-          { query: { $top: "100" } },
-        );
-        for (const c of page.value) {
-          if (c.isDefaultCalendar) {
-            teamsAllowed = (c.allowedOnlineMeetingProviders ?? []).includes("teamsForBusiness");
-          }
-          out.push({
-            id: c.id,
-            name: c.name ?? "Calendar",
-            primary: c.isDefaultCalendar ?? false,
-            writable: c.canEdit ?? true,
-            color: c.hexColor || null,
-          });
+      const seen = new Set<string>();
+      const take = (c: GraphCalendar) => {
+        if (seen.has(c.id)) return;
+        seen.add(c.id);
+        if (c.isDefaultCalendar) {
+          teamsAllowed = (c.allowedOnlineMeetingProviders ?? []).includes("teamsForBusiness");
         }
-        url = page["@odata.nextLink"] ?? null;
+        out.push(calendarOfGraph(c, me));
+      };
+      for await (const c of pages<GraphCalendar>("me/calendars")) take(c);
+      // Calendars others shared sit in their own calendar groups ("People's
+      // calendars", "Other calendars"), which /me/calendars leaves out. A
+      // tenant that refuses the groups keeps the default group's calendars.
+      try {
+        const groups: { id: string }[] = [];
+        for await (const g of pages<{ id: string }>("me/calendarGroups")) groups.push(g);
+        for (const g of groups) {
+          for await (const c of pages<GraphCalendar>(
+            `me/calendarGroups/${encodeURIComponent(g.id)}/calendars`,
+          )) {
+            take(c);
+          }
+        }
+      } catch (error) {
+        if ((error as ProviderError).code === "auth") throw error;
       }
       return out;
     },

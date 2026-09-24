@@ -3,7 +3,7 @@
 // weeks of a month, the search over Events and each calendar's colour. Pure,
 // so every placement is testable without a DOM.
 
-import type { Calendar } from "@monday/shared";
+import type { Calendar, CalendarDraft, CalendarDraftChange } from "@monday/shared";
 import type { Occurrence } from "./calendar-data.ts";
 import {
   addDays,
@@ -239,4 +239,101 @@ export function calendarColors(
     out.set(c.id, cssColor(value));
   });
   return out;
+}
+
+/* ------------------------------ Which calendars a Workspace shows ------------------------------ */
+
+/** The calendar.shown Setting: per Workspace ("*" for every one), per calendar, shown or not. */
+export type ShownSetting = Readonly<Record<string, Readonly<Record<string, boolean>>>>;
+
+/**
+ * Whether a Workspace shows a calendar: hidden everywhere on the Server, an
+ * other Account's with calendar.other_accounts off, or turned off for this
+ * Workspace (or for every one) in calendar.shown; shown otherwise.
+ */
+export function calendarShown(
+  shown: ShownSetting,
+  workspaceId: string,
+  c: { id: string; workspaceId: string; visible: boolean },
+  otherAccounts: boolean,
+): boolean {
+  if (!c.visible) return false;
+  if (c.workspaceId !== workspaceId && !otherAccounts) return false;
+  return shown[workspaceId]?.[c.id] ?? shown["*"]?.[c.id] ?? true;
+}
+
+/** calendar.shown with one Workspace's choices for some calendars changed. */
+export function withShown(
+  shown: ShownSetting,
+  workspaceId: string,
+  choices: Readonly<Record<string, boolean>>,
+): Record<string, Record<string, boolean>> {
+  return { ...shown, [workspaceId]: { ...(shown[workspaceId] ?? {}), ...choices } };
+}
+
+/* ------------------------------ A calendar draft over the views ------------------------------ */
+
+/**
+ * The views' occurrences with a draft laid over them, like a diff: an Event
+ * the draft removes or moves is marked where it stands ("delete", "before"),
+ * and what it adds or moves to is a ghost ("add", "after"). Changes left
+ * out or already applied are not shown.
+ */
+export function draftOverlay(
+  items: readonly Occurrence[],
+  draft: CalendarDraft | null,
+  skip: ReadonlySet<string>,
+): Occurrence[] {
+  if (!draft) return [...items];
+  const live = draft.changes.filter((c) => !skip.has(c.id));
+  const matches = (o: Occurrence, c: CalendarDraftChange) =>
+    o.id === c.eventId &&
+    (!c.occurrence || o.instanceStart === c.occurrence || o.start === c.occurrence);
+  const out: Occurrence[] = items.map((o) => {
+    const c = live.find((x) => (x.kind === "update" || x.kind === "delete") && matches(o, x));
+    if (!c) return o;
+    return {
+      ...o,
+      draft: { changeId: c.id, kind: c.kind === "delete" ? "delete" : "before" } as const,
+    };
+  });
+  for (const c of live) {
+    if (!c.after || (c.kind !== "create" && c.kind !== "update")) continue;
+    const base = c.kind === "update" ? items.find((o) => matches(o, c)) : undefined;
+    const f = c.after;
+    out.push({
+      ...(base ?? {
+        id: `draft:${c.id}`,
+        workspaceId: draft.workspaceId,
+        calendarId: f.calendarId ?? "",
+        providerId: "",
+        uid: null,
+        timeZone: null,
+        description: "",
+        location: "",
+        organizer: null,
+        attendees: [],
+        link: null,
+        status: "confirmed" as const,
+        recurrence: null,
+        recurringEventId: null,
+        response: null,
+        createdByAgent: false,
+        etag: null,
+        updatedAt: draft.createdAt,
+      }),
+      key: `draft:${c.id}`,
+      title: f.title,
+      start: f.start,
+      end: f.end,
+      allDay: f.allDay,
+      ...(f.calendarId ? { calendarId: f.calendarId } : {}),
+      ...(f.location !== undefined ? { location: f.location } : {}),
+      ...(f.description !== undefined ? { description: f.description } : {}),
+      attendees: (f.attendees ?? []).map((p) => ({ ...p, response: "needs-action" as const })),
+      instanceStart: null,
+      draft: { changeId: c.id, kind: c.kind === "create" ? "add" : "after" },
+    });
+  }
+  return out.sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
 }

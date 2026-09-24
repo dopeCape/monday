@@ -1,12 +1,24 @@
 // The column beside the Calendar: the mini month for picking a day (the
 // days on screen marked, days with Events dotted), the Today panel, the
 // invites still waiting for an answer, and the calendars of every Account
-// shown, each with its colour as a switch for whether it shows and a
-// swatch menu to pick another colour (the calendar.colors Setting).
+// shown, grouped as the open Account's own, each other Account's and
+// those shared with the Account; each is a coloured switch (what this
+// Workspace shows, the calendar.shown Setting) with hover actions to show
+// only it, hide it and pick its colour (calendar.colors), and a warning
+// on a calendar or an Account whose calendar cannot be read.
 
 import type { Calendar, Settings } from "@monday/shared";
-import { Btn, clock, formatMonth, Icon, SideCard, Tag, WEEKDAY_SHORT } from "@monday/ui";
-import { CaretLeftIcon, CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
+import { Btn, clock, cx, formatMonth, Icon, SideCard, WEEKDAY_SHORT } from "@monday/ui";
+import {
+  CaretLeftIcon,
+  CaretRightIcon,
+  CheckIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  LockSimpleIcon,
+  PaletteIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
 import { type CSSProperties, useEffect, useState } from "react";
 import type { CalendarAccount, Occurrence } from "./calendar-data.ts";
 import { addMonths, dayKey, isoWeek, sameDay, startOfDay, startOfMonth } from "./dates.ts";
@@ -95,20 +107,68 @@ export interface CalendarListProps {
   calendars: readonly Calendar[];
   accounts: readonly CalendarAccount[];
   colors: ReadonlyMap<string, string>;
+  /** The open Workspace, whose own calendars head the list. */
+  workspaceId: string;
+  /** Accounts whose calendar cannot be read, by Workspace. */
+  problems: ReadonlySet<string>;
   s: Settings;
   onToggle: (c: Calendar, visible: boolean) => void;
+  onOnly: (c: Calendar) => void;
+  onShowAll: () => void;
   onColor: (c: Calendar, color: string | null) => void;
   /** Shown instead of the list while nothing has arrived yet. */
   loading: boolean;
 }
 
-/** The calendars grouped by Account, each a coloured switch with a colour menu. */
+interface Group {
+  key: string;
+  title: string;
+  problem: boolean;
+  calendars: Calendar[];
+}
+
+/** The groups the list shows: the open Workspace's own, each other Account's, then shared ones. */
+export function calendarGroups(
+  calendars: readonly Calendar[],
+  accounts: readonly CalendarAccount[],
+  workspaceId: string,
+  problems: ReadonlySet<string>,
+  words: { mine: string; shared: string },
+): Group[] {
+  const address = (ws: string) => accounts.find((a) => a.workspaceId === ws)?.address ?? ws;
+  const out: Group[] = [];
+  const mine = calendars.filter((c) => c.workspaceId === workspaceId && !c.sharedBy);
+  if (mine.length)
+    out.push({
+      key: "mine",
+      title: words.mine,
+      problem: problems.has(workspaceId),
+      calendars: mine,
+    });
+  const others = new Map<string, Calendar[]>();
+  for (const c of calendars) {
+    if (c.workspaceId === workspaceId || c.sharedBy) continue;
+    others.set(c.workspaceId, [...(others.get(c.workspaceId) ?? []), c]);
+  }
+  for (const [ws, list] of others)
+    out.push({ key: ws, title: address(ws), problem: problems.has(ws), calendars: list });
+  const shared = calendars.filter((c) => c.sharedBy);
+  if (shared.length)
+    out.push({ key: "shared", title: words.shared, problem: false, calendars: shared });
+  return out;
+}
+
+/** The calendars in groups: each a coloured switch, hover actions to show only it, hide it and colour it. */
 export function CalendarList({
   calendars,
   accounts,
   colors,
+  workspaceId,
+  problems,
   s,
   onToggle,
+  onOnly,
+  onShowAll,
   onColor,
   loading,
 }: CalendarListProps) {
@@ -120,21 +180,48 @@ export function CalendarList({
       </p>
     );
   }
-  const groups = new Map<string, Calendar[]>();
-  for (const c of calendars) groups.set(c.workspaceId, [...(groups.get(c.workspaceId) ?? []), c]);
-  const label = (workspaceId: string) =>
-    accounts.find((a) => a.workspaceId === workspaceId)?.address ?? "";
-  const many = groups.size > 1;
+  const fill = (t: string, vars: Record<string, string | number>) =>
+    t.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
+  const groups = calendarGroups(calendars, accounts, workspaceId, problems, {
+    mine: s["strings.calendar.list.mine"],
+    shared: s["strings.calendar.list.shared"],
+  });
+  const address = (ws: string) => accounts.find((a) => a.workspaceId === ws)?.address ?? "";
+  const hidden = calendars.some((c) => !c.visible);
   return (
     <div className="cal-list">
-      {[...groups.entries()].map(([ws, list]) => (
-        <div key={ws} className="cal-list-group">
-          {many && label(ws) ? <div className="cal-list-account">{label(ws)}</div> : null}
-          {list.map((c) => {
+      {groups.map((g) => (
+        <div key={g.key} className="cal-list-group">
+          <div className="cal-list-account">
+            <span>{g.title}</span>
+            {g.problem ? (
+              <span className="cal-list-warn" title={s["strings.calendar.list.account_problem"]}>
+                <Icon icon={WarningIcon} />
+              </span>
+            ) : null}
+          </div>
+          {g.calendars.map((c) => {
             const color = colors.get(c.id) ?? "var(--fg-muted)";
+            const busyOnly = c.access === "free-busy";
+            const readOnly = !c.writable || c.access === "reader";
+            const sub = c.sharedBy
+              ? fill(s["strings.calendar.list.shared_by"], {
+                  name: c.sharedBy.name || c.sharedBy.email,
+                })
+              : null;
             return (
-              <div key={c.id} className="cal-list-row" style={{ "--ev": color } as CSSProperties}>
-                <label>
+              <div
+                key={c.id}
+                className={cx("cal-list-row", !c.visible && "off", c.error && "err")}
+                style={{ "--ev": color } as CSSProperties}
+              >
+                <label
+                  title={
+                    c.error
+                      ? fill(s["strings.calendar.list.cant_read"], { message: c.error })
+                      : c.name
+                  }
+                >
                   <input
                     type="checkbox"
                     checked={c.visible}
@@ -143,16 +230,62 @@ export function CalendarList({
                   <span className="cal-check" aria-hidden="true">
                     {c.visible ? <Icon icon={CheckIcon} /> : null}
                   </span>
-                  <span className="cal-list-name">{c.name}</span>
+                  <span className="cal-list-text">
+                    <span className="cal-list-name">{c.name}</span>
+                    {sub || (c.sharedBy && accounts.length > 1) ? (
+                      <span className="cal-list-sub">
+                        {[sub, c.sharedBy && accounts.length > 1 ? address(c.workspaceId) : ""]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    ) : null}
+                  </span>
                 </label>
-                {!c.writable ? <Tag>{s["strings.calendar.read_only"]}</Tag> : null}
-                <button
-                  type="button"
-                  className="cal-swatch"
-                  aria-label={s["strings.calendar.color"]}
-                  aria-expanded={picking === c.id}
-                  onClick={() => setPicking(picking === c.id ? null : c.id)}
-                />
+                {c.error ? (
+                  <span
+                    className="cal-list-warn"
+                    title={fill(s["strings.calendar.list.cant_read"], { message: c.error })}
+                  >
+                    <Icon icon={WarningIcon} />
+                  </span>
+                ) : busyOnly ? (
+                  <span className="cal-list-tag">{s["strings.calendar.list.free_busy"]}</span>
+                ) : readOnly ? (
+                  <span className="cal-list-tag" title={s["strings.calendar.read_only"]}>
+                    <Icon icon={LockSimpleIcon} />
+                  </span>
+                ) : null}
+                <span className="cal-list-acts">
+                  <button
+                    type="button"
+                    title={s["strings.calendar.list.only"]}
+                    aria-label={s["strings.calendar.list.only"]}
+                    onClick={() => onOnly(c)}
+                  >
+                    <Icon icon={EyeIcon} />
+                  </button>
+                  <button
+                    type="button"
+                    title={s["strings.calendar.color"]}
+                    aria-label={s["strings.calendar.color"]}
+                    aria-expanded={picking === c.id}
+                    onClick={() => setPicking(picking === c.id ? null : c.id)}
+                  >
+                    <Icon icon={PaletteIcon} />
+                  </button>
+                  <button
+                    type="button"
+                    title={
+                      c.visible ? s["strings.calendar.list.hide"] : s["strings.calendar.list.show"]
+                    }
+                    aria-label={
+                      c.visible ? s["strings.calendar.list.hide"] : s["strings.calendar.list.show"]
+                    }
+                    onClick={() => onToggle(c, !c.visible)}
+                  >
+                    <Icon icon={c.visible ? EyeSlashIcon : EyeIcon} />
+                  </button>
+                </span>
                 {picking === c.id ? (
                   <div className="cal-swatches" role="menu">
                     {CALENDAR_TOKENS.map((t) => (
@@ -161,6 +294,7 @@ export function CalendarList({
                         role="menuitem"
                         key={t}
                         aria-label={t}
+                        className={colors.get(c.id) === cssColor(t) ? "on" : ""}
                         style={{ "--ev": cssColor(t) } as CSSProperties}
                         onClick={() => {
                           setPicking(null);
@@ -186,6 +320,11 @@ export function CalendarList({
           })}
         </div>
       ))}
+      {hidden ? (
+        <button type="button" className="cal-list-all" onClick={onShowAll}>
+          {s["strings.calendar.list.show_all"]}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -200,12 +339,16 @@ export interface SidebarProps {
   calendars: readonly Calendar[];
   accounts: readonly CalendarAccount[];
   colors: ReadonlyMap<string, string>;
+  workspaceId: string;
+  problems: ReadonlySet<string>;
   loading: boolean;
   s: Settings;
   onPick: (day: Date) => void;
   onOpen: (o: Occurrence, el: HTMLElement) => void;
   onJoin: (o: Occurrence) => void;
   onToggle: (c: Calendar, visible: boolean) => void;
+  onOnly: (c: Calendar) => void;
+  onShowAll: () => void;
   onColor: (c: Calendar, color: string | null) => void;
 }
 
@@ -253,8 +396,12 @@ export function Sidebar(p: SidebarProps) {
           calendars={p.calendars}
           accounts={p.accounts}
           colors={p.colors}
+          workspaceId={p.workspaceId}
+          problems={p.problems}
           s={s}
           onToggle={p.onToggle}
+          onOnly={p.onOnly}
+          onShowAll={p.onShowAll}
           onColor={p.onColor}
           loading={p.loading}
         />

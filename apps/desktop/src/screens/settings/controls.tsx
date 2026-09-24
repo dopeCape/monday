@@ -9,6 +9,7 @@
 
 import {
   type AiLevel,
+  type Calendar,
   type CustomActionValue,
   type Effort,
   HOSTED_PROVIDERS,
@@ -1647,3 +1648,103 @@ controlKinds["mcp-servers"] = McpServersControl;
 
 /** A re-export so a page can render the enum picker for a value it holds itself. */
 export { EnumPicker };
+
+/* ------------------------------ Calendars per Workspace ------------------------------ */
+
+/**
+ * Which connected calendars each Workspace shows (calendar.shown): one row
+ * per calendar of every Account, shared ones marked, one column per
+ * Workspace plus "Every workspace". A tick shows it there; the first column
+ * sets every Workspace at once.
+ */
+function CalendarShownControl({ k }: ControlProps) {
+  const { value, change, error, shell } = useSetting(k);
+  const s = shell.settings;
+  const accounts = useAccounts();
+  const [calendars, setCalendars] = useState<Calendar[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    let live = true;
+    Promise.all(accounts.map((a) => shell.api.calendar.calendars(a.workspaceId).catch(() => [])))
+      .then((lists) => {
+        if (live) setCalendars(lists.flat());
+      })
+      .catch((e: unknown) => {
+        if (live) setFailed(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [accounts, shell.api]);
+  const shown = (value ?? {}) as Record<string, Record<string, boolean>>;
+  const fillT = (t: string, vars: Record<string, string>) =>
+    t.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? "");
+  const on = (ws: string, id: string) => shown[ws]?.[id] ?? shown["*"]?.[id] ?? true;
+  const set = (ws: string, id: string, v: boolean) => {
+    const next: Record<string, Record<string, boolean>> = {
+      ...shown,
+      [ws]: { ...(shown[ws] ?? {}), [id]: v },
+    };
+    if (ws === "*") {
+      // Every Workspace at once: their own choices for this calendar give way.
+      for (const w of Object.keys(next)) {
+        if (w === "*" || !next[w]) continue;
+        const { [id]: _drop, ...rest } = next[w] as Record<string, boolean>;
+        next[w] = rest;
+      }
+    }
+    void change(next);
+  };
+  const address = (ws: string) => accounts.find((a) => a.workspaceId === ws)?.address ?? ws;
+  return (
+    <Row k={k} block error={error}>
+      {failed ? (
+        <p className="faint">
+          {fillT(s["strings.settings.calendar_shown.failed"], { message: failed })}
+        </p>
+      ) : calendars === null ? (
+        <p className="faint">{s["strings.settings.calendar_shown.loading"]}</p>
+      ) : (
+        <div className="cal-shown">
+          <table>
+            <thead>
+              <tr>
+                <th>{s["strings.settings.calendar_shown.title"]}</th>
+                <th>{s["strings.settings.calendar_shown.everywhere"]}</th>
+                {accounts.map((a) => (
+                  <th key={a.workspaceId}>{a.address}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {calendars.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <b>{c.name}</b>
+                    <span className="faint">
+                      {address(c.workspaceId)}
+                      {c.sharedBy ? ` · ${s["strings.settings.calendar_shown.shared"]}` : ""}
+                    </span>
+                  </td>
+                  {["*", ...accounts.map((a) => a.workspaceId)].map((ws) => (
+                    <td key={ws}>
+                      <input
+                        type="checkbox"
+                        aria-label={`${c.name}, ${ws === "*" ? s["strings.settings.calendar_shown.everywhere"] : address(ws)}`}
+                        checked={on(ws, c.id)}
+                        onChange={(e) => set(ws, c.id, e.currentTarget.checked)}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="faint">{s["strings.settings.calendar_shown.note"]}</p>
+        </div>
+      )}
+    </Row>
+  );
+}
+controlKinds["calendar-visibility"] = CalendarShownControl;

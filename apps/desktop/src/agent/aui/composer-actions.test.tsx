@@ -231,7 +231,7 @@ describe("the / command menu", () => {
     await type("/");
     const names = () =>
       qa('.agent-menu[data-kind="commands"] .agent-menu-item .name').map((n) => n.textContent);
-    expect(names()).toEqual(["/draft", "/summarize", "/find", "/organize", "/new"]);
+    expect(names()).toEqual(["/draft", "/summarize", "/find", "/organize", "/plan-week", "/new"]);
     await type("/sum");
     expect(names()).toEqual(["/summarize"]);
     await click(q('.agent-menu[data-kind="commands"] .agent-menu-item'));
@@ -244,7 +244,7 @@ describe("the / command menu", () => {
     await mount(client);
     await send("hello");
     expect(client.sessions).toHaveLength(1);
-    await type("/ne");
+    await type("/new");
     await click(q('.agent-menu[data-kind="commands"] .agent-menu-item'));
     expect(client.sessions).toHaveLength(2);
     expect(q(".agent-thread .u")).toBeNull();

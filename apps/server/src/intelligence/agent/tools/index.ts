@@ -66,7 +66,7 @@ export interface ToolOutcome {
 
 /** What a tool would do, without doing it: a Dry run reads these. */
 export type ToolPreviewOutcome =
-  | { kind: "result"; text: string }
+  | { kind: "result"; text: string; preview?: ToolPreview | undefined }
   | { kind: "refused"; text: string }
   | { kind: "action"; preview: ToolPreview; count: number; asks: boolean };
 
@@ -162,6 +162,15 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
     },
     extensions: options.extensions,
     sessionId,
+    sessionResults: async (tool) => {
+      const rows = await activity.list(host.workspaceId, {
+        limit: 500,
+        ...(sessionId ? { sessionId } : {}),
+      });
+      return rows
+        .filter((r) => r.tool === tool && r.status === "done" && r.resultData != null)
+        .map((r) => r.resultData);
+    },
   });
 
   const finish = async (
@@ -210,7 +219,13 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
         return { kind: "refused", text: `Invalid input: ${issues}` };
       }
       const plan = await tool.run(parsed.data, context(request.pinned ?? [], settings, null));
-      if (plan.kind === "result") return { kind: "result", text: plan.text };
+      if (plan.kind === "result") {
+        return {
+          kind: "result",
+          text: plan.text,
+          ...(plan.preview ? { preview: plan.preview } : {}),
+        };
+      }
       if (plan.kind === "refused") return { kind: "refused", text: plan.text };
       return {
         kind: "action",
@@ -313,7 +328,13 @@ export function createToolServer(options: ToolServerOptions): ToolServer {
       if (plan.kind === "result") {
         const done = await finish(
           row,
-          { status: "done", decision: "auto", resultText: plan.text, result: plan.data },
+          {
+            status: "done",
+            decision: "auto",
+            resultText: plan.text,
+            result: plan.data,
+            ...(plan.preview ? { preview: plan.preview } : {}),
+          },
           ctx,
         );
         return { activity: done, text: plan.text, isError: false };

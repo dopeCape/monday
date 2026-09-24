@@ -72,7 +72,8 @@ export function scheduleReminders(
   settings: () => Pick<
     Settings,
     "notifications.enabled" | "notifications.calendar_lead_minutes" | "strings.calendar.reminder"
-  >,
+  > &
+    Partial<Pick<Settings, "notifications.calendar">>,
   notifier: Notifier = platformNotifier,
   now: () => Date = () => new Date(),
 ): () => void {
@@ -82,7 +83,8 @@ export function scheduleReminders(
     if (timer) clearTimeout(timer);
     timer = null;
     const s = settings();
-    if (!s["notifications.enabled"]) return;
+    // Off for every notification, or off for the calendar's alone.
+    if (!s["notifications.enabled"] || s["notifications.calendar"] === false) return;
     const body = (title: string, time: string) =>
       s["strings.calendar.reminder"].replace("{title}", title).replace("{time}", time);
     const next = nextReminder(source, s["notifications.calendar_lead_minutes"], now(), fired, body);
@@ -107,14 +109,16 @@ export function scheduleReminders(
 
 export function useEventReminders(source: CalendarSource | undefined, settings: Settings): void {
   const enabled = settings["notifications.enabled"];
+  const calendarOn = settings["notifications.calendar"];
   const lead = settings["notifications.calendar_lead_minutes"];
   const text = settings["strings.calendar.reminder"];
   useEffect(() => {
     if (!source) return;
     return scheduleReminders(source, () => ({
       "notifications.enabled": enabled,
+      "notifications.calendar": calendarOn,
       "notifications.calendar_lead_minutes": lead,
       "strings.calendar.reminder": text,
     }));
-  }, [source, enabled, lead, text]);
+  }, [source, enabled, calendarOn, lead, text]);
 }

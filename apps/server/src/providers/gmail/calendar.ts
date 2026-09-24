@@ -7,7 +7,14 @@
 // invitations and the replies itself. Requests ride the Gmail client for
 // auth, retries and backoff; calendar calls cost no Gmail quota.
 
-import type { Attendee, CalendarInfo, IsoDate, Person, RsvpResponse } from "@monday/shared";
+import type {
+  Attendee,
+  CalendarAccess,
+  CalendarInfo,
+  IsoDate,
+  Person,
+  RsvpResponse,
+} from "@monday/shared";
 import { meetingLinkIn, splitRecurrence } from "@monday/shared";
 import {
   type CalendarSession,
@@ -23,7 +30,7 @@ import type { GmailApiError, GmailClient } from "./client.ts";
 
 export const CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3";
 
-interface GoogleCalendarEntry {
+export interface GoogleCalendarEntry {
   id: string;
   summary?: string;
   summaryOverride?: string;
@@ -184,6 +191,46 @@ function googleAttendees(people: readonly Person[]): GoogleAttendee[] {
   return people.map((p) => ({ email: p.email, ...(p.name ? { displayName: p.name } : {}) }));
 }
 
+/** A person's address, not a group or subscribed calendar's id (…@group.calendar.google.com). */
+function personalAddress(id: string): boolean {
+  return /^[^\s@#]+@[^\s@]+\.[^\s@]+$/.test(id) && !/\.calendar\.google\.com$/i.test(id);
+}
+
+/**
+ * One calendarList entry as monday keeps it. The list already holds the
+ * calendars others shared with the Account (and ones it subscribed to): a
+ * calendar is shared when the Account does not own it and it is not the
+ * primary; who shares it is the calendar's name and, when the id is an
+ * address (a person's calendar), that address.
+ */
+export function calendarOfGoogle(c: GoogleCalendarEntry): ProviderCalendar {
+  const access: CalendarAccess =
+    c.accessRole === "owner"
+      ? "owner"
+      : c.accessRole === "writer" || c.accessRole === "writerWithoutPrivateAccess"
+        ? "writer"
+        : c.accessRole === "freeBusyReader"
+          ? "free-busy"
+          : "reader";
+  const primary = c.primary ?? false;
+  const shared = access !== "owner" && !primary;
+  const name = c.summaryOverride ?? c.summary ?? c.id;
+  return {
+    id: c.id,
+    name,
+    primary,
+    writable: access === "owner" || access === "writer",
+    color: c.backgroundColor ?? null,
+    access,
+    sharedBy: shared
+      ? {
+          name: c.summary ?? c.id,
+          email: personalAddress(c.id) ? c.id.toLowerCase() : "",
+        }
+      : null,
+  };
+}
+
 export interface GoogleCalendarOptions {
   now?: () => Date;
   random?: () => number;
@@ -242,13 +289,7 @@ export function createGoogleCalendar(
             const allowed = c.conferenceProperties?.allowedConferenceSolutionTypes;
             meetAllowed = allowed ? allowed.includes("hangoutsMeet") : true;
           }
-          out.push({
-            id: c.id,
-            name: c.summaryOverride ?? c.summary ?? c.id,
-            primary: c.primary ?? false,
-            writable: c.accessRole === "writer" || c.accessRole === "owner",
-            color: c.backgroundColor ?? null,
-          });
+          out.push(calendarOfGoogle(c));
         }
         pageToken = page.nextPageToken;
       } while (pageToken);

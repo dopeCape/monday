@@ -192,5 +192,7 @@ export function createMessageCache(): (events: readonly TranscriptEvent[]) => Th
 /** A step folds into the turn's activity line: a read, or a Developer mode tool, never a card that asks. */
 export function isStep(call: ToolCall): boolean {
   if (call.tool === ERROR_TOOL || call.status === "waiting") return false;
+  // A calendar draft is read-only on the Server but is the turn's answer: always a card.
+  if (call.tool === "propose_calendar_draft") return false;
   return call.tier === "read-only" || call.builtin === true;
 }

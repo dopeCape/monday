@@ -619,6 +619,75 @@ export interface Calendar {
   /** Shown in the views; kept on the Server so every Device agrees. */
   visible: boolean;
   color: string | null;
+  /**
+   * What the Account may do on it, as the Provider says: its own ("owner"),
+   * change Events ("writer"), read them ("reader"), or only see busy times
+   * ("free-busy"). Absent from older rows: owner when writable, else reader.
+   */
+  access?: CalendarAccess | undefined;
+  /** Someone else's calendar shared with the Account: who shares it. Null for the Account's own. */
+  sharedBy?: Person | null | undefined;
+  /** The last read of this calendar failed: the Provider's words. Null when it reads. */
+  error?: string | null | undefined;
+}
+
+export type CalendarAccess = "owner" | "writer" | "reader" | "free-busy";
+
+/* ------------------------------ Calendar drafts (the Agent's proposed changes) ------------------------------ */
+
+/** An Event's fields as a draft shows and applies them. */
+export interface DraftEventFields {
+  title: string;
+  start: IsoDate;
+  end: IsoDate;
+  allDay: boolean;
+  timeZone?: string | null | undefined;
+  calendarId?: Id | null | undefined;
+  description?: string | undefined;
+  location?: string | undefined;
+  attendees?: Person[] | undefined;
+  recurrence?: string | null | undefined;
+  meetingLink?: MeetingLinkKind | undefined;
+}
+
+/**
+ * One change in a calendar draft, like one hunk of a diff: an Event to add,
+ * one to change (before and after), or one to remove (before).
+ */
+export interface CalendarDraftChange {
+  /** Stable within the draft, for "apply some". */
+  id: string;
+  kind: "create" | "update" | "delete";
+  /** The Event changed or removed; absent for a create. */
+  eventId?: Id | undefined;
+  /** Which instances of a repeating Event it reaches. */
+  scope?: RecurrenceScope | undefined;
+  occurrence?: IsoDate | undefined;
+  /** The Event as it is now (update, delete). */
+  before: DraftEventFields | null;
+  /** The Event as it will be (create, update). */
+  after: DraftEventFields | null;
+  /** Why the Agent proposes it, in a line. */
+  reason?: string | undefined;
+  /** The people other than the user who would be emailed when it is applied. */
+  guests: Person[];
+}
+
+/**
+ * A set of calendar changes the Agent proposes as one draft (a weekly plan,
+ * a rescheduled afternoon). Nothing is written until the user applies it,
+ * all of it or some; applying asks first where guests would be emailed.
+ */
+export interface CalendarDraft {
+  id: Id;
+  workspaceId: Id;
+  title: string;
+  summary: string;
+  /** The window the changes fall in, for the Calendar to open on. */
+  from: IsoDate;
+  to: IsoDate;
+  changes: CalendarDraftChange[];
+  createdAt: IsoDate;
 }
 
 export type RsvpResponse = "accepted" | "tentative" | "declined" | "needs-action";

@@ -11,6 +11,7 @@ import type {
   ApprovalDecision,
   Attendee,
   BriefPolicy,
+  CalendarAccess,
   CalendarSource,
   ChangeKind,
   DecisionCandidate,
@@ -1141,6 +1142,10 @@ export const calendars = pgTable(
     writable: boolean("writable").notNull().default(true),
     visible: boolean("visible").notNull().default(true),
     color: text("color"),
+    /** What the Account may do on it (owner, writer, reader, free-busy); null on older rows. */
+    access: text("access").$type<CalendarAccess>(),
+    /** Who shares it, for a calendar someone else shared with the Account; null for its own. */
+    sharedBy: jsonb("shared_by").$type<Person | null>(),
     /** The Provider's incremental sync token for this calendar; null before the first pass. */
     syncToken: text("sync_token"),
     subscription: jsonb("subscription").$type<CalendarSubscription | null>(),

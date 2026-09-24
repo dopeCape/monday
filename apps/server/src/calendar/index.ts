@@ -17,6 +17,7 @@
 import type {
   Attendee,
   Calendar,
+  CalendarAccess,
   CalendarEvent,
   CalendarInfo,
   CalendarProblem,
@@ -165,6 +166,8 @@ export interface CalendarModule {
   /** Which calendar the Workspace's Account has and who mails invitations. */
   info(workspaceId: string): Promise<CalendarInfo>;
   listCalendars(workspaceId: string): Promise<Calendar[]>;
+  /** The Workspace Account's own address: who "the user" is among an Event's people. */
+  selfAddress(workspaceId: string): Promise<string>;
   setCalendarVisible(calendarId: string, visible: boolean): Promise<Calendar>;
   /** Links or unlinks a CalDAV calendar on an Account without a calendar API; re-syncs. */
   linkCalDav(
@@ -333,6 +336,9 @@ function projectCalendar(row: CalendarRow): Calendar {
     writable: row.writable,
     visible: row.visible,
     color: row.color,
+    access: row.access ?? (row.writable ? "owner" : "reader"),
+    sharedBy: row.sharedBy ?? null,
+    error: row.lastError ?? null,
   };
 }
 
@@ -479,6 +485,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       primary: boolean;
       writable: boolean;
       color: string | null;
+      access: CalendarAccess;
+      sharedBy: Person | null;
     },
   ): Promise<CalendarRow> {
     const existing = await db.query.calendars.findFirst({
@@ -493,7 +501,9 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         existing.primary !== input.primary ||
         existing.writable !== input.writable ||
         existing.color !== input.color ||
-        existing.source !== input.source;
+        existing.source !== input.source ||
+        existing.access !== input.access ||
+        stringify(existing.sharedBy ?? null) !== stringify(input.sharedBy);
       if (!changed) return existing;
       const [row] = await db
         .update(calendars)
@@ -503,6 +513,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
           writable: input.writable,
           color: input.color,
           source: input.source,
+          access: input.access,
+          sharedBy: input.sharedBy,
         })
         .where(eq(calendars.id, existing.id))
         .returning();
@@ -537,6 +549,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       primary: true,
       writable: true,
       color: null,
+      access: "owner",
+      sharedBy: null,
     });
   }
 
@@ -589,6 +603,8 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
           primary: c.primary,
           writable: c.writable,
           color: c.color,
+          access: c.access ?? (c.writable ? "owner" : "reader"),
+          sharedBy: c.sharedBy ?? null,
         }),
       );
     }
@@ -964,10 +980,25 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         report.removed += 1;
       }
     }
-    await db
+    await setLastError(calendar.id, null, { lastSync: now() });
+  }
+
+  /**
+   * Stores why a calendar's last read failed (or that it read), and tells the
+   * feed when that changes, so the client can show a calendar it cannot read.
+   */
+  async function setLastError(
+    calendarId: string,
+    message: string | null,
+    extra: { lastSync?: Date } = {},
+  ): Promise<void> {
+    const before = await db.query.calendars.findFirst({ where: eq(calendars.id, calendarId) });
+    const [row] = await db
       .update(calendars)
-      .set({ lastSync: now(), lastError: null })
-      .where(eq(calendars.id, calendar.id));
+      .set({ lastError: message, ...extra })
+      .where(eq(calendars.id, calendarId))
+      .returning();
+    if (row && (before?.lastError ?? null) !== message) await recordCalendar(row);
   }
 
   async function enqueueSync(accountId: string): Promise<void> {
@@ -1350,6 +1381,10 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
       return rows.map(projectCalendar);
     },
 
+    async selfAddress(workspaceId) {
+      return (await accountOfWorkspace(workspaceId)).address.toLowerCase();
+    },
+
     async setCalendarVisible(calendarId, visible) {
       const [row] = await db
         .update(calendars)
@@ -1725,10 +1760,7 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           log(`calendar sync ${acct.id}/${calendar.providerId}: ${message}`);
-          await db
-            .update(calendars)
-            .set({ lastError: message })
-            .where(eq(calendars.id, calendar.id));
+          await setLastError(calendar.id, message);
           // A secondary calendar refusing is not the Account's problem; the primary is.
           if (calendar.primary) problem = classifyCalendarError(error, source);
           if ((error as ProviderError).code === "auth") {

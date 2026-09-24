@@ -51,6 +51,12 @@ export interface ToolContext {
   extensions?: ToolExtensions | undefined;
   /** The Session the call is made in, when there is one: what a tool remembers per conversation. */
   sessionId?: string | null | undefined;
+  /**
+   * The result data of this Session's finished calls of a tool, newest first
+   * (the Workspace's when there is no Session): what a tool proposed earlier
+   * and can be read back, such as a calendar draft.
+   */
+  sessionResults?: ((tool: string) => Promise<unknown[]>) | undefined;
 }
 
 export interface Applied {
@@ -60,7 +66,16 @@ export interface Applied {
 }
 
 export type ToolPlan =
-  | { kind: "result"; text: string; data: unknown }
+  | {
+      kind: "result";
+      text: string;
+      data: unknown;
+      /**
+       * A card for a result that proposes rather than applies (a calendar
+       * draft): stored on the Activity row so the client shows it.
+       */
+      preview?: ToolPreview | undefined;
+    }
   | { kind: "refused"; text: string }
   | {
       kind: "action";

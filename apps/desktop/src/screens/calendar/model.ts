@@ -51,8 +51,12 @@ export function canAnswer(e: CalendarEvent, addressOf: AddressOf): boolean {
 }
 
 /** The modifier classes an Event block carries. */
-export function toneOf(e: CalendarEvent, now: Date): string {
+export function toneOf(
+  e: CalendarEvent & { draft?: { kind: string } | undefined },
+  now: Date,
+): string {
   const out: string[] = [];
+  if (e.draft) out.push("draft", `draft-${e.draft.kind}`);
   if (e.createdByAgent) out.push("agent");
   if (e.response === "declined") out.push("declined");
   else if (e.response === "needs-action" || e.response === "tentative" || e.status === "tentative")

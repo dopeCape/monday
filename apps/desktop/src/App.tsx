@@ -9,7 +9,7 @@
 // Setting keeps its value), and no Session is opened. Onboarding is offered
 // once per Account, after it is added, and again from "Set me up".
 
-import type { ExternalPending, Group } from "@monday/shared";
+import type { CalendarDraft, ExternalPending, Group } from "@monday/shared";
 import {
   Btn,
   formatWhen,
@@ -46,12 +46,15 @@ import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
+import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
+import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
 import type { AccountView } from "./platform/api.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "./platform/providerKeys.ts";
 import { platform } from "./platform/tauri.ts";
 import { Calendar } from "./screens/Calendar.tsx";
 import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
+import { dayKey } from "./screens/calendar/dates.ts";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
@@ -110,6 +113,8 @@ export interface AppProps {
   keys?: DeviceProviderKeys | null | undefined;
   /** The calendar seam (slice 18): the Calendar screen, the invite bar and the reminders. Absent, the screen is empty. */
   calendar?: CalendarSource | undefined;
+  /** Where the fate of the Agent's calendar drafts is kept; the Cache in the app, memory by default. */
+  draftMemory?: DraftMemory | undefined;
 }
 
 /** Detection as the Settings screens and onboarding read it, from what the Device found. */
@@ -176,6 +181,7 @@ export function App({
   accounts: accountsProp,
   keys: keysProp,
   calendar,
+  draftMemory,
 }: AppProps) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -205,7 +211,11 @@ export function App({
   /** A Thread another screen asked to open; the inbox reads it on mount. */
   const [openThread, setOpenThread] = useState<string | null>(null);
   /** A day the palette asked the Calendar to open on, bumped per ask. */
-  const [calendarJump, setCalendarJump] = useState<{ day: string; n: number } | null>(null);
+  const [calendarJump, setCalendarJump] = useState<{
+    day: string;
+    n: number;
+    view?: "day" | "week" | "month" | "agenda";
+  } | null>(null);
   /** A Draft the Drafts folder asked to open; the inbox opens the composer on it on mount. */
   const [composeDraft, setComposeDraft] = useState<string | null>(null);
   /** The workspace switcher under the workspace button. */
@@ -615,6 +625,60 @@ export function App({
     [shell, openOnboarding, openSearch, askHere],
   );
 
+  /* ------------------------------ The Agent's calendar drafts ------------------------------ */
+
+  // Opens the Calendar on a draft: its first day, overlaid, the store's active one.
+  const showDraft = useCallback((draft: CalendarDraft) => {
+    const from = new Date(draft.from);
+    setCalendarJump((j) => ({
+      day: dayKey(Number.isNaN(from.getTime()) ? new Date() : from),
+      n: (j?.n ?? 0) + 1,
+    }));
+    setActive("calendar");
+  }, []);
+  const settingsLive = useRef(shell.settings);
+  settingsLive.current = shell.settings;
+  const [draftStore] = useState(() =>
+    calendar
+      ? createDraftStore({
+          source: calendar,
+          memory: draftMemory ?? memoryDraftMemory(),
+          defaultCalendar: () => {
+            const writable = calendar.calendars().filter((c) => c.writable);
+            return (writable.find((c) => c.primary) ?? writable[0])?.id ?? null;
+          },
+          // A draft the Agent just made: the Calendar opens on it when the Setting says so.
+          onFresh: (draft) => {
+            if (settingsLive.current["calendar.agent_draft_focus"]) showDraft(draft);
+          },
+        })
+      : null,
+  );
+  // The dev server's fixture draft (`&caldraft=1`), with no Agent to propose one.
+  useEffect(() => {
+    if (!draftStore || shell.server || shell.host !== "browser") return;
+    if (new URLSearchParams(location.search).get("caldraft") !== "1") return;
+    void import("./screens/calendar/fixture.ts").then((fx) =>
+      draftStore.offer(fx.devDraft(new Date())),
+    );
+  }, [draftStore, shell.server, shell.host]);
+  // A draft in the Session reaches the store even while the composer is closed.
+  useEffect(() => {
+    if (!draftStore) return;
+    for (const e of agentSession.events) {
+      if (e.kind === "tool" && e.preview?.kind === "calendar-draft") {
+        void draftStore.offer(e.preview.draft);
+      }
+    }
+  }, [agentSession.events, draftStore]);
+  const onShowDraft = useCallback(
+    (draft: CalendarDraft) => {
+      draftStore?.setActive(draft.id);
+      showDraft(draft);
+    },
+    [draftStore, showDraft],
+  );
+
   // A page's bottom agent and the switcher close when the screen changes.
   const shownScreen = useRef(active);
   useEffect(() => {
@@ -895,6 +959,7 @@ export function App({
         // A fixed clock only when one was given (tests); otherwise the Calendar keeps its own that ticks.
         now={nowProp}
         jumpTo={calendarJump ?? undefined}
+        people={composer.participants()}
         onNavigate={navigate}
         onAsk={askHere}
         agent={bottomAgent}
@@ -970,7 +1035,7 @@ export function App({
       </div>
     ) : null;
 
-  return (
+  const app = (
     <ComposerMentionsContext.Provider value={mentions}>
       <div
         className="app"
@@ -981,5 +1046,12 @@ export function App({
         {reauth}
       </div>
     </ComposerMentionsContext.Provider>
+  );
+  return draftStore ? (
+    <CalendarDraftsProvider store={draftStore} settings={shell.settings} onShow={onShowDraft}>
+      {app}
+    </CalendarDraftsProvider>
+  ) : (
+    app
   );
 }

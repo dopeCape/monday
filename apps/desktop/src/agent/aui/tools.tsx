@@ -24,7 +24,9 @@ import { AgentSteps, formatListTime, formatSpan, type IconComponent, ToolCard } 
 import {
   ArchiveIcon,
   ArrowCounterClockwiseIcon,
+  ArrowsLeftRightIcon,
   CalendarCheckIcon,
+  CalendarDotsIcon,
   CalendarIcon,
   CalendarPlusIcon,
   CalendarXIcon,
@@ -35,6 +37,7 @@ import {
   FolderSimplePlusIcon,
   FunnelIcon,
   GearSixIcon,
+  HourglassIcon,
   LayoutIcon,
   LightningIcon,
   ListBulletsIcon,
@@ -47,6 +50,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
+import { CalendarDraftPreview } from "../../calendar/DraftCard.tsx";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
 import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
@@ -172,6 +176,8 @@ export function PreviewView({
         </div>
       );
     }
+    case "calendar-draft":
+      return <CalendarDraftPreview draft={preview.draft} />;
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }
@@ -210,6 +216,12 @@ export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
   update_event: CalendarIcon,
   rsvp: CalendarCheckIcon,
   delete_event: CalendarXIcon,
+  move_event: ArrowsLeftRightIcon,
+  list_calendars: CalendarIcon,
+  search_events: MagnifyingGlassIcon,
+  find_free_time: HourglassIcon,
+  propose_calendar_draft: CalendarDotsIcon,
+  get_calendar_draft: CalendarDotsIcon,
   change_setting: GearSixIcon,
   change_layout: LayoutIcon,
   create_section: RowsIcon,
@@ -326,6 +338,13 @@ export const TOOL_UIS: Readonly<Record<string, ToolCallMessagePartComponent>> = 
   update_event: MondayTool,
   rsvp: MondayTool,
   delete_event: MondayTool,
+  move_event: MondayTool,
+  list_calendars: MondayTool,
+  search_events: MondayTool,
+  find_free_time: MondayTool,
+  get_calendar_draft: MondayTool,
+  // A calendar draft: a card with the diff and Apply, never a folded step.
+  propose_calendar_draft: MondayTool,
   // The app itself.
   change_setting: MondayTool,
   change_layout: MondayTool,

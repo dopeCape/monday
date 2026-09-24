@@ -80,7 +80,7 @@ export function Popover({ anchor, onClose, label, className, children }: Popover
       const target = e.target as Node | null;
       if (!el || !target || el.contains(target)) return;
       // A press inside another floating layer (a dialog it opened) is not outside.
-      if ((target as Element).closest?.(".cal-dialog-scrim, .cal-editor-scrim")) return;
+      if ((target as Element).closest?.(".cal-dialog-scrim, .cal-editor-scrim, .cal-float")) return;
       onClose();
     };
     document.addEventListener("pointerdown", onDown, true);

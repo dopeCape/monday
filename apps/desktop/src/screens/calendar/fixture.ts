@@ -3,7 +3,13 @@
 // `?screen=calendar` with no Server. `&calstate=api-disabled` shows an
 // Account whose Google Calendar API is off. Never loaded in the app.
 
-import type { Attendee, Calendar, CalendarEvent, CalendarStatus } from "@monday/shared";
+import type {
+  Attendee,
+  Calendar,
+  CalendarDraft,
+  CalendarEvent,
+  CalendarStatus,
+} from "@monday/shared";
 import { type CalendarAccount, fixtureCalendar, type StoreCalendar } from "./calendar-data.ts";
 import { allDayIso } from "./dates.ts";
 
@@ -47,8 +53,17 @@ export function devCalendar(now: Date, state: string | null): StoreCalendar {
   });
   const calendars = [
     cal("c-work", ws, "tejas@genai-labs.io", "#4f7cf0", { primary: true }),
-    cal("c-team", ws, "Team (shared)", "#2a9fa8", { writable: false }),
+    cal("c-team", ws, "Team", "#2a9fa8", {
+      writable: false,
+      access: "reader",
+      sharedBy: { name: "Kenji Watanabe", email: "kenji@genai-labs.io" },
+    }),
     cal("c-hiring", ws, "Hiring", "#b8479a"),
+    cal("c-holidays", ws, "Holidays in Ireland", null, {
+      writable: false,
+      access: "reader",
+      error: "403: The caller does not have permission",
+    }),
     cal("c-home", other, "Personal", "#d4880f", { primary: true }),
   ];
   const day = (offset: number, h: number, m = 0) => {
@@ -224,4 +239,71 @@ export function devCalendar(now: Date, state: string | null): StoreCalendar {
     statuses,
   });
   return { ...source, close() {} };
+}
+
+/** A plan for the week the Agent might propose, for `&caldraft=1` on the dev server. */
+export function devDraft(now: Date): CalendarDraft {
+  const day = (offset: number, h: number, m = 0) =>
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset, h, m).toISOString();
+  return {
+    id: "dev-draft",
+    workspaceId: "ws-genai",
+    title: "Your week, planned",
+    summary:
+      "Focus blocks on the mornings you had free, prep before the board, the review moved off your focus time.",
+    from: day(-3, 0),
+    to: day(4, 0),
+    createdAt: now.toISOString(),
+    changes: [
+      {
+        id: "c1",
+        kind: "create",
+        before: null,
+        after: {
+          title: "Focus: pricing page",
+          start: day(1, 9),
+          end: day(1, 11, 30),
+          allDay: false,
+        },
+        guests: [],
+        reason: "Your Friday morning is free",
+      },
+      {
+        id: "c2",
+        kind: "create",
+        before: null,
+        after: { title: "Board prep", start: day(2, 8, 30), end: day(2, 9, 45), allDay: false },
+        guests: [],
+        reason: "Before Board prep at 10:00",
+      },
+      {
+        id: "c3",
+        kind: "update",
+        eventId: "dev-6",
+        before: {
+          title: "Icon review with Mateus",
+          start: day(-1, 14),
+          end: day(-1, 15),
+          allDay: false,
+        },
+        after: {
+          title: "Icon review with Mateus",
+          start: day(-1, 16),
+          end: day(-1, 17),
+          allDay: false,
+        },
+        guests: [{ name: "Mateus Silva", email: "mateus@genai-labs.io" }],
+        reason: "Mateus asked for later in the day",
+      },
+      {
+        id: "c4",
+        kind: "delete",
+        eventId: "dev-13",
+        before: { title: "1:1 Kenji", start: day(3, 14, 30), end: day(3, 15), allDay: false },
+        after: null,
+        guests: [],
+        reason: "Overlaps the interview loop",
+      },
+    ],
+  };
 }
