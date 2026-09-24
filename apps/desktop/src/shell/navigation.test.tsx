@@ -290,6 +290,28 @@ describe("the workspace switcher", () => {
     expect(document.activeElement).toBe(button as Element);
   });
 
+  test("an Account whose sign-in was refused says so in the switcher and on the main screen", async () => {
+    const refused = {
+      ...hey,
+      lastError: "token endpoint: invalid_grant (reauth related error (invalid_rapt))",
+      needsSignIn: true,
+    };
+    await mount({ accounts: [genai, refused] });
+    const notice = q(".reauth-notice");
+    expect(notice?.textContent).toContain(`stopped accepting monday's sign-in for ${hey.address}`);
+    await click(q(".nav .ws"));
+    const rows = qa(".ws-menu .ws-acct");
+    expect(rows[1]?.textContent).toContain("Sign in again");
+    await key(document.activeElement, "Escape");
+    // Sign in again goes to Accounts, where Reconnect waits; Later hides the notice.
+    const signIn = [...(notice?.querySelectorAll("button") ?? [])].find(
+      (b) => b.textContent === "Sign in again",
+    );
+    await click(signIn ?? null);
+    expect(document.title).toContain("Settings");
+    expect(q(".reauth-notice")).toBeNull();
+  });
+
   test("a click outside closes it; a click on the button toggles it", async () => {
     await mount({ accounts: [genai, hey] });
     await click(q(".nav .ws"));

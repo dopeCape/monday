@@ -46,6 +46,11 @@ export interface SanitizeOptions {
   cidUrl?: (contentId: string) => string | null;
   /** Load http(s) images. Off by default: they move aside and the reader offers to show them. */
   allowRemoteImages?: boolean;
+  /**
+   * Hosts (or host suffixes) whose images are open trackers, dropped whether
+   * or not remote images load: the reader.tracker_hosts Setting.
+   */
+  trackerHosts?: readonly string[];
   /** Extra class names (beyond the built-in list) that mark a quoted-history container. */
   quoteClasses?: readonly string[];
 }
@@ -56,6 +61,8 @@ export interface SanitizedHtml {
   quoted: boolean;
   /** Remote images left unloaded (img, srcset, backgrounds, CSS url()). */
   blockedImages: number;
+  /** Tracking pixels dropped: tiny or hidden remote images, and images from tracker hosts. */
+  trackers: number;
   /** Subtrees dropped whole, for diagnostics. */
   dropped: number;
 }
@@ -290,6 +297,40 @@ function imageVerdict(value: string, options: SanitizeOptions): UrlVerdict {
   return null;
 }
 
+/**
+ * An open tracker: a remote image no one is meant to see (1 or 2 pixels, or
+ * hidden) or one served from a known tracking host. It is dropped rather than
+ * blocked, so showing images never tells the sender the message was opened.
+ */
+export function isTrackerImage(
+  attribs: Record<string, string>,
+  trackerHosts: readonly string[],
+): boolean {
+  // Seen after the img transform too, when a blocked image's url sits in data-src.
+  const src = (attribs.src ?? attribs["data-src"] ?? "").trim();
+  if (!/^https?:\/\//i.test(src)) return false;
+  const tiny = (v: string | undefined) => v !== undefined && /^\s*[0-2](px)?\s*$/i.test(v);
+  if (tiny(attribs.width) && tiny(attribs.height)) return true;
+  const style = (attribs.style ?? "").toLowerCase().replace(/\s+/g, "");
+  if (/display:none|visibility:hidden/.test(style)) return true;
+  if (
+    /(^|;)width:[0-2](px)?(!important)?(;|$)/.test(style) &&
+    /(^|;)height:[0-2](px)?(!important)?(;|$)/.test(style)
+  ) {
+    return true;
+  }
+  let host = "";
+  try {
+    host = new URL(src).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return trackerHosts.some((h) => {
+    const t = h.trim().toLowerCase();
+    return t !== "" && (host === t || host.endsWith(`.${t}`));
+  });
+}
+
 /** A srcset whose candidates all pass the image rule; blocked when any is remote and images are off. */
 function srcsetVerdict(value: string, options: SanitizeOptions): UrlVerdict {
   const out: string[] = [];
@@ -391,6 +432,7 @@ function prepare(input: string, extraQuoteClasses: readonly string[]): Prepared 
 export function sanitizeHtml(input: string, options: SanitizeOptions = {}): SanitizedHtml {
   const prepared = prepare(input, options.quoteClasses ?? []);
   let blockedImages = 0;
+  let trackers = 0;
   const policy: CssPolicy = { url: (target) => imageVerdict(target, options) };
 
   const transformAll = (tagName: string, attribs: sanitize.Attributes): sanitize.Tag => {
@@ -461,6 +503,14 @@ export function sanitizeHtml(input: string, options: SanitizeOptions = {}): Sani
 
   // allowedEmptyAttributes is in sanitize-html 2.x but not yet in its published types.
   const config: sanitize.IOptions & { allowedEmptyAttributes: string[] } = {
+    exclusiveFilter: (frame) => {
+      if (frame.tag !== "img" || !isTrackerImage(frame.attribs, options.trackerHosts ?? [])) {
+        return false;
+      }
+      trackers += 1;
+      if (frame.attribs["data-blocked"] !== undefined) blockedImages -= 1;
+      return true;
+    },
     allowedTags: ALLOWED_TAGS,
     allowedAttributes: { "*": GLOBAL_ATTRS, ...TAG_ATTRS },
     allowedSchemes: ["http", "https", "mailto"],
@@ -524,6 +574,7 @@ export function sanitizeHtml(input: string, options: SanitizeOptions = {}): Sani
     html: `${head}${html.trim()}`,
     quoted: prepared.quoted,
     blockedImages,
+    trackers,
     dropped: prepared.dropped,
   };
 }

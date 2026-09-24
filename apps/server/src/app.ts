@@ -58,8 +58,8 @@ import {
 } from "./intelligence/index.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
-import { createFirstSyncReader } from "./providers/first-sync.ts";
 import { createCredentialStore as createAccountCredentialStore } from "./providers/credentials.ts";
+import { createFirstSyncReader } from "./providers/first-sync.ts";
 import { createOAuthAppStore, legacyFromAccounts } from "./providers/oauth/apps.ts";
 import type { PushManager } from "./providers/push.ts";
 import type { SyncEngine } from "./providers/sync.ts";
@@ -424,6 +424,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         (await readGlobalSettings(db, ["reader.load_remote_images"] as const))[
           "reader.load_remote_images"
         ],
+      trackerHosts: async () =>
+        (await readGlobalSettings(db, ["reader.tracker_hosts"] as const))["reader.tracker_hosts"],
       // A user's move is a correction routing learns from (ADR 0005: it beats automation).
       onMove: (intent, previous) => intelligence.routing.observeMove(intent, previous),
       log: (m) => console.warn(`[mail] ${m}`),

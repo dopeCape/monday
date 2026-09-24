@@ -7,7 +7,7 @@ import { type SanitizeOptions, sanitizeHtml } from "./sanitize.ts";
 import { textToHtml } from "./text.ts";
 
 export type { SanitizedHtml, SanitizeOptions } from "./sanitize.ts";
-export { escapeHtml, safeHref, sanitizeHtml, sanitizeStyle } from "./sanitize.ts";
+export { escapeHtml, isTrackerImage, safeHref, sanitizeHtml, sanitizeStyle } from "./sanitize.ts";
 export type { TextHtml } from "./text.ts";
 export { linkify, quoteStart, textToHtml } from "./text.ts";
 
@@ -19,6 +19,8 @@ export interface DisplayBody {
 
 export interface DisplayOptions {
   allowRemoteImages?: boolean;
+  /** The reader.tracker_hosts Setting. */
+  trackerHosts?: readonly string[];
   /** Where an attachment id is served; defaults to /attachments/:id. */
   attachmentUrl?: (attachmentId: string) => string;
 }
@@ -39,6 +41,7 @@ export function displayBody(
       ...(options.allowRemoteImages !== undefined
         ? { allowRemoteImages: options.allowRemoteImages }
         : {}),
+      ...(options.trackerHosts ? { trackerHosts: options.trackerHosts } : {}),
     };
     const out = sanitizeHtml(body.html, sanitizeOptions);
     return { html: out.html, quoted: out.quoted, blockedImages: out.blockedImages };

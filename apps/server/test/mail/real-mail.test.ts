@@ -83,8 +83,10 @@ describe("a newsletter", () => {
     );
     // The sender's own data-src never reaches the reader.
     expect(html).not.toContain("tracker.example/pixel");
-    // logo (src and srcset, one image), open.gif, the td's background attribute, its inline background, the banner rule.
-    expect(blockedImages).toBe(5);
+    // logo (src and srcset, one image), the td's background attribute, its inline background,
+    // the banner rule. The 1 by 1 open.gif is a tracking pixel: dropped, never set aside.
+    expect(blockedImages).toBe(4);
+    expect(html).not.toContain("open.gif");
     // The inline part resolves to the attachment route.
     expect(html).toContain(`src="/attachments/att-chart"`);
   });

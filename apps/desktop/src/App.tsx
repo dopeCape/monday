@@ -11,13 +11,20 @@
 
 import type { ExternalPending, Group } from "@monday/shared";
 import {
+  Btn,
   formatWhen,
+  Icon,
   NavSidebar,
   Rail,
   type WorkspaceMenuAccount,
   type WorkspaceSwitcher,
 } from "@monday/ui";
-import { EnvelopeSimpleIcon, GoogleLogoIcon, WindowsLogoIcon } from "@phosphor-icons/react";
+import {
+  EnvelopeSimpleIcon,
+  GoogleLogoIcon,
+  WarningCircleIcon,
+  WindowsLogoIcon,
+} from "@phosphor-icons/react";
 import {
   type ReactNode,
   useCallback,
@@ -56,6 +63,7 @@ import { Routing } from "./screens/Routing.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
+import { fill } from "./screens/settings/wizard.ts";
 import { Workflows } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
@@ -369,6 +377,20 @@ export function App({
       live = false;
     };
   }, [accountsSource, shell.refresh]);
+  // The Accounts' state is asked for again now and then, so a refused sign-in
+  // shows in the switcher and the notice without reopening anything.
+  const statusPollMs = shell.settings["accounts.status_poll_seconds"] * 1000;
+  useEffect(() => {
+    if (!accountsSource) return;
+    const timer = setInterval(() => {
+      accountsSource
+        .list()
+        .then((r) => setFound(r.accounts))
+        .catch(() => {});
+    }, statusPollMs);
+    return () => clearInterval(timer);
+  }, [accountsSource, statusPollMs]);
+  const [reauthHidden, setReauthHidden] = useState(false);
   // Each new Account gets its own offer, once: the offer is recorded before the screen shows.
   const shellRef = useRef(shell);
   shellRef.current = shell;
@@ -589,18 +611,20 @@ export function App({
         : s["strings.nav.status.online"];
     const rows = list.map((a): WorkspaceMenuAccount => {
       const current = a.id === ws.accountId;
-      const state = a.lastError
-        ? s["strings.switcher.error"]
-        : !a.connected
-          ? s["strings.switcher.disconnected"]
-          : current
-            ? live
-            : a.lastSync
-              ? s["strings.settings.accounts.last_sync"].replaceAll(
-                  "{when}",
-                  formatWhen(a.lastSync, now),
-                )
-              : s["strings.settings.accounts.never"];
+      const state = a.needsSignIn
+        ? s["strings.switcher.signin"]
+        : a.lastError
+          ? s["strings.switcher.error"]
+          : !a.connected
+            ? s["strings.switcher.disconnected"]
+            : current
+              ? live
+              : a.lastSync
+                ? s["strings.settings.accounts.last_sync"].replaceAll(
+                    "{when}",
+                    formatWhen(a.lastSync, now),
+                  )
+                : s["strings.settings.accounts.never"];
       return {
         id: a.id,
         address: a.address,
@@ -889,6 +913,31 @@ export function App({
     parts.push(column("right"));
   }
 
+  const refused = (found ?? []).filter((a) => a.needsSignIn);
+  const reauth =
+    refused.length > 0 && !reauthHidden && active !== "settings" ? (
+      <div className="reauth-notice" role="alert">
+        <Icon icon={WarningCircleIcon} />
+        <span>
+          {refused.length === 1
+            ? fill(shell.settings["strings.reauth.banner"], {
+                provider:
+                  shell.settings[
+                    `strings.first_sync.provider.${refused[0]?.provider ?? "imap"}` as "strings.first_sync.provider.gmail"
+                  ],
+                address: refused[0]?.address ?? "",
+              })
+            : fill(shell.settings["strings.reauth.banner_many"], { count: refused.length })}
+        </span>
+        <Btn sm primary onClick={() => navigate("settings:accounts")}>
+          {shell.settings["strings.reauth.action"]}
+        </Btn>
+        <Btn sm onClick={() => setReauthHidden(true)}>
+          {shell.settings["strings.reauth.dismiss"]}
+        </Btn>
+      </div>
+    ) : null;
+
   return (
     <div
       className="app"
@@ -896,6 +945,7 @@ export function App({
       style={{ gridTemplateColumns: cols.join(" ") }}
     >
       {parts}
+      {reauth}
     </div>
   );
 }

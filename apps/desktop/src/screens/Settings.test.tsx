@@ -691,9 +691,9 @@ describe("Settings pages come from the schema", () => {
     await mountOpen({ initialSection: "routing" }, { api: scriptedApi().api });
     // A boolean.
     await click(q('[data-setting="reader.load_remote_images"] .switch'));
-    expect(captured?.settings["reader.load_remote_images"]).toBe(true);
-    await clickText("Undo Z", q(".toast") ?? document);
     expect(captured?.settings["reader.load_remote_images"]).toBe(false);
+    await clickText("Undo Z", q(".toast") ?? document);
+    expect(captured?.settings["reader.load_remote_images"]).toBe(true);
     // An array: a list item added, then undone.
     const senders = q('[data-setting="briefs.automated_senders"]');
     const before = captured?.settings["briefs.automated_senders"] ?? [];

@@ -4,7 +4,7 @@
 // the token paste and the IMAP form all end here.
 
 import type { Account, AccountCapabilities, Provider as ProviderKind } from "@monday/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "./db/client.ts";
 import { accounts, syncState, workspaces } from "./db/schema.ts";
 import type { Mailstore } from "./mailstore/index.ts";
@@ -22,6 +22,8 @@ export interface AccountView {
   connected: boolean;
   lastSync: string | null;
   lastError: string | null;
+  /** The Provider refused monday's sign-in (a revoked or expired grant): only signing in again fixes it. */
+  needsSignIn: boolean;
 }
 
 export interface AddAccountInput {
@@ -59,6 +61,7 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
         displayName: accounts.displayName,
         capabilities: accounts.capabilities,
         credentialsRef: accounts.credentialsRef,
+        syncState: accounts.syncState,
         workspaceId: workspaces.id,
       })
       .from(accounts)
@@ -78,6 +81,10 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
       connected: row.credentialsRef !== null,
       lastSync: state?.lastReconcile?.toISOString() ?? null,
       lastError: state?.lastError ?? null,
+      needsSignIn:
+        (state?.lastError ?? null) !== null &&
+        (row.syncState as { firstSync?: { errorCode?: string | null } } | null)?.firstSync
+          ?.errorCode === "auth",
     };
   }
 
@@ -113,6 +120,12 @@ export function createAccountService(options: AccountServiceOptions): AccountSer
             .update(syncState)
             .set({ lastError: null })
             .where(eq(syncState.workspaceId, workspace.id));
+          await db
+            .update(accounts)
+            .set({
+              syncState: sql`jsonb_set(coalesce(${accounts.syncState}, '{}'::jsonb), '{firstSync,errorCode}', 'null'::jsonb)`,
+            })
+            .where(eq(accounts.id, existing.id));
           await options.onAdded?.(existing.id, input.provider);
           const reconnected = await view(existing.id);
           if (reconnected) return reconnected;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   displayBody,
+  isTrackerImage,
   linkify,
   quoteStart,
   safeHref,
@@ -285,5 +286,42 @@ describe("displayBody", () => {
     const out = displayBody({ text: "one\n\ntwo", html: null }, []);
     expect(out.html).toBe("<p>one</p><p>two</p>");
     expect(out.quoted).toBe(false);
+  });
+});
+
+describe("tracking pixels", () => {
+  const hosts = ["google-analytics.com", "list-manage.com"];
+
+  test("tiny, hidden and tracker-host images are dropped whether images load or not; real ones stay", () => {
+    const html = [
+      '<img src="https://cdn.shop.test/product.jpg" width="60" height="60" alt="Shoe">',
+      '<img src="https://click.mail.test/open.gif" width="1" height="1" alt="">',
+      '<img src="https://t.mail.test/o.png" style="display: none; width: 1px; height: 1px">',
+      '<img src="https://www.google-analytics.com/collect?v=1&tid=UA-1" height="0" width="0">',
+      '<img src="https://us1.list-manage.com/track/open.php?u=1" alt="">',
+    ].join("");
+    const shown = sanitizeHtml(html, { allowRemoteImages: true, trackerHosts: hosts });
+    expect(shown.trackers).toBe(4);
+    expect(shown.html).toContain("https://cdn.shop.test/product.jpg");
+    expect(shown.html).not.toContain("open.gif");
+    expect(shown.html).not.toContain("google-analytics");
+    expect(shown.html).not.toContain("list-manage");
+    expect(shown.blockedImages).toBe(0);
+
+    const blocked = sanitizeHtml(html, { allowRemoteImages: false, trackerHosts: hosts });
+    expect(blocked.trackers).toBe(4);
+    // Only the real image waits for "Show images"; no tracker is kept aside to load later.
+    expect(blocked.blockedImages).toBe(1);
+    expect(blocked.html).toContain('data-src="https://cdn.shop.test/product.jpg"');
+    expect(blocked.html).not.toContain("open.gif");
+  });
+
+  test("isTrackerImage leaves inline parts, data images and ordinary remote images alone", () => {
+    expect(isTrackerImage({ src: "cid:logo", width: "1", height: "1" }, hosts)).toBe(false);
+    expect(
+      isTrackerImage({ src: "https://cdn.test/a.png", width: "24", height: "21" }, hosts),
+    ).toBe(false);
+    expect(isTrackerImage({ src: "https://ssl.google-analytics.com/x.gif" }, hosts)).toBe(true);
+    expect(isTrackerImage({ src: "https://notgoogle-analytics.com/x.gif" }, hosts)).toBe(false);
   });
 });

@@ -892,7 +892,8 @@ describe("drafts and scheduled sends", () => {
     );
     const fetched = await request(`/messages/${rich.messageId}/body`);
     expect(((await fetched.json()) as { bodyState: string }).bodyState).toBe("fetched");
-    const res = await request(`/messages/bodies?workspace=${workspaceId}&limit=1000`);
+    // With remote images off (the Setting's default is on) they wait for "Show images".
+    const res = await request(`/messages/bodies?workspace=${workspaceId}&limit=1000&images=0`);
     expect(res.status).toBe(200);
     const page = (await res.json()) as {
       bodies: { id: string; html: string | null; text: string; bodyState: string }[];

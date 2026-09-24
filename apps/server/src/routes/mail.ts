@@ -95,12 +95,16 @@ export interface MailRouteOptions {
   ) => Promise<{ group: string | null; subgroup: string | null } | null>;
   /** The reader.load_remote_images Setting, for a body asked for without ?images. */
   remoteImages?: () => Promise<boolean>;
+  /** The reader.tracker_hosts Setting: images from these hosts never load. */
+  trackerHosts?: () => Promise<readonly string[]>;
   log?: (message: string) => void;
 }
 
 export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
+  const trackers = async (): Promise<readonly string[]> =>
+    (await options.trackerHosts?.().catch(() => [])) ?? [];
   /** ?images=1 or 0 when the client says; the reader.load_remote_images Setting otherwise. */
   const remoteImages = async (query: string | undefined): Promise<boolean> => {
     if (query === "1") return true;
@@ -207,7 +211,10 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
         continue;
       }
       const header = await mailstore.findMessage(b.id);
-      const display = displayBody(b, header?.attachments ?? [], { allowRemoteImages });
+      const display = displayBody(b, header?.attachments ?? [], {
+        allowRemoteImages,
+        trackerHosts: await trackers(),
+      });
       bodies.push({ ...b, html: display.html, bodyState });
     }
     return c.json({ ...page, bodies });
@@ -240,7 +247,10 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     return c.json({
       ...body,
       bodyState,
-      display: displayBody(body, header?.attachments ?? [], { allowRemoteImages }),
+      display: displayBody(body, header?.attachments ?? [], {
+        allowRemoteImages,
+        trackerHosts: await trackers(),
+      }),
     });
   });
 

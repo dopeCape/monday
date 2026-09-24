@@ -934,6 +934,8 @@ export interface AccountView {
   connected: boolean;
   lastSync: string | null;
   lastError: string | null;
+  /** The Provider refused monday's sign-in; only signing in again (Reconnect) fixes it. */
+  needsSignIn?: boolean | undefined;
 }
 
 export interface HostPort {
