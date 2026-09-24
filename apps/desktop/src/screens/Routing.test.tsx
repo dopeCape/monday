@@ -1,7 +1,9 @@
 /// <reference types="bun-types" />
 // The Routing page through its seams: Groups and Needs a decision from the
-// RoutingSource, counts from the InboxSource, Confidence and the actions
-// through a fake of the routing API. Mounted under a StaticShell with happy-dom.
+// RoutingSource, counts from the InboxSource, Confidence, Examples, routes
+// and the actions through a fake of the routing API; the tabs, why each
+// Thread went where it did, and the locked state below automate. Mounted
+// under a StaticShell with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { GroupView, HostedProvider, ProposedMove, RoutingPreview } from "@monday/shared";
@@ -119,13 +121,14 @@ async function mount(
   api: RoutingApi,
   routing = fixtureRouting(),
   keys: { shared(): Promise<{ shared: HostedProvider[] }> } | null = null,
+  level: "off" | "assist" | "automate" = "automate",
 ) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell settings={{ "ai.level": "automate" }}>
+      <StaticShell settings={{ "ai.level": level }}>
         <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} keys={keys} />
       </StaticShell>,
     );
@@ -149,11 +152,11 @@ const byText = (el: HTMLElement, text: string) =>
   buttons(el).find((b) => b.textContent?.trim() === text);
 
 describe("Routing page", () => {
-  test("renders the Groups tree with rules, Sub-groups, Confidence and the side cards from the mock", async () => {
+  test("renders each Group as a card: its rule, what always goes there, Sub-groups, Confidence and corrections", async () => {
     const api = fakeApi();
     const el = await mount(api);
-    const cards = [...el.querySelectorAll(".grp")];
-    expect(cards.map((c) => c.querySelector("b")?.textContent)).toEqual([
+    const cards = [...el.querySelectorAll(".rgrp")];
+    expect(cards.map((c) => c.querySelector(".rgrp-name b")?.textContent)).toEqual([
       "Hiring",
       "Finance",
       "Investors",
@@ -161,16 +164,38 @@ describe("Routing page", () => {
       "Press",
     ]);
     const hiring = cards[0] as HTMLElement;
-    expect(hiring.querySelector(".grp-h .tag")?.textContent).toBe("94% confident");
-    expect(hiring.querySelector(".grp-h .n")?.textContent).toBe("6 unread");
-    expect(hiring.querySelector(".rule code")?.textContent).toBe("careers.genai-labs.io");
-    expect([...hiring.querySelectorAll(".subg")].map((s) => s.textContent)).toEqual([
+    expect(hiring.querySelector(".rgrp-conf-label")?.textContent).toBe("94% confident");
+    expect([...hiring.querySelectorAll(".rgrp-stats span")].map((s) => s.textContent)).toEqual([
+      "6 unread",
+      "2 threads",
+    ]);
+    expect(hiring.querySelector(".rgrp-rule .rule code")?.textContent).toBe(
+      "careers.genai-labs.io",
+    );
+    expect([...hiring.querySelectorAll(".rgrp-chip")].map((c) => c.textContent)).toEqual([
+      "Anyone at careers.genai-labs.io",
+    ]);
+    expect([...hiring.querySelectorAll(".rgrp-sub")].map((s) => s.textContent)).toEqual([
       expect.stringContaining("Candidates"),
       expect.stringContaining("Interviews"),
       expect.stringContaining("Rejected"),
     ]);
+    // What it learned from the user's moves, behind a toggle.
+    const learned = hiring.querySelector(".rgrp-learned") as HTMLElement;
+    expect(learned.textContent).toContain("Learned from 1 of your corrections");
+    expect(learned.querySelector(".sample")).toBeNull();
+    await click(byText(learned, "Show"));
+    expect(learned.querySelector(".sample")?.textContent).toContain(
+      "re: senior rust engineer role",
+    );
     // Only Hiring was scored; the others show no Confidence.
-    expect(cards[1]?.querySelector(".grp-h .tag")).toBeNull();
+    expect(cards[1]?.querySelector(".rgrp-conf")).toBeNull();
+    expect([...(cards[1]?.querySelectorAll(".rgrp-chip") ?? [])].map((c) => c.textContent)).toEqual(
+      ["From billing@hetzner.com", "From receipts@stripe.com"],
+    );
+    // The overview line: how many, and that new mail is sorted as it arrives.
+    expect(el.querySelector(".rt-stats")?.textContent).toContain("5 Groups");
+    expect(el.querySelector(".rt-sorting")?.textContent).toBe("Sorting new mail as it arrives");
     expect(el.querySelector(".page-head h1")?.textContent).toBe("Routing");
     const sideTitles = [...el.querySelectorAll(".side-card h3")].map((h) => h.textContent);
     expect(sideTitles).toEqual(["Ask for a group", "Needs a decision2", "Recently routed"]);
@@ -181,15 +206,16 @@ describe("Routing page", () => {
     const decisions = el.querySelectorAll(".side-card")[1] as HTMLElement;
     expect(decisions.querySelectorAll(".sample")).toHaveLength(2);
     // Every row can be left out of every Group, tied candidates or not.
+    // Each candidate says how sure routing was.
     expect(buttons(decisions).map((b) => b.textContent?.trim())).toEqual([
-      "Hiring",
-      "Community",
+      "Hiring 61%",
+      "Community 54%",
       "",
-      "Finance",
+      "Finance 66%",
       "",
     ]);
     expect(decisions.querySelectorAll('button[aria-label="Leave"]')).toHaveLength(2);
-    expect(api.calls).toEqual(["groups"]);
+    expect(api.calls.filter((c) => c === "groups")).toEqual(["groups"]);
   });
 
   test("accepting a decision calls the API and drops the row; leaving passes null", async () => {
@@ -197,7 +223,7 @@ describe("Routing page", () => {
     const routing = fixtureRouting();
     const el = await mount(api, routing);
     const decisions = () => el.querySelectorAll(".side-card")[1] as HTMLElement;
-    await click(byText(decisions(), "Hiring"));
+    await click(byText(decisions(), "Hiring 61%"));
     expect(api.calls).toContain("decide:d1:hiring");
     expect(decisions().querySelectorAll(".sample")).toHaveLength(1);
     await click(decisions().querySelector('button[aria-label="Leave"]'));
@@ -307,9 +333,9 @@ describe("Routing page", () => {
       throw new Error("offline");
     };
     const el = await mount(api);
-    expect([...el.querySelectorAll(".grp-h .tag")]).toHaveLength(0);
+    expect([...el.querySelectorAll(".rgrp-conf")]).toHaveLength(0);
     // The unread counts still come from the stream.
-    expect(el.querySelector(".grp-h .n")?.textContent).toBe("1 unread");
+    expect(el.querySelector(".rgrp-stats span")?.textContent).toBe("1 unread");
   });
 
   test("at automate with no shared key the page says routing needs one; with a key it says nothing", async () => {
@@ -323,5 +349,87 @@ describe("Routing page", () => {
       shared: async () => ({ shared: ["anthropic"] }),
     });
     expect(el2.querySelector(".routing-note")).toBeNull();
+  });
+
+  test("Recently routed says why each Thread went where it did", async () => {
+    const api = fakeApi();
+    api.routeOf = async (threadId) =>
+      threadId === "e5"
+        ? {
+            threadId,
+            groupId: "press",
+            subgroupId: null,
+            confidence: null,
+            subgroupConfidence: null,
+            by: "user",
+            routedAt: "2026-09-16T09:00:00.000Z",
+          }
+        : threadId === "e1"
+          ? {
+              threadId,
+              groupId: "hiring",
+              subgroupId: "candidates",
+              confidence: 0.9,
+              subgroupConfidence: 0.82,
+              by: "model",
+              routedAt: "2026-09-16T09:00:00.000Z",
+            }
+          : null;
+    const el = await mount(api);
+    await act(async () => {
+      await tick();
+    });
+    const rows = [...el.querySelectorAll(".rt-recent .routed")];
+    const why = (subject: string) =>
+      rows
+        .find((r) => r.querySelector(".routed-subject")?.textContent === subject)
+        ?.querySelector(".routed-why")?.textContent;
+    // A Predicate fact the headers met.
+    expect(why("Term sheet redline, v3")).toBe("Matched meridianfund.co");
+    // The user's own move, and the rule sentence with the model's Confidence.
+    expect(why("Podcast invite: building email clients in 2026")).toBe("You put it here");
+    expect(why("Re: Senior Rust engineer role, take-home submitted")).toBe(
+      "Read the rule, 82% sure",
+    );
+  });
+
+  test("the Sections and Custom actions tabs hold their blocks", async () => {
+    const el = await mount(fakeApi());
+    expect(el.querySelector('[data-block="sections"]')).toBeNull();
+    await click(el.querySelectorAll(".rt-tabs button")[1]);
+    expect(el.querySelector('[data-block="sections"]')).not.toBeNull();
+    expect(el.querySelector(".rgrp")).toBeNull();
+    await click(el.querySelectorAll(".rt-tabs button")[2]);
+    expect(el.querySelector('[data-block="actions"]')).not.toBeNull();
+  });
+
+  test("below automate sorting is paused: the page says so, and the Groups stay, editable by hand", async () => {
+    const api = fakeApi();
+    const el = await mount(api, fixtureRouting(), null, "off");
+    const lock = el.querySelector(".locked") as HTMLElement;
+    expect(lock.querySelector("h2")?.textContent).toBe("Sorting is paused");
+    expect(lock.querySelector(".locked-lede")?.textContent).toBe(
+      "Increase the AI level to unlock Routing.",
+    );
+    expect(lock.querySelector(".locked-body")?.textContent).toContain(
+      "At Just mail new mail is not sorted into your 5 Groups",
+    );
+    expect(el.querySelector(".rt-sorting")?.textContent).toBe("Sorting paused");
+    // Every rule is kept and says it is paused.
+    const cards = [...el.querySelectorAll<HTMLElement>(".rgrp")];
+    expect(cards).toHaveLength(5);
+    expect(cards.every((c) => c.dataset.paused === "true")).toBe(true);
+    expect(cards[0]?.querySelector(".rgrp-label .tag")?.textContent).toBe("Paused");
+    // Nothing that asks a model: no re-run, no Ask for a group.
+    expect(byText(el, "Re-run on inbox")).toBeUndefined();
+    expect(el.querySelector(".ask input")).toBeNull();
+    // Groups still work by hand.
+    await click(byText(el, "Change rule"));
+    expect(el.querySelector(".rule-edit")).not.toBeNull();
+    // Raising the level asks once, then the page unlocks.
+    await click(byText(lock, "Raise to Mail that sorts and acts for me"));
+    await click(byText(lock, "Turn on Mail that sorts and acts for me"));
+    expect(el.querySelector(".locked")).toBeNull();
+    expect(byText(el, "Re-run on inbox")).toBeDefined();
   });
 });

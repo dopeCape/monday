@@ -16,7 +16,7 @@ import type {
   ToolPreview,
   ViewSetting,
 } from "@monday/shared";
-import { levelAtLeast, validateSetting } from "@monday/shared";
+import { levelAtLeast, sketchOf, validateSetting } from "@monday/shared";
 import { z } from "zod";
 import type { OnboardingSeam } from "../../onboarding.ts";
 import type { ToolContext, ToolDefinition, ToolPlan } from "./catalog.ts";
@@ -252,9 +252,14 @@ const adoptWorkflow: ToolDefinition<{ catalog_id: string }> = {
     const dry = await seam.dryRunInput(workspaceId, entry.document);
     return {
       kind: "action",
-      preview: text(
-        `Enable "${entry.document.name}"? ${entry.document.sentence}\n${dryRunLine(dry)}`,
-      ),
+      preview: {
+        kind: "workflow",
+        action: "enable",
+        workflow: sketchOf(entry.document),
+        previous: null,
+        version: 1,
+        note: dryRunLine(dry),
+      },
       count: ALWAYS_ASK,
       apply: async () => {
         const created = await workflows.create(workspaceId, entry.document);

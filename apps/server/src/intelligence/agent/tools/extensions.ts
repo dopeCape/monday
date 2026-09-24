@@ -13,7 +13,13 @@ import type {
   WorkflowInput,
   WorkflowView,
 } from "@monday/shared";
-import { describeWorkflow, type INTEGRATIONS, parseWorkflowInput } from "@monday/shared";
+import {
+  describeWorkflow,
+  type INTEGRATIONS,
+  parseWorkflowInput,
+  sketchOf,
+  type WorkflowPreview,
+} from "@monday/shared";
 import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
@@ -307,6 +313,24 @@ const listWorkflows: ToolDefinition<Record<string, never>> = {
   },
 };
 
+/** The Group ids the documents mention, named, so the Workflow card reads "Finance" and not an id. */
+async function groupNamesFor(
+  ctx: { host: { listGroups(): Promise<Array<{ id: string; name: string }>> } },
+  ...docs: Array<Pick<WorkflowInput, "trigger" | "steps"> | null>
+): Promise<Record<string, string>> {
+  const ids = new Set<string>();
+  for (const doc of docs) {
+    if (!doc) continue;
+    const t = doc.trigger;
+    if ((t.kind === "arrival" || t.kind === "silence") && t.group) ids.add(t.group);
+    if (t.kind === "thread_event" && t.event === "moved" && t.value) ids.add(t.value);
+    for (const s of doc.steps) if (s.kind === "move" && s.group) ids.add(s.group);
+  }
+  if (ids.size === 0) return {};
+  const groups = await ctx.host.listGroups().catch(() => []);
+  return Object.fromEntries(groups.filter((g) => ids.has(g.id)).map((g) => [g.id, g.name]));
+}
+
 const documentField = z
   .record(z.string(), z.unknown())
   .describe(
@@ -328,9 +352,17 @@ const createWorkflow: ToolDefinition<{ document: Record<string, unknown> }> = {
     if (!parsed.ok)
       return { kind: "refused", text: `The document does not validate: ${parsed.error}` };
     const doc = parsed.value;
+    const preview: WorkflowPreview = {
+      kind: "workflow",
+      action: "create",
+      workflow: sketchOf(doc),
+      previous: null,
+      version: 1,
+      groupNames: await groupNamesFor(ctx, doc),
+    };
     return {
       kind: "action",
-      preview: text(`${doc.name}: ${chainText(doc)}`),
+      preview,
       count: 1,
       apply: async () => {
         const created = await seam.create(ctx.host.workspaceId, doc);
@@ -350,7 +382,7 @@ const updateWorkflow: ToolDefinition<{ workflow_id: string; document: Record<str
     "Replace a Workflow's document with a new version; earlier versions stay for the Runs that used them. Reversible: undo points back at the previous version.",
   tier: "reversible",
   input: z.object({ workflow_id: z.string().min(1), document: documentField }),
-  summarize: (i) => i.workflow_id,
+  summarize: (i) => (typeof i.document.name === "string" ? i.document.name : i.workflow_id),
   async run(i, ctx) {
     const seam = needWorkflows(ctx);
     if (!seam) return { kind: "refused", text: REFUSED };
@@ -363,9 +395,17 @@ const updateWorkflow: ToolDefinition<{ workflow_id: string; document: Record<str
     if (!parsed.ok)
       return { kind: "refused", text: `The document does not validate: ${parsed.error}` };
     const doc = parsed.value;
+    const preview: WorkflowPreview = {
+      kind: "workflow",
+      action: "update",
+      workflow: sketchOf(doc),
+      previous: sketchOf(current),
+      version: current.version + 1,
+      groupNames: await groupNamesFor(ctx, doc, current),
+    };
     return {
       kind: "action",
-      preview: text(`${doc.name} v${current.version + 1}: ${chainText(doc)}`),
+      preview,
       count: 1,
       apply: async () => {
         const updated = await seam.update(i.workflow_id, doc);
@@ -398,11 +438,18 @@ const enableWorkflow: ToolDefinition<{ workflow_id: string; enabled: boolean }> 
     if (current.enabled === i.enabled) {
       return { kind: "result", text: `Already ${i.enabled ? "enabled" : "disabled"}.`, data: null };
     }
-    let preview = text(`${i.enabled ? "Enable" : "Disable"} "${current.name}"`);
+    const preview: WorkflowPreview = {
+      kind: "workflow",
+      action: i.enabled ? "enable" : "disable",
+      workflow: sketchOf(current),
+      previous: null,
+      version: current.version,
+      groupNames: await groupNamesFor(ctx, current),
+    };
     let count = 1;
     if (i.enabled && (await seam.askBeforeEnable())) {
       const dry = await seam.dryRun(i.workflow_id);
-      preview = text(`Enable "${current.name}"?\n${dryRunText(dry)}`);
+      preview.note = dryRunText(dry);
       // Above every preview threshold, so the card asks before enabling (ADR 0004: the Setting decides).
       count = Number.MAX_SAFE_INTEGER;
     }

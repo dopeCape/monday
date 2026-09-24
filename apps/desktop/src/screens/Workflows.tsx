@@ -1,11 +1,15 @@
-// The Workflows page (ADR 0003; design/js/screens/workflows.js): the list
-// with its enabled switches and Placement, a Workflow's chain rendered
-// read-only from its document, the "Change with monday" ask box that hands
-// the sentence to the composer (the Agent writes the document, there is no
-// editor), the Run log with Step results and the approval card a paused Run
-// waits on, the Dry run preview and the Source view. Data comes from the
-// /workflows routes through the Api; the fixture API stands in without a
-// Server. Every string is a Setting (strings.workflows.*).
+// The Workflows page (ADR 0003, docs/spec/workflows.md): the list of
+// Workflows with their trigger in plain words, status, last run and recent
+// outcomes, and the selected Workflow drawn as what it is, a vertical flow
+// of cards (trigger, conditions with their branches, Steps with their tool,
+// summary, fields and approval). Recent Runs lay their Step results over the
+// flow; a paused Run shows its approval card; Dry run, Run now, Source and
+// rename sit in the head, and "Change with monday" hands a sentence to the
+// composer (the Agent writes the document, there is no editor). While the AI
+// level keeps Workflows paused the page says so, offers to raise it, and
+// keeps every Workflow visible read-only. Data comes from the /workflows
+// routes through the Api; the fixture API stands in without a Server. Every
+// string is a Setting (strings.workflows.*).
 
 import type {
   ActivityRecord,
@@ -15,32 +19,46 @@ import type {
   ToolCall,
   WorkflowView,
 } from "@monday/shared";
-import { describeWorkflow } from "@monday/shared";
 import {
   AgentBar,
   AgentDock,
   AskBox,
   Btn,
   DryRunCard,
-  flowNodesOf,
+  flowGlyph,
   formatWhen,
   Icon,
+  Input,
   PageHead,
   RunApprovalCard,
+  RunDots,
   RunLog,
-  RunSteps,
   SideCard,
   SourceView,
-  Tabs,
+  Switch,
   Tag,
-  WorkflowCard,
+  WorkflowFlow,
+  WorkflowStatus,
 } from "@monday/ui";
-import { ClockCounterClockwiseIcon, FlaskIcon, PlayIcon, PlusIcon } from "@phosphor-icons/react";
+import {
+  ClockCounterClockwiseIcon,
+  CloudIcon,
+  CodeIcon,
+  FlaskIcon,
+  PencilSimpleIcon,
+  PlayIcon,
+  PlusIcon,
+  TerminalWindowIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { cliLabel } from "../agent/runtimes/index.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
 import { fill } from "./inbox/triage.ts";
+import { LevelLock, useLevelLock } from "./LevelLock.tsx";
+import { flowModel, flowStrings } from "./workflows/flow.ts";
+import { statusLabel, workflowStatus } from "./workflows/status.ts";
 import { fixtureWorkflowsApi, type WorkflowsApi } from "./workflows/workflow-data.ts";
 
 export type { WorkflowsApi } from "./workflows/workflow-data.ts";
@@ -52,7 +70,7 @@ export interface WorkflowsProps {
   /** Hands a sentence to the composer: "Change the workflow X: ..." or a new one. */
   onAsk?: ((text: string) => void) | undefined;
   onNavigate?: ((target: string) => void) | undefined;
-  /** Group ids to names, for the chain's "matches Hiring › Candidates". */
+  /** Group ids to names, for "Mail arrives in Hiring › Candidates". */
   groupName?: ((id: string) => string) | undefined;
   now?: Date | undefined;
   /**
@@ -113,8 +131,10 @@ export function Workflows({
   const current = useWorkspace();
   const workspaceId = workspaceIdProp ?? current.id;
   const { settings } = shell;
-  // Just mail (CONTEXT.md "AI level"): the Workflows stay listed, nothing here asks the Agent.
+  // Just mail (CONTEXT.md "AI level"): nothing here asks the Agent.
   const aiOff = settings["ai.level"] === "off";
+  // Below automate nothing runs unasked: the page is locked, the Workflows kept read-only.
+  const { locked, levelName } = useLevelLock();
   // The fixture stands in on the browser dev server only, where no Server exists.
   const server = shell.server !== null;
   const fallbackApi = useMemo(
@@ -123,16 +143,18 @@ export function Workflows({
   );
   const api = apiOverride ?? fallbackApi;
   const s = useMemo(() => workflowStrings(settings), [settings]);
+  const fs = useMemo(() => flowStrings(settings), [settings]);
   const now = nowProp ?? new Date();
 
   const [workflows, setWorkflows] = useState<WorkflowView[] | null>(null);
   const [runs, setRuns] = useState<RunView[]>([]);
-  const [tab, setTab] = useState<"active" | "paused">("active");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  /** The Run whose Step results lay over the flow; none shows the Workflow as written. */
+  const [shownRun, setShownRun] = useState<string | null>(null);
   const [waitingCard, setWaitingCard] = useState<ActivityRecord | null>(null);
   const [dry, setDry] = useState<DryRunPreview | null>(null);
   const [source, setSource] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** The last action that failed; cleared by the next action, never by a refresh. */
   const [error, setError] = useState<string | null>(null);
@@ -171,23 +193,35 @@ export function Workflows({
     return () => clearInterval(id);
   }, [every, refresh]);
 
-  const list = workflows ?? [];
-  const active = list.filter((w) => w.enabled);
-  const pausedList = list.filter((w) => !w.enabled);
-  const shown = tab === "active" ? active : pausedList;
-  const selected = list.find((w) => w.id === selectedId) ?? shown[0] ?? list[0] ?? null;
-  const selectedRuns = selected ? runs.filter((r) => r.workflowId === selected.id) : [];
-  const openRun = selectedRuns.find((r) => r.id === selectedRun) ?? selectedRuns[0] ?? null;
+  const list = useMemo(() => {
+    // Switched on first, then by name: the list reads the same on every refresh.
+    return [...(workflows ?? [])].sort(
+      (a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name),
+    );
+  }, [workflows]);
+  const selected = list.find((w) => w.id === selectedId) ?? list[0] ?? null;
+  // The first Workflow shown stays selected when a change reorders the list.
+  const firstId = selected?.id ?? null;
+  useEffect(() => {
+    if (selectedId === null && firstId !== null) setSelectedId(firstId);
+  }, [selectedId, firstId]);
+  const selectedRuns = selected
+    ? runs
+        .filter((r) => r.workflowId === selected.id)
+        .slice(0, settings["workflows.page.runs_shown"])
+    : [];
+  const overlay = selectedRuns.find((r) => r.id === shownRun) ?? null;
+  const waitingRun = selectedRuns.find((r) => r.status === "paused") ?? null;
 
   // The waiting Step's Activity row carries the card's preview.
   useEffect(() => {
     let cancelled = false;
-    if (openRun?.status !== "paused") {
+    if (!waitingRun) {
       setWaitingCard(null);
       return;
     }
     api
-      .runActivity(openRun.id)
+      .runActivity(waitingRun.id)
       .then((rows) => {
         if (cancelled) return;
         setWaitingCard(rows.find((r) => r.status === "waiting") ?? null);
@@ -198,7 +232,7 @@ export function Workflows({
     return () => {
       cancelled = true;
     };
-  }, [api, openRun]);
+  }, [api, waitingRun]);
 
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -222,9 +256,23 @@ export function Workflows({
     });
   const runNow = (w: WorkflowView) => void act(() => api.run(w.id, null));
   const revoke = (w: WorkflowView, step: string) => void act(() => api.standing(w.id, step, false));
+  const rename = (w: WorkflowView, name: string) =>
+    void act(async () => {
+      await api.update(w.id, {
+        name,
+        sentence: w.sentence,
+        kind: w.kind,
+        trigger: w.trigger,
+        steps: w.steps,
+        placement: w.placement,
+        failurePolicy: w.failurePolicy,
+        standingApprovals: w.standingApprovals,
+      });
+      setRenaming(null);
+    });
 
   /** Runs waiting for an approval: the Server's count, or what the loaded Runs say. */
-  const pausedCount = (w: WorkflowView) =>
+  const waitingCount = (w: WorkflowView) =>
     Math.max(w.paused, runs.filter((r) => r.workflowId === w.id && r.status === "paused").length);
 
   const runtimeName = cliLabel(settings["ai.local.cli"]);
@@ -259,148 +307,277 @@ export function Workflows({
     undoable: false,
   });
 
+  const select = (id: string) => {
+    setSelectedId(id);
+    setShownRun(null);
+    setDry(null);
+    setSource(false);
+    setRenaming(null);
+  };
+
+  const loading = workflows === null && !loadError;
+  const empty = workflows !== null && list.length === 0;
+  const status = (w: WorkflowView) => workflowStatus(w, runs, locked);
+
+  const lock = locked ? (
+    <LevelLock
+      title={s["locked.title"] ?? ""}
+      lede={s["locked.lede"] ?? ""}
+      body={fill(list.length ? (s["locked.body"] ?? "") : (s["locked.body_empty"] ?? ""), {
+        level: levelName,
+        n: list.length,
+      })}
+      benefits={settings["strings.workflows.locked.benefits"]}
+      illustration={<ExampleFlow lines={settings["strings.workflows.locked.example"]} />}
+      onNavigate={onNavigate}
+    />
+  ) : null;
+
+  const examples = (
+    <div className="empty page-empty wf-empty">
+      <h3>{s.empty_title ?? "Describe the next one"}</h3>
+      <p>{s.empty_body}</p>
+      <div className="examples">
+        {settings["strings.workflows.examples"].map((example) => (
+          <button type="button" key={example} onClick={() => newWorkflow(example)}>
+            {example}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className="main page">
       <div className="page-wrap">
-        <div className="page-in">
+        <div className="page-in wf-page">
           <PageHead title={s.title ?? "Workflows"} subtitle={s.subtitle}>
             <Btn outline onClick={() => onNavigate?.("activity")}>
               <Icon icon={ClockCounterClockwiseIcon} /> {s.history ?? "Run history"}
             </Btn>
-            <Btn primary onClick={() => newWorkflow()}>
-              <Icon icon={PlusIcon} /> {s.new ?? "New workflow"}
-            </Btn>
+            {locked ? null : (
+              <Btn primary onClick={() => newWorkflow()}>
+                <Icon icon={PlusIcon} /> {s.new ?? "New workflow"}
+              </Btn>
+            )}
           </PageHead>
           {(error ?? loadError) ? (
             <p className="faint routing-error" role="alert">
               {error ?? loadError}
             </p>
           ) : null}
-          <div className="two">
-            <div>
-              <Tabs
-                items={[
-                  { key: "active", label: s.active ?? "Active", count: active.length },
-                  { key: "paused", label: s.paused ?? "Paused", count: pausedList.length },
-                ]}
-                active={tab}
-                onChange={setTab}
-                className="wf-tabs"
-              />
-              <div className="wf" aria-busy={workflows === null && !loadError ? "true" : undefined}>
-                {workflows === null && !loadError ? (
-                  <p className="faint wf-loading">{s.loading}</p>
-                ) : null}
-                {shown.map((w) => (
-                  <WorkflowCard
-                    key={w.id}
-                    name={w.name}
-                    sentence={w.sentence}
-                    nodes={flowNodesOf(describeWorkflow(w, groupName))}
-                    enabled={w.enabled}
-                    placement={w.placementInEffect}
-                    placementLabel={placementLabel(w)}
-                    todayLabel={
-                      w.runsToday ? fill(s.today ?? "{n} today", { n: w.runsToday }) : undefined
-                    }
-                    waitingLabel={
-                      pausedCount(w)
-                        ? fill(s.waiting_tag ?? "{n} waiting", { n: pausedCount(w) })
-                        : undefined
-                    }
-                    pausedLabel={s.paused_tag ?? "Paused"}
-                    lastRunLabel={
-                      w.lastRunAt
-                        ? fill(s.last_run ?? "Last run {when}", { when: ago(w.lastRunAt, now) })
-                        : (s.never_ran ?? "Not run yet")
-                    }
-                    selected={selected?.id === w.id}
-                    onSelect={() => {
-                      setSelectedId(w.id);
-                      setSelectedRun(null);
-                      setDry(null);
-                      setSource(false);
-                    }}
-                    onToggle={(enabled) => toggle(w, enabled)}
-                    enableLabel={`${s.enable ?? "Enabled"}: ${w.name}`}
-                    busy={busy}
-                  />
-                ))}
-              </div>
-              <div className="empty page-empty">
-                <h3>{s.empty_title ?? "Describe the next one"}</h3>
-                <p>{s.empty_body}</p>
-                <div className="examples">
-                  {settings["strings.workflows.examples"].map((example) => (
-                    <button type="button" key={example} onClick={() => newWorkflow(example)}>
-                      {example}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <aside>
-              {selected ? (
-                <>
-                  <SideCard
-                    title={selected.name}
-                    action={
-                      <Btn sm on={source} onClick={() => setSource((v) => !v)}>
-                        {s.source ?? "Source"}
-                      </Btn>
-                    }
-                  >
-                    {aiOff ? null : (
-                      <AskBox
-                        placeholder={s.ask_placeholder ?? "Ask monday to change this workflow"}
-                        value={ask}
-                        onChange={setAsk}
-                        onSubmit={change}
-                      />
-                    )}
-                    <div className="wf-meta">
-                      <span className="faint">
-                        {fill(s.version ?? "Version {n}", { n: selected.version })}
+          {lock}
+          {loading ? (
+            <p className="faint wf-loading" aria-busy="true">
+              {s.loading}
+            </p>
+          ) : null}
+          {empty && !locked ? examples : null}
+          {list.length > 0 && selected ? (
+            <>
+              {locked ? <h2 className="wf-kept">{s["locked.kept"]}</h2> : null}
+              <div className="wfx" data-locked={locked ? "true" : undefined}>
+                <nav className="wfx-list" aria-label={s.list_label}>
+                  {list.map((w) => {
+                    const st = status(w);
+                    const trig = flowModel(w, fs, { groupName }).cards[0];
+                    return (
+                      <button
+                        type="button"
+                        key={w.id}
+                        className="wfx-row"
+                        aria-current={selected.id === w.id ? "true" : undefined}
+                        data-status={st}
+                        onClick={() => select(w.id)}
+                      >
+                        <span className="wfx-row-icon">
+                          <Icon icon={flowGlyph(trig?.icon ?? "lightning")} />
+                        </span>
+                        <span className="wfx-row-main">
+                          <span className="wfx-row-name">
+                            <b>{w.name}</b>
+                            <WorkflowStatus
+                              kind={st}
+                              label={statusLabel(st, waitingCount(w), settings)}
+                            />
+                          </span>
+                          <span className="wfx-row-trig">{trig?.title}</span>
+                          <span className="wfx-row-foot">
+                            <span>
+                              {w.lastRunAt
+                                ? fill(s.last_run ?? "Last run {when}", {
+                                    when: ago(w.lastRunAt, now),
+                                  })
+                                : (s.never_ran ?? "Not run yet")}
+                            </span>
+                            {w.runsToday ? (
+                              <span>{fill(s.today ?? "{n} today", { n: w.runsToday })}</span>
+                            ) : null}
+                            <RunDots
+                              recent={w.recent}
+                              label={
+                                w.recent.length === 1
+                                  ? s.runs_one
+                                  : fill(s.runs_count ?? "{n} recent runs", { n: w.recent.length })
+                              }
+                            />
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {locked ? null : (
+                    <button type="button" className="wfx-row wfx-new" onClick={() => newWorkflow()}>
+                      <span className="wfx-row-icon">
+                        <Icon icon={PlusIcon} />
                       </span>
-                      <Btn sm onClick={() => dryRun(selected)} disabled={busy}>
-                        <Icon icon={FlaskIcon} /> {s.dry_run ?? "Dry run"}
-                      </Btn>
-                      {selected.trigger.kind === "manual" ? (
+                      <span className="wfx-row-main">
+                        <b>{s.new ?? "New workflow"}</b>
+                        <span className="wfx-row-trig">{s.empty_title}</span>
+                      </span>
+                    </button>
+                  )}
+                </nav>
+                <section className="wfx-detail" aria-label={selected.name}>
+                  <header className="wfx-head">
+                    <div className="wfx-title">
+                      {renaming !== null ? (
+                        <form
+                          className="wfx-rename"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const name = renaming.trim();
+                            if (name && name !== selected.name) rename(selected, name);
+                            else setRenaming(null);
+                          }}
+                        >
+                          <Input
+                            value={renaming}
+                            autoFocus
+                            aria-label={s.rename}
+                            onChange={(e) => setRenaming(e.currentTarget.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") setRenaming(null);
+                            }}
+                          />
+                          <Btn sm primary type="submit" disabled={busy}>
+                            {s.rename_save}
+                          </Btn>
+                          <Btn sm onClick={() => setRenaming(null)}>
+                            {s.rename_cancel}
+                          </Btn>
+                        </form>
+                      ) : (
+                        <>
+                          <h2>{selected.name}</h2>
+                          {locked || aiOff ? null : (
+                            <Btn
+                              sm
+                              icon
+                              aria-label={s.rename}
+                              title={s.rename}
+                              onClick={() => setRenaming(selected.name)}
+                            >
+                              <Icon icon={PencilSimpleIcon} />
+                            </Btn>
+                          )}
+                        </>
+                      )}
+                      <WorkflowStatus
+                        kind={status(selected)}
+                        label={statusLabel(status(selected), waitingCount(selected), settings)}
+                      />
+                    </div>
+                    <div className="wfx-meta">
+                      <span className="where">
+                        <Icon
+                          icon={
+                            selected.placementInEffect === "server" ? CloudIcon : TerminalWindowIcon
+                          }
+                        />
+                        {placementLabel(selected)}
+                      </span>
+                      <span>{fill(s.version ?? "Version {n}", { n: selected.version })}</span>
+                      <span>
+                        {selected.lastRunAt
+                          ? fill(s.last_run ?? "Last run {when}", {
+                              when: ago(selected.lastRunAt, now),
+                            })
+                          : (s.never_ran ?? "Not run yet")}
+                      </span>
+                    </div>
+                    <div className="wfx-acts">
+                      {locked ? null : (
+                        <span className="wfx-switch">
+                          <Switch
+                            on={selected.enabled}
+                            label={`${s.enable ?? "Enabled"}: ${selected.name}`}
+                            disabled={busy}
+                            onChange={(next) => toggle(selected, next)}
+                          />
+                          {s.enable}
+                        </span>
+                      )}
+                      {locked ? null : (
+                        <Btn sm onClick={() => dryRun(selected)} disabled={busy}>
+                          <Icon icon={FlaskIcon} /> {s.dry_run ?? "Dry run"}
+                        </Btn>
+                      )}
+                      {!locked && selected.trigger.kind === "manual" ? (
                         <Btn sm onClick={() => runNow(selected)} disabled={busy}>
                           <Icon icon={PlayIcon} /> {s.run_now ?? "Run now"}
                         </Btn>
                       ) : null}
+                      <Btn sm on={source} onClick={() => setSource((v) => !v)}>
+                        <Icon icon={CodeIcon} /> {source ? s.hide_source : (s.source ?? "Source")}
+                      </Btn>
                     </div>
-                    {selected.standingApprovals.length ? (
-                      <div className="wf-standing">
-                        {selected.standingApprovals.map((step) => (
-                          <span key={step} className="wf-standing-row">
-                            <Tag kind="ok">{s.standing_on ?? "Standing approval"}</Tag>{" "}
-                            {selected.steps.find((st) => st.id === step)?.name ?? step}
-                            <Btn sm onClick={() => revoke(selected, step)} disabled={busy}>
-                              {s.revoke ?? "Revoke"}
-                            </Btn>
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {source ? (
-                      <SourceView
-                        document={{
-                          name: selected.name,
-                          sentence: selected.sentence,
-                          kind: selected.kind,
-                          trigger: selected.trigger,
-                          steps: selected.steps,
-                          placement: selected.placement,
-                          failurePolicy: selected.failurePolicy,
-                          standingApprovals: selected.standingApprovals,
-                        }}
+                  </header>
+                  {selected.sentence ? (
+                    <figure className="wfx-sentence">
+                      <figcaption>{s.asked_for}</figcaption>
+                      <blockquote>{selected.sentence}</blockquote>
+                    </figure>
+                  ) : null}
+                  {locked || aiOff ? null : (
+                    <AskBox
+                      className="wfx-ask"
+                      placeholder={s.ask_placeholder ?? "Ask monday to change this workflow"}
+                      value={ask}
+                      onChange={setAsk}
+                      onSubmit={change}
+                    />
+                  )}
+                  {source ? (
+                    <SourceView
+                      document={{
+                        name: selected.name,
+                        sentence: selected.sentence,
+                        kind: selected.kind,
+                        trigger: selected.trigger,
+                        steps: selected.steps,
+                        placement: selected.placement,
+                        failurePolicy: selected.failurePolicy,
+                        standingApprovals: selected.standingApprovals,
+                      }}
+                    />
+                  ) : null}
+                  {waitingRun && !locked ? (
+                    <SideCard title={s.waiting ?? "Waiting for your approval"} className="wfx-card">
+                      <RunApprovalCard
+                        call={waitingCall(waitingRun, waitingCard)}
+                        preview={waitingCard?.preview ?? null}
+                        approveLabel={s.approve ?? "Approve"}
+                        standingLabel={s.standing ?? "Always allow this step"}
+                        declineLabel={s.decline ?? "Decline"}
+                        onDecide={(decision, standing) => decide(waitingRun, decision, standing)}
+                        busy={busy}
                       />
-                    ) : null}
-                  </SideCard>
+                    </SideCard>
+                  ) : null}
                   {dry ? (
                     <DryRunCard
+                      className="wfx-card"
                       title={fill(s.dry_run_title ?? "Dry run over {n} threads", {
                         n: dry.threads.length,
                       })}
@@ -425,20 +602,44 @@ export function Workflows({
                       onClose={() => setDry(null)}
                     />
                   ) : null}
-                  {openRun?.status === "paused" ? (
-                    <SideCard title={s.waiting ?? "Waiting for your approval"}>
-                      <RunApprovalCard
-                        call={waitingCall(openRun, waitingCard)}
-                        preview={waitingCard?.preview ?? null}
-                        approveLabel={s.approve ?? "Approve"}
-                        standingLabel={s.standing ?? "Always allow this step"}
-                        declineLabel={s.decline ?? "Decline"}
-                        onDecide={(decision, standing) => decide(openRun, decision, standing)}
-                        busy={busy}
-                      />
-                    </SideCard>
+                  <h3 className="wfx-h">{s.flow_title}</h3>
+                  {overlay ? (
+                    <div className="wfx-showing" role="status">
+                      <span>
+                        {fill(s.showing_run ?? "", {
+                          subject: runTitle(overlay, s),
+                          when: ago(overlay.startedAt, now),
+                        })}
+                      </span>
+                      <Btn sm onClick={() => setShownRun(null)}>
+                        <Icon icon={XIcon} /> {s.hide_run}
+                      </Btn>
+                    </div>
                   ) : null}
-                  <SideCard title={s.recent_runs ?? "Recent runs"} count={selectedRuns.length}>
+                  <WorkflowFlow
+                    label={selected.name}
+                    cards={flowModel(selected, fs, { groupName, run: overlay }).cards}
+                    fields={settings["workflows.page.step_details"]}
+                    dim={locked || !selected.enabled}
+                  />
+                  {selected.standingApprovals.length && !locked ? (
+                    <div className="wf-standing">
+                      {selected.standingApprovals.map((step) => (
+                        <span key={step} className="wf-standing-row">
+                          <Tag kind="ok">{s.standing_on ?? "Standing approval"}</Tag>{" "}
+                          {selected.steps.find((st) => st.id === step)?.name ?? step}
+                          <Btn sm onClick={() => revoke(selected, step)} disabled={busy}>
+                            {s.revoke ?? "Revoke"}
+                          </Btn>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <SideCard
+                    title={s.recent_runs ?? "Recent runs"}
+                    count={selectedRuns.length}
+                    className="wfx-runs"
+                  >
                     <RunLog
                       runs={selectedRuns.map((r) => ({
                         id: r.id,
@@ -452,32 +653,19 @@ export function Workflows({
                             : undefined,
                       }))}
                       emptyLabel={s.never_ran ?? "Not run yet"}
-                      selectedId={openRun?.id ?? null}
-                      onSelect={(id) => setSelectedRun(id === selectedRun ? null : id)}
+                      selectedId={overlay?.id ?? null}
+                      onSelect={(id) => setShownRun(id === shownRun ? null : id)}
                     />
-                    {openRun && selectedRun === openRun.id ? (
-                      <RunSteps steps={openRun.steps} className="wf-run-steps" />
-                    ) : null}
                   </SideCard>
-                  <SideCard title={s.where ?? "Where it runs"}>
-                    <div className="note">
-                      <div>
-                        {selected.placementInEffect === "server"
-                          ? fill(s.where_server ?? "", { address: current.address })
-                          : fill(s.where_local ?? "", { runtime: runtimeName })}
-                      </div>
-                    </div>
-                  </SideCard>
-                </>
-              ) : (
-                <SideCard title={s.title ?? "Workflows"}>
-                  <p className="faint">
-                    {workflows === null && !loadError ? s.loading : s.none_selected}
+                  <p className="wfx-where faint">
+                    {selected.placementInEffect === "server"
+                      ? fill(s.where_server ?? "", { address: current.address })
+                      : fill(s.where_local ?? "", { runtime: runtimeName })}
                   </p>
-                </SideCard>
-              )}
-            </aside>
-          </div>
+                </section>
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
       {shell.layout.agent === "bottom" && !aiOff
@@ -491,5 +679,24 @@ export function Workflows({
           ))
         : null}
     </div>
+  );
+}
+
+/** The locked page's faded example: a trigger and two Steps, from strings.workflows.locked.example. */
+function ExampleFlow({ lines }: { lines: readonly string[] }) {
+  const icons = ["envelope", "brain", "drive", "bell", "slack"];
+  return (
+    <WorkflowFlow
+      compact
+      className="wflow-example"
+      cards={lines.map((line, i) => ({
+        key: `${i}:${line}`,
+        tone: i === 0 ? "trig" : "step",
+        icon: icons[i] ?? "lightning",
+        eyebrow: "",
+        title: line,
+        depth: 0,
+      }))}
+    />
   );
 }

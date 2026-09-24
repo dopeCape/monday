@@ -19,8 +19,16 @@ import {
   useAssistantToolUI,
   useAuiState,
 } from "@assistant-ui/react";
-import type { ToolCall, ToolPreview } from "@monday/shared";
-import { AgentSteps, formatListTime, formatSpan, type IconComponent, ToolCard } from "@monday/ui";
+import type { ToolCall, ToolPreview, WorkflowPreview } from "@monday/shared";
+import { diffWorkflow } from "@monday/shared";
+import {
+  AgentSteps,
+  formatListTime,
+  formatSpan,
+  type IconComponent,
+  ToolCard,
+  WorkflowFlow,
+} from "@monday/ui";
 import {
   ArchiveIcon,
   ArrowCounterClockwiseIcon,
@@ -51,6 +59,7 @@ import {
 } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
 import { CalendarDraftPreview } from "../../calendar/DraftCard.tsx";
+import { diffLine, flowModel } from "../../screens/workflows/flow.ts";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
 import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
@@ -205,9 +214,64 @@ export function PreviewView({
           </div>
         </div>
       );
+    case "workflow":
+      return <WorkflowPreviewView preview={preview} strings={strings} />;
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }
+}
+
+/**
+ * The Workflow card: what the Workflow will be, drawn as the same flow the
+ * Workflows page shows, compact; for an edit, which Steps are new, changed
+ * or taken out. Apply, Undo and Approve are the card's own buttons (ADR 0002).
+ */
+function WorkflowPreviewView({
+  preview,
+  strings,
+}: {
+  preview: WorkflowPreview;
+  strings: ComposerStrings;
+}) {
+  const w = preview.workflow;
+  const diff = preview.previous ? diffWorkflow(preview.previous, w) : null;
+  const names = preview.groupNames ?? {};
+  const model = flowModel(w, strings, { diff, groupName: (id) => names[id] ?? id });
+  const lead = fill(strings[`strings.agent.preview_workflow.${preview.action}`], {
+    name: w.name,
+    version: preview.version ?? "",
+  });
+  return (
+    <div className="agent-preview agent-workflow" data-action={preview.action}>
+      <div className="count">{lead}</div>
+      {diff ? (
+        <div className="wf-diff" data-changed={diff.changed ? "true" : "false"}>
+          <span>{diffLine(diff, strings)}</span>
+          {diff.renamed && preview.previous ? (
+            <span>
+              {fill(strings["strings.agent.preview_workflow.renamed"], {
+                name: preview.previous.name,
+              })}
+            </span>
+          ) : null}
+          {diff.trigger === "changed" ? (
+            <span>{strings["strings.agent.preview_workflow.trigger"]}</span>
+          ) : null}
+        </div>
+      ) : null}
+      <WorkflowFlow
+        compact
+        cards={model.cards}
+        label={w.name}
+        footer={
+          model.removed.length ? (
+            <WorkflowFlow compact cards={model.removed} className="wflow-removed" />
+          ) : undefined
+        }
+      />
+      {preview.note ? <div className="more wf-note">{preview.note}</div> : null}
+    </div>
+  );
 }
 
 /* ------------------------------ Cards ------------------------------ */
@@ -230,6 +294,10 @@ export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
   list_events: CalendarIcon,
   list_workflows: FlowArrowIcon,
   list_workflow_runs: FlowArrowIcon,
+  create_workflow: FlowArrowIcon,
+  update_workflow: FlowArrowIcon,
+  enable_workflow: FlowArrowIcon,
+  adopt_workflow: FlowArrowIcon,
   archive_threads: ArchiveIcon,
   snooze_threads: ClockIcon,
   tag_threads: TagIcon,
@@ -373,6 +441,11 @@ export const TOOL_UIS: Readonly<Record<string, ToolCallMessagePartComponent>> = 
   get_calendar_draft: MondayTool,
   // A calendar draft: a card with the diff and Apply, never a folded step.
   propose_calendar_draft: MondayTool,
+  // Workflows: the card draws the flow, and for an edit what changes.
+  create_workflow: MondayTool,
+  update_workflow: MondayTool,
+  enable_workflow: MondayTool,
+  adopt_workflow: MondayTool,
   // The app itself.
   change_setting: MondayTool,
   change_layout: MondayTool,

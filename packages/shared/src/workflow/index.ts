@@ -666,3 +666,87 @@ export function describeWorkflow(
     ...doc.steps.map((s) => describeStep(s, groupName)),
   ];
 }
+
+/* ------------------------------ Sketches and diffs ------------------------------ */
+
+/**
+ * A Workflow document as a card draws it: what the Agent is about to create
+ * or change (the composer's Workflow card) and what the Workflows page shows.
+ * Row state (id, version, enabled) stays out.
+ */
+export type WorkflowSketch = Pick<
+  WorkflowInput,
+  "name" | "sentence" | "kind" | "trigger" | "steps" | "placement" | "standingApprovals"
+>;
+
+/** The sketch of a document: the fields a card draws, nothing else. */
+export function sketchOf(doc: WorkflowSketch): WorkflowSketch {
+  return {
+    name: doc.name,
+    sentence: doc.sentence,
+    kind: doc.kind,
+    trigger: doc.trigger,
+    steps: doc.steps,
+    placement: doc.placement,
+    standingApprovals: doc.standingApprovals,
+  };
+}
+
+export type WorkflowChange = "added" | "changed" | "same";
+
+/** What an edit changes, Step by Step (Steps are matched by id). */
+export interface WorkflowDiff {
+  renamed: boolean;
+  sentence: boolean;
+  trigger: WorkflowChange;
+  /** One entry per Step of the new document, in its order. */
+  steps: Array<{ id: string; change: WorkflowChange }>;
+  /** Steps the old document had and the new one does not, in their old order. */
+  removed: Step[];
+  /** Whether anything at all differs. */
+  changed: boolean;
+}
+
+/** JSON with sorted keys, so two documents that differ only in key order compare equal. */
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** What changed between two versions of a Workflow: the card marks new, changed and removed Steps. */
+export function diffWorkflow(
+  previous: Pick<WorkflowSketch, "name" | "sentence" | "trigger" | "steps">,
+  next: Pick<WorkflowSketch, "name" | "sentence" | "trigger" | "steps">,
+): WorkflowDiff {
+  const before = new Map(previous.steps.map((s) => [s.id, s]));
+  const after = new Set(next.steps.map((s) => s.id));
+  const steps = next.steps.map((s) => {
+    const old = before.get(s.id);
+    const change: WorkflowChange = !old ? "added" : stable(old) === stable(s) ? "same" : "changed";
+    return { id: s.id, change };
+  });
+  const removed = previous.steps.filter((s) => !after.has(s.id));
+  const renamed = previous.name !== next.name;
+  const sentence = previous.sentence !== next.sentence;
+  const trigger: WorkflowChange =
+    stable(previous.trigger) === stable(next.trigger) ? "same" : "changed";
+  return {
+    renamed,
+    sentence,
+    trigger,
+    steps,
+    removed,
+    changed:
+      renamed ||
+      sentence ||
+      trigger !== "same" ||
+      removed.length > 0 ||
+      steps.some((s) => s.change !== "same"),
+  };
+}

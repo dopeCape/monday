@@ -1,13 +1,20 @@
-// The Routing page (docs/spec/settings.md "Routing"; design/js/screens/
-// routing.js): the Groups tree with each rule, Sub-groups, unread counts and
-// Confidence; the Needs a decision queue with accept or leave; "Recently
-// routed"; and the re-run with preview, which asks the Server for a dry run
-// and applies only on the second click. Groups and decisions come from the
-// Store (the feed keeps them current); Examples, Confidence and the actions
-// go through the API. Under the tree, the Sections block and the Actions
-// block (slice 26, OrganizeBlocks.tsx) edit sections.rules, sections.order
-// and actions.custom through the Shell, the same rows the Agent writes.
-// Every string is a Setting (strings.routing.*).
+// The Routing page (docs/spec/routing.md; design/js/screens/routing.js): an
+// overview line (Groups, Sections, what waits for a decision, whether new
+// mail is sorted), then three tabs. Groups: each Group as a card with its
+// rule in plain words, what always goes there (the Predicate as chips), its
+// threshold, Sub-groups, Confidence and what it learned from the user's
+// corrections (Examples). Sections and judgments, and Custom actions: the
+// Sections block and the Actions block (slice 26, OrganizeBlocks.tsx), which
+// edit sections.rules, sections.order and actions.custom through the Shell,
+// the same rows the Agent writes. Beside them: the Needs a decision queue
+// with accept or leave, "Recently routed" with why each Thread went where it
+// did, and the re-run with preview, which asks the Server for a dry run and
+// applies only on the second click. While the AI level keeps sorting paused
+// the page says so and offers to raise it; the Groups, rules, Sections and
+// actions stay, editable by hand, and each rule says it is paused. Groups
+// and decisions come from the Store (the feed keeps them current);
+// Examples, Confidence, routes and the actions go through the API. Every
+// string is a Setting (strings.routing.*).
 
 import type {
   Group,
@@ -17,6 +24,7 @@ import type {
   Predicate,
   ProposedMove,
   Settings,
+  ThreadRoute,
 } from "@monday/shared";
 import {
   AgentBar,
@@ -24,17 +32,19 @@ import {
   AskBox,
   Btn,
   DecisionRow,
-  GroupCard,
   Icon,
   type IconComponent,
   motionMs,
   PageHead,
   PreviewCard,
   personName,
+  RoutedRow,
+  RuleGroupCard,
   SampleRow,
   Seg,
   SideCard,
   type SubgroupItem,
+  Tabs,
 } from "@monday/ui";
 import { groupIcon as fixtureGroupIcon } from "@monday/ui/fixtures";
 import { ArrowsClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
@@ -51,8 +61,10 @@ import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
 import { fixtureInbox, type InboxSource } from "./inbox/actions.ts";
 import { fill } from "./inbox/triage.ts";
+import { LevelLock, useLevelLock } from "./LevelLock.tsx";
 import { ActionsBlock, SectionsBlock, sectionNameOf } from "./routing/OrganizeBlocks.tsx";
 import { fixtureRouting, type RoutingSource } from "./routing/routing-data.ts";
+import { predicateChips, whyRouted } from "./routing/why.ts";
 
 export interface RoutingProps {
   /** Groups and Needs a decision; the Store's implementation in the app, fixtures in tests. */
@@ -187,6 +199,8 @@ export function Routing({
   const s = useMemo(() => routingStrings(settings), [settings]);
   // Just mail (CONTEXT.md "AI level"): the Groups stay, hand-made; nothing here asks the Agent.
   const aiOff = settings["ai.level"] === "off";
+  // Below automate nothing is sorted unasked: the page says so and keeps everything, by hand.
+  const { locked, levelName } = useLevelLock();
   const groups = useSyncExternalStore(routing.subscribe, routing.groups, routing.groups);
   const decisions = useSyncExternalStore(routing.subscribe, routing.decisions, routing.decisions);
   const threads = useSyncExternalStore(inbox.subscribe, inbox.threads, inbox.threads);
@@ -207,6 +221,11 @@ export function Routing({
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** Whether a shared key exists for routing on the Server; null until known or where it cannot be. */
   const [sharedKeys, setSharedKeys] = useState<KeyProvider[] | null>(null);
+  const [tab, setTab] = useState<"groups" | "sections" | "actions">("groups");
+  /** Groups whose corrections (Examples) are open. */
+  const [openLearned, setOpenLearned] = useState<Set<string>>(() => new Set());
+  /** Where routing put the recent Threads and how, for "why"; empty until the Server answers. */
+  const [routes, setRoutes] = useState<Map<string, ThreadRoute>>(() => new Map());
 
   const refreshViews = useCallback(() => {
     api
@@ -245,7 +264,28 @@ export function Routing({
     threads.filter((t) => t.unread && (t.group === id || t.subgroup === id)).length;
   const confidenceOf = (id: string): number | null => views?.get(id)?.confidence ?? null;
 
-  const recent = threads.filter((t) => t.group !== null).slice(0, 8);
+  const recent = useMemo(
+    () => threads.filter((t) => t.group !== null).slice(0, settings["routing.page.recent_shown"]),
+    [threads, settings],
+  );
+  const recentKey = recent.map((t) => t.id).join(",");
+  // Routes live on the Server: asked when there is one, or when a test hands the api in.
+  const remote = server || apiOverride !== undefined;
+  // The route record says how each recent Thread was placed; a Thread never routed has none.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recentKey stands for the recent ids.
+  useEffect(() => {
+    if (!remote || recent.length === 0) return;
+    let live = true;
+    Promise.all(recent.map((t) => api.routeOf(t.id).catch(() => null)))
+      .then((list) => {
+        if (!live) return;
+        setRoutes(new Map(list.flatMap((r) => (r ? [[r.threadId, r] as const] : []))));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [api, remote, recentKey]);
   const sectionRules = settings["sections.rules"];
   const sectionOrder = settings["sections.order"];
   const sectionOptions = useMemo(
@@ -505,15 +545,115 @@ export function Routing({
       </div>
     ) : null;
 
+  const visibleSections = sectionRules.filter((r) => !r.hidden).length;
+  const sortingKey = locked
+    ? "stat.sorting_paused"
+    : settings["routing.on_arrival"]
+      ? "stat.sorting_on"
+      : "stat.sorting_manual";
+
+  const groupsTab = (
+    <div className="rt-groups">
+      {top.length === 0 ? (
+        <div className="empty page-empty">
+          <p>{s.empty}</p>
+        </div>
+      ) : null}
+      {top.map((g) => {
+        const confidence = confidenceOf(g.id);
+        const view = views?.get(g.id);
+        const unread = view ? view.unread : unreadIn(g.id);
+        const rule = view?.rule ?? g.rule;
+        const examples = view?.examples ?? [];
+        const threshold = view?.threshold ?? g.threshold;
+        const subgroups: SubgroupItem[] = childrenOf(g.id).map((c) => ({
+          id: c.id,
+          name: c.name,
+          description: c.rule.sentence.length > 0 ? c.rule.sentence : undefined,
+          count: views?.get(c.id)?.unread ?? unreadIn(c.id),
+          icon: groupIcon?.(c),
+        }));
+        const open = openLearned.has(g.id);
+        return (
+          <RuleGroupCard
+            key={g.id}
+            id={g.id}
+            name={g.name}
+            icon={groupIcon?.(g)}
+            stats={[
+              fill(s.unread ?? "{n} unread", { n: unread }),
+              ...(view ? [fill(s.threads ?? "{n} threads", { n: view.threads })] : []),
+            ]}
+            confidence={confidence}
+            confidenceLabel={
+              confidence === null
+                ? undefined
+                : fill(s.confident ?? "{n}% confident", { n: Math.round(confidence * 100) })
+            }
+            ruleLabel={s.rule_label ?? "Rule"}
+            sentence={rule.sentence}
+            predicate={rule.predicate}
+            noRule={s.no_rule}
+            alwaysLabel={s.always_label ?? "Always"}
+            always={predicateChips(rule.predicate, settings)}
+            threshold={
+              threshold === null || threshold === undefined
+                ? undefined
+                : fill(s.threshold ?? "", { pct: Math.round(threshold * 100) })
+            }
+            pausedLabel={locked ? settings["strings.ai.lock.paused"] : undefined}
+            subgroups={subgroups}
+            learned={
+              examples.length
+                ? {
+                    label:
+                      examples.length === 1
+                        ? (s.learned_one ?? "")
+                        : fill(s.learned ?? "", { n: examples.length }),
+                    toggle: open ? (s.learned_hide ?? "Hide") : (s.learned_show ?? "Show"),
+                    open,
+                    onToggle: () =>
+                      setOpenLearned((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(g.id)) next.delete(g.id);
+                        else next.add(g.id);
+                        return next;
+                      }),
+                    body: examples.map((e) => (
+                      <SampleRow
+                        key={`${e.threadId}:${e.positive}`}
+                        name={nameOf(e.from)}
+                        subject={e.subject}
+                        tag={e.positive ? s["edit.belongs"] : s["edit.not_belongs"]}
+                      />
+                    )),
+                  }
+                : undefined
+            }
+            changeRuleLabel={s.change_rule ?? "Change rule"}
+            onChangeRule={startEdit}
+            openLabel={s.open ?? "Open"}
+            onOpen={onNavigate ? (id) => onNavigate(`group:${id}`) : undefined}
+            onOpenSubgroup={(id) => onNavigate?.(`group:${id}`)}
+          >
+            {editing === g.id || childrenOf(g.id).some((c) => c.id === editing) ? editor : null}
+          </RuleGroupCard>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="main page">
       <div className="page-wrap">
-        <div className="page-in">
+        <div className="page-in rt-page">
           <PageHead title={s.title ?? "Routing"} subtitle={s.subtitle}>
-            <Btn outline onClick={rerun} disabled={busy}>
-              <Icon icon={ArrowsClockwiseIcon} /> {s.rerun ?? "Re-run on inbox"}
-            </Btn>
-            <Btn primary onClick={newGroup} disabled={busy}>
+            {locked ? null : (
+              <Btn outline onClick={rerun} disabled={busy}>
+                <Icon icon={ArrowsClockwiseIcon} /> {s.rerun ?? "Re-run on inbox"}
+              </Btn>
+            )}
+            <Btn primary={!locked} outline={locked} onClick={newGroup} disabled={busy}>
               <Icon icon={PlusIcon} /> {s.new_group ?? "New group"}
             </Btn>
           </PageHead>
@@ -522,73 +662,74 @@ export function Routing({
               {error}
             </p>
           ) : null}
-          {hostedNeeded ? <p className="faint routing-note">{s.hosted_needed}</p> : null}
-          <div className="two">
-            <div className="tree">
-              {top.length === 0 ? (
-                <div className="empty page-empty">
-                  <p>{s.empty}</p>
-                </div>
-              ) : null}
-              {top.map((g) => {
-                const confidence = confidenceOf(g.id);
-                const view = views?.get(g.id);
-                const unread = view ? view.unread : unreadIn(g.id);
-                const subgroups: SubgroupItem[] = childrenOf(g.id).map((c) => ({
-                  id: c.id,
-                  name: c.name,
-                  description: c.rule.sentence.length > 0 ? c.rule.sentence : undefined,
-                  count: views?.get(c.id)?.unread ?? unreadIn(c.id),
-                  icon: groupIcon?.(c),
-                }));
-                return (
-                  <div key={g.id}>
-                    <GroupCard
-                      id={g.id}
-                      name={g.name}
-                      meta={fill(s.unread ?? "{n} unread", { n: unread })}
-                      confidence={
-                        confidence === null
-                          ? undefined
-                          : fill(s.confident ?? "{n}% confident", {
-                              n: Math.round(confidence * 100),
-                            })
-                      }
-                      sentence={view?.rule.sentence ?? g.rule.sentence}
-                      predicate={view?.rule.predicate ?? g.rule.predicate}
-                      noRule={s.no_rule}
-                      subgroups={subgroups}
-                      changeRuleLabel={s.change_rule ?? "Change rule"}
-                      onChangeRule={startEdit}
-                      onMore={startEdit}
-                      onOpenSubgroup={(id) => onNavigate?.(`group:${id}`)}
-                    />
-                    {editing === g.id || childrenOf(g.id).some((c) => c.id === editing)
-                      ? editor
-                      : null}
-                  </div>
-                );
+          {hostedNeeded && !locked ? <p className="faint routing-note">{s.hosted_needed}</p> : null}
+          {locked ? (
+            <LevelLock
+              title={s["locked.title"] ?? ""}
+              lede={s["locked.lede"] ?? ""}
+              body={fill(top.length ? (s["locked.body"] ?? "") : (s["locked.body_empty"] ?? ""), {
+                level: levelName,
+                n: top.length,
               })}
-              <SectionsBlock
-                heading
-                settings={settings}
-                rules={sectionRules}
-                order={sectionOrder}
-                onChange={changeSections}
-                onRenameString={(key, name) =>
-                  shell.set(key as Parameters<typeof shell.set>[0], name as never)
-                }
-                onAsk={onAsk}
+              benefits={settings["strings.routing.locked.benefits"]}
+              onNavigate={onNavigate}
+            />
+          ) : null}
+          <div
+            className="rt-stats"
+            data-sorting={locked ? "paused" : settings["routing.on_arrival"] ? "on" : "manual"}
+          >
+            <span>{fill(s["stat.groups"] ?? "{n} Groups", { n: top.length })}</span>
+            <span>{fill(s["stat.sections"] ?? "{n} Sections", { n: visibleSections })}</span>
+            <span>{fill(s["stat.decisions"] ?? "{n} to decide", { n: stillShown.length })}</span>
+            <span className="rt-sorting">
+              <span className="rt-sorting-dot" aria-hidden="true" />
+              {s[sortingKey]}
+            </span>
+          </div>
+          <div className="two rt-two">
+            <div className="tree">
+              <Tabs
+                className="rt-tabs"
+                items={[
+                  { key: "groups", label: s["tab.groups"] ?? "Groups", count: top.length },
+                  {
+                    key: "sections",
+                    label: s["tab.sections"] ?? "Sections",
+                    count: visibleSections,
+                  },
+                  {
+                    key: "actions",
+                    label: s["tab.actions"] ?? "Custom actions",
+                    count: settings["actions.custom"].length,
+                  },
+                ]}
+                active={tab}
+                onChange={setTab}
               />
-              <ActionsBlock
-                heading
-                settings={settings}
-                actions={settings["actions.custom"]}
-                onChange={changeActions}
-                groups={groupOptions}
-                sections={sectionOptions}
-                onAsk={onAsk}
-              />
+              {tab === "groups" ? groupsTab : null}
+              {tab === "sections" ? (
+                <SectionsBlock
+                  settings={settings}
+                  rules={sectionRules}
+                  order={sectionOrder}
+                  onChange={changeSections}
+                  onRenameString={(key, name) =>
+                    shell.set(key as Parameters<typeof shell.set>[0], name as never)
+                  }
+                  onAsk={locked ? undefined : onAsk}
+                />
+              ) : null}
+              {tab === "actions" ? (
+                <ActionsBlock
+                  settings={settings}
+                  actions={settings["actions.custom"]}
+                  onChange={changeActions}
+                  groups={groupOptions}
+                  sections={sectionOptions}
+                  onAsk={locked ? undefined : onAsk}
+                />
+              ) : null}
             </div>
             <aside>
               {preview ? (
@@ -612,7 +753,7 @@ export function Routing({
                   busy={busy}
                 />
               ) : null}
-              {aiOff ? null : (
+              {aiOff || locked ? null : (
                 <SideCard title={s["ask.title"] ?? "Ask for a group"}>
                   <AskBox
                     placeholder={s["ask.placeholder"] ?? ""}
@@ -626,11 +767,13 @@ export function Routing({
                   />
                 </SideCard>
               )}
-              <SideCard title={s.decisions ?? "Needs a decision"} count={stillShown.length}>
+              <SideCard
+                title={s.decisions ?? "Needs a decision"}
+                count={stillShown.length}
+                className="rt-decisions"
+              >
                 {pending.length === 0 ? (
-                  <p className="faint" style={{ fontSize: "var(--fs-xs)", margin: 0 }}>
-                    {s["decisions.empty"]}
-                  </p>
+                  <p className="faint rt-empty-line">{s["decisions.empty"]}</p>
                 ) : null}
                 {pending.map((d) => {
                   const t = inbox.thread(d.threadId);
@@ -644,7 +787,10 @@ export function Routing({
                       subject={t?.subject || d.subject}
                       candidates={d.candidates.map((c) => ({
                         id: c.groupId,
-                        label: nameOfGroup(c.groupId),
+                        label: fill(s.candidate ?? "{name} {pct}%", {
+                          name: nameOfGroup(c.groupId),
+                          pct: Math.round(c.confidence * 100),
+                        }),
                       }))}
                       onPick={(threadId, groupId) => void decide(threadId, groupId)}
                       onLeave={(threadId) => void decide(threadId, null)}
@@ -653,16 +799,22 @@ export function Routing({
                   );
                 })}
               </SideCard>
-              <SideCard title={s.recent ?? "Recently routed"}>
-                {recent.map((t) => (
-                  <SampleRow
-                    key={t.id}
-                    name={nameOf(t.participants[0] ?? null)}
-                    subject={t.subject}
-                    tag={deepestName(t) ?? undefined}
-                  />
-                ))}
-              </SideCard>
+              {settings["routing.page.recent_shown"] > 0 ? (
+                <SideCard title={s.recent ?? "Recently routed"} className="rt-recent">
+                  {recent.length === 0 ? (
+                    <p className="faint rt-empty-line">{s.recent_empty}</p>
+                  ) : null}
+                  {recent.map((t) => (
+                    <RoutedRow
+                      key={t.id}
+                      name={nameOf(t.participants[0] ?? null)}
+                      subject={t.subject}
+                      target={deepestName(t) ?? ""}
+                      why={whyRouted(t, byId, routes.get(t.id) ?? null, settings)}
+                    />
+                  ))}
+                </SideCard>
+              ) : null}
             </aside>
           </div>
         </div>

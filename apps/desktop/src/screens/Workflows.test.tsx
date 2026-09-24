@@ -1,8 +1,9 @@
 /// <reference types="bun-types" />
-// The Workflows page through its seam: the list with its switches and
-// Placement, the chain rendered from the document, the Run log with Step
-// results, the approval card a paused Run waits on, the Dry run preview, the
-// Source view and the "Change with monday" handoff. Mounted under a
+// The Workflows page through its seam: the list with each Workflow's
+// trigger, status and last run; the selected Workflow drawn as a flow of
+// cards; a Run's Step results laid over the flow; the approval card a paused
+// Run waits on; the Dry run preview, rename, the Source view and the "Change
+// with monday" handoff; and the locked state below automate. Mounted under a
 // StaticShell with happy-dom over the fixture API.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -146,16 +147,23 @@ function pausedApi(): WorkflowsApi & { calls: string[] } {
   };
 }
 
-async function mount(api: WorkflowsApi, onAsk?: (text: string) => void) {
+async function mount(
+  api: WorkflowsApi,
+  onAsk?: (text: string) => void,
+  options: { level?: "off" | "assist" | "automate"; onNavigate?: (t: string) => void } = {},
+) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => {
     root?.render(
-      <StaticShell settings={{ "workflows.page.refresh_seconds": 0, "ai.level": "automate" }}>
+      <StaticShell
+        settings={{ "workflows.page.refresh_seconds": 0, "ai.level": options.level ?? "automate" }}
+      >
         <Workflows
           api={api}
           onAsk={onAsk}
+          onNavigate={options.onNavigate}
           now={NOW}
           groupName={(id) =>
             ({ candidates: "Hiring › Candidates", finance: "Finance", investors: "Investors" })[
@@ -185,73 +193,154 @@ const click = async (el: Element | null | undefined) => {
 const texts = (el: ParentNode, selector: string) =>
   [...el.querySelectorAll(selector)].map((n) => n.textContent?.trim() ?? "");
 
+const button = (el: ParentNode, text: string) =>
+  [...el.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
+
+/** The flow's cards as "eyebrow | title | tier or outcome". */
+const cards = (el: ParentNode) =>
+  [...el.querySelectorAll(".wfx-detail .wflow-node")].map((n) =>
+    [
+      n.querySelector(".wflow-eyebrow")?.textContent,
+      n.querySelector(".wflow-title b")?.textContent,
+      n.querySelector(".wflow-run, .wflow-tier")?.textContent ?? "",
+    ].join(" | "),
+  );
+
 describe("the Workflows page", () => {
-  test("lists the active Workflows with their chain, Placement and switch, and the paused one under its tab", async () => {
-    const api = fixtureWorkflowsApi();
-    const el = await mount(api);
+  test("lists every Workflow with its trigger in plain words, its status and last run; switched-off ones last", async () => {
+    const el = await mount(fixtureWorkflowsApi());
     expect(el.querySelector("h1")?.textContent).toBe("Workflows");
-    expect(texts(el, ".wf-card .wf-top b")).toEqual([
+    expect(texts(el, ".wfx-row:not(.wfx-new) b")).toEqual([
       "Candidate intake",
-      "Invoices to Drive",
       "Investor follow-up nudge",
+      "Invoices to Drive",
+      "Newsletter digest",
     ]);
-    const first = el.querySelector(".wf-card") as HTMLElement;
-    expect(first.dataset.selected).toBe("true");
-    expect(texts(first, ".flow .node")).toEqual([
-      "Email arrivesmatches Hiring › Candidates",
-      "Extractname, role, links",
-      "Notionadd row to Hiring",
-      "If role is Rust",
-      "Slack#hiring",
+    expect(texts(el, ".wfx-row .wfx-row-trig").slice(0, 4)).toEqual([
+      "Mail arrives in Hiring › Candidates",
+      "No reply from you for 2 days in Investors",
+      "Mail arrives in Finance",
+      "On a schedule: Fridays 16:00",
     ]);
-    expect(first.querySelector(".where")?.textContent).toContain("Runs on your server");
-    expect(first.querySelector(".wf-foot")?.textContent).toContain("Last run 9 min ago");
-    expect(first.querySelector(".tag")?.textContent).toBe("1 today");
-    expect(texts(el, ".wf-card .where")[2]).toContain("Runs here via Claude Code");
-    // The switch is the only control on a card; off pauses the Workflow through the API.
-    const switches = el.querySelectorAll<HTMLButtonElement>(".wf-card .switch");
-    expect([...switches].map((s) => s.getAttribute("aria-checked"))).toEqual([
-      "true",
-      "true",
-      "true",
-    ]);
-    await click(switches[1]);
-    expect(api.calls).toEqual(["enable:w2:false"]);
-    // Paused tab holds the Newsletter digest, and now Invoices to Drive.
-    await click([...el.querySelectorAll('[role="tab"]')][1]);
-    expect(texts(el, ".wf-card .wf-top b")).toEqual(["Invoices to Drive", "Newsletter digest"]);
-    expect(texts(el, ".wf-card .flow .node")[3]).toBe("Fridays 16:00");
+    const rows = [...el.querySelectorAll<HTMLElement>(".wfx-row:not(.wfx-new)")];
+    expect(rows.map((r) => r.dataset.status)).toEqual(["on", "on", "on", "off"]);
+    expect(texts(el, ".wfx-row .wf-status")).toEqual(["On", "On", "On", "Paused"]);
+    expect(rows[0]?.querySelector(".wfx-row-foot")?.textContent).toContain("Last run 9 min ago");
+    expect(rows[0]?.querySelector(".wfx-row-foot")?.textContent).toContain("1 today");
+    // Recent outcomes as dots, oldest first: the failed Run shows.
+    expect(
+      [...(rows[0]?.querySelectorAll(".wf-dot") ?? [])].map((d) => d.getAttribute("data-status")),
+    ).toEqual(["failed", "done", "done"]);
+    expect(rows[0]?.getAttribute("aria-current")).toBe("true");
   });
 
-  test("the side shows the Run log with Step results, the Source, and hands a change to the composer", async () => {
-    const asked: string[] = [];
-    const el = await mount(fixtureWorkflowsApi(), (t) => asked.push(t));
-    const aside = el.querySelector("aside") as HTMLElement;
-    expect(aside.querySelector(".side-card h3")?.textContent).toContain("Candidate intake");
-    expect(texts(aside, ".runlog .r")).toEqual([
+  test("the selected Workflow is drawn as a flow of cards: trigger, Steps with their approval, the condition's branches", async () => {
+    const el = await mount(fixtureWorkflowsApi());
+    expect(el.querySelector(".wfx-detail h2")?.textContent).toBe("Candidate intake");
+    expect(cards(el)).toEqual([
+      "When | Mail arrives in Hiring › Candidates | ",
+      "Step 1 · Agent step | Extract | Changes nothing",
+      "Step 2 · Add to Notion | Notion | Runs on your standing approval",
+      "Step 3 · Check | If role is Rust | ",
+      "Step 4 · Post to Slack | Slack | Asks first",
+    ]);
+    const nodes = [...el.querySelectorAll<HTMLElement>(".wfx-detail .wflow-node")];
+    // The condition says what happens either way, and Slack hangs under its "if yes".
+    expect(nodes[3]?.querySelector(".wflow-summary")?.textContent).toBe(
+      'Goes on only if role from Extract contains "rust"',
+    );
+    expect(texts(nodes[3] as HTMLElement, ".wflow-branches span")).toEqual([
+      "If yes",
+      "If not, the run ends here",
+    ]);
+    expect(nodes.map((n) => n.dataset.depth)).toEqual(["0", "0", "0", "0", "1"]);
+    // Template holes read as names, not {{steps.extract.name}}.
+    expect(texts(nodes[4] as HTMLElement, ".wflow-hole")).toEqual([
+      "name from Extract",
+      "role from Extract",
+    ]);
+    expect(nodes[1]?.querySelector(".wflow-fields")?.textContent).toContain("read_thread");
+    // The sentence it was written from sits above the flow.
+    expect(el.querySelector(".wfx-sentence blockquote")?.textContent).toContain(
+      "When a candidate emails about any open role",
+    );
+    // Picking another Workflow draws its flow.
+    await click(el.querySelectorAll(".wfx-row")[3]);
+    expect(cards(el)).toEqual([
+      "When | On a schedule: Fridays 16:00 | ",
+      "Step 1 · Agent step | Summarize | Asks first",
+    ]);
+    // Switched off, the flow reads faded.
+    expect(el.querySelector(".wfx-detail .wflow")?.classList.contains("dim")).toBe(true);
+  });
+
+  test("the switch, rename and Source act on the selected Workflow through the API", async () => {
+    const api = fixtureWorkflowsApi();
+    const el = await mount(api);
+    await click(el.querySelector(".wfx-switch .switch"));
+    expect(api.calls).toEqual(["enable:w1:false"]);
+    // Rename writes a new version with the new name.
+    await click(el.querySelector('.wfx-title button[aria-label="Rename"]'));
+    const input = el.querySelector<HTMLInputElement>(".wfx-rename input") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "Candidates to Notion");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await tick();
+      await tick();
+    });
+    expect(api.calls).toEqual(["enable:w1:false", "update:w1"]);
+    expect(texts(el, ".wfx-row b")).toContain("Candidates to Notion");
+    // Source is the JSON document, read-only.
+    await click(button(el, "Source"));
+    const source = el.querySelector("pre.source")?.textContent ?? "";
+    expect(JSON.parse(source)).toMatchObject({ trigger: { kind: "arrival" } });
+  });
+
+  test("a Run lays its Step results over the flow; the Run log lists the Workflow's Runs", async () => {
+    const el = await mount(fixtureWorkflowsApi());
+    const runs = el.querySelector(".wfx-runs") as HTMLElement;
+    expect(texts(runs, ".runlog .r")).toEqual([
       expect.stringContaining("Aoife Brennan, Senior Rust engineerPosted to #hiring9 min ago"),
       expect.stringContaining("Ngozi Adeyemi, Design EngineerNo: Design Engineer"),
       expect.stringContaining("Unknown sender, no role detected"),
     ]);
-    // Opening a Run shows its Steps in order with their outcomes.
-    await click(aside.querySelectorAll(".runlog button.r")[1]);
-    expect(texts(aside, ".run-steps .r")).toEqual([
-      "Extractname: Ngozi Adeyemi, role: Design Engineer",
-      "NotionRow added to Hiring",
-      "If role is RustNo: Design Engineer",
-      "SlackSkipped: If role is Rust said no",
+    await click(runs.querySelectorAll(".runlog button.r")[1]);
+    expect(el.querySelector(".wfx-showing")?.textContent).toContain(
+      "Showing what happened on Ngozi Adeyemi, Design Engineer",
+    );
+    expect(cards(el).slice(1)).toEqual([
+      "Step 1 · Agent step | Extract | Done",
+      "Step 2 · Add to Notion | Notion | Done",
+      "Step 3 · Check | If role is Rust | Done",
+      "Step 4 · Post to Slack | Slack | Skipped",
     ]);
-    // Source is the JSON document, read-only.
-    await click([...aside.querySelectorAll("button")].find((b) => b.textContent === "Source"));
-    const source = aside.querySelector("pre.source")?.textContent ?? "";
-    expect(JSON.parse(source)).toMatchObject({
-      name: "Candidate intake",
-      trigger: { kind: "arrival" },
-    });
+    const slack = [...el.querySelectorAll<HTMLElement>(".wfx-detail .wflow-node")][4];
+    expect(slack?.dataset.run).toBe("skipped");
+    expect(slack?.querySelector(".wflow-run-detail")?.textContent).toBe(
+      "Skipped: If role is Rust said no",
+    );
+    // A failed Run: the Steps it never reached say so.
+    await click(runs.querySelectorAll(".runlog button.r")[2]);
+    expect(
+      cards(el)
+        .slice(1)
+        .map((c) => c.split(" | ")[2]),
+    ).toEqual(["Failed", "Not reached", "Not reached", "Not reached"]);
+    await click(button(el, "Show the workflow"));
+    expect(el.querySelector(".wfx-showing")).toBeNull();
+    expect(cards(el)[4]).toBe("Step 4 · Post to Slack | Slack | Asks first");
+  });
+
+  test("the ask box hands a change to the composer with the Workflow named; no editor exists", async () => {
+    const asked: string[] = [];
+    const el = await mount(fixtureWorkflowsApi(), (t) => asked.push(t));
     // Standing approvals are listed and revocable.
-    expect(aside.querySelector(".wf-standing")?.textContent).toContain("Standing approval Notion");
-    // The ask box hands the sentence to the composer with the Workflow named; no editor exists.
-    const input = aside.querySelector<HTMLInputElement>(".ask input") as HTMLInputElement;
+    expect(el.querySelector(".wf-standing")?.textContent).toContain("Standing approval Notion");
+    const input = el.querySelector<HTMLInputElement>(".wfx-ask input") as HTMLInputElement;
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       setter?.call(input, "Also post to Discord");
@@ -263,16 +352,16 @@ describe("the Workflows page", () => {
       await tick();
     });
     expect(asked).toEqual(['Change the workflow "Candidate intake": Also post to Discord']);
-    expect(el.querySelector("textarea, input[type=text].editor")).toBeNull();
+    expect(el.querySelector("textarea")).toBeNull();
   });
 
   test("a paused Run shows the approval card with the Step's payload; approving resumes it through the API", async () => {
     const api = pausedApi();
     const el = await mount(api);
-    const first = el.querySelector(".wf-card") as HTMLElement;
-    expect(first.querySelector(".tag.warn")?.textContent).toBe("1 waiting");
-    const aside = el.querySelector("aside") as HTMLElement;
-    const card = aside.querySelector(".run-approval") as HTMLElement;
+    const first = el.querySelector(".wfx-row") as HTMLElement;
+    expect(first.dataset.status).toBe("waiting");
+    expect(first.querySelector(".wf-status")?.textContent).toBe("1 waiting");
+    const card = el.querySelector(".wfx-detail .run-approval") as HTMLElement;
     expect(card).not.toBeNull();
     expect(card.dataset.tier).toBe("always-ask");
     expect(card.querySelector(".preview")?.textContent).toBe(
@@ -281,26 +370,27 @@ describe("the Workflows page", () => {
     expect(texts(card, ".acts button")).toEqual(["Approve", "Always allow this step", "Decline"]);
     await click(card.querySelectorAll(".acts button")[1]);
     expect(api.calls).toEqual(["decide:r9:approved:true"]);
-    expect(aside.querySelector(".run-approval")).toBeNull();
-    expect(texts(aside, ".runlog .r")[0]).toContain("Priya Raman, Rust engineerPosted to #hiring");
+    expect(el.querySelector(".run-approval")).toBeNull();
+    expect(texts(el, ".wfx-runs .runlog .r")[0]).toContain(
+      "Priya Raman, Rust engineerPosted to #hiring",
+    );
   });
 
   test("Dry run asks the Server and shows what would happen, applying nothing", async () => {
     const api = fixtureWorkflowsApi();
     const el = await mount(api);
-    const aside = el.querySelector("aside") as HTMLElement;
     await click(
-      [...aside.querySelectorAll("button")].find((b) => b.textContent?.includes("Dry run")),
+      [...el.querySelectorAll(".wfx-acts button")].find((b) => b.textContent?.includes("Dry run")),
     );
     expect(api.calls).toEqual(["dry:w1:"]);
-    const card = aside.querySelector(".dry-run") as HTMLElement;
+    const card = el.querySelector(".dry-run") as HTMLElement;
     expect(card.querySelector("h3")?.textContent).toContain("Dry run over 1 threads");
     expect(card.textContent).toContain("Nothing was applied");
     expect(texts(card, '[data-status="would_ask"]')).toEqual(["Slack: Slack would run"]);
     expect(texts(card, '[data-status="would_apply"]')).toHaveLength(3);
   });
 
-  test("Where it runs names the current Workspace's address, never the fixture's; the Local line names the CLI Setting", async () => {
+  test("where it runs names the current Workspace's address; the Local line names the CLI Setting", async () => {
     const api = fixtureWorkflowsApi();
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -326,12 +416,10 @@ describe("the Workflows page", () => {
     });
     const el = host;
     expect(api.calls).toEqual([]);
-    const where = [...el.querySelectorAll(".side-card")].find((c) =>
-      c.querySelector("h3")?.textContent?.includes("Where it runs"),
-    );
-    expect(where?.textContent).toContain("Runs on me@example.test");
-    expect(where?.textContent).not.toContain("genai-labs");
-    expect(texts(el, ".wf-card .where")[2]).toContain("Runs here via Codex");
+    expect(el.querySelector(".wfx-where")?.textContent).toContain("Runs on me@example.test");
+    expect(el.querySelector(".wfx-where")?.textContent).not.toContain("genai-labs");
+    await click(el.querySelectorAll(".wfx-row")[1]);
+    expect(el.querySelector(".wfx-meta .where")?.textContent).toContain("Runs here via Codex");
   });
 
   test("while the list loads it says so; a list that cannot load says why, in plain words", async () => {
@@ -349,14 +437,13 @@ describe("the Workflows page", () => {
     };
     const el = await mount(slow);
     expect(el.querySelector(".wf-loading")?.textContent).toBe("Loading your workflows");
-    expect(el.querySelector(".wf")?.getAttribute("aria-busy")).toBe("true");
     await act(async () => {
       release();
       await tick();
       await tick();
     });
     expect(el.querySelector(".wf-loading")).toBeNull();
-    expect(texts(el, ".wf-card .wf-top b")).toHaveLength(3);
+    expect(texts(el, ".wfx-row:not(.wfx-new) b")).toHaveLength(4);
 
     const broken: WorkflowsApi = {
       ...api,
@@ -371,5 +458,91 @@ describe("the Workflows page", () => {
       "Could not load your workflows: the Server is unreachable",
     );
     expect(el2.querySelector(".wf-loading")).toBeNull();
+  });
+
+  test("with no Workflows the page offers examples to ask the agent for", async () => {
+    const asked: string[] = [];
+    const empty: WorkflowsApi = { ...fixtureWorkflowsApi(), list: async () => [] };
+    const el = await mount(empty, (t) => asked.push(t));
+    expect(el.querySelector(".wfx")).toBeNull();
+    const examples = [...el.querySelectorAll<HTMLButtonElement>(".examples button")];
+    expect(examples).toHaveLength(3);
+    await click(examples[0]);
+    expect(asked[0]).toStartWith("Write a new workflow: When a customer replies angry");
+  });
+});
+
+describe("the Workflows page below automate", () => {
+  test("says Workflows are paused and how to unlock them, and keeps every Workflow visible read-only", async () => {
+    const api = fixtureWorkflowsApi();
+    const went: string[] = [];
+    const el = await mount(api, undefined, { level: "assist", onNavigate: (t) => went.push(t) });
+    const lock = el.querySelector(".locked") as HTMLElement;
+    expect(lock.querySelector("h2")?.textContent).toBe("Workflows are paused");
+    expect(lock.querySelector(".locked-lede")?.textContent).toBe(
+      "Increase the AI level to unlock Workflows.",
+    );
+    expect(lock.querySelector(".locked-body")?.textContent).toContain(
+      "At Mail with an assistant nothing runs on its own. Your 4 workflows are kept",
+    );
+    expect(texts(lock, ".locked-side > ul > li")).toHaveLength(3);
+    expect(texts(lock, ".wflow-example .wflow-title b")).toHaveLength(3);
+    // Kept, read-only, marked locked: no switch, no Dry run, no ask box, no New workflow.
+    expect(el.querySelector(".wf-kept")?.textContent).toBe("Kept while paused");
+    expect(texts(el, ".wfx-row .wf-status")).toEqual(["Locked", "Locked", "Locked", "Locked"]);
+    expect(el.querySelector(".wfx-switch")).toBeNull();
+    expect(el.querySelector(".wfx-ask")).toBeNull();
+    expect(el.querySelector(".wfx-new")).toBeNull();
+    expect(button(el, "New workflow")).toBeUndefined();
+    expect([...el.querySelectorAll("button")].some((b) => b.textContent?.includes("Dry run"))).toBe(
+      false,
+    );
+    expect(cards(el)).toHaveLength(5);
+    expect(el.querySelector(".wfx-detail .wflow")?.classList.contains("dim")).toBe(true);
+    await click(button(lock, "See the AI levels"));
+    expect(went).toEqual(["settings:ai"]);
+    expect(api.calls).toEqual([]);
+  });
+
+  test("raising the level asks once, saying what starts, then unlocks the page", async () => {
+    const el = await mount(fixtureWorkflowsApi(), undefined, { level: "off" });
+    const lock = el.querySelector(".locked") as HTMLElement;
+    expect(lock.querySelector(".locked-body")?.textContent).toContain("At Just mail");
+    await click(button(lock, "Raise to Mail that sorts and acts for me"));
+    expect(lock.querySelector(".locked-confirm p")?.textContent).toContain(
+      "Anything that leaves your mailbox still asks first",
+    );
+    // Not now forgets the question.
+    await click(button(lock, "Not now"));
+    expect(lock.querySelector(".locked-confirm")).toBeNull();
+    await click(button(lock, "Raise to Mail that sorts and acts for me"));
+    await click(button(lock, "Turn on Mail that sorts and acts for me"));
+    expect(el.querySelector(".locked")).toBeNull();
+    expect(el.querySelector(".wfx-switch")).not.toBeNull();
+    expect(texts(el, ".wfx-row .wf-status")[0]).toBe("On");
+  });
+
+  test("a level set in the Config file is the user's: the page says where to change it instead", async () => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <StaticShell
+          settings={{ "workflows.page.refresh_seconds": 0, "ai.level": "off" }}
+          shell={{ pinned: new Set(["ai.level"]) }}
+        >
+          <Workflows api={fixtureWorkflowsApi()} now={NOW} />
+        </StaticShell>,
+      );
+    });
+    await act(async () => {
+      await tick();
+    });
+    const lock = host.querySelector(".locked") as HTMLElement;
+    expect(lock.querySelector(".locked-pinned")?.textContent).toBe(
+      "The AI level is set in monday.toml, so change it there.",
+    );
+    expect(button(lock, "Raise to Mail that sorts and acts for me")).toBeUndefined();
   });
 });

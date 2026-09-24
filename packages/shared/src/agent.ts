@@ -19,6 +19,7 @@ import type {
 } from "./domain.ts";
 import type { GroupInput } from "./routing/index.ts";
 import type { Actor, DraftContent, Intent, IntentArgs } from "./sync.ts";
+import type { WorkflowSketch } from "./workflow/index.ts";
 
 /* ------------------------------ Tiers ------------------------------ */
 
@@ -149,7 +150,28 @@ export type ToolPreview =
   /** A calendar draft the Agent proposes: the card shows the summary with Apply and Discard. */
   | { kind: "calendar-draft"; draft: CalendarDraft }
   | { kind: "groups"; groups: GroupProposalPreview[]; considered: number }
+  /** A Workflow the Agent creates, changes or switches: the card draws its flow and, for an edit, what changed. */
+  | WorkflowPreview
   | { kind: "text"; text: string };
+
+/**
+ * The Workflow card (create_workflow, update_workflow, enable_workflow,
+ * adopt_workflow): the document as it will be, the one it replaces for an
+ * edit, and a line of context such as the Dry run the enable asks over.
+ */
+export interface WorkflowPreview {
+  kind: "workflow";
+  action: "create" | "update" | "enable" | "disable";
+  workflow: WorkflowSketch;
+  /** The version it replaces, for an update; null otherwise. */
+  previous: WorkflowSketch | null;
+  /** The version the change makes, when known. */
+  version: number | null;
+  /** One more line under the flow: the Dry run an enable asks over. */
+  note?: string | undefined;
+  /** Names for the Group ids the documents mention, so the card reads "Hiring", not an id. */
+  groupNames?: Record<Id, string> | undefined;
+}
 
 /** One Group onboarding proposes, as its card shows it before anything is created. */
 export interface GroupProposalPreview {
