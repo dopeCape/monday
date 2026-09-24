@@ -29,5 +29,8 @@ base64 = "0.22"
 thiserror = "2"
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_34"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -348,6 +348,14 @@ function Gate(): ReactNode {
     return () => clearTimeout(timer);
   }, [warm, accountIds]);
 
+  // The window's memory limit applies from the next start; the shell reads it before the window exists.
+  const webviewMemory = shell.settings["appearance.webview_memory_mb"];
+  useEffect(() => {
+    void platform()
+      .then((p) => p.saveWebviewMemory?.(webviewMemory))
+      .catch(() => {});
+  }, [webviewMemory]);
+
   // New mail in any account, told once it lands in that account's saved mail.
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;

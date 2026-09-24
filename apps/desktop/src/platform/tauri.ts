@@ -38,6 +38,11 @@ export interface Platform {
   writeConfig(text: string): Promise<void>;
   onConfigChanged(cb: (file: ConfigFile) => void): () => void;
   /**
+   * Keeps the appearance.webview_memory_mb Setting where the shell reads it
+   * before the window starts (the next launch). Absent outside the desktop app.
+   */
+  saveWebviewMemory?(mb: number): Promise<boolean>;
+  /**
    * The palette file `appearance.palette` names (a token TOML or a base16
    * YAML): `~` expands, a relative path is under the config directory. Read
    * only, never written; `exists` is false when there is no such file.
@@ -155,6 +160,7 @@ async function tauriPlatform(): Promise<Platform> {
     recoveryFile: () => invoke<string>("recovery_file"),
     importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
     notify: (title, body) => invoke("notify", { title, body }),
+    saveWebviewMemory: (mb) => invoke<boolean>("webview_memory_save", { mb }),
     spawn,
   };
 }

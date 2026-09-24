@@ -3888,6 +3888,16 @@ export const settingsSchema = {
     label: "Job lease",
     help: "Seconds a claimed Job step may run before its lease expires and another server may take it over. Cloud functions shorten it to what their platform allows.",
   }),
+  "appearance.webview_memory_mb": setting({
+    type: z.int().min(64).max(8192),
+    default: 384,
+    scope: "device",
+    section: "server",
+    group: "Storage",
+    tier: "advanced",
+    label: "Window memory",
+    help: "Megabytes the app window may use before it lets go of what it can rebuild (pictures, pages it has shown). Lower uses less memory; higher keeps more ready. Takes effect the next time monday starts.",
+  }),
   "server.postgres_buffers_mb": setting({
     type: z.int().min(8).max(4096),
     default: 32,

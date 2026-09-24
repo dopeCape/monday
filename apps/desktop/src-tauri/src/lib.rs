@@ -6,11 +6,13 @@ mod power;
 mod runtimes;
 mod secrets;
 mod sidecar;
+mod webview_memory;
 
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    webview_memory::apply_before_start();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -36,8 +38,12 @@ pub fn run() {
             power::network_info,
             runtimes::env_path,
             notify::notify,
+            webview_memory::webview_memory_save,
         ])
         .setup(|app| {
+            for window in app.webview_windows().values() {
+                webview_memory::lean_cache(window);
+            }
             config::watch(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
