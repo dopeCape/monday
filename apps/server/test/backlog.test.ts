@@ -132,7 +132,7 @@ describe("the Backlog sort", () => {
       });
   };
 
-  const send = (path: string, body: unknown) =>
+  const send = async (path: string, body: unknown): Promise<Response> =>
     app.request(path, {
       method: "POST",
       body: JSON.stringify(body),

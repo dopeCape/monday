@@ -88,6 +88,14 @@ _Avoid_: filter, classifier (that is an implementation)
 The queue of Threads whose best Routing rule was not confident enough, or where two rules tied, waiting for the user to choose.
 _Avoid_: low confidence, unsorted
 
+**Sort scope**:
+How much of the mail already there a re-run or a Backlog sort covers: the newest N Threads, the last N days, weeks, months or years, everything since a date, or everything. Written as a short sentence ("last 3 months").
+_Avoid_: range, window, lookback
+
+**Backlog sort**:
+The background Job that routes the mail already there inside a Sort scope, newest first, in batches, one per Workspace, after its newest sample was moved on approval. New mail is routing on arrival, not the Backlog sort.
+_Avoid_: backfill (in user-facing words), bulk sort, migration
+
 **Brief**:
 The Agent's short summary of a Thread with suggested actions, shown at the top of the reader.
 _Avoid_: summary, TL;DR, AI summary

@@ -11,6 +11,7 @@ import type {
   JudgeState,
   ProposedMove,
   RerunProgress,
+  RoutingBacklog,
   RoutingPreview,
 } from "@monday/shared";
 import { groups, threads } from "@monday/ui/fixtures";
@@ -109,8 +110,8 @@ function fakeApi(): RoutingApi & { calls: string[] } {
       calls.push(`decide:${threadId}:${groupId}`);
       return { examples: [], revised: groupId };
     },
-    rerun: async () => {
-      calls.push("rerun");
+    rerun: async (_w, _recent, scope) => {
+      calls.push("rerun", `rerun:${scope ?? ""}`);
       return preview;
     },
     apply: async (_w, moves) => {
@@ -149,6 +150,16 @@ const click = async (el: Element | null | undefined) => {
   if (!(el instanceof HTMLElement)) throw new Error("nothing to click");
   await act(async () => {
     el.click();
+    await tick();
+  });
+};
+
+const typeInto = async (input: Element | null | undefined, value: string) => {
+  if (!input) throw new Error("no input");
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
   });
 };
@@ -242,6 +253,7 @@ describe("Routing page", () => {
     const api = fakeApi();
     const el = await mount(api);
     await click(byText(el, "Re-run on inbox"));
+    await click(byText(el, "Show what would move"));
     expect(api.calls).toContain("rerun");
     const preview = el.querySelector(".side-card.preview") as HTMLElement;
     expect(preview.querySelector("h3")?.textContent).toContain("What would move");
@@ -268,6 +280,7 @@ describe("Routing page", () => {
     };
     const el = await mount(api);
     await click(byText(el, "Re-run on inbox"));
+    await click(byText(el, "Show what would move"));
     expect(el.querySelector(".rt-rerun")?.textContent).toContain("Getting your newest threads");
     await act(async () => tell({ done: 3, total: 11, moves: 1, subject: "Term sheet" }));
     const panel = el.querySelector(".rt-rerun") as HTMLElement;
@@ -481,5 +494,168 @@ describe("Routing page", () => {
     await click(byText(lock, "Turn on Mail that sorts and acts for me"));
     expect(el.querySelector(".locked")).toBeNull();
     expect(byText(el, "Re-run on inbox")).toBeDefined();
+  });
+
+  test("Re-run asks which mail first: the Setting's scope, or the newest N, the last N units, or a date", async () => {
+    const api = fakeApi();
+    const el = await mount(api);
+    await click(byText(el, "Re-run on inbox"));
+    const pop = el.querySelector(".rt-scope-pop") as HTMLElement;
+    expect(pop.querySelector(".pop-h")?.textContent).toBe("Which mail to sort");
+    // The default comes from routing.rerun.scope: the newest 50.
+    expect((pop.querySelector(".scope-n") as HTMLInputElement).value).toBe("50");
+    expect(pop.querySelector(".scope-says")?.textContent).toBe("The newest 50 threads");
+    // The last 6 months.
+    await click(byText(pop, "The last"));
+    await typeInto(pop.querySelector(".scope-n"), "6");
+    await click(byText(pop, "months"));
+    expect(pop.querySelector(".scope-says")?.textContent).toBe("The last 6 months");
+    await click(byText(pop, "Show what would move"));
+    expect(api.calls).toContain("rerun:last 6 months");
+    expect(el.querySelector(".rt-scope-pop")).toBeNull();
+    // Since a date, then everything; a scope that is not one keeps the button off.
+    await click(byText(el, "Re-run on inbox"));
+    const again = el.querySelector(".rt-scope-pop") as HTMLElement;
+    expect(again.querySelector(".scope-says")?.textContent).toBe("The last 6 months");
+    await click(byText(again, "Since"));
+    expect(byText(again, "Show what would move")?.disabled).toBe(true);
+    expect(again.querySelector(".scope-says")?.textContent).toBe(
+      "Pick a number from 1 up, or a date.",
+    );
+    await typeInto(again.querySelector(".scope-date"), "2026-01-01");
+    await click(byText(again, "Show what would move"));
+    expect(api.calls).toContain("rerun:since 2026-01-01");
+    await click(byText(el, "Re-run on inbox"));
+    await click(byText(el.querySelector(".rt-scope-pop") as HTMLElement, "Everything"));
+    await click(byText(el, "Show what would move"));
+    expect(api.calls).toContain("rerun:all");
+  });
+
+  test("a large scope shows a sample with counts per Group; Apply starts the background sort, which pauses, resumes and stops", async () => {
+    const base = fakeApi();
+    const move = (id: string, groupId: string): ProposedMove => ({
+      threadId: id,
+      from: { name: "Stripe", email: "billing@stripe.com" },
+      subject: `Invoice ${id}`,
+      current: { groupId: null, subgroupId: null },
+      proposed: { kind: "route", groupId, subgroupId: null, confidence: 0.95 },
+    });
+    let state: RoutingBacklog = {
+      workspaceId: "ws",
+      scope: "all",
+      status: "running",
+      reason: null,
+      sorter: "typesafe",
+      local: false,
+      done: 100,
+      total: 56000,
+      moved: 2,
+      asked: 0,
+      skipped: 0,
+      batches: 0,
+      batchSize: 0,
+      calls: 0,
+      startedAt: "2026-09-16T12:00:00.000Z",
+      updatedAt: "2026-09-16T12:00:00.000Z",
+      finishedAt: null,
+      lastError: null,
+    };
+    const started: unknown[] = [];
+    const api: RoutingApi = {
+      ...base,
+      rerun: async (_w, _recent, scope) => ({
+        workspaceId: "ws",
+        considered: 100,
+        calls: 100,
+        moves: [move("i1", "hiring"), move("i2", "hiring")],
+        scope: scope ?? "",
+        inScope: 56000,
+        complete: false,
+        after: { at: "2025-01-01T00:00:00.000Z", id: "t100" },
+        byTarget: { hiring: 2 },
+      }),
+      // Nothing runs until Apply starts it; after that the Server answers with where it is.
+      backlog: async () => (started.length ? state : null),
+      startBacklog: async (_w, input) => {
+        started.push(input);
+        return { backlog: state, applied: { moved: 2, asked: 0 } };
+      },
+      backlogAction: async (_w, action) => {
+        state = {
+          ...state,
+          status: action === "pause" ? "paused" : action === "resume" ? "running" : "cancelled",
+          ...(action === "cancel" ? { finishedAt: "2026-09-16T12:01:00.000Z" } : {}),
+        };
+        base.calls.push(`backlog:${action}`);
+        return state;
+      },
+    };
+    const el = await mount(api);
+    await click(byText(el, "Re-run on inbox"));
+    await click(byText(el, "Everything"));
+    await click(byText(el, "Show what would move"));
+    const preview = el.querySelector(".side-card.preview") as HTMLElement;
+    const summary = preview.querySelector("p")?.textContent ?? "";
+    expect(summary).toContain("2 of the newest 100 would move");
+    expect(summary).toContain("All your mail holds 56,000 threads");
+    expect(summary).toContain("Hiring: 2");
+    await click(byText(preview, "Apply and sort the rest"));
+    expect(started).toEqual([
+      {
+        scope: "all",
+        moves: [move("i1", "hiring"), move("i2", "hiring")],
+        after: { at: "2025-01-01T00:00:00.000Z", id: "t100" },
+        done: 100,
+      },
+    ]);
+    // The background sort's card: how far, what it did, and its buttons.
+    const card = () => el.querySelector(".rt-backlog") as HTMLElement;
+    expect(card().textContent).toContain("Sorting all your mail");
+    expect(card().textContent).toContain("100 of 56,000 threads");
+    expect(card().textContent).toContain("2 moved, 0 to decide");
+    await click(byText(card(), "Pause"));
+    expect(base.calls).toContain("backlog:pause");
+    expect(card().dataset.status).toBe("paused");
+    await click(byText(card(), "Resume"));
+    expect(base.calls).toContain("backlog:resume");
+    expect(card().dataset.status).toBe("running");
+    await click(byText(card(), "Stop"));
+    expect(base.calls).toContain("backlog:cancel");
+    expect(card().textContent).toContain("Stopped after 100 threads: 2 moved.");
+    await click(byText(card(), "Dismiss"));
+    expect(el.querySelector(".rt-backlog")).toBeNull();
+  });
+
+  test("a background sort that waits says why; on a coding agent it says it is slow", async () => {
+    const base = fakeApi();
+    const backlog: RoutingBacklog = {
+      workspaceId: "ws",
+      scope: "last 3 months",
+      status: "waiting",
+      reason: "no_judge",
+      sorter: "llm",
+      local: true,
+      done: 40,
+      total: 5400,
+      moved: 12,
+      asked: 3,
+      skipped: 1,
+      batches: 8,
+      batchSize: 5,
+      calls: 8,
+      startedAt: "2026-09-16T12:00:00.000Z",
+      updatedAt: "2026-09-16T12:00:00.000Z",
+      finishedAt: null,
+      lastError: null,
+    };
+    const el = await mount({ ...base, backlog: async () => backlog });
+    const card = el.querySelector(".rt-backlog") as HTMLElement;
+    expect(card.textContent).toContain("Sorting the last 3 months");
+    expect(card.textContent).toContain("12 moved, 3 to decide, 1 you placed");
+    expect(card.textContent).toContain("Batch 8, 5 threads each");
+    expect(card.textContent).toContain(
+      "Sorting needs TypeSafe, an AI provider key, or a coding agent.",
+    );
+    expect(card.textContent).toContain("Sorting with your coding agent, a few threads at a time.");
   });
 });

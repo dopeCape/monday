@@ -4,7 +4,7 @@ Optional. The first screen and the keymap question run on first launch, before a
 
 ## The welcome, step by step
 
-One idea per screen, centered in the window, in this order: the AI level, the runtime step (only when the level needs one and none is configured), the keymap, then connecting the first Account. A slim progress line at the top shows the steps and where the user is; Enter continues, Esc goes back, the arrow keys move between cards; each step slides in from the side it comes from (the motion tokens; nothing with transitions off).
+One idea per screen, centered in the window, in this order: the AI level, the runtime step (only when the level needs one and none is configured), how far back to sort (only at "Mail that sorts and acts for me"), the keymap, then connecting the first Account. A slim progress line at the top shows the steps and where the user is; Enter continues, Esc goes back, the arrow keys move between cards; each step slides in from the side it comes from (the motion tokens; nothing with transitions off).
 
 **Skip, use sensible defaults** is on every step but the last. It says in one line what the defaults are ("Defaults: Mail with an assistant, Vim keys, comfortable density, notifications on."), sets whatever the user has not chosen yet in this run, and goes straight to connecting an Account, since the app is not usable without one. The defaults are Settings: `onboarding.defaults.level` (`auto`: Mail with an assistant when a runtime for one is already configured on this computer, Just mail otherwise), `onboarding.defaults.keymap` (`vim`), `onboarding.defaults.density` (`auto`: from the screen size) and `onboarding.defaults.notifications` (on). A choice made before skipping stays. Skipping the welcome also skips the first Account's conversation; a later Account still gets its own offer. On "Set me up" the same action reads Skip and changes nothing.
 
@@ -17,6 +17,8 @@ The screen is a short title, one line, and three compact cards with one line eac
 - **Just mail.** No AI at all: no agent bar, no Briefs, no routing, no Workflows, no model calls, no provider key asked for. monday is a fast mail client with Groups the user makes by hand, search, keymaps and the calendar. The conversation is skipped; the keymap question still asks, then the first Account is connected.
 - **Mail with an assistant.** The agent bar and what it reaches (draft, find, summarize, change settings, undo), Briefs on open, and the Task map. No routing, no automation, nothing runs without the user asking. Onboarding continues with the conversation below, minus the Groups and Workflows proposals. With a TypeSafe key the palette also answers typed sentences without a Session.
 - **Mail that sorts and acts for me.** Everything: routing into Groups and Sections the user describes in their own words, background Briefs under the policy, custom actions per Group, Workflows with their approvals. The full conversation below. The sorting runs on TypeSafe when its key exists and on the language model otherwise.
+
+**How far back should monday sort your mail?** At "Mail that sorts and acts for me", right after the level (and the runtime step when there is one), one screen asks for the Sort scope (CONTEXT.md) the Backlog sort covers once Groups exist: the newest N threads, the last N days, weeks, months or years, everything since a date, or everything, picked with monday's own segmented controls and said back in words ("The last 3 months"). It starts at the Setting `routing.backfill.scope` (shipped as `last 3 months`); Continue (or Enter) saves the pick there, and the step's Skip keeps the shipped default. An Account's offer asks it too, before the conversation. The words are `strings.onboarding.scope_title`, `strings.onboarding.scope_intro` and `strings.routing.scope.*`.
 
 After the cards and the keymap comes "Connect an account" (Fastmail or JMAP, IMAP, Gmail, Microsoft) with "Connect later" as the way out; the welcome is recorded once, when the user leaves that step, so it never re-asks. The keymap cards show each keymap's own keys for moving and archiving. Each Account added afterwards gets its own offer, opening on the conversation (or on nothing at all under Just mail).
 
@@ -37,7 +39,8 @@ Connecting the first Account, from the welcome's connect step or Settings › Ac
 
 - A short conversation with the Agent in the composer, not a form. Five questions at most, each answerable in one sentence or a chip: who you are and what you do; what mail matters most (chips built from the top senders already synced); which tools you use (Slack, Notion, Drive, Discord, chips); whether monday may learn your voice from sent mail (off unless yes); whether monday may read the last 30 days to propose Groups (off unless yes).
 - One centered surface: the title and "Question 2 of 5" with a thin bar above it, the thread in the middle, the question's chips waiting above the input as the composer's quick replies (they step aside while a proposal waits), Skip the rest and, once the Agent set the keymap, Done under it. The kickoff turn is the screen's, so it is not shown.
-- Proposals are cards: the Groups card lists each Group on its own row with its sentence and how many existing Threads would move, then Apply and Cancel.
+- Proposals are cards: the Groups card lists each Group on its own row with its sentence and how many existing Threads would move, then Apply and Cancel. The counts are over the newest `routing.backfill.sample` Threads of the Sort scope (default 100); when the scope holds more, the card says so ("then monday sorts the rest of the last 3 months (5,400 threads) in the background").
+- Approving moves the sample at once and starts the Backlog sort for the rest of the scope. The card then follows it ("Sorting the last 3 months in the background: 1,200 of 5,400, 310 moved"), and so does a line under the conversation's progress while the screen is showing. One Undo stops it, removes the Groups and puts the moved Threads back.
 - Every step has Skip. Closing the panel skips the rest.
 - Under Just mail there is no conversation. With an assistant it asks the questions and seeds Settings; with automation it also proposes Groups and Workflows.
 
@@ -48,7 +51,7 @@ Connecting the first Account, from the welcome's connect step or Settings › Ac
 
 ## What it seeds
 
-- Groups and Routing rules: proposed from the answers and the mail read, shown as a list with the sentence and the count of existing Threads that would move. Nothing is applied until the user approves the list; approval is reversible with one Undo.
+- Groups and Routing rules: proposed from the answers and the mail read, shown as a list with the sentence and the count of existing Threads that would move. Nothing is applied until the user approves the list; approval moves the sample and sorts the rest of the Sort scope in the background (docs/spec/routing.md, "Background sorting"), and is reversible with one Undo.
 - Section rules: the four defaults, renamed if the user's words suggest it.
 - Workflows: at most two proposals drawn from a catalog matched to the tools chosen (for example, invoices to Drive; candidates to Notion), each shown with its Dry run result and enabled only on approval.
 - Views: none by default; a Focus view is offered if the user said they get a lot of mail.

@@ -16,6 +16,7 @@
 // Setting (ADR 0004).
 
 import type { AiLevel, Density, OnboardingState, SettingKey, Settings } from "@monday/shared";
+import { settingsSchema } from "@monday/shared";
 import { Btn, type ChoiceCard, ChoiceCards, cx, Kbd } from "@monday/ui";
 import {
   ArrowLeftIcon,
@@ -40,6 +41,13 @@ import { useAgentSession } from "../agent/useAgentSession.ts";
 import { chordLabel, KEYMAPS, type KeyAction } from "../keyboard/keymaps.ts";
 import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
+import {
+  BacklogContext,
+  backlogLine,
+  ScopePicker,
+  useBacklog,
+  useBacklogShown,
+} from "./routing/backlog.tsx";
 import { AddAccount } from "./settings/AddAccount.tsx";
 import {
   levelCards,
@@ -90,7 +98,7 @@ export interface OnboardingProps {
   onDone: () => void;
 }
 
-type Step = "level" | "runtime" | "keymap" | "connect" | "chat";
+type Step = "level" | "runtime" | "scope" | "keymap" | "connect" | "chat";
 
 /** The onboarding.state key of the welcome run, which belongs to no Account. */
 export const WELCOME_KEY = "welcome";
@@ -334,6 +342,8 @@ function OnboardingBody({
     if (conversationOnly) return ["chat"];
     const steps: Step[] = ["level"];
     if (needsRuntime || step === "runtime") steps.push("runtime");
+    // Sorting runs at automate: how far back it goes is asked once, before the keymap or the conversation.
+    if ((chosen ?? current) === "automate" || step === "scope") steps.push("scope");
     if (mode === "welcome") steps.push("keymap", "connect");
     else steps.push((chosen ?? current) === "off" ? "keymap" : "chat");
     return steps;
@@ -346,8 +356,31 @@ function OnboardingBody({
   const applyLevel = async (level: AiLevel) => {
     picked.current.level = true;
     if (level !== current) await shell.set("ai.level", level);
-    if (level === "off" || mode === "welcome") go("keymap");
+    if (level === "automate") go("scope");
+    else if (level === "off" || mode === "welcome") go("keymap");
     else go("chat");
+  };
+  /** How far back sorting goes (routing.backfill.scope): the Setting's value until the user picks. */
+  const [scopeDraft, setScopeDraft] = useState<string | null>(s["routing.backfill.scope"]);
+  const afterScope = () => {
+    if (mode === "welcome") go("keymap");
+    else go("chat");
+  };
+  const saveScope = async (value: string) => {
+    if (value !== s["routing.backfill.scope"] && !shell.pinned.has("routing.backfill.scope")) {
+      await shell.set("routing.backfill.scope", value);
+    }
+  };
+  /** Continue: the pick is saved. */
+  const continueScope = async () => {
+    if (!scopeDraft) return;
+    await saveScope(scopeDraft);
+    afterScope();
+  };
+  /** Skip: the shipped default, the last 3 months unless the schema says otherwise. */
+  const skipScope = async () => {
+    await saveScope(settingsSchema["routing.backfill.scope"].default);
+    afterScope();
   };
   const continueFromLevel = async (level: AiLevel | null = chosen) => {
     if (level === null) return;
@@ -396,6 +429,8 @@ function OnboardingBody({
       void continueFromLevel(level);
     } else if (step === "runtime") {
       if (configured) void applyLevel(chosen ?? "assist");
+    } else if (step === "scope") {
+      void continueScope();
     } else if (step === "keymap") {
       if (card) void shell.set("keyboard.keymap", card as KeymapChoice);
       afterKeymap();
@@ -541,6 +576,29 @@ function OnboardingBody({
       >
         {s["strings.ai.level.runtime_continue"]} <Kbd>Enter</Kbd>
       </Btn>
+    );
+  } else if (step === "scope") {
+    title = s["strings.onboarding.scope_title"];
+    intro = s["strings.onboarding.scope_intro"];
+    body = (
+      <div className="onb-scope">
+        <ScopePicker value={s["routing.backfill.scope"]} settings={s} onChange={setScopeDraft} />
+      </div>
+    );
+    next = (
+      <>
+        <Btn data-action="skip-scope" onClick={() => void skipScope()}>
+          {s["strings.onboarding.skip"]}
+        </Btn>
+        <Btn
+          primary
+          data-action="continue"
+          disabled={scopeDraft === null}
+          onClick={() => void continueScope()}
+        >
+          {cont} <Kbd>Enter</Kbd>
+        </Btn>
+      </>
     );
   } else if (step === "keymap") {
     title = s["strings.onboarding.keymap_title"];
@@ -712,6 +770,35 @@ function Conversation({
       ? total / (total + 1)
       : Math.min(asked, total) / (total + 1);
   const lots = threadCount >= s["onboarding.focus_view_threads"];
+  // The Backlog sort an approved Group proposal starts: its line under the progress, and
+  // the proposal's card follows it too.
+  const routingApi = shell.server ? shell.api.routing : null;
+  const backlogSource = useMemo(
+    () => (routingApi ? { backlog: (w: string) => routingApi.backlog(w) } : null),
+    [routingApi],
+  );
+  const backlogCtx = useMemo(
+    () =>
+      backlogSource
+        ? {
+            workspaceId,
+            source: backlogSource,
+            pollSeconds: s["routing.backfill.poll_seconds"],
+            settings: s,
+          }
+        : null,
+    [backlogSource, workspaceId, s],
+  );
+  const { backlog, refresh: refreshBacklog } = useBacklog(
+    backlogSource,
+    workspaceId,
+    s["routing.backfill.poll_seconds"],
+  );
+  const backlogShown = useBacklogShown(backlog);
+  // A turn that ended may have started it (propose_groups approved): read again.
+  useEffect(() => {
+    if (!agent.busy) refreshBacklog();
+  }, [agent.busy, refreshBacklog]);
 
   return (
     <div className="onboarding onb-convo-wrap">
@@ -733,22 +820,29 @@ function Conversation({
             >
               <span style={{ "--p": String(share) } as CSSProperties} />
             </div>
+            {backlog && backlogShown.shown ? (
+              <span className="onb-backlog" data-status={backlog.status}>
+                {backlogLine(backlog, s)}
+              </span>
+            ) : null}
           </div>
         </header>
         <div className="onboarding-chat" data-lots={lots ? "true" : undefined}>
-          <Composer
-            agent={agent}
-            mode="right"
-            runtime={runtimeText}
-            strings={agentStrings}
-            suggestions={[]}
-            replies={finished || reviewing ? [] : [...chips, s["strings.onboarding.skip"]]}
-            now={now}
-            placeholder={s["strings.agent.placeholder_open"]}
-            text={text}
-            onTextChange={setText}
-            plain
-          />
+          <BacklogContext.Provider value={backlogCtx}>
+            <Composer
+              agent={agent}
+              mode="right"
+              runtime={runtimeText}
+              strings={agentStrings}
+              suggestions={[]}
+              replies={finished || reviewing ? [] : [...chips, s["strings.onboarding.skip"]]}
+              now={now}
+              placeholder={s["strings.agent.placeholder_open"]}
+              text={text}
+              onTextChange={setText}
+              plain
+            />
+          </BacklogContext.Provider>
         </div>
         <footer className="onb-convo-foot">
           {finished ? null : (

@@ -77,6 +77,7 @@ import {
   onboardingFixtureClient,
 } from "./screens/onboarding-fixture.ts";
 import { Routing } from "./screens/Routing.tsx";
+import { BacklogContext } from "./screens/routing/backlog.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
@@ -619,6 +620,20 @@ export function App({
         : [],
     [mentionsOn, mentionLimit, nav.sections, inboxThreads, navGroups, ws.address],
   );
+  // The Backlog sort the agent's Group and sorting cards follow (routing/backlog.tsx).
+  const routingApi = shell.server ? shell.api.routing : null;
+  const backlogFollow = useMemo(
+    () =>
+      routingApi
+        ? {
+            workspaceId: ws.id,
+            source: { backlog: (w: string) => routingApi.backlog(w) },
+            pollSeconds: shell.settings["routing.backfill.poll_seconds"],
+            settings: shell.settings,
+          }
+        : null,
+    [routingApi, ws.id, shell.settings],
+  );
   // New message opens the compose window over the screen that is open.
   const onCompose = () => compose.openNew();
 
@@ -1130,25 +1145,27 @@ export function App({
 
   const app = (
     <ComposerMentionsContext.Provider value={mentions}>
-      <div
-        className="app"
-        data-online={online ? "true" : "false"}
-        style={{ gridTemplateColumns: cols.join(" ") }}
-      >
-        {parts}
-        {reauth}
-        <ComposeLayer
-          compose={compose}
-          composer={composer}
-          now={composeNow}
-          toastMs={shell.settings["inbox.undo_toast_ms"]}
-          undoKey={chordLabel(
-            composeKeymap.undo,
-            typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
-          )}
-          undoLabel={shell.settings["strings.inbox.undo"]}
-        />
-      </div>
+      <BacklogContext.Provider value={backlogFollow}>
+        <div
+          className="app"
+          data-online={online ? "true" : "false"}
+          style={{ gridTemplateColumns: cols.join(" ") }}
+        >
+          {parts}
+          {reauth}
+          <ComposeLayer
+            compose={compose}
+            composer={composer}
+            now={composeNow}
+            toastMs={shell.settings["inbox.undo_toast_ms"]}
+            undoKey={chordLabel(
+              composeKeymap.undo,
+              typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+            )}
+            undoLabel={shell.settings["strings.inbox.undo"]}
+          />
+        </div>
+      </BacklogContext.Provider>
     </ComposerMentionsContext.Provider>
   );
   return draftStore ? (

@@ -59,6 +59,11 @@ import {
 } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
 import { CalendarDraftPreview } from "../../calendar/DraftCard.tsx";
+import {
+  backlogLine,
+  useBacklogFromContext,
+  useBacklogShown,
+} from "../../screens/routing/backlog.tsx";
 import { diffLine, flowModel } from "../../screens/workflows/flow.ts";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
@@ -212,6 +217,14 @@ export function PreviewView({
           <div className="more">
             {fill(strings["strings.agent.preview_groups.note"], { n: preview.considered })}
           </div>
+          {preview.backlog ? (
+            <div className="more backlog">
+              {fill(strings["strings.agent.preview_groups.backlog"], {
+                scope: preview.backlog.scope,
+                n: preview.backlog.threads.toLocaleString(),
+              })}
+            </div>
+          ) : null}
         </div>
       );
     case "workflow":
@@ -350,6 +363,24 @@ const artifactOf = (props: { artifact?: unknown }): ToolArtifact | null => {
   return a && typeof a === "object" && "call" in a ? a : null;
 };
 
+/** The tools whose approval can start a Backlog sort; their card follows it. */
+const BACKLOG_TOOLS = new Set(["propose_groups", "organize_existing"]);
+
+/**
+ * The Backlog sort under a card that started one: how far it got, or how it
+ * ended, read through the screen's BacklogContext while the card is shown.
+ */
+export function BacklogToolLine() {
+  const { backlog, settings } = useBacklogFromContext();
+  const { shown } = useBacklogShown(backlog);
+  if (!backlog || !settings || !shown) return null;
+  return (
+    <div className="agent-backlog" data-status={backlog.status} role="status" aria-live="polite">
+      {backlogLine(backlog, settings)}
+    </div>
+  );
+}
+
 /** One tool call as a monday card: a compact row for a step, a full card otherwise. */
 function MondayTool(props: ToolCallMessagePartProps) {
   const { strings, now, actions } = useComposerEnv();
@@ -362,6 +393,8 @@ function MondayTool(props: ToolCallMessagePartProps) {
   const shown: ToolCall = stopped ? { ...call, status: "failed" } : call;
   // A step that read something has no result line to show: the check says it is done.
   const step = isStep(call);
+  // A Group proposal or a scoped sort that applied follows the Backlog sort it may have started.
+  const follows = BACKLOG_TOOLS.has(call.tool) && call.status === "done" && !call.undoneAt;
   const onAction = (action: string) => {
     if (action === strings["strings.agent.approve"] || action === strings["strings.agent.apply"]) {
       actions.approve(call.id);
@@ -385,7 +418,14 @@ function MondayTool(props: ToolCallMessagePartProps) {
             ? ""
             : statusLabel(call, strings)
       }
-      preview={preview ? <PreviewView preview={preview} strings={strings} now={now} /> : undefined}
+      preview={
+        preview || follows ? (
+          <>
+            {preview ? <PreviewView preview={preview} strings={strings} now={now} /> : null}
+            {follows ? <BacklogToolLine /> : null}
+          </>
+        ) : undefined
+      }
       actions={stopped ? [] : cardActions(call, strings)}
       onAction={onAction}
     />

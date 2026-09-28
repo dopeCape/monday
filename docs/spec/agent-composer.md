@@ -15,6 +15,7 @@ Behaviors a tester can check. Every default is a Setting (ADR 0004) unless marke
 - "Put newsletters in a folder called Reading", "show me invoices I still owe at the top", "give invoice threads a forward-to-accounting button", "candidates go under Hiring" are one turn each. The Agent has tools that create, change and delete Groups, Sub-groups, Sections and custom actions from a sentence: `create_section` (sentence, conditions, Judgment, placement), `update_section`, `create_group` and `update_group` (already present), `create_action`, `update_action`, `delete_action`, and `move_threads` for the existing mail.
 - Every one is reversible and shows a card naming what will exist and how many existing Threads move; the Judgment's question text is shown on the card and saved as a Setting the user can reword.
 - A Section or Group the Agent creates shows in the nav and the stream at once, through the Changes feed, and the routing of existing Threads runs as a Job with a preview above the threshold.
+- "Sort my last 6 months into these Groups" is `organize_existing` with a Sort scope (with a Group, only moves into it are shown): the card lists the moves among the scope's newest `routing.backfill.sample` Threads and, when the scope holds more, says the rest is sorted in the background. Approving moves the sample at once and starts the Backlog sort (docs/spec/routing.md, "Background sorting"); the card then follows it in one line until it ends. Undo puts the sample back and stops the background sorting; what it already placed stays.
 
 ## Sessions
 

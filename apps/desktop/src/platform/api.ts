@@ -7,6 +7,7 @@ import type {
   ActivityRecord,
   AgentEvent,
   ApprovalDecision,
+  BacklogCursor,
   Brief,
   BriefTrigger,
   Calendar,
@@ -58,6 +59,7 @@ import type {
   Provider,
   RerunProgress,
   RoutingApplied,
+  RoutingBacklog,
   RoutingDecision,
   RoutingPreview,
   Runtime,
@@ -572,10 +574,13 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           json("POST", { group: groupId, at: new Date().toISOString() }),
         ),
       /** A dry run over the newest Threads: what would move. Nothing moves. */
-      rerun: (workspaceId: Id, recent?: number) =>
+      rerun: (workspaceId: Id, recent?: number, scope?: string) =>
         request<RoutingPreview>(
           "/routing/rerun",
-          json("POST", { workspace: workspaceId, ...(recent ? { recent } : {}) }),
+          json("POST", {
+            workspace: workspaceId,
+            ...(scope ? { scope } : recent ? { recent } : {}),
+          }),
         ),
       /**
        * The same dry run, told as it goes: `onProgress` hears each Thread
@@ -585,9 +590,13 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         workspaceId: Id,
         onProgress: (progress: RerunProgress) => void,
         recent?: number,
+        scope?: string,
       ): Promise<RoutingPreview> => {
         const res = await raw("/routing/rerun", {
-          ...json("POST", { workspace: workspaceId, ...(recent ? { recent } : {}) }),
+          ...json("POST", {
+            workspace: workspaceId,
+            ...(scope ? { scope } : recent ? { recent } : {}),
+          }),
           headers: { "content-type": "application/json", accept: "application/x-ndjson" },
         });
         // A Server without the stream answers the plain preview.
@@ -626,6 +635,34 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           "/routing/rerun/apply",
           json("POST", { workspace: workspaceId, moves }),
         ),
+      /** The Workspace's Backlog sort, or null when none ever ran. */
+      backlog: (workspaceId: Id) =>
+        request<{ backlog: RoutingBacklog | null }>(
+          `/routing/backlog?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.backlog),
+      /**
+       * A large re-run's Apply: moves the preview's sample, then sorts the
+       * rest of the scope in the background, from below `after`.
+       */
+      startBacklog: (
+        workspaceId: Id,
+        input: {
+          scope: string;
+          moves?: ProposedMove[];
+          after?: BacklogCursor | null;
+          done?: number;
+        },
+      ) =>
+        request<{ backlog: RoutingBacklog; applied: RoutingApplied }>(
+          "/routing/backlog",
+          json("POST", { workspace: workspaceId, ...input }),
+        ),
+      /** Pause, resume or stop the Backlog sort. */
+      backlogAction: (workspaceId: Id, action: "pause" | "resume" | "cancel") =>
+        request<{ backlog: RoutingBacklog }>(
+          `/routing/backlog/${action}`,
+          json("POST", { workspace: workspaceId }),
+        ).then((r) => r.backlog),
       /**
        * The judged Sections and custom actions per Thread (slice 26): the
        * cached answers, plus the Judge's for what was missing when it is

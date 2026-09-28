@@ -355,6 +355,11 @@ export interface PreviewCardProps {
   onApply: () => void;
   onCancel: () => void;
   busy?: boolean | undefined;
+  /**
+   * Apply works with no moves listed (a large re-run's sample, whose Apply
+   * also sorts the rest in the background); the summary then always shows.
+   */
+  applyEnabled?: boolean | undefined;
   className?: string | undefined;
 }
 
@@ -369,6 +374,7 @@ export function PreviewCard({
   onApply,
   onCancel,
   busy,
+  applyEnabled,
   className,
 }: PreviewCardProps) {
   return (
@@ -380,14 +386,19 @@ export function PreviewCard({
           <Btn sm onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Btn>
-          <Btn sm primary onClick={onApply} disabled={busy || moves.length === 0}>
+          <Btn
+            sm
+            primary
+            onClick={onApply}
+            disabled={busy || (moves.length === 0 && !applyEnabled)}
+          >
             {applyLabel}
           </Btn>
         </span>
       }
     >
       <p className="faint" style={HELP_STYLE}>
-        {moves.length === 0 ? emptyLabel : summary}
+        {moves.length === 0 && !applyEnabled ? emptyLabel : summary}
       </p>
       {moves.map((m) => (
         <SampleRow key={m.threadId} name={m.name} subject={m.subject} tag={m.target} />
