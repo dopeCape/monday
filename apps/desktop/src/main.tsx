@@ -237,6 +237,7 @@ function Root() {
       online={status === "online" || status === "syncing"}
       syncing={progress}
       search={search}
+      runFeed={store}
     />
   );
 }

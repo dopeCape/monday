@@ -300,7 +300,7 @@ export function WorkflowFlow({
 
 /* ------------------------------ Status ------------------------------ */
 
-export type WorkflowStatusKind = "on" | "off" | "locked" | "failing" | "waiting";
+export type WorkflowStatusKind = "on" | "off" | "locked" | "failing" | "waiting" | "running";
 
 const STATUS_GLYPH: Record<WorkflowStatusKind, IconComponent | null> = {
   on: null,
@@ -308,9 +308,10 @@ const STATUS_GLYPH: Record<WorkflowStatusKind, IconComponent | null> = {
   locked: LockSimpleIcon,
   failing: WarningCircleIcon,
   waiting: HandPalmIcon,
+  running: CircleNotchIcon,
 };
 
-/** A Workflow's state as a small pill: on, switched off, locked by the AI level, failing, waiting. */
+/** A Workflow's state as a small pill: on, switched off, locked by the AI level, failing, waiting, running. */
 export function WorkflowStatus({ kind, label }: { kind: WorkflowStatusKind; label: string }) {
   const glyph = STATUS_GLYPH[kind];
   return (

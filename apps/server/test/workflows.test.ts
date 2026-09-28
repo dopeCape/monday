@@ -427,6 +427,29 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
     expect(month.lines.map((l) => [l.task, l.calls])).toEqual([["agentic-step", 2]]);
   });
 
+  test("each move of the Run reaches the Changes feed as a run change, and the live Runs are one request", async () => {
+    const page = await store.listChanges(workspaceId, { since: 0, limit: 1000 });
+    const moves = page.changes.flatMap((c) =>
+      c.kind === "run" && c.entityId === runId ? [c.payload] : [],
+    );
+    // Queued when made, running Step by Step, paused at Slack last.
+    expect(moves[0]).toMatchObject({ id: runId, workflowId, status: "queued", currentStep: 0 });
+    expect(moves.some((m) => m.status === "running" && m.currentStep === 2)).toBe(true);
+    expect(moves.at(-1)).toMatchObject({ status: "paused", currentStep: 4 });
+    // Every live Run in one request: the client's nav and Approvals queue read this.
+    const live = (await (
+      await request(`/workflows/runs?workspace=${workspaceId}&status=queued,running,paused`)
+    ).json()) as { runs: RunView[] };
+    expect(live.runs.map((r) => [r.id, r.status])).toEqual([[runId, "paused"]]);
+    const finished = (await (
+      await request(`/workflows/runs?workspace=${workspaceId}&status=done,failed`)
+    ).json()) as { runs: RunView[] };
+    expect(finished.runs).toEqual([]);
+    expect(
+      (await request(`/workflows/runs?workspace=${workspaceId}&status=paused,nope`)).status,
+    ).toBe(400);
+  });
+
   test("a Standing approval granted through the route lets the resumed Run complete, and the Slack fake received the post", async () => {
     const granted = await send(`/workflows/${workflowId}/approvals`, {
       step: "slack",

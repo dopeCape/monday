@@ -66,7 +66,11 @@ export interface WorkflowsSeam {
   dryRun(workflowId: string, recent?: number): Promise<DryRunPreview>;
   runs(
     workspaceId: string,
-    options?: { workflowId?: string; status?: RunView["status"] },
+    /** One status, or any of several (the client's live Runs: queued, running, paused). */
+    options?: {
+      workflowId?: string;
+      status?: RunView["status"] | readonly RunView["status"][];
+    },
   ): Promise<RunView[]>;
   run(runId: string): Promise<RunView | null>;
   /** Answers a paused Run; `standing` also grants a Standing approval on that Step. */

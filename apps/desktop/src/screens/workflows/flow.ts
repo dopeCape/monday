@@ -468,16 +468,24 @@ export function flowModel(
     if (run) {
       const at = byIndex.get(index);
       const result = results.get(step.id) ?? (at && !names.has(at.stepId) ? at : undefined);
-      const status: FlowRunStatus | null = result
-        ? result.status
-        : runFinished || run.status === "paused"
-          ? "not_reached"
-          : null;
+      let status: FlowRunStatus | null = result?.status ?? null;
+      // The Step a going Run is on: its row may not exist yet, or still say it
+      // waited (an approval just given, the Step running again).
+      if (
+        run.status === "running" &&
+        index === run.currentStep &&
+        (status === null || status === "waiting")
+      )
+        status = "running";
+      if (status === null && (runFinished || run.status === "paused")) status = "not_reached";
       if (status) {
         card.run = {
           status,
           label: s[RUN_KEY[status]],
-          detail: result?.detail || undefined,
+          // The Step's own line, unless it only repeats the label.
+          detail:
+            (result?.status === status && result.detail !== s[RUN_KEY[status]] && result.detail) ||
+            undefined,
         };
       }
     }

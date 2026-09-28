@@ -33,6 +33,7 @@ import {
   GitBranchIcon,
   GithubLogoIcon,
   GraduationCapIcon,
+  HandPalmIcon,
   HandshakeIcon,
   HeartIcon,
   HouseIcon,
@@ -59,6 +60,8 @@ import {
 } from "@phosphor-icons/react";
 
 export type NavStringKey = Extract<keyof Settings, `strings.nav.${string}`>;
+
+const fillN = (template: string, n: number) => template.replaceAll("{n}", String(n));
 /** The nav's own strings, plus the shipped Section names a placed Section may read. */
 export type NavStrings = Pick<Settings, NavStringKey> &
   Partial<Pick<Settings, Extract<keyof Settings, `strings.section.${string}`>>>;
@@ -156,6 +159,12 @@ export interface NavInput {
    * listed, and the model carries the line that says how to turn them on.
    */
   sectionsOff?: boolean | undefined;
+  /**
+   * Workflow Runs going (a breathing dot beside Workflows) and approvals
+   * waiting (the Approvals entry and its count). Absent, or `approvals` null,
+   * leaves the Approvals entry out (just mail: nothing asks).
+   */
+  automation?: { running: number; approvals: number | null } | undefined;
   strings: NavStrings;
 }
 
@@ -309,6 +318,8 @@ export function navModel(input: NavInput): NavModel {
   const sections = input.sectionsOff
     ? []
     : navSections(input.sections ?? [], input.sectionOrder ?? [], s);
+  const running = input.automation?.running ?? 0;
+  const approvals = input.automation ? input.automation.approvals : null;
   return {
     workspace: { name: input.address, initials: addressInitials(input.address), status },
     labels: {
@@ -323,7 +334,30 @@ export function navModel(input: NavInput): NavModel {
     folders,
     calendar: { key: "calendar", label: s["strings.nav.calendar"], icon: CalendarBlankIcon },
     automation: [
-      { key: "workflows", label: s["strings.nav.workflows"], icon: FlowArrowIcon },
+      {
+        key: "workflows",
+        label: s["strings.nav.workflows"],
+        icon: FlowArrowIcon,
+        ...(running > 0
+          ? { live: true, title: fillN(s["strings.nav.workflows_running"], running) }
+          : {}),
+      },
+      ...(approvals !== null
+        ? [
+            {
+              key: "approvals",
+              label: s["strings.nav.approvals"],
+              icon: HandPalmIcon,
+              ...(approvals > 0
+                ? {
+                    count: approvals,
+                    attention: true,
+                    title: fillN(s["strings.nav.approvals_waiting"], approvals),
+                  }
+                : {}),
+            },
+          ]
+        : []),
       { key: "routing", label: s["strings.nav.routing"], icon: GitBranchIcon },
     ],
     sections,
@@ -348,7 +382,28 @@ export function navModel(input: NavInput): NavModel {
     ],
     railTail: [
       { key: "calendar", icon: CalendarBlankIcon, title: s["strings.nav.calendar"] },
-      { key: "workflows", icon: FlowArrowIcon, title: s["strings.nav.workflows"] },
+      {
+        key: "workflows",
+        icon: FlowArrowIcon,
+        title:
+          running > 0
+            ? `${s["strings.nav.workflows"]}, ${fillN(s["strings.nav.workflows_running"], running)}`
+            : s["strings.nav.workflows"],
+        ...(running > 0 ? { live: true } : {}),
+      },
+      ...(approvals !== null
+        ? [
+            {
+              key: "approvals",
+              icon: HandPalmIcon,
+              title:
+                approvals > 0
+                  ? `${s["strings.nav.approvals"]}, ${fillN(s["strings.nav.approvals_waiting"], approvals)}`
+                  : s["strings.nav.approvals"],
+              ...(approvals > 0 ? { count: approvals } : {}),
+            },
+          ]
+        : []),
       { key: "routing", icon: GitBranchIcon, title: s["strings.nav.routing"] },
       { key: "settings", icon: GearSixIcon, title: s["strings.nav.settings"] },
     ],

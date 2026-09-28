@@ -13,6 +13,10 @@ export interface RailItem {
   icon: IconComponent;
   /** The tooltip; the rail shows no labels. */
   title: string;
+  /** A count that asks for the user (approvals waiting), as a small badge on the icon. */
+  count?: number | undefined;
+  /** Something is going on behind it (a Workflow Run): a small breathing dot. */
+  live?: boolean | undefined;
 }
 
 export interface RailProps {
@@ -50,9 +54,12 @@ function RailButton({
       title={item.title}
       aria-label={item.title}
       aria-current={on ? "page" : undefined}
+      data-key={item.key}
       onClick={() => onSelect?.(item.key)}
     >
       <Icon icon={item.icon} />
+      {item.count ? <span className="rail-n">{item.count}</span> : null}
+      {item.live && !item.count ? <span className="live-dot" aria-hidden="true" /> : null}
     </button>
   );
 }

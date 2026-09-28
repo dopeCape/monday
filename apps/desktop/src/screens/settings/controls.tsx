@@ -1432,7 +1432,15 @@ controlKinds["always-ask"] = AlwaysAskControl;
 const AREAS: Array<{ key: string; actions: KeyAction[] }> = [
   {
     key: "navigate",
-    actions: ["move.down", "move.up", "thread.open", "sheet.close", "palette.open", "agent.focus"],
+    actions: [
+      "move.down",
+      "move.up",
+      "thread.open",
+      "sheet.close",
+      "palette.open",
+      "agent.focus",
+      "approvals.open",
+    ],
   },
   {
     key: "act",

@@ -487,6 +487,35 @@ describe("Settings changed on the Server", () => {
   });
 });
 
+describe("Workflow Runs that moved on the Server", () => {
+  test("run rows in the feed tell onRuns listeners once per pull, and store nothing", async () => {
+    const heard: string[][] = [];
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      backoff: { minMs: 5, maxMs: 20 },
+    });
+    const stop = store.onRuns((runs) => heard.push(runs.map((r) => `${r.id}:${r.status}`)));
+    const run = (status: "running" | "paused", currentStep: number) =>
+      ({
+        kind: "run",
+        entityId: "r1",
+        payload: { id: "r1", workflowId: "w1", status, currentStep },
+      }) as Omit<Change, "seq" | "workspaceId" | "at">;
+    server.record(run("running", 1));
+    server.record(run("paused", 3));
+    await store.sync();
+    expect(heard).toEqual([["r1:running", "r1:paused"]]);
+    await store.sync();
+    expect(heard).toHaveLength(1);
+    // A listener that left hears nothing more.
+    stop();
+    server.record(run("running", 3));
+    await store.sync();
+    expect(heard).toHaveLength(1);
+  });
+});
+
 describe("new Messages", () => {
   test("a Message new to the Cache is reported once; one it already held is not", async () => {
     const heard: string[][] = [];
