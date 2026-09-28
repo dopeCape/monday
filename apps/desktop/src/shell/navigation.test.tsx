@@ -12,13 +12,19 @@
 // on a page opens the agent there without leaving it.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { type Draft, defaultSettings, type PartialSettings } from "@monday/shared";
+import {
+  type Draft,
+  defaultSettings,
+  type KeyProvider,
+  type PartialSettings,
+} from "@monday/shared";
 import { draft, threads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { App } from "../App.tsx";
 import type { AccountView } from "../platform/api.ts";
+import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { fixtureCalendar } from "../screens/calendar/calendar-data.ts";
 import { fixtureComposer } from "../screens/compose/composer.ts";
 import { fixtureInbox, type Inbox } from "../screens/inbox/actions.ts";
@@ -108,7 +114,19 @@ interface MountOptions {
   inbox?: Inbox;
   drafts?: Draft[];
   calendar?: boolean;
+  /** This Device's provider keys; none by default, so no AI can sort. */
+  keys?: DeviceProviderKeys | null;
 }
+
+/** A keychain holding only these providers' keys. */
+const keychain = (...have: KeyProvider[]): DeviceProviderKeys => ({
+  get: async (p) => (have.includes(p) ? "key" : null),
+  set: async () => {},
+  remove: async () => {},
+  resolver: async (p) => (have.includes(p) ? "key" : null),
+  share: async () => false,
+  unshare: async () => {},
+});
 
 async function mount(options: MountOptions = {}) {
   const accounts = options.accounts ?? null;
@@ -130,7 +148,7 @@ async function mount(options: MountOptions = {}) {
           composer={composer}
           agentClient={null}
           accounts={accounts ? { list: async () => ({ accounts }) } : null}
-          keys={null}
+          keys={options.keys ?? null}
           now={NOW}
           calendar={options.calendar ? fixtureCalendar({}) : undefined}
         />
@@ -204,16 +222,42 @@ describe("the Mail folders", () => {
   });
 });
 
+describe("Workflow run history", () => {
+  test("Run history opens inside the Workflows page, never Settings; Escape goes back to the Workflow list; the palette jumps to it", async () => {
+    await mount({ settings: { "ai.level": "automate", "workflows.page.refresh_seconds": 0 } });
+    await click(navItem("Workflows"));
+    expect(document.title).toBe("Workflows · monday");
+    const historyTab = () =>
+      qa(".wf-tabs [role=tab]").find((b) => b.textContent?.startsWith("Run history"));
+    await click(historyTab());
+    expect(document.title).toBe("Workflows · monday");
+    expect(q(".settings")).toBeNull();
+    expect(qa(".wfh-list .wfh-row").length).toBeGreaterThan(0);
+    await key(document.body, "Escape");
+    expect(q(".wfh-list")).toBeNull();
+    expect(historyTab()?.getAttribute("aria-selected")).toBe("false");
+    const targets = paletteNavigation(defaultSettings(), false, []).map((n) => n.target);
+    expect(targets).toContain("workflows:runs");
+  });
+});
+
 describe("Sections in the nav", () => {
-  test("every Section is a nav entry under Groups; clicking one opens the Inbox's lens on it under its name", async () => {
-    const inbox = fixtureInbox();
-    await mount({ inbox });
-    const sections = qa(".nav .nav-item").filter((b) =>
-      ["Needs your reply", "Waiting on you", "For your information", "Newsletters"].includes(
-        b.querySelector("span")?.textContent ?? "",
-      ),
+  const SECTION_NAMES = [
+    "Needs your reply",
+    "Waiting on you",
+    "For your information",
+    "Newsletters",
+  ];
+  const sectionItems = () =>
+    qa(".nav .nav-item").filter((b) =>
+      SECTION_NAMES.includes(b.querySelector("span")?.textContent ?? ""),
     );
-    expect(sections).toHaveLength(4);
+
+  test("with an AI that can sort, every Section is a nav entry under Groups; clicking one opens the Inbox's lens on it under its name", async () => {
+    const inbox = fixtureInbox();
+    await mount({ inbox, keys: keychain("typesafe"), settings: { "ai.level": "automate" } });
+    expect(sectionItems()).toHaveLength(4);
+    expect(q('.nav [data-hint="sections"]')).toBeNull();
     await click(navItem("Needs your reply"));
     expect(listTitle()).toBe("Needs your reply");
     expect(rowIds()).toEqual(
@@ -223,6 +267,36 @@ describe("Sections in the nav", () => {
         .map((t) => t.id),
     );
     expect(document.title).toBe("Needs your reply · monday");
+  });
+
+  test("a language model key counts as an AI that can sort, as TypeSafe does", async () => {
+    await mount({ keys: keychain("openrouter"), settings: { "ai.level": "automate" } });
+    expect(sectionItems()).toHaveLength(4);
+  });
+
+  test("with no AI that can sort, the Inbox is one list, the nav shows no Section, and one quiet line links to the AI settings", async () => {
+    const inbox = fixtureInbox();
+    await mount({ inbox, settings: { "ai.level": "automate" } });
+    expect(sectionItems()).toHaveLength(0);
+    const hint = q('.nav [data-hint="sections"]');
+    expect(hint?.textContent).toContain(defaultSettings()["strings.nav.sections_off"]);
+    // The Inbox is every Thread in one list, with no Section headings.
+    expect(listTitle()).toBe("Inbox");
+    expect(qa(".col.list .sec")).toEqual([]);
+    expect(rowIds().length).toBe(inbox.threads().length);
+    await click(hint?.querySelector("button"));
+    expect(document.title).toBe("Settings · monday");
+  });
+
+  test("Just mail keeps Sections off even with a key; sections.require_ai off brings back rule-only Sections", async () => {
+    await mount({ keys: keychain("typesafe") });
+    expect(sectionItems()).toHaveLength(0);
+    await act(async () => {
+      await captured?.set("sections.require_ai", false);
+    });
+    await settle();
+    expect(sectionItems()).toHaveLength(4);
+    expect(q('.nav [data-hint="sections"]')).toBeNull();
   });
 });
 

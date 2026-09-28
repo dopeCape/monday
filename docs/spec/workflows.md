@@ -31,6 +31,13 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
 - Dry run shows what the Workflow would have done over recent matching Threads, Thread by Thread, with the judge's answers; nothing is applied.
 - The page refreshes every `workflows.page.refresh_seconds`.
 
+## Run history
+
+- A second tab beside the Workflow list, never a Settings section: every Workflow's Runs, newest first (`workflows.page.history_shown`), also reachable from the palette ("Workflow run history").
+- Each row: the state glyph, the Workflow's name, a state pill (Running, Waiting, Done, Failed), the subject of the Thread it was about, what started it in plain words, when, and how long it took ("Still running" until it finishes). A failed Run adds the Step it stopped at and its error.
+- Picking a Run opens it beside the list: its head (subject, state, Workflow, trigger, when, length, the version when older), Open thread, Open workflow, Close, the failure box for a failed Run, and its Steps laid over the flow of the version it ran under, as on the Workflow's own page.
+- Escape closes the open Run, and with none open goes back to the Workflow list. A loading line and an empty state ("No runs yet") are `strings.workflows.run_history.*` Settings.
+
 ## The agent's Workflow card
 
 - `create_workflow`, `update_workflow`, `enable_workflow` and `adopt_workflow` preview as a Workflow card (`ToolPreview` kind `workflow`), never a line of text: a lead line (new and switched off; changes to version n; turns on or off), the compact flow with the same cards (trigger, conditions, each Step's glyph, summary and approval), and Group ids named.

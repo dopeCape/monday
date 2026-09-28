@@ -307,6 +307,25 @@ i.ph-bold > svg {
   font-weight: 500;
   color: var(--fg-faint);
 }
+/* Sections off: one quiet line where they would be, with a link to turn them on. */
+.nav-hint {
+  margin: 2px 0 0;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-faint);
+}
+.nav-hint-link {
+  color: var(--fg-muted);
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.nav-hint-link:hover {
+  color: var(--fg);
+  text-decoration-color: currentColor;
+}
 .nav-item {
   display: flex;
   align-items: center;
@@ -9666,6 +9685,79 @@ button.prov {
   font-size: var(--fs-xs);
   line-height: 1.5;
   max-width: 72ch;
+}
+/* The page's two views: the Workflows and their Run history. */
+.wf-tabs {
+  margin: -6px 0 20px;
+}
+/* Run history: every Run newest first, the open one laid over its flow. */
+.wfh-list {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.wfh-row .wfx-row-icon {
+  color: var(--success);
+}
+.wfh-row[data-state="failed"] .wfx-row-icon {
+  color: var(--danger);
+}
+.wfh-row[data-state="waiting"] .wfx-row-icon {
+  color: var(--warning);
+}
+.wfh-row[data-state="running"] .wfx-row-icon {
+  color: var(--accent);
+}
+.wfh-row[data-state="running"] .wfx-row-icon i {
+  animation: spin var(--t-spin) linear infinite;
+}
+.wfh .wf-status[data-status="done"] {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 11%, transparent);
+}
+.wfh .wf-status[data-status="failed"] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 11%, transparent);
+}
+.wfh .wf-status[data-status="running"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.wfh-error {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--danger);
+}
+.wfh-failure {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--fg);
+}
+.wfh-failure > i {
+  margin-top: 2px;
+  color: var(--danger);
+}
+.wfh-failure > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wfh-pick {
+  margin: 10px 0 0;
+  font-size: var(--fs-sm);
 }
 @media (max-width: 1000px) {
   .wfx {

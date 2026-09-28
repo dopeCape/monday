@@ -65,6 +65,11 @@ export interface NavSidebarProps {
   groupIcon?: (group: Group) => IconComponent | undefined;
   /** Every Section, under Groups; none hides the block. */
   sections?: readonly NavItem[] | undefined;
+  /**
+   * Shown in place of the Sections while they are off (no AI can sort): one
+   * quiet line and a link that opens where to turn them on.
+   */
+  sectionsHint?: { text: string; action: string; onAction: () => void } | undefined;
   automation: readonly NavItem[];
   /** The active folder key, Group id, or "calendar", "settings". */
   active: string;
@@ -109,6 +114,7 @@ export function NavSidebar({
   counts,
   groupIcon,
   sections,
+  sectionsHint,
   automation,
   active,
   onSelect,
@@ -181,8 +187,16 @@ export function NavSidebar({
         </Fragment>
       ))}
 
-      {sections?.length ? (
+      {sections?.length || sectionsHint ? (
         <div className="nav-sec">{labels.sections ?? DEFAULT_NAV_LABELS.sections}</div>
+      ) : null}
+      {sectionsHint && !sections?.length ? (
+        <p className="nav-hint" data-hint="sections">
+          {sectionsHint.text}{" "}
+          <button type="button" className="nav-hint-link" onClick={sectionsHint.onAction}>
+            {sectionsHint.action}
+          </button>
+        </p>
       ) : null}
       {sections?.map((sec) => (
         <Item

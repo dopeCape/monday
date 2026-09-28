@@ -271,6 +271,8 @@ const sectionWhen = z.object({
   groups: z.array(z.string().min(1)).optional(),
   notGroups: z.array(z.string().min(1)).optional(),
   ungrouped: z.boolean().optional(),
+  /** The Thread has its arrival Judgments; true never holds on header guesses. */
+  judged: z.boolean().optional(),
 });
 export const sectionRuleShape = z.object({
   id: z.string().min(1),
@@ -1314,6 +1316,15 @@ export const settingsSchema = {
     tier: "primary",
     label: "Sections",
     help: "Which Threads each Section holds: conditions over Thread state and Group, checked in Section order on this device. A rule may also bound a Judgment (needs a reply, waiting, newsletter, automated, urgency); once a Thread has been judged those bounds decide in place of the unread, bulk, message count and last sender conditions. A rule with a judge statement asks it for what the conditions leave open. Each rule says where its Section shows: the stream, the nav, or both. The shipped four are rows like any other.",
+  }),
+  "sections.require_ai": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: "Sections",
+    label: "Sections need AI",
+    help: "Show Sections only when an AI can sort mail: a TypeSafe key, a language model key, or a coding agent (Claude Code, Codex, OpenCode) on this device. Without one the Inbox is one list and the nav shows no Sections. Turn this off to keep Sections on their header rules alone.",
   }),
   "sections.judge_threshold": setting({
     type: confidence,
@@ -3087,6 +3098,16 @@ export const settingsSchema = {
     label: "Runs shown per workflow",
     help: "How many recent runs a workflow's page lists under its flow.",
   }),
+  "workflows.page.history_shown": setting({
+    type: z.int().min(1).max(100),
+    default: 100,
+    scope: "global",
+    section: "workflows",
+    group: "Defaults",
+    tier: "advanced",
+    label: "Runs shown in Run history",
+    help: "How many of the newest runs, across every workflow, the Run history view lists.",
+  }),
   "workflows.page.step_details": setting({
     type: z.boolean(),
     default: true,
@@ -3955,6 +3976,12 @@ export const settingsSchema = {
   "strings.nav.mail": str("appearance", "Nav: mail heading", "Mail"),
   "strings.nav.groups": str("appearance", "Nav: groups heading", "Groups"),
   "strings.nav.sections": str("appearance", "Nav: sections heading", "Sections"),
+  "strings.nav.sections_off": str(
+    "appearance",
+    "Nav: sections need AI",
+    "Sections sort your mail by what it needs once an AI can read it.",
+  ),
+  "strings.nav.sections_off_action": str("appearance", "Nav: set up AI for sections", "Set up AI"),
   "strings.nav.automation": str("appearance", "Nav: automation heading", "Automation"),
   "strings.nav.inbox": str("appearance", "Nav: inbox", "Inbox"),
   "strings.nav.starred": str("appearance", "Nav: starred", "Starred"),
@@ -4355,6 +4382,105 @@ export const settingsSchema = {
   ),
   "strings.workflows.hide_run": str("workflows", "Stop showing the Run", "Show the workflow"),
   "strings.workflows.open_run": str("workflows", "Open a Run on the flow", "Show on the flow"),
+  /* Run history: every Workflow's Runs, newest first, as a view beside the list. */
+  "strings.workflows.run_history.tab_list": str("workflows", "Workflows tab", "Workflows"),
+  "strings.workflows.run_history.loading": str(
+    "workflows",
+    "Run history loading line",
+    "Loading the run history",
+  ),
+  "strings.workflows.run_history.empty_title": str(
+    "workflows",
+    "Run history: none yet",
+    "No runs yet",
+  ),
+  "strings.workflows.run_history.empty_body": str(
+    "workflows",
+    "Run history: none yet, body",
+    "Each time a workflow runs it shows here, newest first, with what it did and where it stopped.",
+  ),
+  "strings.workflows.run_history.pick": str(
+    "workflows",
+    "Run history: nothing picked",
+    "Pick a run to see its steps laid over the workflow.",
+  ),
+  "strings.workflows.run_history.state.running": str(
+    "workflows",
+    "Run history: running",
+    "Running",
+  ),
+  "strings.workflows.run_history.state.waiting": str(
+    "workflows",
+    "Run history: waiting for an approval",
+    "Waiting",
+  ),
+  "strings.workflows.run_history.state.done": str("workflows", "Run history: done", "Done"),
+  "strings.workflows.run_history.state.failed": str("workflows", "Run history: failed", "Failed"),
+  "strings.workflows.run_history.trigger.arrival": str(
+    "workflows",
+    "Run history: started by new mail",
+    "Mail arrived",
+  ),
+  "strings.workflows.run_history.trigger.thread_event": str(
+    "workflows",
+    "Run history: started by a Thread event",
+    "A thread changed",
+  ),
+  "strings.workflows.run_history.trigger.schedule": str(
+    "workflows",
+    "Run history: started on schedule",
+    "On a schedule",
+  ),
+  "strings.workflows.run_history.trigger.silence": str(
+    "workflows",
+    "Run history: started by no reply",
+    "No reply came",
+  ),
+  "strings.workflows.run_history.trigger.manual": str(
+    "workflows",
+    "Run history: started by hand",
+    "Run by hand",
+  ),
+  "strings.workflows.run_history.seconds": str("workflows", "Run duration: seconds", "{n} s"),
+  "strings.workflows.run_history.minutes": str("workflows", "Run duration: minutes", "{n} min"),
+  "strings.workflows.run_history.hours": str("workflows", "Run duration: hours", "{h} h {m} min"),
+  "strings.workflows.run_history.took": str("workflows", "Run duration line", "Took {duration}"),
+  "strings.workflows.run_history.still_running": str(
+    "workflows",
+    "Run duration: not finished",
+    "Still running",
+  ),
+  "strings.workflows.run_history.failed_at": str(
+    "workflows",
+    "Run history: the Step that failed",
+    "Failed at step {n}, {step}",
+  ),
+  "strings.workflows.run_history.no_thread": str(
+    "workflows",
+    "Run history: a Run with no Thread",
+    "No thread",
+  ),
+  "strings.workflows.run_history.removed": str(
+    "workflows",
+    "Run history: its Workflow was deleted",
+    "A deleted workflow",
+  ),
+  "strings.workflows.run_history.open_thread": str(
+    "workflows",
+    "Run history: open the Thread",
+    "Open thread",
+  ),
+  "strings.workflows.run_history.open_workflow": str(
+    "workflows",
+    "Run history: open the Workflow",
+    "Open workflow",
+  ),
+  "strings.workflows.run_history.close": str(
+    "workflows",
+    "Run history: close the Run (Escape)",
+    "Close",
+  ),
+  "strings.workflows.run_history.steps": str("workflows", "Run history: steps heading", "Steps"),
   "strings.workflows.locked.title": str("workflows", "Locked: heading", "Workflows are paused"),
   "strings.workflows.locked.lede": str(
     "workflows",
@@ -7286,6 +7412,11 @@ export const settingsSchema = {
   "strings.palette.nav.search": str("appearance", "Palette: Search", "Search"),
   "strings.palette.nav.routing": str("appearance", "Palette: Routing", "Routing"),
   "strings.palette.nav.workflows": str("appearance", "Palette: Workflows", "Workflows"),
+  "strings.palette.nav.run_history": str(
+    "appearance",
+    "Palette: Workflows run history",
+    "Workflow run history",
+  ),
   "strings.palette.nav.calendar": str("appearance", "Palette: Calendar", "Calendar"),
   "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
   "strings.palette.nav.settings_page": str(

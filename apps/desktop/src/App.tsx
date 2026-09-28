@@ -76,11 +76,12 @@ import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
 import { fill } from "./screens/settings/wizard.ts";
-import { Workflows } from "./screens/Workflows.tsx";
+import { Workflows, type WorkflowsView } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
+import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
 import { useWindowTitle, windowTitle } from "./shell/title.ts";
 import { useWorkspace } from "./workspace.tsx";
 
@@ -236,6 +237,11 @@ export function App({
   /** The App's own bottom agent, on the pages that are not the stream: raised, and its text. */
   const [bottomOpen, setBottomOpen] = useState(false);
   const [bottomText, setBottomText] = useState("");
+  /** Which Workflows view "workflows" or "workflows:runs" asked for; each request remounts the page on it. */
+  const [workflowsView, setWorkflowsView] = useState<{ view: WorkflowsView; n: number }>({
+    view: "list",
+    n: 0,
+  });
   /** The Settings section the palette or the URL asked for, and whether to open on the search field. */
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     () => new URLSearchParams(location.search).get("section") ?? undefined,
@@ -278,6 +284,30 @@ export function App({
   const pinned = shell.pinned;
   const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
   const detection = useMemo(() => detectionOf(runtimes), [runtimes]);
+  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
+  useEffect(() => {
+    if (keysProp !== undefined) return;
+    let live = true;
+    void platform().then((p) => {
+      if (live) setKeys(deviceProviderKeys(p));
+    });
+    return () => {
+      live = false;
+    };
+  }, [keysProp]);
+  // Sections only when an AI can sort (sections.require_ai): a TypeSafe key, a
+  // language model key or a coding agent. Re-read on every screen change, so a
+  // key added in Settings counts on the way back.
+  const sharedKeys = useMemo(
+    () => (shell.server ? () => shell.api.keys.shared() : null),
+    [shell.server, shell.api],
+  );
+  const runtimeState = useRuntimeStateOf({ runtimes: detection, keys, shared: sharedKeys }, active);
+  const sectionsOn = sectionsShown({
+    requireAi: shell.settings["sections.require_ai"],
+    level: shell.settings["ai.level"],
+    state: runtimeState,
+  });
   const agentSession = useAgentSession({
     client: aiOff ? null : client,
     workspaceId: ws.id,
@@ -383,9 +413,11 @@ export function App({
         pausedRuns,
         external: externalPending,
         // Sections are decided on the client: this counts within the Threads the Inbox holds.
-        needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
+        needsReply: sectionsOn
+          ? (inbox?.threads().filter((t) => t.section === "needs-reply") ?? [])
+          : [],
       }),
-    [shell.settings, agent.waiting, pausedRuns, externalPending, inbox],
+    [shell.settings, agent.waiting, pausedRuns, externalPending, inbox, sectionsOn],
   );
   /* ------------------------------ Onboarding ------------------------------ */
 
@@ -455,17 +487,6 @@ export function App({
     setOnboarding({ account: fresh, rerun: false, afterWelcome: welcomed });
     setActive("onboarding");
   }, [found]);
-  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
-  useEffect(() => {
-    if (keysProp !== undefined) return;
-    let live = true;
-    void platform().then((p) => {
-      if (live) setKeys(deviceProviderKeys(p));
-    });
-    return () => {
-      live = false;
-    };
-  }, [keysProp]);
   const senders = useMemo(
     () =>
       topSenders(
@@ -529,9 +550,11 @@ export function App({
         folderCounts: { drafts: draftCount, snoozed: snoozedCount },
         sections: shell.settings["sections.rules"],
         sectionOrder: shell.settings["sections.order"],
+        sectionsOff: !sectionsOn,
         strings: shell.settings,
       }),
     [
+      sectionsOn,
       ws.address,
       online,
       syncing,
@@ -633,8 +656,12 @@ export function App({
       } else if (target === "search") openSearch();
       else if (target === "agent") askHere();
       else if (target === "routing") setActive("routing");
-      else if (target === "workflows") setActive("workflows");
-      else if (target === "calendar") setActive("calendar");
+      else if (target === "workflows" || target === "workflows:runs") {
+        // Run history is a view of the Workflows page, never a Settings section.
+        const view: WorkflowsView = target === "workflows:runs" ? "history" : "list";
+        setWorkflowsView((v) => ({ view, n: v.n + 1 }));
+        setActive("workflows");
+      } else if (target === "calendar") setActive("calendar");
       else if (target.startsWith("calendar:")) {
         // A date from the palette's "Jump to date": the Calendar opens on that day.
         setCalendarJump((j) => ({ day: target.slice("calendar:".length), n: (j?.n ?? 0) + 1 }));
@@ -859,6 +886,11 @@ export function App({
     );
   }
 
+  // The nav's Workflows entry always opens the Workflow list.
+  const selectNav = (key: string) => {
+    if (key === "workflows") navigate("workflows");
+    else setActive(key);
+  };
   const cols: string[] = [];
   const parts: React.ReactNode[] = [];
   if (shell.layout.nav === "full") {
@@ -874,9 +906,15 @@ export function App({
         groupIcon={nav.groupIcon}
         counts={nav.counts}
         sections={nav.sections}
+        // The line waits for the runtimes to answer, so it never flashes on start.
+        sectionsHint={
+          nav.sectionsHint && runtimeState !== null
+            ? { ...nav.sectionsHint, onAction: () => navigate("settings:ai") }
+            : undefined
+        }
         automation={nav.automation}
         active={active}
-        onSelect={setActive}
+        onSelect={selectNav}
         onSearch={openSearch}
         onCompose={onCompose}
         onWorkspace={toggleSwitcher}
@@ -886,7 +924,9 @@ export function App({
   }
   // A Group in the nav opens the Inbox as a lens on it; a Section placed in the nav likewise.
   const groupLens = navGroups.some((g) => g.id === active) ? active : undefined;
-  const sectionLens = active.startsWith("section:") ? active.slice("section:".length) : undefined;
+  // While Sections are off a Section key opens the whole Inbox.
+  const sectionLens =
+    sectionsOn && active.startsWith("section:") ? active.slice("section:".length) : undefined;
   if (shell.layout.nav === "rail") {
     cols.push("var(--rail-w)");
     parts.push(
@@ -897,7 +937,7 @@ export function App({
         items={nav.rail}
         tail={nav.railTail}
         active={active}
-        onSelect={setActive}
+        onSelect={selectNav}
         onSearch={openSearch}
         onCompose={onCompose}
         onWorkspace={toggleSwitcher}
@@ -962,7 +1002,8 @@ export function App({
       />
     ) : active === "workflows" ? (
       <Workflows
-        key="screen"
+        key={`screen-workflows-${workflowsView.n}`}
+        initialView={workflowsView.view}
         workspaceId={ws.id}
         api={workflowsApi}
         groupName={(id) => {
@@ -1020,6 +1061,7 @@ export function App({
         calendar={calendar}
         group={groupLens}
         section={sectionLens}
+        sectionsOn={sectionsOn}
         folder={folderLens}
         judge={shell.api.judge}
       />

@@ -151,6 +151,11 @@ export interface NavInput {
   sections?: readonly SectionRuleSetting[] | undefined;
   /** Their order (sections.order). */
   sectionOrder?: readonly string[] | undefined;
+  /**
+   * Sections are off (sections.require_ai and no AI can sort): none is
+   * listed, and the model carries the line that says how to turn them on.
+   */
+  sectionsOff?: boolean | undefined;
   strings: NavStrings;
 }
 
@@ -160,8 +165,10 @@ export interface NavModel {
   folders: NavItem[];
   calendar: NavItem;
   automation: NavItem[];
-  /** Every Section not hidden, in Section order, keyed "section:<id>". */
+  /** Every Section not hidden, in Section order, keyed "section:<id>"; none while Sections are off. */
   sections: NavItem[];
+  /** While Sections are off: the quiet line in their place and its link's words. */
+  sectionsHint: { text: string; action: string } | null;
   /** Unread counts by folder key, Group id or "section:<id>"; absent keys show no count. */
   counts: Record<string, number>;
   rail: RailItem[];
@@ -299,7 +306,9 @@ export function navModel(input: NavInput): NavModel {
   }
   const groupIcon = (g: Group) => input.groupIcon?.(g);
   const top = input.groups.filter((g) => g.parentId === null);
-  const sections = navSections(input.sections ?? [], input.sectionOrder ?? [], s);
+  const sections = input.sectionsOff
+    ? []
+    : navSections(input.sections ?? [], input.sectionOrder ?? [], s);
   return {
     workspace: { name: input.address, initials: addressInitials(input.address), status },
     labels: {
@@ -318,6 +327,9 @@ export function navModel(input: NavInput): NavModel {
       { key: "routing", label: s["strings.nav.routing"], icon: GitBranchIcon },
     ],
     sections,
+    sectionsHint: input.sectionsOff
+      ? { text: s["strings.nav.sections_off"], action: s["strings.nav.sections_off_action"] }
+      : null,
     counts: {
       ...heldOrWhole(
         unreadCounts(

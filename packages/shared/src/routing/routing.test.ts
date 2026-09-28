@@ -154,10 +154,12 @@ describe("Section rules", () => {
   test("the shipped defaults fill the mock's four Sections from Thread state", () => {
     const at = (t: Thread, lastSender: string | null) =>
       sectionOf(t, { lastSender, owner: me }, DEFAULT_SECTION_RULES, order);
-    expect(at(thread(), "aoife@northwind.test")).toBe("needs-reply");
-    // Reading a Thread does not answer it: read, someone else wrote last, it still needs a reply.
-    expect(at(thread({ unread: false }), "mateus@x.test")).toBe("needs-reply");
-    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("needs-reply");
+    // Before the judge answers nothing is put in Needs your reply by guesswork: an unread
+    // Thread someone else wrote last (a shipment notice, a one-time code) is For your information.
+    expect(at(thread(), "aoife@northwind.test")).toBe("fyi");
+    expect(at(thread({ unread: false }), "mateus@x.test")).toBe("fyi");
+    // An ongoing exchange someone else wrote last is Waiting on you by the headers.
+    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("waiting");
     // Before the judge answers, Waiting on you catches the ongoing exchanges it is ordered ahead of.
     expect(
       sectionOf(
@@ -173,6 +175,43 @@ describe("Section rules", () => {
     expect(at(thread({ unread: true }), null)).toBe("fyi");
   });
 
+  test("automated and transactional mail never lands in Needs your reply; an unjudged Thread waits outside it", () => {
+    const at = (t: Thread, judgments: SectionJudgments | null) =>
+      sectionOf(
+        t,
+        { lastSender: "ship-confirm@amazon.test", owner: me, judgments },
+        DEFAULT_SECTION_RULES,
+        order,
+      );
+    // A shipment notice, a one-time code, "your payment failed": unread, someone else wrote
+    // last, no list headers. Unjudged, the header guess would call it a reply; it is not.
+    const notice = thread({ unread: true, bulk: false, messageCount: 1 });
+    expect(at(notice, null)).not.toBe("needs-reply");
+    expect(at(notice, null)).toBe("fyi");
+    // Judged automated, even when the model leans toward "needs a reply", it stays out.
+    const automated = {
+      needsReply: 0.8,
+      waitingOnOthers: 0.7,
+      newsletter: 0.1,
+      automated: 0.93,
+      urgency: 2,
+    };
+    expect(at(notice, automated)).toBe("fyi");
+    expect(at(thread({ messageCount: 3 }), automated)).toBe("fyi");
+    // A newsletter the model thinks wants an answer is not a reply either.
+    expect(
+      at(notice, { ...automated, automated: 0.2, newsletter: 0.7, waitingOnOthers: 0.1 }),
+    ).toBe("newsletters");
+    // A person asking something, judged: Needs your reply.
+    expect(at(notice, { ...automated, automated: 0.05, newsletter: 0.05 })).toBe("needs-reply");
+    // The `judged` condition on its own: holds only with (or only without) Judgments.
+    const rule = [{ id: "j", when: { judged: true } }];
+    const facts = { lastSender: null, owner: me };
+    expect(sectionOf(notice, facts, rule)).toBeNull();
+    expect(sectionOf(notice, { ...facts, judgments: automated }, rule)).toBe("j");
+    expect(sectionOf(notice, facts, [{ id: "u", when: { judged: false } }])).toBe("u");
+  });
+
   test("a judged Thread lands by its Judgments, an unjudged one by the header rules, and Group conditions always apply", () => {
     const judged = (over: Partial<SectionJudgments> = {}): SectionJudgments => ({
       needsReply: 0.1,
@@ -184,10 +223,10 @@ describe("Section rules", () => {
     });
     const at = (t: Thread, lastSender: string | null, judgments: SectionJudgments | null) =>
       sectionOf(t, { lastSender, owner: me, judgments }, DEFAULT_SECTION_RULES, order);
-    // Read, someone else wrote last: Needs your reply by the headers; the judge keeps it
-    // there or lets it go to For your information.
+    // Read, someone else wrote last: For your information until judged; the judge puts it in
+    // Needs your reply or leaves it where it is.
     const read = thread({ unread: false });
-    expect(at(read, "aoife@northwind.test", null)).toBe("needs-reply");
+    expect(at(read, "aoife@northwind.test", null)).toBe("fyi");
     expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.64 }))).toBe("needs-reply");
     expect(at(read, "aoife@northwind.test", judged({ needsReply: 0.58 }))).toBe("fyi");
     // The owner wrote last: For your information by the headers, Needs your reply once judged.

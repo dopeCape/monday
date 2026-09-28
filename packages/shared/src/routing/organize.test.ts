@@ -91,7 +91,7 @@ describe("judged Sections", () => {
 
   test("a judged rule does not decide until the Judge has answered; the Thread falls through", () => {
     expect(sectionRuleHolds(owe, thread(), facts)).toBe(false);
-    expect(sectionOf(thread(), facts, rules, order)).toBe("needs-reply");
+    expect(sectionOf(thread(), facts, rules, order)).toBe("fyi");
     expect(sectionsToJudge(thread(), facts, rules, order)).toEqual(["owe"]);
   });
 
@@ -100,14 +100,14 @@ describe("judged Sections", () => {
     expect(sectionOf(thread(), yes, rules, order)).toBe("owe");
     expect(sectionsToJudge(thread(), yes, rules, order)).toEqual([]);
     const no = { ...facts, judged: { owe: 0.2 }, judgeThreshold: 0.7 };
-    expect(sectionOf(thread(), no, rules, order)).toBe("needs-reply");
+    expect(sectionOf(thread(), no, rules, order)).toBe("fyi");
     expect(sectionsToJudge(thread(), no, rules, order)).toEqual([]);
   });
 
   test("a Thread the conditions rule out is never asked about", () => {
     const other = thread({ group: "hiring" });
     expect(sectionsToJudge(other, facts, rules, order)).toEqual([]);
-    expect(sectionOf(other, facts, rules, order)).toBe("needs-reply");
+    expect(sectionOf(other, facts, rules, order)).toBe("fyi");
   });
 });
 

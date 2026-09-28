@@ -72,6 +72,12 @@ export interface SectionWhen extends JudgedWhen {
   notGroups?: string[] | undefined;
   /** The Thread has no Group at all. */
   ungrouped?: boolean | undefined;
+  /**
+   * The Thread has its arrival Judgments (true) or has none yet (false).
+   * With `true` the rule never holds on header guesses: a Thread not yet
+   * judged falls through to the next rule until the Judge has answered.
+   */
+  judged?: boolean | undefined;
 }
 
 /**
@@ -141,22 +147,32 @@ export interface SectionFacts {
 export const DEFAULT_JUDGED_THRESHOLD = 0.6;
 
 /**
+ * The ceiling on the automated and newsletter Judgments under which a shipped
+ * Section treats a Thread as written by a person for the user: shipment
+ * notices, one-time codes and payment receipts sit above it.
+ */
+export const DEFAULT_AUTOMATED_CEILING = 0.4;
+
+/**
  * The shipped defaults, matching the mock's four Sections in their order:
- * rows like any other, placed in the stream. Each pairs a header rule (what
- * decides before the judge answers) with a judged condition (what decides
- * once it has): Needs your reply is mail someone else wrote last, read or
- * not (reading a Thread does not answer it), or a Thread judged to need a
- * reply; Waiting is an ongoing exchange someone
- * else wrote last, or one judged waiting; Newsletters is list mail, or a
- * Thread judged a newsletter; For your information is the rest.
+ * rows like any other, placed in the stream. Needs your reply decides on the
+ * Judgments alone: a Thread judged to need a reply that is neither automated
+ * nor a newsletter, and nothing else. A Thread not judged yet is never put
+ * there on header guesses (a shipment notice or a one-time code is unread,
+ * from someone else and not list mail, yet needs no reply); it falls through
+ * to For your information until the Judge answers. Waiting pairs a header
+ * rule (an ongoing exchange someone else wrote last) with the waiting
+ * Judgment and, once judged, leaves automated mail out; Newsletters is list
+ * mail, or a Thread judged a newsletter; For your information is the rest.
  */
 export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
   {
     id: "needs-reply",
     when: {
-      lastFrom: "others",
-      bulk: false,
+      judged: true,
       needs_reply_at_least: DEFAULT_JUDGED_THRESHOLD,
+      automated_at_most: DEFAULT_AUTOMATED_CEILING,
+      newsletter_at_most: DEFAULT_AUTOMATED_CEILING,
     },
     placement: "stream",
     createdBy: "shipped",
@@ -168,6 +184,7 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
       minMessages: 2,
       bulk: false,
       waiting_at_least: DEFAULT_JUDGED_THRESHOLD,
+      automated_at_most: DEFAULT_AUTOMATED_CEILING,
     },
     placement: "stream",
     createdBy: "shipped",
@@ -289,6 +306,7 @@ export function judgedMatches(when: JudgedWhen, judgments: SectionJudgments): bo
  * header heuristics those stand in for (see SectionWhen).
  */
 export function sectionMatches(when: SectionWhen, thread: Thread, facts: SectionFacts): boolean {
+  if (when.judged !== undefined && Boolean(facts.judgments) !== when.judged) return false;
   const judged = facts.judgments && hasJudgedWhen(when) ? facts.judgments : null;
   if (judged) {
     if (!judgedMatches(when, judged)) return false;
