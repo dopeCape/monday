@@ -371,8 +371,44 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
   const loadRun = async (runId: Id): Promise<RunRow | null> =>
     (await db.query.workflowRuns.findFirst({ where: eq(workflowRuns.id, runId) })) ?? null;
 
+  /**
+   * Tells the Changes feed a Run moved (a `run` change), so an open client
+   * follows it Step by Step on its wake connection instead of polling. A
+   * feed failure is logged and never fails the Run.
+   */
+  const announce = async (runId: Id): Promise<void> => {
+    try {
+      const [r] = await db
+        .select({
+          workspaceId: workflowRuns.workspaceId,
+          workflowId: workflowRuns.workflowId,
+          status: workflowRuns.status,
+          currentStep: workflowRuns.currentStep,
+        })
+        .from(workflowRuns)
+        .where(eq(workflowRuns.id, runId))
+        .limit(1);
+      if (!r) return;
+      await mailstore.recordChange(db, {
+        workspaceId: r.workspaceId,
+        entityId: runId,
+        kind: "run",
+        payload: {
+          id: runId,
+          workflowId: r.workflowId,
+          status: r.status,
+          currentStep: r.currentStep,
+        },
+      });
+    } catch (error) {
+      log(`run ${runId}: the changes feed missed a move: ${String(error)}`);
+    }
+  };
+
   const patchRun = async (runId: Id, patch: Partial<RunRow>): Promise<void> => {
     await db.update(workflowRuns).set(patch).where(eq(workflowRuns.id, runId));
+    // Only a move a client shows: the status, the Step it is on, or an answer given.
+    if ("status" in patch || "currentStep" in patch || "decision" in patch) await announce(runId);
   };
 
   const writeStep = async (
@@ -407,6 +443,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
           at: now(),
         },
       });
+    await announce(runId);
   };
 
   /* ------------------------------ Threads for triggers and templates ------------------------------ */
@@ -996,6 +1033,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       .returning();
     const run = inserted[0];
     if (!run) return null;
+    await announce(run.id);
     await enqueueStep(run, doc, 0);
     return run;
   };
@@ -1732,7 +1770,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
           and(
             eq(workflowRuns.workspaceId, workspaceId),
             ...(opts.workflowId ? [eq(workflowRuns.workflowId, opts.workflowId)] : []),
-            ...(opts.status ? [eq(workflowRuns.status, opts.status)] : []),
+            ...(typeof opts.status === "string"
+              ? [eq(workflowRuns.status, opts.status)]
+              : opts.status?.length
+                ? [inArray(workflowRuns.status, [...opts.status])]
+                : []),
           ),
         )
         .orderBy(desc(workflowRuns.startedAt))

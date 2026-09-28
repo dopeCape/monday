@@ -20,6 +20,12 @@ export interface NavItem {
   label: string;
   icon?: IconComponent | undefined;
   count?: number | undefined;
+  /** The count asks for the user (approvals waiting), drawn as a pill instead of a quiet number. */
+  attention?: boolean | undefined;
+  /** Something is going on behind the entry (a Workflow Run): a small breathing dot. */
+  live?: boolean | undefined;
+  /** The tooltip, saying what the dot or the count means: "2 running now". */
+  title?: string | undefined;
 }
 
 export interface NavWorkspace {
@@ -96,11 +102,15 @@ function Item({ item, on, sub, onSelect }: ItemProps) {
       type="button"
       className={cx("nav-item", on && "on", sub && "sub")}
       aria-current={on ? "page" : undefined}
+      title={item.title}
+      aria-label={item.title ? `${item.label}, ${item.title}` : undefined}
+      data-key={item.key}
       onClick={() => onSelect?.(item.key)}
     >
       {item.icon ? <Icon icon={item.icon} /> : null}
       <span>{item.label}</span>
-      {item.count ? <span className="n">{item.count}</span> : null}
+      {item.live ? <span className="live-dot" aria-hidden="true" /> : null}
+      {item.count ? <span className={cx("n", item.attention && "attn")}>{item.count}</span> : null}
     </button>
   );
 }

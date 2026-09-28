@@ -696,12 +696,19 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           `/workflows/${encodeURIComponent(workflowId)}/approvals`,
           json("POST", { step, granted }),
         ),
-      runs: (workspaceId: Id, options: { workflowId?: Id; status?: RunView["status"] } = {}) =>
+      /** Runs newest first; `status` names one, or several (every live Run: queued, running, paused). */
+      runs: (
+        workspaceId: Id,
+        options: {
+          workflowId?: Id;
+          status?: RunView["status"] | readonly RunView["status"][];
+        } = {},
+      ) =>
         request<{ runs: RunView[] }>(
           `/workflows/runs?${new URLSearchParams({
             workspace: workspaceId,
             ...(options.workflowId ? { workflow: options.workflowId } : {}),
-            ...(options.status ? { status: options.status } : {}),
+            ...(options.status?.length ? { status: [options.status].flat().join(",") } : {}),
           })}`,
         ).then((r) => r.runs),
       runOf: (runId: Id) => request<RunView>(`/workflows/runs/${encodeURIComponent(runId)}`),

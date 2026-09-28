@@ -13,7 +13,8 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
 ## The list
 
 - One row per Workflow, switched-on first, then by name: the trigger's glyph, the name, the trigger in plain words ("Mail arrives in Hiring › Candidates", "On a schedule: Fridays 16:00"), a status pill, the last run ("Last run 9 min ago" or "Not run yet"), runs today, and the last Runs as outcome dots, oldest first.
-- Status, in this order: Locked (the AI level), Paused (switched off), "n waiting" (a Run waits for an approval), Failing (the newest finished Run failed), On.
+- Status, in this order: Locked (the AI level), Paused (switched off), "n waiting" (a Run waits for an approval), Running (a Run is going), Failing (the newest finished Run failed), On.
+- While one of its Runs is going or waiting, the row says which Step it is on under the trigger ("Step 2 of 4: Notion"), with a spinner, or a raised hand while it waits.
 - The selection stays on a Workflow when a change reorders the list. The last row starts a new Workflow through the agent.
 - The page head's "Connect a tool" opens the MCP connect dialog (`settings.md`, "MCP servers and Connect a tool"); a connected server's tools become Steps. It is hidden while locked.
 - No Workflows: "Describe the next one" with the example sentences (`strings.workflows.examples`); each hands "Write a new workflow: …" to the composer.
@@ -27,10 +28,26 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
   - A Step card: "Step n · kind" ("Post to Slack"), the Step's name, one plain sentence ("Posts to #hiring on Slack"), its fields (message, file name, Notion properties, webhook body, an agent Step's instructions, the tools it may use, what it reports, its Budget) with template holes named ("name from Extract", "the subject"), and the approval it runs under: Asks first (anything that leaves the mailbox, or an agent Step whose tools can), Applies with Undo, Changes nothing, or Runs on your standing approval. A Step's own failure policy shows as one line. `workflows.page.step_details` hides the fields.
   - A condition card: dashed, "Goes on only if …" in words, and both ways: "If yes" and "If not, the run ends here" or "If not, skips <Step>". The Steps it guards sit indented under its "if yes" rail.
 - Standing approvals are listed under the flow with Revoke.
-- Recent runs (`workflows.page.runs_shown`): each with its outcome glyph, subject, last line and time, and the version when it ran under an older one. Picking one lays that Run over the flow: each card shows Done, Failed, Waiting for you, Skipped or Running with its line, Steps it never reached read "Not reached", and a bar says which Run is shown with "Show the workflow" to go back.
+- Recent runs (`workflows.page.runs_shown`): each with its outcome glyph, subject, last line and time, and the version when it ran under an older one. Picking one lays that Run over the flow: each card shows Done, Failed, Waiting for your approval, Skipped or Running with its line, Steps it never reached read "Not reached", and a bar says which Run is shown with "Show the workflow" to go back.
+- A going or waiting Run lays itself over the flow without being picked, and follows its Steps as they happen: the Steps done are checked, the Step it is on is marked Running and its card breathes (and stays still under reduced motion or `appearance.transitions` off), the Step it waits on reads "Waiting for your approval". The bar says "Running now on <subject>: step n of m, <Step>" or "Waiting for your approval on …"; "Show the workflow" puts it away until the next Run.
 - A Run waiting for an approval shows its approval card above the flow: the Step's exact payload, Approve, "Always allow this step" (a Standing approval) and Decline.
 - Dry run shows what the Workflow would have done over recent matching Threads, Thread by Thread, with the judge's answers; nothing is applied.
-- The page refreshes every `workflows.page.refresh_seconds`.
+- The page refreshes every `workflows.page.refresh_seconds`. Live Runs come from the window's own tracker (below), so a going Run's Steps show without waiting for it.
+
+## Live Runs
+
+- The window keeps each Workspace's live Runs (queued, running, paused) from one request (`GET /workflows/runs?status=queued,running,paused`). The Server records a `run` change on the Changes feed whenever a Run is made, moves to a Step, pauses, is answered or finishes, and the Store's existing wake connection tells the window to read them again: no stream or long-poll of its own.
+- Only while a Run is queued or running, the window also reads them every `workflows.live.poll_seconds` (0 relies on the feed alone). A Run paused on an approval is never polled.
+- Beside Workflows in the nav (and on the rail's icon), a small breathing dot while a Run is going, its tooltip "n running now".
+
+## Approvals
+
+- Every approval waiting for the user is in one queue: a Workflow Run paused at a Step that asks, a call waiting in the current agent Session, and an external caller's call parked on the owner (`external-mcp.md`). Hidden at the AI level Just mail.
+- It opens over any screen, from "Approvals" under Automation in the nav (on the rail too), from its shortcut (`approvals.open`, Ctrl or Cmd+Shift+A in every keymap) and from the palette ("Approvals waiting for you"). Escape or a click outside closes it.
+- Each item says where it comes from ("Candidate intake · Step 4: Slack", "The agent, in your current session"), since when it waits, what it will do (the tool and what it names, with the exact payload as on the Run's card) and the Thread it is about, which opens the Thread; a Run's item opens the Run on its Workflow's flow, an external one opens its Session in the agent.
+- Approve, "Always allow this step" (where the Step has no Standing approval yet) and Decline answer through the same paths as where the approval started (ADR 0002): a Run through `POST /workflows/runs/:id/approvals`, a Session call through the Session's approval stream. An external call is answered in its Session. The item leaves at once; a failure says so and keeps it. No approval is undoable here, as nowhere else: an always-ask call has no Undo.
+- The count of approvals waiting is a pill beside "Approvals" in the nav, a badge on the rail, in front of the window title ("(2) Inbox · monday") and on the dock or taskbar badge where the system shows one (`workflows.approvals.window_badge`).
+- When a Run starts waiting on a Step that asks, the user is told once for that Step (`notifications.workflow_approvals`, under `notifications.enabled`): "<Workflow> is waiting for your approval", "Step n, <Step>: <what it will do>". A desktop notification while the window is elsewhere or shows another Account; a note in the window, with a button to the queue, while it shows this one. A Step that was already waiting more than `notifications.workflow_approvals_recent_minutes` stays quiet. The desktop notification cannot open the queue when clicked: the notification plugin reports no clicks on desktop, so a click only brings the app forward where the system does that.
 
 ## Run history
 
@@ -67,4 +84,4 @@ Left for later:
 
 ## Strings
 
-Every user-visible string is a Setting keyed by name: `strings.workflows.*`, `strings.workflows.flow.*`, `strings.agent.preview_workflow.*`, and the shared `strings.ai.lock.*`.
+Every user-visible string is a Setting keyed by name: `strings.workflows.*`, `strings.workflows.flow.*`, `strings.approvals.*`, `strings.notifications.workflow_approval.*`, `strings.agent.preview_workflow.*`, and the shared `strings.ai.lock.*`.

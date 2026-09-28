@@ -16,6 +16,7 @@ import {
   Icon,
   NavSidebar,
   Rail,
+  Toast,
   type WorkspaceMenuAccount,
   type WorkspaceSwitcher,
 } from "@monday/ui";
@@ -47,18 +48,21 @@ import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
 import { useLocalWorker } from "./agent/useLocalWorker.ts";
+import { ApprovalsSheet } from "./approvals/ApprovalsSheet.tsx";
+import type { ApprovalNotice } from "./approvals/notices.ts";
+import { type RunFeed, useApprovals } from "./approvals/useApprovals.ts";
 import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
 import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
 import { chordLabel } from "./keyboard/keymaps.ts";
-import { useActiveKeymap } from "./keyboard/useKeymap.ts";
+import { useActiveKeymap, useKeymap } from "./keyboard/useKeymap.ts";
 import type { AccountView } from "./platform/api.ts";
 import {
   type DeviceProviderKeys,
   deviceProviderKeys,
   reconcileSharedKeys,
 } from "./platform/providerKeys.ts";
-import { platform } from "./platform/tauri.ts";
+import { platform, platformNotifier } from "./platform/tauri.ts";
 import { Calendar } from "./screens/Calendar.tsx";
 import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { dayKey } from "./screens/calendar/dates.ts";
@@ -68,6 +72,7 @@ import { Scheduled } from "./screens/compose/Scheduled.tsx";
 import { composeStrings } from "./screens/compose/strings.ts";
 import { useCompose } from "./screens/compose/useCompose.ts";
 import { Drafts, openDrafts } from "./screens/Drafts.tsx";
+import { windowInFront } from "./screens/first-sync/ready.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { type FolderKey, isStreamFolder } from "./screens/inbox/folders.ts";
@@ -88,7 +93,7 @@ import { useIsActivePane } from "./shell/active.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
 import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
-import { useWindowTitle, windowTitle } from "./shell/title.ts";
+import { titleWithWaiting, useWindowBadge, useWindowTitle, windowTitle } from "./shell/title.ts";
 import { useWorkspace } from "./workspace.tsx";
 
 export interface AppProps {
@@ -126,6 +131,11 @@ export interface AppProps {
   calendar?: CalendarSource | undefined;
   /** Where the fate of the Agent's calendar drafts is kept; the Cache in the app, memory by default. */
   draftMemory?: DraftMemory | undefined;
+  /**
+   * Where `run` changes arrive (the Workspace's Store): live Runs and the
+   * Approvals queue follow them. Absent, they are read on start only.
+   */
+  runFeed?: RunFeed | undefined;
 }
 
 /** Detection as the Settings screens and onboarding read it, from what the Device found. */
@@ -171,6 +181,7 @@ const PROVIDER_MARK: Record<string, ReactNode> = {
 };
 
 const NO_FOLDER: readonly unknown[] = [];
+const NO_SELECTION: readonly string[] = [];
 
 const defaultComposer = fixtureComposer();
 const noSubscribe = () => () => {};
@@ -193,6 +204,7 @@ export function App({
   keys: keysProp,
   calendar,
   draftMemory,
+  runFeed,
 }: AppProps) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -244,7 +256,12 @@ export function App({
   const [bottomOpen, setBottomOpen] = useState(false);
   const [bottomText, setBottomText] = useState("");
   /** Which Workflows view "workflows" or "workflows:runs" asked for; each request remounts the page on it. */
-  const [workflowsView, setWorkflowsView] = useState<{ view: WorkflowsView; n: number }>({
+  const [workflowsView, setWorkflowsView] = useState<{
+    view: WorkflowsView;
+    n: number;
+    /** A Run to lay over its Workflow's flow on arrival (the Approvals queue's Open run). */
+    run?: { workflowId: string; runId: string };
+  }>({
     view: "list",
     n: 0,
   });
@@ -364,38 +381,7 @@ export function App({
   );
   const runtime = runtimeLine(agent.runtimeInfo, shell.settings, ws.address, runtimes);
   const agentStrings = useMemo(() => composerStrings(shell.settings), [shell.settings]);
-  // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
-  // Agent's approve_workflow_step tool then shows the card in the composer.
-  const [pausedRuns, setPausedRuns] = useState<PausedRunChip[]>([]);
   const workflowsClient = workflowsApi ?? (shell.server ? shell.api.workflows : null);
-  const refreshSeconds = shell.settings["workflows.page.refresh_seconds"];
-  useEffect(() => {
-    if (!workflowsClient) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const [runs, list] = await Promise.all([
-          workflowsClient.runs(ws.id, { status: "paused" }),
-          workflowsClient.list(ws.id),
-        ]);
-        if (cancelled) return;
-        setPausedRuns(
-          runs.map((r) => ({
-            workflowName: list.find((w) => w.id === r.workflowId)?.name ?? r.workflowId,
-            stepName: r.steps.find((s) => s.index === r.waitingStep)?.name ?? "waiting",
-          })),
-        );
-      } catch {
-        if (!cancelled) setPausedRuns([]);
-      }
-    };
-    void load();
-    const timer = refreshSeconds > 0 ? setInterval(() => void load(), refreshSeconds * 1000) : null;
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [workflowsClient, refreshSeconds, ws.id]);
   // External callers' calls parked on an approval (slice 19): the Workspace's
   // external feed while the client is open, which is also how the Server knows
   // a client is open; each becomes a chip that opens the caller's Session.
@@ -421,6 +407,42 @@ export function App({
       stop();
     };
   }, [externalClient, ws.id]);
+  // Live Workflow Runs and every approval waiting (approvals/): woken by the
+  // Store's Changes feed, a notice once per waiting Step, the nav's running
+  // dot and count, and the Approvals queue (activePane is read above, for the worker).
+  const activePaneRef = useRef(activePane);
+  activePaneRef.current = activePane;
+  const [approvalNote, setApprovalNote] = useState<ApprovalNotice | null>(null);
+  const tellApproval = useCallback((notice: ApprovalNotice) => {
+    // In front and showing this Workspace: a note in the window; otherwise the desktop.
+    if (activePaneRef.current && windowInFront()) setApprovalNote(notice);
+    else void platformNotifier.notify(notice.title, notice.body).catch(() => {});
+  }, []);
+  const approvals = useApprovals({
+    api: workflowsClient,
+    workspaceId: ws.id,
+    feed: runFeed,
+    settings: shell.settings,
+    session: agent.waiting,
+    external: externalPending,
+    tell: tellApproval,
+  });
+  const [approvalsOpen, setApprovalsOpen] = useState(
+    () => new URLSearchParams(location.search).get("overlay") === "approvals",
+  );
+  // Workflow Runs paused at a Step that asks surface as chips (slice 16); the
+  // Agent's approve_workflow_step tool then shows the card in the composer.
+  const liveRuns = approvals.live;
+  const pausedRuns = useMemo<PausedRunChip[]>(
+    () =>
+      liveRuns.runs
+        .filter((r) => r.status === "paused")
+        .map((r) => ({
+          workflowName: liveRuns.workflows.get(r.workflowId)?.name ?? r.workflowId,
+          stepName: r.steps.find((s) => s.index === r.waitingStep)?.name ?? "waiting",
+        })),
+    [liveRuns],
+  );
   const chips = useMemo(
     () =>
       suggestionsFor({
@@ -582,9 +604,13 @@ export function App({
         sections: shell.settings["sections.rules"],
         sectionOrder: shell.settings["sections.order"],
         sectionsOff: !sectionsOn,
+        automation: { running: approvals.running, approvals: aiOff ? null : approvals.count },
         strings: shell.settings,
       }),
     [
+      approvals.running,
+      approvals.count,
+      aiOff,
       sectionsOn,
       ws.address,
       online,
@@ -687,10 +713,16 @@ export function App({
       } else if (target === "search") openSearch();
       else if (target === "agent") askHere();
       else if (target === "routing") setActive("routing");
+      else if (target === "approvals") setApprovalsOpen(true);
       else if (target === "workflows" || target === "workflows:runs") {
         // Run history is a view of the Workflows page, never a Settings section.
         const view: WorkflowsView = target === "workflows:runs" ? "history" : "list";
         setWorkflowsView((v) => ({ view, n: v.n + 1 }));
+        setActive("workflows");
+      } else if (target.startsWith("workflow-run:")) {
+        // One Run laid over its Workflow's flow: "workflow-run:<workflow id>:<run id>".
+        const [workflowId = "", runId = ""] = target.slice("workflow-run:".length).split(":");
+        setWorkflowsView((v) => ({ view: "list", n: v.n + 1, run: { workflowId, runId } }));
         setActive("workflows");
       } else if (target === "calendar") setActive("calendar");
       else if (target.startsWith("calendar:")) {
@@ -879,7 +911,26 @@ export function App({
     if (active === "settings") return s["strings.nav.settings"];
     return s["strings.nav.inbox"];
   })();
-  useWindowTitle(windowTitle(shell.settings["strings.window.title"], screenName));
+  // The approvals waiting ride in the title and the dock badge (workflows.approvals.window_badge).
+  const badge = shell.settings["workflows.approvals.window_badge"] && !aiOff ? approvals.count : 0;
+  useWindowTitle(
+    titleWithWaiting(
+      shell.settings["strings.window.title_waiting"],
+      windowTitle(shell.settings["strings.window.title"], screenName),
+      badge,
+    ),
+  );
+  useWindowBadge(badge);
+  // The Approvals queue opens from any screen (approvals.open, mod+shift+a by default).
+  useKeymap(
+    {
+      "approvals.open": () => {
+        if (aiOff) return false;
+        setApprovalsOpen((open) => !open);
+      },
+    },
+    { pane: "list", focus: null, selection: NO_SELECTION },
+  );
 
   if (active === "onboarding") {
     // The dev server's fixture state: the conversation from the mock, with no Server behind it.
@@ -920,6 +971,7 @@ export function App({
   // The nav's Workflows entry always opens the Workflow list.
   const selectNav = (key: string) => {
     if (key === "workflows") navigate("workflows");
+    else if (key === "approvals") setApprovalsOpen((open) => !open);
     else setActive(key);
   };
   const cols: string[] = [];
@@ -1035,6 +1087,9 @@ export function App({
       <Workflows
         key={`screen-workflows-${workflowsView.n}`}
         initialView={workflowsView.view}
+        initialRun={workflowsView.run}
+        live={approvals.live}
+        onDecided={approvals.refresh}
         workspaceId={ws.id}
         api={workflowsApi}
         groupName={(id) => {
@@ -1148,6 +1203,54 @@ export function App({
           )}
           undoLabel={shell.settings["strings.inbox.undo"]}
         />
+        {approvalsOpen && !aiOff ? (
+          <ApprovalsSheet
+            items={approvals.items}
+            strings={shell.settings}
+            now={now}
+            onDecide={async (item, decision, standing) => {
+              if (item.kind === "run") await approvals.decideRun(item.run, decision, standing);
+              else if (item.kind === "session") {
+                // The Session's own approval stream resumes the paused turn (ADR 0002).
+                if (decision === "approved") await agent.approve(item.call.id);
+                else await agent.decline(item.call.id);
+              }
+            }}
+            onOpenRun={(item) => {
+              setApprovalsOpen(false);
+              navigate(`workflow-run:${item.run.workflowId}:${item.run.id}`);
+            }}
+            onOpenThread={(threadId) => {
+              setApprovalsOpen(false);
+              navigate(`thread:${threadId}`);
+            }}
+            onOpenSession={(item) => {
+              setApprovalsOpen(false);
+              const session = item.kind === "external" ? item.sessionId : null;
+              if (session) void agent.openSession(session);
+              askHere();
+            }}
+            onClose={() => setApprovalsOpen(false)}
+          />
+        ) : null}
+        {approvalNote ? (
+          <Toast
+            key={approvalNote.key}
+            className="ready-note"
+            text={`${approvalNote.title}. ${approvalNote.body}`}
+            undoLabel={shell.settings["strings.nav.approvals"]}
+            undoKey={chordLabel(
+              composeKeymap["approvals.open"],
+              typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+            )}
+            onUndo={() => {
+              setApprovalNote(null);
+              setApprovalsOpen(true);
+            }}
+            ms={shell.settings["notifications.note_ms"]}
+            onExpire={() => setApprovalNote(null)}
+          />
+        ) : null}
       </div>
     </ComposerMentionsContext.Provider>
   );

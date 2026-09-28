@@ -319,7 +319,7 @@ export function fixtureWorkflowsApi(): WorkflowsApi & { calls: string[] } {
       runs.filter(
         (r) =>
           (!options.workflowId || r.workflowId === options.workflowId) &&
-          (!options.status || r.status === options.status),
+          (!options.status || [options.status].flat().includes(r.status)),
       ),
     runOf: async (runId) => {
       const found = runs.find((r) => r.id === runId);

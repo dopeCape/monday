@@ -41,6 +41,7 @@ import {
   FolderIcon,
   FunnelSimpleIcon,
   GearIcon,
+  HandPalmIcon,
   KeyboardIcon,
   LayoutIcon,
   MagnifyingGlassIcon,
@@ -104,6 +105,7 @@ const ICONS: Record<string, IconComponent> = {
   undo: ArrowsOutLineVerticalIcon,
   ask: CommandIcon,
   palette: KeyboardIcon,
+  approvals: HandPalmIcon,
   view: LayoutIcon,
   inbox: TrayIcon,
   group: UsersThreeIcon,
@@ -176,6 +178,8 @@ export function paletteActions(
   const out: PaletteAction[] = [];
   for (const action of KEY_ACTIONS) {
     if (!inScope(action, scope)) continue;
+    // The App's own: the palette offers it under "Go to", where it opens from any screen.
+    if (action === "approvals.open") continue;
     const view = /^view\.(\d)$/.exec(action);
     const label = view
       ? fill(t("strings.action.view"), { n: view[1] ?? "" })
@@ -210,6 +214,8 @@ export function paletteNavigation(
   settings: Settings,
   mac: boolean,
   groups: readonly Group[],
+  /** The active keymap, for the Approvals queue's shortcut beside its row. */
+  keymap?: Keymap | undefined,
 ): PaletteNav[] {
   const t = (k: string) => (k in settings ? String(settings[k as keyof Settings]) : k);
   const out: PaletteNav[] = [];
@@ -277,6 +283,15 @@ export function paletteNavigation(
     label: t("strings.palette.nav.run_history"),
     icon: "workflow",
   });
+  // The Approvals queue opens over whatever screen is open (just mail has nothing that asks).
+  if (settings["ai.level"] !== "off") {
+    out.push({
+      target: "approvals",
+      label: t("strings.palette.nav.approvals"),
+      icon: "approvals",
+      ...(keymap ? { kbd: chordLabel(keymap["approvals.open"], mac) } : {}),
+    });
+  }
   out.push({ target: "calendar", label: t("strings.palette.nav.calendar"), icon: "calendar" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
   // Set me up: onboarding again, from the three choices (docs/spec/onboarding.md, "Later and again").
@@ -382,8 +397,8 @@ export function Palette({
     ];
   }, [query, now, settings]);
   const navigation = useMemo(
-    () => paletteNavigation(settings, mac, groups),
-    [settings, mac, groups],
+    () => paletteNavigation(settings, mac, groups, keymap),
+    [settings, mac, groups, keymap],
   );
   const strings = useMemo<PaletteStrings>(
     () => ({

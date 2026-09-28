@@ -42,9 +42,11 @@ import {
   WorkflowStatus,
 } from "@monday/ui";
 import {
+  CircleNotchIcon,
   CloudIcon,
   CodeIcon,
   FlaskIcon,
+  HandPalmIcon,
   PencilSimpleIcon,
   PlayIcon,
   PlugsConnectedIcon,
@@ -52,8 +54,9 @@ import {
   TerminalWindowIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cliLabel } from "../agent/runtimes/index.ts";
+import type { LiveRunsSnapshot } from "../approvals/live-runs.ts";
 import { openExternal } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
@@ -84,6 +87,32 @@ export interface WorkflowsProps {
   agent?: ReactNode | undefined;
   /** Which view opens first: the Workflow list (default) or Run history. */
   initialView?: WorkflowsView | undefined;
+  /** A Run to lay over its Workflow's flow on arrival (the Approvals queue's Open run). */
+  initialRun?: { workflowId: string; runId: string } | undefined;
+  /**
+   * The Workspace's live Runs (approvals/live-runs.ts), woken by the Changes
+   * feed: a going Run's Steps show on the flow as they happen, without the
+   * page polling for them.
+   */
+  live?: Pick<LiveRunsSnapshot, "runs" | "loaded"> | undefined;
+  /** Told after the page answered an approval, so the live Runs are read again at once. */
+  onDecided?: (() => void) | undefined;
+}
+
+const LIVE = new Set<RunView["status"]>(["queued", "running", "paused"]);
+
+/** The page's Runs with the live ones laid over them: newer states win, new Runs come first. */
+export function withLive(
+  runs: readonly RunView[],
+  live: readonly RunView[] | undefined,
+): RunView[] {
+  if (!live?.length) return [...runs];
+  const byId = new Map(live.map((r) => [r.id, r]));
+  const known = new Set(runs.map((r) => r.id));
+  const fresh = live.filter((r) => !known.has(r.id));
+  return [...fresh, ...runs.map((r) => byId.get(r.id) ?? r)].sort((a, b) =>
+    b.startedAt.localeCompare(a.startedAt),
+  );
 }
 
 /** The page's two views: the Workflows with their flows, and every Run newest first. */
@@ -129,6 +158,26 @@ function runDetail(run: RunView, s: Strings): string {
   return last?.detail ?? s[`status.${run.status}`] ?? run.status;
 }
 
+/** The Step a live Run is on, by its position, name and the Workflow's Step count. */
+function liveStep(run: RunView, w: WorkflowView): { n: number; total: number; step: string } {
+  const index = run.status === "paused" ? (run.waitingStep ?? run.currentStep) : run.currentStep;
+  const step = run.steps.find((st) => st.index === index)?.name ?? w.steps[index]?.name ?? w.name;
+  return { n: index + 1, total: Math.max(w.steps.length, run.steps.length, index + 1), step };
+}
+
+/** A live Run in one line: the Step it is on, or what it waits for. */
+function liveLine(run: RunView, w: WorkflowView, s: Strings): string {
+  const subject = run.subject || (s["live.no_subject"] ?? "");
+  if (run.status === "queued") return run.error ?? fill(s["live.queued"] ?? "", { subject });
+  const at = liveStep(run, w);
+  return fill(s[run.status === "paused" ? "live.waiting" : "live.running"] ?? "", {
+    subject,
+    n: at.n,
+    total: at.total,
+    step: at.step,
+  });
+}
+
 export function Workflows({
   workspaceId: workspaceIdProp,
   api: apiOverride,
@@ -138,6 +187,9 @@ export function Workflows({
   now: nowProp,
   agent,
   initialView = "list",
+  initialRun,
+  live,
+  onDecided,
 }: WorkflowsProps) {
   const shell = useShell();
   const current = useWorkspace();
@@ -160,10 +212,14 @@ export function Workflows({
 
   const [view, setView] = useState<WorkflowsView>(initialView);
   const [workflows, setWorkflows] = useState<WorkflowView[] | null>(null);
-  const [runs, setRuns] = useState<RunView[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pageRuns, setRuns] = useState<RunView[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(initialRun?.workflowId ?? null);
   /** The Run whose Step results lay over the flow; none shows the Workflow as written. */
-  const [shownRun, setShownRun] = useState<string | null>(null);
+  const [shownRun, setShownRun] = useState<string | null>(initialRun?.runId ?? null);
+  /** A live Run the user put away ("Show the workflow"): the flow stops following it. */
+  const [putAway, setPutAway] = useState<string | null>(null);
+  /** Runs answered here, by the approval answered: their card goes before the Server moves on. */
+  const [answered, setAnswered] = useState<ReadonlyMap<string, string | null>>(new Map());
   const [waitingCard, setWaitingCard] = useState<ActivityRecord | null>(null);
   const [dry, setDry] = useState<DryRunPreview | null>(null);
   const [source, setSource] = useState(false);
@@ -208,6 +264,18 @@ export function Workflows({
     return () => clearInterval(id);
   }, [every, refresh]);
 
+  // The live Runs lay over the page's own as they move; when one starts or
+  // finishes the page reads its list again (last run, today's count, dots).
+  const liveRuns = live?.runs;
+  const runs = useMemo(() => withLive(pageRuns, liveRuns), [pageRuns, liveRuns]);
+  const liveIds = (liveRuns ?? []).map((r) => r.id).join(",");
+  const lastLiveIds = useRef(liveIds);
+  useEffect(() => {
+    if (lastLiveIds.current === liveIds) return;
+    lastLiveIds.current = liveIds;
+    void refresh();
+  }, [liveIds, refresh]);
+
   const list = useMemo(() => {
     // Switched on first, then by name: the list reads the same on every refresh.
     return [...(workflows ?? [])].sort(
@@ -225,8 +293,16 @@ export function Workflows({
         .filter((r) => r.workflowId === selected.id)
         .slice(0, settings["workflows.page.runs_shown"])
     : [];
-  const overlay = selectedRuns.find((r) => r.id === shownRun) ?? null;
-  const waitingRun = selectedRuns.find((r) => r.status === "paused") ?? null;
+  const picked = selectedRuns.find((r) => r.id === shownRun) ?? null;
+  // A going or waiting Run shows on the flow by itself, until the user picks another or puts it away.
+  const liveRun = selectedRuns.find((r) => LIVE.has(r.status) && r.id !== putAway) ?? null;
+  const overlay = picked ?? (locked ? null : liveRun);
+  const waitingRun =
+    selectedRuns.find(
+      (r) =>
+        r.status === "paused" &&
+        !(answered.has(r.id) && answered.get(r.id) === r.waitingActivityId),
+    ) ?? null;
 
   // The waiting Step's Activity row carries the card's preview.
   useEffect(() => {
@@ -264,7 +340,12 @@ export function Workflows({
 
   const toggle = (w: WorkflowView, enabled: boolean) => void act(() => api.enable(w.id, enabled));
   const decide = (run: RunView, decision: "approved" | "declined", standing: boolean) =>
-    void act(() => api.decide(run.id, decision, standing));
+    void act(async () => {
+      await api.decide(run.id, decision, standing);
+      // The Run stays paused on the Server until its Step runs again; its card goes now.
+      setAnswered((a) => new Map(a).set(run.id, run.waitingActivityId));
+      onDecided?.();
+    });
   const dryRun = (w: WorkflowView) =>
     void act(async () => {
       setDry(await api.dryRun(w.id));
@@ -334,6 +415,21 @@ export function Workflows({
   const loading = workflows === null && !loadError;
   const empty = workflows !== null && list.length === 0;
   const status = (w: WorkflowView) => workflowStatus(w, runs, locked);
+  /** A list row's line while one of its Runs is going or waiting: the Step it is on. */
+  const rowLive = (w: WorkflowView): ReactNode => {
+    if (locked) return null;
+    const run = runs.find(
+      (r) => r.workflowId === w.id && (r.status === "running" || r.status === "paused"),
+    );
+    if (!run) return null;
+    const at = liveStep(run, w);
+    return (
+      <span className="wfx-row-live" data-state={run.status === "paused" ? "waiting" : "running"}>
+        <Icon icon={run.status === "paused" ? HandPalmIcon : CircleNotchIcon} />
+        <span>{fill(s["live.row"] ?? "", at)}</span>
+      </span>
+    );
+  };
 
   const lock = locked ? (
     <LevelLock
@@ -465,6 +561,7 @@ export function Workflows({
                             />
                           </span>
                           <span className="wfx-row-trig">{trig?.title}</span>
+                          {rowLive(w)}
                           <span className="wfx-row-foot">
                             <span>
                               {w.lastRunAt
@@ -667,14 +764,32 @@ export function Workflows({
                   ) : null}
                   <h3 className="wfx-h">{s.flow_title}</h3>
                   {overlay ? (
-                    <div className="wfx-showing" role="status">
+                    <div
+                      className="wfx-showing"
+                      role="status"
+                      data-live={LIVE.has(overlay.status) ? overlay.status : undefined}
+                    >
+                      {LIVE.has(overlay.status) ? (
+                        <Icon
+                          icon={overlay.status === "paused" ? HandPalmIcon : CircleNotchIcon}
+                          className="wfx-live-glyph"
+                        />
+                      ) : null}
                       <span>
-                        {fill(s.showing_run ?? "", {
-                          subject: runTitle(overlay, s),
-                          when: ago(overlay.startedAt, now),
-                        })}
+                        {LIVE.has(overlay.status)
+                          ? liveLine(overlay, selected, s)
+                          : fill(s.showing_run ?? "", {
+                              subject: runTitle(overlay, s),
+                              when: ago(overlay.startedAt, now),
+                            })}
                       </span>
-                      <Btn sm onClick={() => setShownRun(null)}>
+                      <Btn
+                        sm
+                        onClick={() => {
+                          if (LIVE.has(overlay.status)) setPutAway(overlay.id);
+                          setShownRun(null);
+                        }}
+                      >
                         <Icon icon={XIcon} /> {s.hide_run}
                       </Btn>
                     </div>
@@ -717,7 +832,13 @@ export function Workflows({
                       }))}
                       emptyLabel={s.never_ran ?? "Not run yet"}
                       selectedId={overlay?.id ?? null}
-                      onSelect={(id) => setShownRun(id === shownRun ? null : id)}
+                      onSelect={(id) => {
+                        // Picking the Run on show puts it away; any other shows instead.
+                        if (id === overlay?.id) {
+                          if (LIVE.has(overlay.status)) setPutAway(id);
+                          setShownRun(null);
+                        } else setShownRun(id);
+                      }}
                     />
                   </SideCard>
                   <p className="wfx-where faint">

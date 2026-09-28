@@ -9,22 +9,29 @@
 //   POST   /workflows/:id/dry-run    {recent?}         -> DryRunPreview, nothing applied
 //   POST   /workflows/:id/run        {threadId?}       -> RunView (202), a manual Run
 //   POST   /workflows/:id/approvals  {step, granted}   -> WorkflowView, a Standing approval
-//   GET    /workflows/runs?workspace=&workflow=&status= {runs: RunView[]}, newest first
+//   GET    /workflows/runs?workspace=&workflow=&status= {runs: RunView[]}, newest first;
+//                                                      status may list several: queued,running,paused
 //   GET    /workflows/runs/:id                         RunView, or 404
 //   GET    /workflows/runs/:id/activity                {activity: ActivityRecord[]}, oldest first
 //   POST   /workflows/runs/:id/approvals {decision, standing?} -> RunView, resumes the Run
 
-import { workflowInputSchema } from "@monday/shared";
+import { type RunStatus, workflowInputSchema } from "@monday/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
 import type { Workflows } from "../workflows/index.ts";
 import { parseBody } from "./validate.ts";
 
+const runStatus = z.enum(["queued", "running", "paused", "done", "failed"]);
 const workspaceQuery = z.object({
   workspace: z.string().min(1),
   workflow: z.string().min(1).optional(),
-  status: z.enum(["queued", "running", "paused", "done", "failed"]).optional(),
+  // One status, or several comma-separated: "queued,running,paused" is every live Run.
+  status: z
+    .string()
+    .transform((s) => s.split(",").filter(Boolean))
+    .pipe(z.array(runStatus).min(1))
+    .optional(),
 });
 const createBody = z.object({ workspace: z.string().min(1) }).and(workflowInputSchema);
 const enableBody = z.object({ enabled: z.boolean() });
@@ -83,7 +90,9 @@ export function workflowRoutes(workflows: Workflows): Hono<AppEnv> {
     return c.json({
       runs: await workflows.runs(q.workspace, {
         ...(q.workflow ? { workflowId: q.workflow } : {}),
-        ...(q.status ? { status: q.status } : {}),
+        ...(q.status
+          ? { status: q.status.length === 1 ? (q.status[0] as RunStatus) : q.status }
+          : {}),
       }),
     });
   });

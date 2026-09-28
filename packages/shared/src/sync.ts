@@ -229,7 +229,21 @@ export type ChangeKind =
   | "calendar"
   | "event"
   | "invite"
-  | "settings";
+  | "settings"
+  | "run";
+
+/**
+ * A Workflow Run moved: it started, reached a Step, paused for an approval or
+ * finished. Nothing is cached from it; the client asks the Workflow routes
+ * again, so the Workflows page, the nav's running count and the Approvals
+ * queue follow a Run Step by Step without a poll of their own.
+ */
+export interface RunChange {
+  id: Id;
+  workflowId: Id;
+  status: "queued" | "running" | "paused" | "done" | "failed";
+  currentStep: number;
+}
 
 /**
  * Settings changed on the Server by something other than this client's own
@@ -432,7 +446,8 @@ export type ChangePayload =
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange }
-  | { kind: "settings"; payload: SettingsChange };
+  | { kind: "settings"; payload: SettingsChange }
+  | { kind: "run"; payload: RunChange };
 
 export type Change = ChangePayload & {
   seq: number;

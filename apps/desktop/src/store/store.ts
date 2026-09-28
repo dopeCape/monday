@@ -33,6 +33,7 @@ import type {
   JudgmentsChange,
   Message,
   MessageBodyRow,
+  RunChange,
   SendChange,
   ThreadChange,
 } from "@monday/shared";
@@ -147,6 +148,12 @@ export interface Store {
   onWrite(
     listener: (tables: ReadonlySet<string>, threadIds: readonly Id[] | undefined) => void,
   ): () => void;
+  /**
+   * Called after a pull that carried `run` changes (a Workflow Run moved on
+   * the Server): nothing is cached from them, so whoever shows Runs asks the
+   * Workflow routes again. Rides the Store's own wake connection.
+   */
+  onRuns(listener: (runs: readonly RunChange[]) => void): () => void;
   /** Applies locally, appends to the Outbox, returns. The network happens in sync. */
   intent(action: StoreIntent | DraftStoreIntent | InviteStoreIntent): Promise<void>;
   /**
@@ -654,6 +661,9 @@ export function changeStatements(change: Change): Statement[] {
     case "settings":
       // Nothing to store: the Shell reads its Settings again (Store.onSettingsChanged).
       return [];
+    case "run":
+      // Nothing to store: the Run's screens ask the Workflow routes again (Store.onRuns).
+      return [];
   }
 }
 
@@ -1041,6 +1051,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   const writeListeners = new Set<
     (tables: ReadonlySet<string>, threadIds: readonly Id[] | undefined) => void
   >();
+  const runListeners = new Set<(runs: readonly RunChange[]) => void>();
 
   const invalidate = (tables: Iterable<string>, threadIds?: readonly Id[]) => {
     const touched = new Set(tables);
@@ -1168,6 +1179,16 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     await driver.exec(FTS_MERGE_SQL);
     const settingKeys = changes.flatMap((c) => (c.kind === "settings" ? c.payload.keys : []));
     if (settingKeys.length > 0) options.onSettingsChanged?.(settingKeys);
+    const runs = changes.flatMap((c) => (c.kind === "run" ? [c.payload] : []));
+    if (runs.length > 0) {
+      for (const l of [...runListeners]) {
+        try {
+          l(runs);
+        } catch (error) {
+          log(`a run listener failed: ${String(error)}`);
+        }
+      }
+    }
     const fresh = incoming.filter((m) => !known.has(m.id));
     if (fresh.length > 0) {
       options.onNewMessages?.(
@@ -1563,6 +1584,11 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     onWrite(listener) {
       writeListeners.add(listener);
       return () => writeListeners.delete(listener);
+    },
+
+    onRuns(listener) {
+      runListeners.add(listener);
+      return () => runListeners.delete(listener);
     },
 
     async setReplyAll(threadId, replyAll) {

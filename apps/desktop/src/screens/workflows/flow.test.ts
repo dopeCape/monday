@@ -229,6 +229,53 @@ describe("an edit and a Run over the flow", () => {
     ]);
   });
 
+  test("a going Run marks the Step it is on as running, even over the row of an approval just given; a paused one waits for your approval", () => {
+    const w = doc({
+      trigger: { kind: "manual" },
+      steps: [
+        { id: "a", kind: "archive", name: "A" },
+        { id: "b", kind: "archive", name: "B" },
+        { id: "c", kind: "archive", name: "C" },
+      ],
+    });
+    const row = (index: number, status: string, detail: string) => ({
+      index,
+      stepId: ["a", "b", "c"][index],
+      name: ["A", "B", "C"][index],
+      kind: "archive",
+      status,
+      detail,
+      activityId: null,
+      at: "2026-09-16T10:00:00Z",
+    });
+    const going = {
+      status: "running",
+      currentStep: 1,
+      steps: [row(0, "done", "Archived"), row(1, "waiting", "Waiting for your approval")],
+    } as unknown as RunView;
+    expect(
+      flowModel(w, s, { run: going })
+        .cards.slice(1)
+        .map((c) => c.run?.status ?? null),
+    ).toEqual(["done", "running", null]);
+    const paused = {
+      status: "paused",
+      currentStep: 1,
+      waitingStep: 1,
+      steps: [row(0, "done", "Archived"), row(1, "waiting", "Waiting for your approval")],
+    } as unknown as RunView;
+    expect(
+      flowModel(w, s, { run: paused })
+        .cards.slice(1)
+        .map((c) => c.run),
+    ).toEqual([
+      { status: "done", label: "Done", detail: "Archived" },
+      // The line only repeats the label, so it is left out.
+      { status: "waiting", label: "Waiting for your approval", detail: undefined },
+      { status: "not_reached", label: "Not reached", detail: undefined },
+    ]);
+  });
+
   test("template holes read as names", () => {
     const text = templateText("{{steps.x.vendor}} on {{thread.from}}: {{other.path}}", s, (id) =>
       id === "x" ? "Read" : id,
