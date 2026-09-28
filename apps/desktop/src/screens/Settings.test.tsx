@@ -47,6 +47,7 @@ import type { DeviceProviderKeys } from "../platform/providerKeys.ts";
 import { fakePlatform } from "../platform/tauri.ts";
 import { Shell, type ShellState, StaticShell, useShell } from "../shell/Shell.tsx";
 import { Settings, type SettingsProps, writeAll } from "./Settings.tsx";
+import { shareOnSaveFor } from "./settings/controls.tsx";
 import { resetDisclosures } from "./settings/disclosure.tsx";
 import { controlKinds } from "./settings/render.tsx";
 import { buildSearchIndex, searchSettings } from "./settings/search.ts";
@@ -760,6 +761,20 @@ describe("Settings pages come from the schema", () => {
 /* ------------------------------ AI and agent ------------------------------ */
 
 describe("Settings › AI and agent", () => {
+  test("where a new key's share switch starts: TypeSafe on everywhere, a language model's key on beside the Sidecar alone, off beside a Cloud", () => {
+    const d = defaultSettings();
+    expect(shareOnSaveFor("typesafe", d, false)).toBe(true);
+    expect(shareOnSaveFor("typesafe", d, true)).toBe(true);
+    expect(shareOnSaveFor("anthropic", d, true)).toBe(true);
+    expect(shareOnSaveFor("anthropic", d, false)).toBe(false);
+    expect(shareOnSaveFor("anthropic", { ...d, "ai.keys.share_with_sidecar": false }, true)).toBe(
+      false,
+    );
+    expect(shareOnSaveFor("typesafe", { ...d, "ai.judge.share_by_default": false }, true)).toBe(
+      false,
+    );
+  });
+
   test("keys are added and shared without ever being displayed", async () => {
     const scripted = scriptedApi();
     const keys = fakeKeys();
@@ -773,13 +788,19 @@ describe("Settings › AI and agent", () => {
     await clickText("Save", row ?? document);
     expect(keys.writes).toEqual(["anthropic:sk-ant-secret"]);
     expect(text()).not.toContain("sk-ant-secret");
-    expect(row?.textContent).toContain("Key set");
-    // The share switch sends the Device key and flips the Setting.
-    await click(row?.querySelector(".switch"));
+    // The only Server is the Sidecar on this computer: the new key is shared with it at once
+    // (ai.keys.share_with_sidecar), so Workflows and sorting can use it.
     expect(scripted.calls).toContainEqual({
       name: "keys.share",
       args: ["anthropic", "sk-ant-secret"],
     });
+    expect(captured?.settings["ai.share_key.anthropic"]).toBe(true);
+    // The switch turns sharing off again; the key stays on this device.
+    await click(row?.querySelector(".switch"));
+    expect(captured?.settings["ai.share_key.anthropic"]).toBe(false);
+    expect(row?.textContent).toContain("Key set");
+    // And on again: the Device key is sent and the Setting flips.
+    await click(row?.querySelector(".switch"));
     expect(captured?.settings["ai.share_key.anthropic"]).toBe(true);
     // Sharing with no key on the Device is refused with the reason.
     const gemini = q('[data-setting="ai.share_key.gemini"]');
@@ -796,10 +817,11 @@ describe("Settings › AI and agent", () => {
     const groups = qa("[data-group]").map((el) => el.getAttribute("data-group"));
     expect(groups.indexOf("TypeSafe")).toBe(groups.indexOf("Runtime") + 1);
     expect(groups.indexOf("TypeSafe")).toBeLessThan(groups.indexOf("Anthropic"));
-    // Auto with no key: the language model answers.
+    // Auto with no TypeSafe key and no key for the chosen provider: nothing answers,
+    // never a provider with no key.
     const status = () => q('[data-panel="judge-status"]');
-    expect(status()?.dataset.judge).toBe("llm");
-    expect(status()?.textContent).toContain("The language model answers judgments.");
+    expect(status()?.dataset.judge).toBe("none");
+    expect(status()?.textContent).toContain("Nothing answers judgments yet.");
     expect(q('[data-setting="ai.judge.provider"] .seg')).not.toBeNull();
 
     const row = q('[data-setting="ai.share_key.typesafe"]');
@@ -822,18 +844,20 @@ describe("Settings › AI and agent", () => {
     await clickText("Save", row ?? document);
     expect(keys.writes).toEqual(["typesafe:ts-good"]);
     expect(text()).not.toContain("ts-good");
-    expect(row?.textContent).toContain("Key accepted");
-    // In Settings the share switch keeps its default, off: the key stays on this device.
-    expect(scripted.calls.some((c) => c.name === "keys.share")).toBe(false);
-    expect(captured?.settings["ai.share_key.typesafe"]).toBe(false);
-    expect(status()?.dataset.judge).toBe("typesafe");
-    expect(status()?.textContent).toContain("TypeSafe answers judgments on jev-1.13.0.");
-    expect(status()?.textContent).toContain("The key is on this device only.");
-    // The share switch sends it under the envelope like any provider's.
-    await click(row?.querySelector(".switch"));
+    // In Settings too the share switch starts on (ai.judge.share_by_default): the key reaches
+    // the Server that sorts mail, under the envelope like any provider's.
     expect(scripted.calls).toContainEqual({ name: "keys.share", args: ["typesafe", "ts-good"] });
     expect(captured?.settings["ai.share_key.typesafe"]).toBe(true);
     expect(row?.textContent).toContain("Shared with the server");
+    expect(status()?.dataset.judge).toBe("typesafe");
+    expect(status()?.textContent).toContain("TypeSafe answers judgments on jev-1.13.0.");
+    // Turned off, the key stays on this device only, and the status says so.
+    await click(row?.querySelector(".switch"));
+    expect(captured?.settings["ai.share_key.typesafe"]).toBe(false);
+    expect(status()?.textContent).toContain("The key is on this device only.");
+    // On again, it is sent again.
+    await click(row?.querySelector(".switch"));
+    expect(captured?.settings["ai.share_key.typesafe"]).toBe(true);
     // Judgments pinned to the language model: the status follows the Setting.
     await click(
       [...(q('[data-setting="ai.judge.provider"]')?.querySelectorAll("button") ?? [])].find(
@@ -841,7 +865,8 @@ describe("Settings › AI and agent", () => {
       ),
     );
     expect(captured?.settings["ai.judge.provider"]).toBe("llm");
-    expect(status()?.dataset.judge).toBe("llm");
+    // The language model the user has: none here (Hosted, no Anthropic key), so nothing answers.
+    expect(status()?.dataset.judge).toBe("none");
     // Removing the key with the Setting pinned to TypeSafe: no key answers.
     await click(
       [...(q('[data-setting="ai.judge.provider"]')?.querySelectorAll("button") ?? [])].find(

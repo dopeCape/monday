@@ -780,7 +780,8 @@ export const briefs = pgTable("briefs", {
   bulletsKey: bytea("bullets_key").notNull(),
   actionsEnc: bytea("actions_enc").notNull(),
   actionsKey: bytea("actions_key").notNull(),
-  provider: text("provider").$type<HostedProvider>().notNull(),
+  /** Who wrote it: a Hosted provider, or "local" for a Device's Local runtime. */
+  provider: text("provider").$type<HostedProvider | "local">().notNull(),
   model: text("model").notNull(),
   computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
   stale: boolean("stale").notNull().default(false),

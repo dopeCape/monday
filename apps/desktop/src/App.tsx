@@ -46,13 +46,18 @@ import { desiredRuntime, runtimeLine } from "./agent/runtimeLine.ts";
 import { useLocalRuntimes } from "./agent/runtimes/useLocalRuntimes.ts";
 import { type PausedRunChip, suggestionsFor } from "./agent/suggestions.ts";
 import { useAgentSession } from "./agent/useAgentSession.ts";
+import { useLocalWorker } from "./agent/useLocalWorker.ts";
 import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
 import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
 import { chordLabel } from "./keyboard/keymaps.ts";
 import { useActiveKeymap } from "./keyboard/useKeymap.ts";
 import type { AccountView } from "./platform/api.ts";
-import { type DeviceProviderKeys, deviceProviderKeys } from "./platform/providerKeys.ts";
+import {
+  type DeviceProviderKeys,
+  deviceProviderKeys,
+  reconcileSharedKeys,
+} from "./platform/providerKeys.ts";
 import { platform } from "./platform/tauri.ts";
 import { Calendar } from "./screens/Calendar.tsx";
 import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
@@ -251,6 +256,14 @@ export function App({
   const runtimes = useLocalRuntimes(shell.spawn, shell.settings);
   const runtimesRef = useRef(runtimes);
   runtimesRef.current = runtimes;
+  // While ai.mode is local, the Sidecar hands this Device's command-line agent
+  // the background work that needs a language model (Workflow steps, sorting).
+  useLocalWorker({
+    spawn: shell.spawn,
+    sidecar: shell.sidecar,
+    settings: shell.settings,
+    runtimes,
+  });
   // In the app the Device client drives a Local runtime itself and sends Hosted turns
   // to the Server; the browser dev server, with no processes to spawn, stays Hosted.
   const client = useMemo(
@@ -466,6 +479,21 @@ export function App({
       live = false;
     };
   }, [keysProp]);
+  // On start and on every new Server: a key in the keychain whose share Setting
+  // is on but that the Server lacks is shared again, without asking for it anew.
+  const serverUp = shell.server !== null;
+  useEffect(() => {
+    if (!keys || !serverUp) return;
+    void reconcileSharedKeys({
+      keys,
+      api: shell.api,
+      workspaceId: ws.id,
+      wantsShare: (provider) => settingsRef.current[`ai.share_key.${provider}`],
+      log: (line) => console.warn(line),
+    }).catch((error: unknown) =>
+      console.warn(`share keys: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  }, [keys, serverUp, shell.api, ws.id]);
   const senders = useMemo(
     () =>
       topSenders(

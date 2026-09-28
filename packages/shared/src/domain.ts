@@ -465,6 +465,8 @@ export interface HostedState {
 export interface JudgeState {
   provider: "typesafe" | "llm" | "none";
   model: string;
+  /** For `llm`: whether a Hosted provider or a Device's Local runtime answers. */
+  runtime?: "hosted" | "local";
 }
 
 export interface Session {

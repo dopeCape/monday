@@ -13,6 +13,7 @@ import type {
   Person,
   RsvpResponse,
   Runtime,
+  Task,
   Thread,
   Tier,
   ToolCall,
@@ -578,3 +579,28 @@ export interface ExternalConsent {
   code: string;
   expiresAt: IsoDate;
 }
+
+/* ------------------------------ Background work on a Local runtime ------------------------------ */
+
+/**
+ * One prompt the Server hands a Device's Local runtime (CONTEXT.md, Local
+ * runtime; docs/spec/workflows.md, "Local runtime work"): a Task that needs a
+ * language model while the Device's `ai.mode` is local. The Device answers
+ * with text only; tools and approvals stay on the Server.
+ */
+export interface LocalCall {
+  id: Id;
+  task: Task;
+  workspaceId: Id;
+  system: string;
+  prompt: string;
+}
+
+/** What a Device says when it asks for work: which command-line agent answers, and on which model. */
+export interface LocalAnnounce {
+  cli: LocalCli;
+  model?: string | null | undefined;
+}
+
+/** The Device's answer to one LocalCall. */
+export type LocalAnswer = { text: string; model?: string | null | undefined } | { error: string };

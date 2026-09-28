@@ -28,6 +28,15 @@ import {
   resolveTaskModel,
 } from "@monday/shared";
 
+import {
+  converseAsCall,
+  LOCAL_CLI_LABEL,
+  type LocalCompletion,
+  type LocalLanguageModel,
+  parseConverseReply,
+  runAsCall,
+} from "./local.ts";
+
 /** One call to one model, with the key already resolved. */
 export interface ChatCall {
   provider: HostedProvider;
@@ -109,14 +118,18 @@ export interface RunOptions {
   provider?: HostedProvider;
 }
 
+/** Who answered a run() or converse(): a Hosted provider, or a Device's Local runtime (runtime/local.ts). */
+export type RunProvider = HostedProvider | "local";
+
 export interface RunResult {
   output: string;
   usage: Usage;
   costMicros: number;
-  provider: HostedProvider;
+  provider: RunProvider;
   model: string;
   durationMs: number;
-  meter: MeterEntry;
+  /** The Meter row; null for a Local runtime, which the Meter does not count (CONTEXT.md, Meter). */
+  meter: MeterEntry | null;
 }
 
 export type MeterInput = Omit<MeterEntry, "id" | "createdAt">;
@@ -209,6 +222,13 @@ export interface HostedRuntimeOptions {
    * turn, no agentic Step. Absent means the level is not enforced here.
    */
   level?: () => Promise<AiLevel>;
+  /**
+   * A Device's Local runtime (runtime/local.ts). When it takes a Task, run()
+   * and converse() go to it before any provider key is looked at: the user
+   * whose `ai.mode` is local has their language model there. Absent on a
+   * Server no client drives, and in tests that do not need one.
+   */
+  local?: LocalLanguageModel;
 }
 
 /** The AI level is `off`: monday makes no model calls at all (docs/spec/onboarding.md). */
@@ -221,14 +241,44 @@ export class AiOffError extends Error {
   }
 }
 
-/** The provider has no key where this runtime looks for one. */
+/**
+ * No language model can take the call: the provider has no key where this
+ * runtime looks for one, and no Device's Local runtime is connected. The
+ * message is `strings.ai.no_language_model`, which names the real fixes.
+ */
 export class NoProviderKeyError extends Error {
   readonly status = 409;
-  constructor(readonly provider: HostedProvider) {
-    super(`no ${provider} key is available to this runtime`);
+  readonly code = "no_language_model";
+  constructor(
+    readonly provider: HostedProvider,
+    message?: string,
+  ) {
+    super(
+      message ??
+        `No AI model can do this yet. Add your ${provider} key or open monday with a coding agent connected.`,
+    );
     this.name = "NoProviderKeyError";
   }
 }
+
+/** The label a provider goes by in a sentence. */
+const PROVIDER_NAME: Record<HostedProvider, string> = {
+  anthropic: "Anthropic",
+  gemini: "Gemini",
+  openai: "OpenAI",
+  kimi: "Kimi",
+  openrouter: "OpenRouter",
+};
+
+export {
+  createLocalBridge,
+  type LocalBridge,
+  type LocalCompletion,
+  type LocalLanguageModel,
+  LocalRuntimeError,
+  LocalRuntimeTimeoutError,
+  localLanguageModel,
+} from "./local.ts";
 
 export function endpointFor(
   settings: HostedSettings,
@@ -248,6 +298,13 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
     },
 
     async run(task, input, opts) {
+      if (options.level && (await options.level()) === "off") throw new AiOffError(task);
+      const local = await localFor(task, opts);
+      if (local) {
+        const started = now();
+        const answer = await local.complete(runAsCall(task, input, opts.workspaceId));
+        return { output: answer.text, ...localResult(answer, started) };
+      }
       const { call, finish } = await prepare(task, input.maxOutputTokens, opts);
       const response = await options.chat({ ...call, system: input.system, prompt: input.prompt });
       const metered = await finish(response);
@@ -302,6 +359,15 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
     },
 
     async converse(task, input, opts) {
+      if (options.level && (await options.level()) === "off") throw new AiOffError(task);
+      const local = await localFor(task, opts);
+      if (local) {
+        const started = now();
+        const answer = await local.complete(converseAsCall(task, input, opts.workspaceId));
+        const reply = parseConverseReply(answer.text);
+        if (reply.text) input.onText?.(reply.text);
+        return { text: reply.text, toolCalls: reply.toolCalls, ...localResult(answer, started) };
+      }
       const converse = options.converse;
       if (!converse) throw new Error("this runtime has no conversational model");
       const { call, finish } = await prepare(task, input.maxOutputTokens, opts);
@@ -317,13 +383,42 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
     },
   };
 
+  /**
+   * The Local runtime when it takes this Task: never for a call that names
+   * its provider (a Hosted Session the user picked), always before a key.
+   */
+  async function localFor(task: Task, opts: RunOptions): Promise<LocalLanguageModel | null> {
+    const local = options.local;
+    if (!local || opts.provider) return null;
+    return (await local.takes(task)) ? local : null;
+  }
+
+  function localResult(answer: LocalCompletion, started: number) {
+    return {
+      usage: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
+      costMicros: 0,
+      provider: "local" as const,
+      model: answer.model ?? LOCAL_CLI_LABEL[answer.cli],
+      durationMs: Math.max(0, now() - started),
+      meter: null,
+    };
+  }
+
   /** What both entry points share: resolve the model, check the key, then meter what came back. */
   async function prepare(task: Task, maxOutputTokens: number | undefined, opts: RunOptions) {
     if (options.level && (await options.level()) === "off") throw new AiOffError(task);
     const settings = await options.settings();
     const choice = resolveTaskModel(settings, task, opts.provider);
     const key = await options.keys(choice.provider);
-    if (!key) throw new NoProviderKeyError(choice.provider);
+    if (!key) {
+      throw new NoProviderKeyError(
+        choice.provider,
+        settings["strings.ai.no_language_model"].replaceAll(
+          "{provider}",
+          PROVIDER_NAME[choice.provider],
+        ),
+      );
+    }
     const started = now();
     const baseUrl = endpointFor(settings, choice.provider);
     const call: Omit<ChatCall, "system" | "prompt"> = {

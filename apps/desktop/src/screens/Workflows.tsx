@@ -114,6 +114,8 @@ function runTitle(run: RunView, s: Strings): string {
 function runDetail(run: RunView, s: Strings): string {
   if (run.status === "paused") return s.waiting ?? "Waiting for your approval";
   if (run.status === "failed") return run.error ?? s["status.failed"] ?? "Failed";
+  // A queued Run with a line is waiting for something (the app and its coding agent).
+  if (run.status === "queued" && run.error) return run.error;
   const last = [...run.steps].reverse().find((st) => st.status === "done");
   return last?.detail ?? s[`status.${run.status}`] ?? run.status;
 }

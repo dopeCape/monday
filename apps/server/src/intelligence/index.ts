@@ -17,6 +17,8 @@ import type {
   IntentRequest,
   JudgeState,
   KeyProvider,
+  LocalCli,
+  Task,
 } from "@monday/shared";
 import {
   HOSTED_PROVIDERS,
@@ -74,6 +76,12 @@ import {
   type KeysResolver,
 } from "./runtime/index.ts";
 import { lazyLangChainChat, lazyLangChainConverse } from "./runtime/langchain-lazy.ts";
+import {
+  LOCAL_CLI_LABEL,
+  type LocalBridge,
+  type LocalLanguageModel,
+  localLanguageModel,
+} from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
@@ -171,6 +179,13 @@ export {
   NoJudgeError,
   NoProviderKeyError,
 } from "./runtime/index.ts";
+export type { LocalBridge, LocalCompletion, LocalLanguageModel } from "./runtime/local.ts";
+export {
+  createLocalBridge,
+  LocalRuntimeError,
+  LocalRuntimeTimeoutError,
+  localLanguageModel,
+} from "./runtime/local.ts";
 export type { KeyValidation, TypeSafeErrorCode } from "./runtime/typesafe.ts";
 export { createTypeSafeJudge, TypeSafeError, validateTypeSafeKey } from "./runtime/typesafe.ts";
 
@@ -207,6 +222,11 @@ export interface IntelligenceOptions {
   /** The AI level; defaults to the Setting ai.level. Tests may pin it. */
   level?: () => Promise<AiLevel>;
   /**
+   * Where a Device's Local runtime takes background work (runtime/local.ts):
+   * the Sidecar makes one; a Server no client drives has none.
+   */
+  localBridge?: LocalBridge | undefined;
+  /**
    * The browser demo's scripted assistant (runtime/demo.ts), for MONDAY_DEMO=1
    * only: a placeholder key for this provider behind every shared-key read,
    * and calls carrying it answered by the script instead of a model.
@@ -216,6 +236,8 @@ export interface IntelligenceOptions {
 
 export interface Intelligence {
   runtime: HostedRuntime;
+  /** The Local runtime's line to the client, on a Server that has one (the Sidecar). */
+  localBridge: LocalBridge | null;
   keys: ProviderKeyStore;
   meter: Meter;
   briefs: Briefs;
@@ -357,6 +379,8 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.budget.minutes",
   "workflows.agentic.system_prompt",
   "workflows.step_retries",
+  "workflows.local_wait_seconds",
+  "strings.workflows.waiting_local",
   "workflows.trigger.routing_wait_seconds",
   "workflows.dry_run.recent",
   "workflows.silence.check_cron",
@@ -389,29 +413,38 @@ const ROUTING_SETTING_KEYS = [
   "routing.brief_policy.default",
   "routing.judge.instructions",
   "routing.judge.none_option",
+  "routing.wait_seconds",
 ] as const;
 
 /**
- * Who answers judgments under these Settings with these shared keys: TypeSafe
- * when a judge model is wired, Settings allow it and its key is shared; the
- * language model's prompt path (the classify Task's model) when Settings say
- * so or auto finds no key; none when Settings pin TypeSafe and no key is shared.
+ * Who answers judgments under these Settings with these shared keys and this
+ * Local runtime (ADR 0012): TypeSafe when a judge model is wired, Settings
+ * allow it and its key is shared; otherwise, when Settings say auto or llm,
+ * the language model the user actually has: a connected Device's Local
+ * runtime that takes the classify Task, else the classify Task's Hosted
+ * provider when its key is shared. Never a Hosted provider with no key: with
+ * nothing to answer, `none`, and routing waits instead of failing.
  */
 export function judgeStateFor(
   settings: HostedSettings,
   sharedKeys: readonly string[],
   hasJudge: boolean,
+  local: LocalCli | null = null,
 ): JudgeState {
   const choice = settings["ai.judge.provider"];
-  const llm = (): JudgeState => ({
-    provider: "llm",
-    model: resolveTaskModel(settings, "classify").model,
-  });
+  const none: JudgeState = { provider: "none", model: "" };
+  const llm = (): JudgeState => {
+    if (local) return { provider: "llm", model: LOCAL_CLI_LABEL[local], runtime: "local" };
+    const hosted = resolveTaskModel(settings, "classify");
+    return sharedKeys.includes(hosted.provider)
+      ? { provider: "llm", model: hosted.model, runtime: "hosted" }
+      : none;
+  };
   if (choice === "llm") return llm();
   if (hasJudge && sharedKeys.includes("typesafe")) {
     return { provider: "typesafe", model: settings["ai.judge.model"] };
   }
-  return choice === "auto" ? llm() : { provider: "none", model: "" };
+  return choice === "auto" ? llm() : none;
 }
 
 export function createIntelligence(options: IntelligenceOptions): Intelligence {
@@ -433,7 +466,14 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       const s = await hostedSettings();
       return validateTypeSafeKey(key, { baseUrl: s["ai.endpoint.typesafe"] });
     });
+  const local: LocalLanguageModel | undefined = options.localBridge
+    ? localLanguageModel(
+        options.localBridge,
+        async (): Promise<readonly Task[]> => readGlobalSetting(db, "ai.local.background.tasks"),
+      )
+    : undefined;
   const runtime = createHostedRuntime({
+    ...(local ? { local } : {}),
     chat: demoChat(options.chat ?? lazyLangChainChat()),
     converse: demoConverse(options.converse ?? lazyLangChainConverse()),
     ...(options.judge ? { judge: options.judge } : {}),
@@ -599,6 +639,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
           instructions: s["routing.judge.instructions"],
           noneOption: s["routing.judge.none_option"],
         },
+        waitSeconds: s["routing.wait_seconds"],
       };
     },
   });
@@ -722,6 +763,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         },
         agenticSystemPrompt: s["workflows.agentic.system_prompt"],
         stepRetries: s["workflows.step_retries"],
+        localWaitSeconds: s["workflows.local_wait_seconds"],
+        waitingLocal: s["strings.workflows.waiting_local"],
         routingWaitSeconds: s["workflows.trigger.routing_wait_seconds"],
         dryRunRecent: s["workflows.dry_run.recent"],
         silenceCheckCron: s["workflows.silence.check_cron"],
@@ -746,6 +789,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       extensions.calendar = seam;
     },
     runtime,
+    localBridge: options.localBridge ?? null,
     keys,
     meter,
     briefs,
@@ -788,11 +832,21 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         provider: settings["ai.hosted.provider"],
         roles,
         sharedKeys: shared,
-        judge: judgeStateFor(settings, shared, options.judge !== undefined),
+        judge: judgeStateFor(
+          settings,
+          shared,
+          options.judge !== undefined,
+          (await local?.takes("classify")) ?? null,
+        ),
       };
     },
     async judgeState() {
-      return judgeStateFor(await hostedSettings(), await keys.list(), options.judge !== undefined);
+      return judgeStateFor(
+        await hostedSettings(),
+        await keys.list(),
+        options.judge !== undefined,
+        (await local?.takes("classify")) ?? null,
+      );
     },
     validateKey,
     registerSteps(jobs) {

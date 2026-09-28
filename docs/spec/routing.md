@@ -31,7 +31,9 @@ Behaviors a tester can check. Routing, Groups, Sections, Judgments and Examples 
 - "Ask for a group" hands "Make a group: …" to the composer.
 - Needs a decision: each Thread with its candidate Groups as buttons carrying routing's Confidence ("Hiring 61%") and Leave; an answered row fades out and becomes an Example.
 - Recently routed (`routing.page.recent_shown`, 0 hides it): each Thread's subject, the Group it went to, and why: "Matched <fact>" (a Predicate fact its headers met), "Read the rule, n% sure" (the model on the rule sentence), "You put it here" (a correction), or "Sorted by the rule".
-- At automate with no shared key, a note says routing needs one.
+- At automate with nothing on the Server that can sort (no TypeSafe key, no key for the chosen provider, no connected coding agent; the judge state `none`), a note says "Sorting needs TypeSafe, an AI provider key, or a coding agent." New Threads wait meanwhile (`routing.wait_seconds`) and are sorted once one is there; their route Jobs never fail for it.
+- Who sorts, with `ai.judge.provider` auto: TypeSafe when its key is on the Server; else the language model the user actually has (a connected Local runtime, else the chosen provider when its key is shared); never a provider with no key.
+- A TypeSafe key added anywhere (onboarding, Settings, AI and agent) is shared with the Server on save while `ai.judge.share_by_default` is on, and a key already in the keychain whose share Setting is on is shared again when the app starts and the Server lacks it. A language model's key is shared on save only while the Sidecar is the only Server (`ai.keys.share_with_sidecar`); beside a Cloud, sharing stays the user's switch.
 
 ## Strings
 
