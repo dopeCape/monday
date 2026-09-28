@@ -25,6 +25,7 @@ import type {
   Integration,
   InviteMethod,
   KeyProvider,
+  McpCatalogEntry,
   MeterProvider,
   MeterTask,
   Person,
@@ -1286,3 +1287,42 @@ export const sectionJudgments = pgTable(
     index("section_judgments_rule_idx").on(t.workspaceId, t.ruleId),
   ],
 );
+
+/**
+ * The MCP Registry, kept here (docs/spec/settings.md "MCP servers"): the
+ * registry's own search takes 10 to 30 seconds a query, so Connect a tool
+ * searches this copy, which a background sync fills page by page and then
+ * refreshes with `updated_since`. Public catalog data, no Workspace, no secrets.
+ */
+export const mcpCatalog = pgTable(
+  "mcp_catalog",
+  {
+    /** The registry id, "io.github.owner/server". */
+    id: text("id").primaryKey(),
+    /** Lowercased id, title, description and publisher, for matching. */
+    haystack: text("haystack").notNull(),
+    /** The card as McpCatalogEntry. */
+    entry: jsonb("entry").$type<McpCatalogEntry>().notNull(),
+    /** Whether it has a remote URL (connects anywhere) rather than only a package. */
+    remote: boolean("remote").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
+  },
+  (t) => [index("mcp_catalog_remote_idx").on(t.remote)],
+);
+
+/** Where the catalog sync stands: one row. */
+export const mcpCatalogSync = pgTable("mcp_catalog_sync", {
+  id: integer("id").primaryKey(),
+  /** The registry the rows came from; a different Setting starts over. */
+  source: text("source").notNull(),
+  /** The next page of a first fill that stopped part way, or null. */
+  cursor: text("cursor"),
+  /** When the first fill finished; null until then. */
+  completeAt: timestamp("complete_at", { withTimezone: true, mode: "date" }),
+  /** When the last pass started, the `updated_since` of the next refresh. */
+  passStartedAt: timestamp("pass_started_at", { withTimezone: true, mode: "date" }),
+  /** A pass in progress holds this until then, so two never run at once. */
+  leaseUntil: timestamp("lease_until", { withTimezone: true, mode: "date" }),
+  count: integer("count").notNull().default(0),
+  lastError: text("last_error"),
+});

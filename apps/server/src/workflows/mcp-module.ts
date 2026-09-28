@@ -10,6 +10,7 @@ import { settings } from "../db/schema.ts";
 import type { ContentStore } from "../mailstore/content.ts";
 import { readGlobalSettings } from "../settings/read.ts";
 import { createSdkMcpClients, type McpClients, type TransportFetch } from "./mcp.ts";
+import { createMcpCatalog, type McpCatalog } from "./mcp-catalog.ts";
 import { createMcpConnections, type McpConnections, type McpLoopback } from "./mcp-connections.ts";
 import { createStoredOAuthProvider, type FetchLike } from "./mcp-oauth.ts";
 import { createMcpRegistry, type McpRegistry } from "./mcp-registry.ts";
@@ -21,6 +22,8 @@ export interface McpModule {
   secrets: McpSecretStore;
   clients: McpClients;
   registry: McpRegistry;
+  /** The registry copy behind `registry`; the Sidecar warms it at boot. */
+  catalog: McpCatalog;
   connections: McpConnections;
 }
 
@@ -78,7 +81,7 @@ export function createMcpModule(options: McpModuleOptions): McpModule {
         ] * 1000,
       ...(options.fetch ? { fetch: options.fetch as TransportFetch } : {}),
     });
-  const registry = createMcpRegistry({
+  const liveRegistry = createMcpRegistry({
     settings: async () => {
       const s = await readGlobalSettings(db, [
         "workflows.mcp_registry.enabled",
@@ -95,6 +98,30 @@ export function createMcpModule(options: McpModuleOptions): McpModule {
     },
     ...(options.fetch ? { fetch: (url, init) => (options.fetch as FetchLike)(url, init) } : {}),
   });
+  // Search answers from the Server's copy of the registry; the live one is its fallback.
+  const catalog = createMcpCatalog({
+    db,
+    live: liveRegistry,
+    settings: async () => {
+      const s = await readGlobalSettings(db, [
+        "workflows.mcp_registry.enabled",
+        "workflows.mcp_registry.url",
+        "workflows.mcp_registry.results",
+        "workflows.mcp_registry.refresh_hours",
+        "workflows.mcp_registry.demote",
+      ]);
+      return {
+        enabled: s["workflows.mcp_registry.enabled"],
+        url: s["workflows.mcp_registry.url"],
+        results: s["workflows.mcp_registry.results"],
+        refreshHours: s["workflows.mcp_registry.refresh_hours"],
+        demote: s["workflows.mcp_registry.demote"],
+      };
+    },
+    ...(options.fetch ? { fetch: (url, init) => (options.fetch as FetchLike)(url, init) } : {}),
+    now: () => now().getTime(),
+  });
+  const registry: McpRegistry = catalog;
   const connections = createMcpConnections({
     servers,
     writeServers,
@@ -115,5 +142,5 @@ export function createMcpModule(options: McpModuleOptions): McpModule {
       };
     },
   });
-  return { secrets, clients, registry, connections };
+  return { secrets, clients, registry, catalog, connections };
 }

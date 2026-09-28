@@ -134,6 +134,13 @@
       "when": 1790234629470,
       "tag": "0019_calendar_sharing",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790588837610,
+      "tag": "0020_mcp_catalog",
+      "breakpoints": true
     }
   ]
 }

@@ -211,6 +211,8 @@ async function main() {
     },
     // An MCP server's sign-in: the same loopback on the Sidecar, the public callback on a Cloud server.
     mcp: {
+      // Search answers from the Server's copy of the registry; filling it takes a few minutes.
+      warmCatalogAfterMs: 20_000,
       loopback:
         mode === "sidecar"
           ? {

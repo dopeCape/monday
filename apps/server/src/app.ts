@@ -205,7 +205,14 @@ export interface AppOptions {
    * loopback receiver for a server's sign-in, and the HTTP client under the
    * registry search, OAuth and URL servers (tests pass one).
    */
-  mcp?: { loopback?: McpLoopback | null; fetch?: McpFetch } | undefined;
+  mcp?:
+    | {
+        loopback?: McpLoopback | null;
+        fetch?: McpFetch;
+        /** A long-running Server fills its copy of the MCP Registry this long after boot. */
+        warmCatalogAfterMs?: number;
+      }
+    | undefined;
 }
 
 /** Whether an error, or the cause under it, says the database connection is gone. */
@@ -266,6 +273,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     ...(options.mcp?.fetch ? { fetch: options.mcp.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  const warmAfter = options.mcp?.warmCatalogAfterMs;
+  if (warmAfter !== undefined) setTimeout(() => void mcp.catalog.syncOnce(), warmAfter);
   const intelligence =
     options.intelligence ??
     (() => {

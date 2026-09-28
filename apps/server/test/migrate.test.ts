@@ -43,6 +43,8 @@ describe("migrations", () => {
       "invites",
       "jobs",
       "labels",
+      "mcp_catalog",
+      "mcp_catalog_sync",
       "messages",
       "meter",
       "oauth_apps",
