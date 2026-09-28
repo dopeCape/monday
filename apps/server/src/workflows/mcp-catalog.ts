@@ -31,6 +31,8 @@ export interface McpCatalogSettings {
   results: number;
   refreshHours: number;
   demote: readonly string[];
+  /** How long a search waits on the live registry while the copy lacks an answer; 0 never asks it. */
+  liveWaitMs: number;
 }
 
 export interface McpCatalogStatus {
@@ -273,11 +275,12 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
       await kick(s);
       const row = await readSync();
       const filled = row !== null && row.source === base(s.url) && row.count > 0;
-      if (!filled) return live.search(query, n);
-      const local = await searchLocal(query, n, s.demote);
-      // Part way through the first fill, a word the copy does not hold yet still finds something.
-      if (local.length === 0 && row.completeAt === null) return live.search(query, n);
-      return local;
+      const local = filled ? await searchLocal(query, n, s.demote) : [];
+      // Part way through the first fill, a word the copy does not hold yet may
+      // still be found live, but only within liveWaitMs: the registry's own
+      // search can take half a minute, and the copy's answer is never held up.
+      if (local.length > 0 || row?.completeAt != null || s.liveWaitMs <= 0) return local;
+      return (await withTimeout(live.search(query, n), s.liveWaitMs)) ?? local;
     },
     get: (id) => live.get(id),
     async status() {
@@ -291,6 +294,19 @@ export function createMcpCatalog(options: McpCatalogOptions): McpCatalog {
     },
     syncOnce,
   };
+}
+
+/** The promise's value, or null once `ms` has passed; a failure also reads as null. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([promise.catch(() => null), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** A LIKE pattern's own wildcards, taken literally. */

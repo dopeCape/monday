@@ -119,9 +119,12 @@ export interface LocalWorker {
 }
 
 /**
- * `ai.local.background.concurrency` loops, each asking for one prompt at a
- * time and answering it. A failed ask (the Sidecar restarting) waits one
- * poll before asking again.
+ * One long-poll asks for prompts and hands each to one of up to
+ * `ai.local.background.concurrency` runs. Only ever one request waits on the
+ * Sidecar: WebKit keeps six connections to a host, and one waiting ask per
+ * run starved every other request the app makes (Workflows, Settings, search
+ * waited behind them for 20 seconds). A failed ask (the Sidecar restarting)
+ * waits one poll before asking again.
  */
 export function startLocalWorker(options: LocalWorkerOptions): LocalWorker {
   const abort = new AbortController();
@@ -142,33 +145,42 @@ export function startLocalWorker(options: LocalWorkerOptions): LocalWorker {
         { once: true },
       );
     });
+  const running = new Set<Promise<void>>();
+  const run = async (call: LocalCall) => {
+    const answer = await answerLocalCall(call, options);
+    await options.api.localRuntime.answer(call.id, answer).catch((error: unknown) => {
+      options.log?.(
+        `[local work] answer ${call.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  };
   const loop = async () => {
     while (!abort.signal.aborted) {
+      // Ask only while a run is free; a full house waits for one to finish.
+      const limit = Math.max(1, options.settings()["ai.local.background.concurrency"]);
+      if (running.size >= limit) {
+        await Promise.race(running);
+        continue;
+      }
       const poll = options.settings()["ai.local.background.poll_seconds"];
       let call: LocalCall | null;
       try {
         call = await options.api.localRuntime.next(announce, poll, abort.signal);
       } catch (error) {
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) break;
         options.log?.(`[local work] ${error instanceof Error ? error.message : String(error)}`);
         await pause(poll * 1000);
         continue;
       }
       if (!call || abort.signal.aborted) continue;
-      const answer = await answerLocalCall(call, options);
-      await options.api.localRuntime.answer(call.id, answer).catch((error: unknown) => {
-        options.log?.(
-          `[local work] answer ${call?.id}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
+      const done: Promise<void> = run(call).finally(() => running.delete(done));
+      running.add(done);
     }
+    await Promise.all(running);
   };
-  const loops = Array.from(
-    { length: Math.max(1, settings["ai.local.background.concurrency"]) },
-    () => loop(),
-  );
+  const poller = loop();
   return {
     stop: () => abort.abort(),
-    done: Promise.all(loops).then(() => {}),
+    done: poller,
   };
 }

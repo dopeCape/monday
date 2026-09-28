@@ -6,7 +6,13 @@
 // under a StaticShell with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { GroupView, JudgeState, ProposedMove, RoutingPreview } from "@monday/shared";
+import type {
+  GroupView,
+  JudgeState,
+  ProposedMove,
+  RerunProgress,
+  RoutingPreview,
+} from "@monday/shared";
 import { groups, threads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
@@ -245,6 +251,38 @@ describe("Routing page", () => {
     await click(byText(preview, "Apply"));
     expect(api.calls).toContain("apply:e6");
     expect(el.querySelector(".side-card.preview")).toBeNull();
+  });
+
+  test("a re-run that streams shows how far it is and what it just scored, then the result above the tabs", async () => {
+    const base = fakeApi();
+    let tell!: (p: RerunProgress) => void;
+    let finish!: () => void;
+    const api = {
+      ...base,
+      rerunWithProgress: (workspaceId: string, onProgress: (p: RerunProgress) => void) => {
+        tell = onProgress;
+        return new Promise<RoutingPreview>((resolve) => {
+          finish = () => void base.rerun(workspaceId).then(resolve);
+        });
+      },
+    };
+    const el = await mount(api);
+    await click(byText(el, "Re-run on inbox"));
+    expect(el.querySelector(".rt-rerun")?.textContent).toContain("Getting your newest threads");
+    await act(async () => tell({ done: 3, total: 11, moves: 1, subject: "Term sheet" }));
+    const panel = el.querySelector(".rt-rerun") as HTMLElement;
+    expect(panel.textContent).toContain("Sorting 3 of 11");
+    expect(panel.textContent).toContain("1 would move so far");
+    expect(panel.textContent).toContain("Just scored: Term sheet");
+    await act(async () => {
+      finish();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(el.querySelector(".rt-rerun")).toBeNull();
+    const result = el.querySelector(".side-card.preview") as HTMLElement;
+    expect(result.textContent).toContain("1 of 11 threads would move");
+    // The result sits above the tabs, not in the side column.
+    expect(result.closest("aside")).toBeNull();
   });
 
   test("Ask for a group hands the typed sentence to the composer, with the Setting's prefix", async () => {

@@ -1307,6 +1307,16 @@ export const settingsSchema = {
     label: "Re-run size",
     help: "How many of the newest Threads a re-run scores before showing what would move.",
   }),
+  "routing.rerun.concurrency": setting({
+    type: z.int().min(1).max(16),
+    default: 4,
+    scope: "global",
+    section: "routing",
+    group: "Sorting",
+    tier: "advanced",
+    label: "Re-run pace",
+    help: "How many Threads a re-run scores at once. Higher finishes sooner; each one is a call to whoever answers judgments.",
+  }),
   "routing.brief_policy.default": setting({
     type: briefPolicy,
     default: "on_open",
@@ -3264,6 +3274,17 @@ export const settingsSchema = {
     label: "Refresh the catalog every",
     help: "Hours between checks for new and changed servers. The Server keeps a copy of the registry so search answers at once; the first copy takes a few minutes to fetch in the background.",
   }),
+  "workflows.mcp_registry.live_wait_seconds": setting({
+    type: z.int().min(0).max(60),
+    default: 4,
+    scope: "global",
+    section: "workflows",
+    group: "MCP servers",
+    tier: "advanced",
+    visibleWhen: { key: "workflows.mcp_registry.enabled", truthy: true },
+    label: "Ask the registry for up to",
+    help: "Seconds a search waits on the registry itself while the Server's copy is still downloading and has no answer. 0 answers from the copy only.",
+  }),
   "workflows.mcp_registry.demote": setting({
     type: z.array(z.string().min(1)),
     default: ["ai.smithery/"],
@@ -5037,6 +5058,22 @@ export const settingsSchema = {
   ),
   "strings.routing.leave": str("routing", "Leave out of every Group", "Leave"),
   "strings.routing.preview.title": str("routing", "Re-run preview heading", "What would move"),
+  "strings.routing.rerun.starting": str(
+    "routing",
+    "Re-run: before the first Thread is scored",
+    "Getting your newest threads",
+  ),
+  "strings.routing.rerun.progress": str("routing", "Re-run: how far", "Sorting {done} of {total}"),
+  "strings.routing.rerun.moves": str(
+    "routing",
+    "Re-run: moves found so far",
+    "{moves} would move so far",
+  ),
+  "strings.routing.rerun.now": str(
+    "routing",
+    "Re-run: the Thread just scored",
+    "Just scored: {subject}",
+  ),
   "strings.routing.preview.considered": str(
     "routing",
     "Re-run preview summary",
@@ -6714,6 +6751,11 @@ export const settingsSchema = {
   ),
   "strings.mcp.results": str("workflows", "Connect a tool: results", "Servers"),
   "strings.mcp.searching": str("workflows", "Connect a tool: searching", "Searching the registry"),
+  "strings.mcp.catalog_loading": str(
+    "workflows",
+    "Connect a tool: the Server's copy of the registry is still downloading",
+    "Still downloading the catalog ({count} servers so far), so some servers may be missing.",
+  ),
   "strings.mcp.no_results": str(
     "workflows",
     "Connect a tool: no results",
@@ -8781,6 +8823,7 @@ const AUTOMATE_KEYS = new Set<string>([
   "routing.classify.snippet_chars",
   "routing.examples_in_prompt",
   "routing.rerun.recent",
+  "routing.rerun.concurrency",
   "routing.threshold.route",
   "routing.threshold.ask",
   "routing.threshold.tie_margin",

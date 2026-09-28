@@ -56,6 +56,7 @@ import type {
   MeterMonth,
   ProposedMove,
   Provider,
+  RerunProgress,
   RoutingApplied,
   RoutingDecision,
   RoutingPreview,
@@ -576,6 +577,49 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           "/routing/rerun",
           json("POST", { workspace: workspaceId, ...(recent ? { recent } : {}) }),
         ),
+      /**
+       * The same dry run, told as it goes: `onProgress` hears each Thread
+       * scored, and the preview resolves at the end.
+       */
+      rerunWithProgress: async (
+        workspaceId: Id,
+        onProgress: (progress: RerunProgress) => void,
+        recent?: number,
+      ): Promise<RoutingPreview> => {
+        const res = await raw("/routing/rerun", {
+          ...json("POST", { workspace: workspaceId, ...(recent ? { recent } : {}) }),
+          headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+        });
+        // A Server without the stream answers the plain preview.
+        if (!(res.headers.get("content-type") ?? "").includes("ndjson")) {
+          return (await res.json()) as RoutingPreview;
+        }
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("the re-run stream closed before it started");
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+          let at = buffer.indexOf("\n");
+          while (at >= 0) {
+            const line = buffer.slice(0, at).trim();
+            buffer = buffer.slice(at + 1);
+            at = buffer.indexOf("\n");
+            if (!line) continue;
+            const event = JSON.parse(line) as
+              | ({ type: "progress" } & RerunProgress)
+              | { type: "done"; preview: RoutingPreview }
+              | { type: "error"; message: string };
+            if (event.type === "progress") {
+              const { type: _t, ...progress } = event;
+              onProgress(progress);
+            } else if (event.type === "done") return event.preview;
+            else throw new Error(event.message);
+          }
+          if (done) throw new Error("the re-run stream ended without a result");
+        }
+      },
       /** The second call: applies the moves a preview proposed. */
       apply: (workspaceId: Id, moves: ProposedMove[]) =>
         request<RoutingApplied>(
@@ -681,10 +725,11 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
      */
     mcp: {
       search: (query: string, signal?: AbortSignal) =>
-        request<{ enabled: boolean; entries: McpCatalogEntry[] }>(
-          `/mcp-servers/catalog?${new URLSearchParams({ q: query })}`,
-          signal ? { signal } : {},
-        ),
+        request<{
+          enabled: boolean;
+          entries: McpCatalogEntry[];
+          catalog?: { count: number; complete: boolean };
+        }>(`/mcp-servers/catalog?${new URLSearchParams({ q: query })}`, signal ? { signal } : {}),
       list: () => request<{ servers: McpServerView[] }>("/mcp-servers").then((r) => r.servers),
       connect: (workspaceId: Id, input: McpConnectBody) =>
         request<McpConnectResponse>(

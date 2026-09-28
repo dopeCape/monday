@@ -154,6 +154,66 @@ describe("the worker loop", () => {
     expect(runner.spawns.map((s) => s.process.killed)).toEqual([true, true]);
   });
 
+  test("one ask waits on the Sidecar at a time, however many prompts run at once", async () => {
+    const queue = [call("a"), call("b"), call("c")];
+    let waiting = 0;
+    let mostWaiting = 0;
+    let running = 0;
+    let mostRunning = 0;
+    const release: Array<() => void> = [];
+    let idle!: () => void;
+    const drained = new Promise<void>((resolve) => {
+      idle = resolve;
+    });
+    const api = {
+      localRuntime: {
+        next: async (_a: LocalAnnounce, _w: number, signal?: AbortSignal) => {
+          waiting += 1;
+          mostWaiting = Math.max(mostWaiting, waiting);
+          try {
+            const next = queue.shift();
+            if (next) return next;
+            idle();
+            await new Promise<void>((resolve) =>
+              signal?.addEventListener("abort", () => resolve(), { once: true }),
+            );
+            return null;
+          } finally {
+            waiting -= 1;
+          }
+        },
+        // A run holds its slot until its answer is taken; the test takes them all at the end.
+        answer: () => {
+          running += 1;
+          mostRunning = Math.max(mostRunning, running);
+          return new Promise<void>((resolve) =>
+            release.push(() => {
+              running -= 1;
+              resolve();
+            }),
+          );
+        },
+      },
+    };
+    const runner = fakeProcessRunner({ claude: claudeSays("ok") });
+    const worker = startLocalWorker({
+      api,
+      runner: runner.runner,
+      mcp: MCP,
+      cli: "claude-code",
+      settings: () => settings({ "ai.local.background.concurrency": 3 }),
+    });
+    // All three runs hold their slots, so the worker asks for no fourth prompt.
+    while (running < 3) await new Promise((r) => setTimeout(r, 5));
+    expect(mostWaiting).toBe(1);
+    expect(mostRunning).toBe(3);
+    for (const r of release) r();
+    // Freed, it asks again and finds the queue empty.
+    await drained;
+    worker.stop();
+    await worker.done;
+  });
+
   test("the worker runs only in local mode with a ready command-line agent, never at AI level off", () => {
     const ready: RuntimeStatus = {
       cli: "claude-code",

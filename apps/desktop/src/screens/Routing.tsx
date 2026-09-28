@@ -23,6 +23,7 @@ import type {
   JudgeState,
   Predicate,
   ProposedMove,
+  RerunProgress,
   Settings,
   ThreadRoute,
 } from "@monday/shared";
@@ -94,7 +95,9 @@ export interface RoutingProps {
   groupIcon?: ((g: Group) => IconComponent | undefined) | undefined;
 }
 
-export type RoutingApi = Api["routing"];
+/** The routing routes; a re-run that streams its progress is optional (tests and older Servers). */
+export type RoutingApi = Omit<Api["routing"], "rerunWithProgress"> &
+  Partial<Pick<Api["routing"], "rerunWithProgress">>;
 
 type Strings = Record<string, string>;
 
@@ -229,6 +232,8 @@ export function Routing({
     null,
   );
   const [busy, setBusy] = useState(false);
+  /** A re-run as it goes: shown above the tabs until its preview replaces it. */
+  const [rerunning, setRerunning] = useState<RerunProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settled, setSettled] = useState<Set<string>>(() => new Set());
   /** Rows answered a moment ago, still on screen while they fade out. */
@@ -402,13 +407,18 @@ export function Routing({
   const rerun = async () => {
     setBusy(true);
     setError(null);
+    setPreview(null);
+    setRerunning({ done: 0, total: 0, moves: 0, subject: null });
     try {
-      const p = await api.rerun(workspaceId);
+      const p = api.rerunWithProgress
+        ? await api.rerunWithProgress(workspaceId, setRerunning)
+        : await api.rerun(workspaceId);
       setPreview({ moves: p.moves, considered: p.considered });
     } catch (e) {
       fail(e);
     } finally {
       setBusy(false);
+      setRerunning(null);
     }
   };
 
@@ -706,6 +716,59 @@ export function Routing({
               {s[sortingKey]}
             </span>
           </div>
+          {rerunning ? (
+            <div className="rt-rerun" role="status" aria-live="polite">
+              <div className="rt-rerun-head">
+                <Icon icon={ArrowsClockwiseIcon} className="rt-rerun-spin" />
+                <b>
+                  {rerunning.total > 0
+                    ? fill(s["rerun.progress"] ?? "Sorting {done} of {total}", {
+                        done: rerunning.done,
+                        total: rerunning.total,
+                      })
+                    : (s["rerun.starting"] ?? "Getting your newest threads")}
+                </b>
+                <span className="faint">
+                  {fill(s["rerun.moves"] ?? "{moves} would move so far", {
+                    moves: rerunning.moves,
+                  })}
+                </span>
+              </div>
+              <div className="rt-rerun-bar" aria-hidden="true">
+                <span
+                  style={{
+                    width: `${rerunning.total > 0 ? Math.round((rerunning.done / rerunning.total) * 100) : 0}%`,
+                  }}
+                />
+              </div>
+              {rerunning.subject ? (
+                <p className="faint rt-rerun-now">
+                  {fill(s["rerun.now"] ?? "Just scored: {subject}", { subject: rerunning.subject })}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {preview ? (
+            <PreviewCard
+              title={s["preview.title"] ?? "What would move"}
+              summary={fill(s["preview.considered"] ?? "{moves} of {n} threads would move", {
+                moves: preview.moves.length,
+                n: preview.considered,
+              })}
+              moves={preview.moves.map((m) => ({
+                threadId: m.threadId,
+                name: nameOf(m.from),
+                subject: m.subject,
+                target: targetOf(m),
+              }))}
+              emptyLabel={s["preview.none"] ?? "Nothing would move"}
+              applyLabel={s["preview.apply"] ?? "Apply"}
+              cancelLabel={s["preview.cancel"] ?? "Cancel"}
+              onApply={applyPreview}
+              onCancel={() => setPreview(null)}
+              busy={busy}
+            />
+          ) : null}
           <div className="two rt-two">
             <div className="tree">
               <Tabs
@@ -751,27 +814,6 @@ export function Routing({
               ) : null}
             </div>
             <aside>
-              {preview ? (
-                <PreviewCard
-                  title={s["preview.title"] ?? "What would move"}
-                  summary={fill(s["preview.considered"] ?? "{moves} of {n} threads would move", {
-                    moves: preview.moves.length,
-                    n: preview.considered,
-                  })}
-                  moves={preview.moves.map((m) => ({
-                    threadId: m.threadId,
-                    name: nameOf(m.from),
-                    subject: m.subject,
-                    target: targetOf(m),
-                  }))}
-                  emptyLabel={s["preview.none"] ?? "Nothing would move"}
-                  applyLabel={s["preview.apply"] ?? "Apply"}
-                  cancelLabel={s["preview.cancel"] ?? "Cancel"}
-                  onApply={applyPreview}
-                  onCancel={() => setPreview(null)}
-                  busy={busy}
-                />
-              ) : null}
               {aiOff || locked ? null : (
                 <SideCard title={s["ask.title"] ?? "Ask for a group"}>
                   <AskBox

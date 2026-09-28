@@ -1014,4 +1014,37 @@ describe("judgments over the fixture mailbox", () => {
     expect(gone).toHaveLength(3);
     expect(gone[2]?.payload).toMatchObject({ deleted: true, needsReply: 0.2 });
   });
+
+  test("a re-run asked for NDJSON tells each Thread as it is scored, then the preview", async () => {
+    const plain = (await (
+      await send("/routing/rerun", { workspace: workspaceId, recent: 50 })
+    ).json()) as RoutingPreview;
+    const streamed = await request("/routing/rerun", {
+      method: "POST",
+      body: JSON.stringify({ workspace: workspaceId, recent: 50 }),
+      headers: { accept: "application/x-ndjson" },
+    });
+    expect(streamed.headers.get("content-type")).toContain("application/x-ndjson");
+    const streamLines = (await streamed.text())
+      .split("\n")
+      .filter(Boolean)
+      .map(
+        (l) =>
+          JSON.parse(l) as {
+            type: string;
+            done?: number;
+            total?: number;
+            preview?: RoutingPreview;
+          },
+      );
+    const progress = streamLines.filter((l) => l.type === "progress");
+    expect(progress[0]).toMatchObject({ done: 0, total: plain.considered });
+    expect(progress.map((p) => p.done)).toEqual(
+      Array.from({ length: plain.considered + 1 }, (_, i) => i),
+    );
+    const last = streamLines[streamLines.length - 1];
+    expect(last?.type).toBe("done");
+    expect(last?.preview?.considered).toBe(plain.considered);
+    expect(last?.preview?.moves.length).toBe(plain.moves.length);
+  });
 });

@@ -366,6 +366,8 @@ export function ConnectTool(props: ConnectToolProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<McpCatalogEntry[]>([]);
   const [searchState, setSearchState] = useState<"idle" | "busy" | "off" | "failed">("idle");
+  /** Servers in the Server's copy of the registry while it is still downloading; null once complete. */
+  const [catalogLoading, setCatalogLoading] = useState<number | null>(null);
   const [focus, setFocus] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -398,6 +400,7 @@ export function ConnectTool(props: ConnectToolProps) {
         const found = await api.mcp.search(query, controller.signal);
         if (controller.signal.aborted) return;
         setResults(found.entries);
+        setCatalogLoading(found.catalog && !found.catalog.complete ? found.catalog.count : null);
         setSearchState(found.enabled ? "idle" : "off");
         setFocus(0);
       } catch {
@@ -517,6 +520,13 @@ export function ConnectTool(props: ConnectToolProps) {
         </div>
         <div className="mcp-results" role="listbox" aria-label={s["strings.mcp.results"]}>
           {searchState === "off" ? <p className="note">{s["strings.mcp.search_off"]}</p> : null}
+          {catalogLoading !== null && searchState !== "off" ? (
+            <p className="note" data-catalog="loading">
+              {fillIn(s["strings.mcp.catalog_loading"], {
+                count: catalogLoading.toLocaleString(),
+              })}
+            </p>
+          ) : null}
           {searchState === "failed" ? (
             <p className="note">{s["strings.mcp.search_failed"]}</p>
           ) : null}

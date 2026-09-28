@@ -109,6 +109,7 @@ export function createMcpModule(options: McpModuleOptions): McpModule {
         "workflows.mcp_registry.results",
         "workflows.mcp_registry.refresh_hours",
         "workflows.mcp_registry.demote",
+        "workflows.mcp_registry.live_wait_seconds",
       ]);
       return {
         enabled: s["workflows.mcp_registry.enabled"],
@@ -116,6 +117,7 @@ export function createMcpModule(options: McpModuleOptions): McpModule {
         results: s["workflows.mcp_registry.results"],
         refreshHours: s["workflows.mcp_registry.refresh_hours"],
         demote: s["workflows.mcp_registry.demote"],
+        liveWaitMs: s["workflows.mcp_registry.live_wait_seconds"] * 1000,
       };
     },
     ...(options.fetch ? { fetch: (url, init) => (options.fetch as FetchLike)(url, init) } : {}),

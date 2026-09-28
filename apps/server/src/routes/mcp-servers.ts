@@ -28,6 +28,8 @@ export const MCP_CALLBACK_PATH = "/mcp-servers/oauth/callback";
 export interface McpServerRoutesOptions {
   connections: McpConnections;
   registry: McpRegistry;
+  /** How far the Server's copy of the registry is, for the "still loading" note. */
+  catalogStatus?: (() => Promise<{ count: number; complete: boolean }>) | undefined;
   /** The Server's public URL, for a Cloud server's redirect; the request's origin when absent. */
   publicUrl?: (() => Promise<string | null>) | undefined;
   /** How long /sign-in/status waits before answering pending. */
@@ -82,7 +84,12 @@ export function mcpServerRoutes(options: McpServerRoutesOptions): Hono<AppEnv> {
         q,
         Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined,
       );
-      return c.json({ enabled: true, entries });
+      const catalog = options.catalogStatus ? await options.catalogStatus() : null;
+      return c.json({
+        enabled: true,
+        entries,
+        ...(catalog ? { catalog: { count: catalog.count, complete: catalog.complete } } : {}),
+      });
     } catch (error) {
       if (error instanceof McpRegistryOffError) return c.json({ enabled: false, entries: [] });
       if (error instanceof McpRegistryUnavailableError) {

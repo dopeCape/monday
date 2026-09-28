@@ -146,6 +146,14 @@ export interface ProposedMove {
 }
 
 /** A dry run over the last N Threads (docs/spec/architecture.md: `/routing/rerun`). */
+/** A re-run as it goes: how far, how many would move, and the Thread just scored. */
+export interface RerunProgress {
+  done: number;
+  total: number;
+  moves: number;
+  subject: string | null;
+}
+
 export interface RoutingPreview {
   workspaceId: Id;
   /** How many Threads were scored. */

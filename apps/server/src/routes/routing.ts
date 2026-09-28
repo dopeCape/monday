@@ -7,6 +7,7 @@
 //   GET    /routing/decisions?workspace=         {decisions: RoutingDecision[]}  Needs a decision, newest first
 //   POST   /routing/decisions/:threadId          {group: id | null, at?} -> CorrectionResult  the user's choice
 //   POST   /routing/rerun                        {workspace, recent?} -> RoutingPreview  a dry run, nothing moves
+//                                                 (Accept: application/x-ndjson streams {type:progress|done|error} lines)
 //   POST   /routing/rerun/apply                  {workspace, moves} -> RoutingApplied  the second call
 //   POST   /threads/:id/route                    {workspace} -> {jobId}  enqueues the route Job (202)
 //   GET    /threads/:id/route                    ThreadRoute, or 404 when never routed
@@ -161,6 +162,34 @@ export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
   app.post("/routing/rerun", async (c) => {
     const body = await parseBody(c, rerunBody);
     if (!body.ok) return body.response;
+    const recent = body.data.recent !== undefined ? { recent: body.data.recent } : {};
+    // Asked for NDJSON, the re-run streams a line per Thread scored, then the preview.
+    if ((c.req.header("accept") ?? "").includes("application/x-ndjson")) {
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const line = (value: unknown) =>
+            controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+          try {
+            const preview = await routing.preview(body.data.workspace, {
+              ...recent,
+              onProgress: (progress) => line({ type: "progress", ...progress }),
+            });
+            line({ type: "done", preview });
+          } catch (error) {
+            line({
+              type: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          } finally {
+            controller.close();
+          }
+        },
+      });
+      return new Response(stream, {
+        headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" },
+      });
+    }
     return c.json(
       await routing.preview(
         body.data.workspace,

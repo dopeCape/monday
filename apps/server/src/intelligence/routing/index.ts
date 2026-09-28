@@ -28,6 +28,7 @@ import type {
   Person,
   Predicate,
   ProposedMove,
+  RerunProgress,
   RouteBy,
   RoutePlacement,
   RoutingApplied,
@@ -112,6 +113,8 @@ export interface RoutingSettings {
   snippetChars: number;
   examplesInPrompt: number;
   rerunRecent: number;
+  /** How many Threads a re-run scores at once. */
+  rerunConcurrency?: number;
   lookbackDays: number;
   briefPolicyDefault: BriefPolicy;
   /** The routing Choice's wording (routing.judge.*), for the judge path. */
@@ -200,7 +203,12 @@ export interface Routing {
    */
   preview(
     workspaceId: Id,
-    options?: { recent?: number; candidates?: readonly CandidateGroup[] },
+    options?: {
+      recent?: number;
+      candidates?: readonly CandidateGroup[];
+      /** Called after each Thread is scored, for a re-run that shows its progress. */
+      onProgress?: (progress: RerunProgress) => void;
+    },
   ): Promise<RoutingPreview>;
   /** Applies moves a preview proposed. */
   apply(workspaceId: Id, moves: readonly ProposedMove[]): Promise<RoutingApplied>;
@@ -1148,20 +1156,37 @@ export function createRouting(options: RoutingOptions): Routing {
         ? await db.select().from(threads).where(inArray(threads.id, ids))
         : [];
       const byId = new Map(rows.map((r) => [r.id, r]));
-      const moves: ProposedMove[] = [];
-      let calls = 0;
-      let considered = 0;
-      for (const id of ids) {
+      const todo = ids.flatMap((id) => {
         const row = byId.get(id);
-        if (!row || userPlaced(row)) continue;
-        considered += 1;
-        const facts = await readFacts(row);
-        const scored = await scoreThread(row, facts, all, settings, null);
-        calls += scored.calls;
-        const { proposal, differs } = toProposed(row, facts, scored, settings);
-        if (differs) moves.push(proposal);
-      }
-      return { workspaceId, considered, moves, calls };
+        return row && !userPlaced(row) ? [row] : [];
+      });
+      // A few at a time: each score may wait on the Judge over the network.
+      const found: Array<ProposedMove | null> = todo.map(() => null);
+      let calls = 0;
+      let done = 0;
+      let moved = 0;
+      let next = 0;
+      opts.onProgress?.({ done: 0, total: todo.length, moves: 0, subject: null });
+      const worker = async () => {
+        while (next < todo.length) {
+          const i = next++;
+          const row = todo[i] as ThreadRow;
+          const facts = await readFacts(row);
+          const scored = await scoreThread(row, facts, all, settings, null);
+          calls += scored.calls;
+          const { proposal, differs } = toProposed(row, facts, scored, settings);
+          if (differs) {
+            found[i] = proposal;
+            moved += 1;
+          }
+          done += 1;
+          opts.onProgress?.({ done, total: todo.length, moves: moved, subject: proposal.subject });
+        }
+      };
+      const pool = Math.max(1, Math.min(settings.rerunConcurrency ?? 1, todo.length));
+      await Promise.all(Array.from({ length: pool }, worker));
+      const moves = found.filter((m): m is ProposedMove => m !== null);
+      return { workspaceId, considered: todo.length, moves, calls };
     },
 
     async apply(workspaceId, moves) {

@@ -84,6 +84,7 @@ import { fill } from "./screens/settings/wizard.ts";
 import { Workflows, type WorkflowsView } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
+import { useIsActivePane } from "./shell/active.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
 import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
@@ -264,8 +265,10 @@ export function App({
   runtimesRef.current = runtimes;
   // While ai.mode is local, the Sidecar hands this Device's command-line agent
   // the background work that needs a language model (Workflow steps, sorting).
+  // One worker for the app: only the Account on show runs it, not every mounted pane.
+  const activePane = useIsActivePane();
   useLocalWorker({
-    spawn: shell.spawn,
+    spawn: activePane ? shell.spawn : null,
     sidecar: shell.sidecar,
     settings: shell.settings,
     runtimes,

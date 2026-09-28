@@ -496,6 +496,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     mcpServerRoutes({
       connections: mcp.connections,
       registry: mcp.registry,
+      catalogStatus: () => mcp.catalog.status(),
       ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
     }),
   );

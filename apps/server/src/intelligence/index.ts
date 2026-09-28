@@ -409,6 +409,7 @@ const ROUTING_SETTING_KEYS = [
   "routing.classify.snippet_chars",
   "routing.examples_in_prompt",
   "routing.rerun.recent",
+  "routing.rerun.concurrency",
   "routing.lookback_days",
   "routing.brief_policy.default",
   "routing.judge.instructions",
@@ -633,6 +634,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         snippetChars: s["routing.classify.snippet_chars"],
         examplesInPrompt: s["routing.examples_in_prompt"],
         rerunRecent: s["routing.rerun.recent"],
+        rerunConcurrency: s["routing.rerun.concurrency"],
         lookbackDays: s["routing.lookback_days"],
         briefPolicyDefault: s["routing.brief_policy.default"],
         judge: {

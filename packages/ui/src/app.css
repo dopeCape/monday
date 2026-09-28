@@ -10802,3 +10802,45 @@ button.prov {
   display: flex;
   flex-direction: column;
 }
+
+/* A re-run as it goes (Routing): what it is on, how far, and what would move so far. */
+.rt-rerun {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+.rt-rerun-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-sm);
+}
+.rt-rerun-head .faint {
+  margin-left: auto;
+}
+.rt-rerun-spin {
+  animation: spin var(--t-spin) linear infinite;
+  color: var(--accent);
+}
+.rt-rerun-bar {
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 2px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.rt-rerun-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--t-med) var(--ease);
+}
+.rt-rerun-now {
+  margin: 8px 0 0;
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

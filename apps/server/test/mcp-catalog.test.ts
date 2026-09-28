@@ -115,6 +115,7 @@ function catalogOver(
     results: 10,
     refreshHours: 24,
     demote: ["ai.smithery/"],
+    liveWaitMs: 2000,
     ...overrides,
   };
   const live = createMcpRegistry({
@@ -212,6 +213,24 @@ describe("the Server's copy of the MCP Registry", () => {
       refresh.some((u) => u.searchParams.get("updated_since") === "2026-09-28T10:00:00.000Z"),
     ).toBe(true);
     expect((await catalog.search("comments")).map((e) => e.id)).toEqual(["io.github.x/notion"]);
+  });
+
+  test("a live search the registry is slow to answer never holds a search up past the wait", async () => {
+    await reset();
+    const reg = fakeRegistry();
+    reg.failPage = 1;
+    const slow: FakeRegistry = {
+      ...reg,
+      fetch: async (url) => {
+        if (new URL(url).searchParams.get("search")) await new Promise((r) => setTimeout(r, 5_000));
+        return reg.fetch(url);
+      },
+    };
+    const { catalog } = catalogOver(slow, { liveWaitMs: 200 });
+    const started = Date.now();
+    expect(await catalog.search("notion")).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await catalog.syncOnce();
   });
 
   test("another registry URL starts the copy over", async () => {

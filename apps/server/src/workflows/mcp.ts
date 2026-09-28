@@ -130,6 +130,17 @@ function missingIn(templates: string[], values: Record<string, string>): string[
   return out;
 }
 
+/** Whether the server refused with 402 Payment Required: its provider wants a paid plan. */
+export function isPaymentRequired(error: unknown): boolean {
+  for (let e = error, depth = 0; e && depth < 4; depth++) {
+    const x = e as { code?: unknown; message?: unknown };
+    if (x.code === 402) return true;
+    if (typeof x.message === "string" && /\b402\b|payment required/i.test(x.message)) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** The status an error from connecting or calling means. */
 export function statusOfError(error: unknown): { status: McpServerStatus; message: string } {
   const message = error instanceof Error ? error.message : String(error);
@@ -137,6 +148,13 @@ export function statusOfError(error: unknown): { status: McpServerStatus; messag
   if (error instanceof McpNeedsInputError) return { status: "needs_input", message };
   if (error instanceof McpLocalUnavailableError) return { status: "unavailable", message };
   if (isUnauthorized(error)) return { status: "needs_sign_in", message };
+  if (isPaymentRequired(error)) {
+    return {
+      status: "error",
+      message:
+        "This server's provider asks for a paid plan before it answers (402 Payment Required). Sign up with them, or pick another server.",
+    };
+  }
   return { status: "error", message };
 }
 
