@@ -23,6 +23,8 @@ import {
 import { z } from "zod";
 import type { IntegrationPost, IntegrationResult } from "../../../workflows/integrations.ts";
 import type { McpCallResult } from "../../../workflows/mcp.ts";
+import type { McpConnections } from "../../../workflows/mcp-connections.ts";
+import type { McpRegistry } from "../../../workflows/mcp-registry.ts";
 import type { GuardSeam } from "../../guard.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
 import type { OrganizeSeam } from "../../organize.ts";
@@ -42,6 +44,12 @@ export interface IntegrationsSeam {
 
 export interface McpSeam {
   call(server: string, tool: string, args: Record<string, unknown>): Promise<McpCallResult>;
+}
+
+/** Connect a tool, for the Agent: the registry search and the Connect service. */
+export interface McpConnectSeam {
+  registry: Pick<McpRegistry, "search" | "get">;
+  connections: Pick<McpConnections, "list" | "add">;
 }
 
 /** What the Workflow tools act through: the Workflows module on the Server. */
@@ -84,6 +92,8 @@ export interface ToolExtensions {
   voice?: VoiceSeam | undefined;
   integrations?: IntegrationsSeam | undefined;
   mcp?: McpSeam | undefined;
+  /** Searching the MCP Registry and connecting a server from it. */
+  mcpConnect?: McpConnectSeam | undefined;
   workflows?: WorkflowsSeam | undefined;
   external?: ExternalSeam | undefined;
   /** What the onboarding tools act through (slice 20). */
@@ -264,6 +274,137 @@ const callMcpTool: ToolDefinition<{ server: string; tool: string; args: Record<s
       };
     },
   };
+
+const searchMcpCatalog: ToolDefinition<{ query: string; limit: number }> = {
+  name: "search_mcp_catalog",
+  description:
+    "Search the MCP Registry for servers that add tools (Linear, GitHub, a CRM) and list the ones already connected. Sends only the query to the registry. Suggest one; connect_mcp connects it after the user approves.",
+  tier: "read",
+  input: z.object({
+    query: z.string().max(200).describe("Words from the server's name, such as linear or github"),
+    limit: z.int().min(1).max(20).default(8),
+  }),
+  summarize: (i) => `MCP Registry: ${i.query}`,
+  async run(i, ctx) {
+    const seam = ctx.extensions?.mcpConnect;
+    if (!seam)
+      return { kind: "refused", text: "Connecting tools is not available from this host." };
+    const connected = await seam.connections.list();
+    let entries: Awaited<ReturnType<McpConnectSeam["registry"]["search"]>> = [];
+    let note = "";
+    try {
+      entries = await seam.registry.search(i.query, i.limit);
+    } catch (error) {
+      note = `The registry search failed (${error instanceof Error ? error.message : String(error)}); a server can still be connected by URL.`;
+    }
+    const lines = [
+      connected.length > 0
+        ? `Connected: ${connected.map((c) => `${c.name} (${c.status})`).join(", ")}`
+        : "No MCP servers are connected yet.",
+      ...entries.map(
+        (e) =>
+          `- ${e.id} "${e.title}" by ${e.publisher}: ${e.description}${e.remote ? " [remote]" : ""}${e.local ? ` [local: ${e.local.command}]` : ""}`,
+      ),
+      ...(entries.length === 0 && !note ? [`Nothing in the registry matches "${i.query}".`] : []),
+      ...(note ? [note] : []),
+    ];
+    return { kind: "result", text: lines.join("\n"), data: { connected, entries } };
+  },
+};
+
+const connectMcp: ToolDefinition<{
+  id?: string | undefined;
+  url?: string | undefined;
+  name?: string | undefined;
+}> = {
+  name: "connect_mcp",
+  description:
+    "Connect an MCP server from the registry (its id from search_mcp_catalog) or by URL, so its tools become Workflow steps and Agent tools. It reaches a third party, so it always asks first. Sign-ins, keys and other inputs are finished by the user under Settings, Workflows, MCP servers; never ask the user to paste a secret here.",
+  tier: "leaves_mailbox",
+  input: z
+    .object({
+      id: z.string().min(3).max(200).optional().describe("The registry id, io.github.owner/server"),
+      url: z.url().optional().describe("A remote server's URL, when it is not in the registry"),
+      name: z.string().min(1).max(60).optional(),
+    })
+    .refine((i) => Boolean(i.id) !== Boolean(i.url), { message: "give an id or a url" }),
+  summarize: (i) => `Connect ${i.id ?? i.url}`,
+  async run(i, ctx) {
+    const seam = ctx.extensions?.mcpConnect;
+    if (!seam)
+      return { kind: "refused", text: "Connecting tools is not available from this host." };
+    let input: Parameters<McpConnectSeam["connections"]["add"]>[1];
+    let line: string;
+    if (i.id) {
+      const entry = await seam.registry.get(i.id).catch(() => null);
+      if (!entry) return { kind: "refused", text: `The registry has no server ${i.id}.` };
+      // Remote first; a local package starts a command, which the card shows in full.
+      if (entry.remote) {
+        const needs = entry.remote.inputs.filter((x) => x.required);
+        if (needs.length > 0) {
+          return {
+            kind: "refused",
+            text: `${entry.title} needs ${needs.map((x) => x.name).join(", ")}. Open Settings, Workflows, MCP servers, Connect a tool, and pick ${entry.title}; the user fills those there.`,
+          };
+        }
+        input = {
+          name: i.name ?? entry.name,
+          title: entry.title,
+          registry: entry.id,
+          url: entry.remote.url,
+          transport: entry.remote.transport,
+          headers: entry.remote.headers,
+        };
+        line = `${entry.title} (${entry.id})\n${entry.remote.url}`;
+      } else if (entry.local) {
+        if (entry.local.inputs.some((x) => x.required)) {
+          return {
+            kind: "refused",
+            text: `${entry.title} needs ${entry.local.inputs
+              .filter((x) => x.required)
+              .map((x) => x.name)
+              .join(
+                ", ",
+              )}. Open Settings, Workflows, MCP servers, Connect a tool, and pick ${entry.title}; the user fills those there.`,
+          };
+        }
+        input = {
+          name: i.name ?? entry.name,
+          title: entry.title,
+          registry: entry.id,
+          command: entry.local.command,
+          args: entry.local.args,
+          env: entry.local.env,
+        };
+        line = `${entry.title} (${entry.id})\nRuns: ${[entry.local.command, ...entry.local.args].join(" ")}`;
+      } else {
+        return { kind: "refused", text: `${entry.title} has nothing monday can connect to.` };
+      }
+    } else {
+      const url = i.url as string;
+      input = {
+        name: i.name ?? new URL(url).hostname.split(".").slice(-2, -1)[0] ?? "server",
+        url,
+      };
+      line = url;
+    }
+    return {
+      kind: "action",
+      preview: text(`Connect ${line}`),
+      count: 1,
+      apply: async () => {
+        const result = await seam.connections.add(ctx.host.workspaceId, input);
+        const next =
+          result.next === "sign_in"
+            ? " It needs a sign-in: open Settings, Workflows, MCP servers and choose Sign in."
+            : result.next === "input"
+              ? " It needs a key or token: open Settings, Workflows, MCP servers to add it."
+              : ` ${result.tools.length} tools are available.`;
+        return { text: `Connected ${result.server.name}.${next}`, data: result, undo: null };
+      },
+    };
+  },
+};
 
 /* ------------------------------ Workflows ------------------------------ */
 
@@ -704,6 +845,8 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   saveToDrive,
   callWebhook,
   callMcpTool,
+  searchMcpCatalog,
+  connectMcp,
   listWorkflows,
   createWorkflow,
   updateWorkflow,

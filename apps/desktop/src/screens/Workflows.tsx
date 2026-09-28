@@ -47,16 +47,19 @@ import {
   FlaskIcon,
   PencilSimpleIcon,
   PlayIcon,
+  PlugsConnectedIcon,
   PlusIcon,
   TerminalWindowIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { cliLabel } from "../agent/runtimes/index.ts";
+import { openExternal } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
 import { fill } from "./inbox/triage.ts";
 import { LevelLock, useLevelLock } from "./LevelLock.tsx";
+import { ConnectTool } from "./mcp/ConnectTool.tsx";
 import { flowModel, flowStrings } from "./workflows/flow.ts";
 import { RunHistory } from "./workflows/RunHistory.tsx";
 import { statusLabel, workflowStatus } from "./workflows/status.ts";
@@ -168,6 +171,8 @@ export function Workflows({
   const [busy, setBusy] = useState(false);
   /** The last action that failed; cleared by the next action, never by a refresh. */
   const [error, setError] = useState<string | null>(null);
+  /** Connect a tool (docs/spec/settings.md "MCP servers"): its tools become Steps. */
+  const [connecting, setConnecting] = useState(false);
   /** Why the list could not load; cleared by the next load that succeeds. */
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ask, setAsk] = useState("");
@@ -363,6 +368,11 @@ export function Workflows({
       <div className="page-wrap">
         <div className="page-in wf-page">
           <PageHead title={s.title ?? "Workflows"} subtitle={s.subtitle}>
+            {locked || !server ? null : (
+              <Btn outline onClick={() => setConnecting(true)}>
+                <Icon icon={PlugsConnectedIcon} /> {settings["strings.mcp.connect"]}
+              </Btn>
+            )}
             {locked ? null : (
               <Btn primary onClick={() => newWorkflow()}>
                 <Icon icon={PlusIcon} /> {s.new ?? "New workflow"}
@@ -386,6 +396,16 @@ export function Workflows({
             active={view}
             onChange={setView}
           />
+          {connecting ? (
+            <ConnectTool
+              api={shell.api}
+              workspaceId={workspaceId}
+              s={settings}
+              openExternal={openExternal}
+              onClose={() => setConnecting(false)}
+              onConnected={() => void shell.refresh()}
+            />
+          ) : null}
           {(error ?? loadError) ? (
             <p className="faint routing-error" role="alert">
               {error ?? loadError}

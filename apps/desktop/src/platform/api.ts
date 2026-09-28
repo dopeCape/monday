@@ -48,6 +48,10 @@ import type {
   LocalAnnounce,
   LocalAnswer,
   LocalCall,
+  McpCatalogEntry,
+  McpServerView,
+  McpSignInStatus,
+  McpToolView,
   MessageBodiesPage,
   MeterMonth,
   ProposedMove,
@@ -669,6 +673,46 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           json("POST", { decision, standing }),
         ),
     },
+    /**
+     * Connect a tool (docs/spec/settings.md "MCP servers"): the registry
+     * search, connecting by URL or command, the browser sign-in with its
+     * Cancel, the tools each server offers, and remove. The Server seals every
+     * secret; nothing here reads one back.
+     */
+    mcp: {
+      search: (query: string, signal?: AbortSignal) =>
+        request<{ enabled: boolean; entries: McpCatalogEntry[] }>(
+          `/mcp-servers/catalog?${new URLSearchParams({ q: query })}`,
+          signal ? { signal } : {},
+        ),
+      list: () => request<{ servers: McpServerView[] }>("/mcp-servers").then((r) => r.servers),
+      connect: (workspaceId: Id, input: McpConnectBody) =>
+        request<McpConnectResponse>(
+          "/mcp-servers",
+          json("POST", { workspace: workspaceId, ...input }),
+        ),
+      tools: (name: string) =>
+        request<{ server: McpServerView; tools: McpToolView[] }>(
+          `/mcp-servers/${encodeURIComponent(name)}/tools`,
+        ),
+      setTools: (name: string, tools: string[]) =>
+        request<{ server: McpServerView }>(
+          `/mcp-servers/${encodeURIComponent(name)}`,
+          json("PATCH", { tools }),
+        ).then((r) => r.server),
+      remove: (name: string) =>
+        raw(`/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => undefined),
+      signIn: (workspaceId: Id, name: string) =>
+        request<{ state: string; url: string }>(
+          `/mcp-servers/${encodeURIComponent(name)}/sign-in`,
+          json("POST", { workspace: workspaceId }),
+        ),
+      /** Long-polls while the browser is open. */
+      signInStatus: (state: string) =>
+        request<McpSignInStatus>(`/mcp-servers/sign-in/status?${new URLSearchParams({ state })}`),
+      cancelSignIn: (state: string) =>
+        request<McpSignInStatus>("/mcp-servers/sign-in/cancel", json("POST", { state })),
+    },
     /** The calendar (slice 18): calendars, Events in a window, the content batch, Invites and the RSVP intent. */
     calendar: {
       info: (workspaceId: Id) =>
@@ -1057,5 +1101,30 @@ export type OAuthStatus =
   | { status: "done"; account: AccountView }
   | { status: "error"; message: string }
   | { status: "cancelled" };
+
+/** What POST /mcp-servers takes besides the Workspace (the Server's McpConnectInput). */
+export interface McpConnectBody {
+  name: string;
+  title?: string;
+  registry?: string;
+  url?: string;
+  transport?: "streamable-http" | "sse";
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  values?: Record<string, string>;
+  secret?: string[];
+  token?: string;
+  auth?: "auto" | "none" | "bearer" | "oauth" | "inputs";
+  tools?: string[];
+  replace?: boolean;
+}
+
+export interface McpConnectResponse {
+  server: McpServerView;
+  next: "ready" | "sign_in" | "input";
+  tools: McpToolView[];
+}
 
 export type Api = ReturnType<typeof createApi>;

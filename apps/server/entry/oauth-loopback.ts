@@ -3,7 +3,9 @@
 // come back with the authorization code, answers a small "you can close this
 // window" page, and hands the query to the route that opened it. Google's
 // Desktop clients accept any http://127.0.0.1:port; Entra's "Mobile and
-// desktop" platform registers http://localhost and ignores the port.
+// desktop" platform registers http://localhost and ignores the port. An MCP
+// server's sign-in ("mcp") takes the Google shape, which the MCP spec's
+// examples use too.
 
 import type { LoopbackListener } from "../src/routes/oauth.ts";
 
@@ -34,7 +36,7 @@ export function createLoopbackListener(options: LoopbackOptions = {}): LoopbackL
         resolveCallback = resolve;
         rejectCallback = reject;
       });
-      const hostname = provider === "google" ? "127.0.0.1" : "localhost";
+      const hostname = provider === "microsoft" ? "localhost" : "127.0.0.1";
       const server = Bun.serve({
         hostname,
         port: 0,
@@ -57,9 +59,9 @@ export function createLoopbackListener(options: LoopbackOptions = {}): LoopbackL
       }, timeoutMs);
       timer.unref();
       const redirectUri =
-        provider === "google"
-          ? `http://127.0.0.1:${server.port}/callback`
-          : `http://localhost:${server.port}`;
+        provider === "microsoft"
+          ? `http://localhost:${server.port}`
+          : `http://127.0.0.1:${server.port}/callback`;
       return {
         redirectUri,
         callback,

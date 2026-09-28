@@ -118,6 +118,8 @@ describe("the tool catalog", () => {
       save_to_drive: "leaves_mailbox",
       call_webhook: "leaves_mailbox",
       call_mcp_tool: "leaves_mailbox",
+      search_mcp_catalog: "read",
+      connect_mcp: "leaves_mailbox",
       list_workflows: "read",
       create_workflow: "reversible",
       update_workflow: "reversible",
