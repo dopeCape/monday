@@ -137,16 +137,18 @@ describe("tuning the judgments behind routing", () => {
     receiptId = receipt.id;
 
     // The judge, scripted by the question's own words: the shipped wording
-    // hears the receipt as needing a reply, the reworded one does not.
+    // hears the receipt as needing a reply, the reworded one does not. It
+    // also misses that the receipt is automated, or Needs your reply would
+    // keep it out whatever the needs-reply answer.
     judge.when(
       (state, q) =>
         subjectOf(state).includes("order has shipped") &&
         instructionsOf(q, "needs_reply").includes("Receipts, shipping notices"),
-      { needs_reply: 0.08 },
+      { needs_reply: 0.08, automated: 0.1, newsletter: 0.1 },
     );
     judge.when(
       (state, q) => subjectOf(state).includes("order has shipped") && q.needs_reply !== undefined,
-      { needs_reply: 0.93 },
+      { needs_reply: 0.93, automated: 0.1, newsletter: 0.1 },
     );
     // Routing: a Receipts Example about this very thread places it there; nothing else does.
     judge.when(
