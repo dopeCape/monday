@@ -209,6 +209,20 @@ async function main() {
       // Only a process on the user's machine can catch the browser's loopback redirect.
       loopback: mode === "sidecar" ? createLoopbackListener() : null,
     },
+    // An MCP server's sign-in: the same loopback on the Sidecar, the public callback on a Cloud server.
+    mcp: {
+      loopback:
+        mode === "sidecar"
+          ? {
+              open: async () =>
+                createLoopbackListener({
+                  timeoutMs:
+                    (await readGlobalSetting(handle.db, "workflows.mcp_connect.sign_in_minutes")) *
+                    60_000,
+                }).open("mcp"),
+            }
+          : null,
+    },
     push,
     calendar,
     mounts: mode === "sidecar" ? [upgradeRoutes(upgrade)] : [],

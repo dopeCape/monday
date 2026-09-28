@@ -77,6 +77,7 @@ import {
 import { integrationRoutes } from "./routes/integrations.ts";
 import { intelligenceRoutes } from "./routes/intelligence.ts";
 import { mailRoutes } from "./routes/mail.ts";
+import { MCP_CALLBACK_PATH, mcpServerRoutes } from "./routes/mcp-servers.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
 import { routingRoutes } from "./routes/routing.ts";
@@ -88,7 +89,10 @@ import { workflowRoutes } from "./routes/workflows.ts";
 import { readGlobalSettings } from "./settings/read.ts";
 import { createSnoozeWaker } from "./snooze.ts";
 import { IntegrationNotConfiguredError } from "./workflows/integrations.ts";
-import { McpServerUnknownError } from "./workflows/mcp.ts";
+import { McpLocalUnavailableError, McpServerUnknownError } from "./workflows/mcp.ts";
+import { McpConnectError, type McpLoopback } from "./workflows/mcp-connections.ts";
+import { createMcpModule } from "./workflows/mcp-module.ts";
+import type { FetchLike as McpFetch } from "./workflows/mcp-oauth.ts";
 
 export type { AppEnv } from "./auth/middleware.ts";
 
@@ -193,6 +197,12 @@ export interface AppOptions {
   publicUrl?: () => Promise<string | null>;
   /** Where the boot and unlock sweeps report; defaults to console.warn. */
   log?: (message: string) => void;
+  /**
+   * Connect a tool (docs/spec/settings.md "MCP servers"): the Sidecar's
+   * loopback receiver for a server's sign-in, and the HTTP client under the
+   * registry search, OAuth and URL servers (tests pass one).
+   */
+  mcp?: { loopback?: McpLoopback | null; fetch?: McpFetch } | undefined;
 }
 
 /** Whether an error, or the cause under it, says the database connection is gone. */
@@ -228,6 +238,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       }
       return created;
     })();
+  // MCP servers: the sealed store, the clients, the registry and the Connect service.
+  const mcp = createMcpModule({
+    db,
+    content: mailstore,
+    mode,
+    loopback: options.mcp?.loopback ?? null,
+    ...(options.mcp?.fetch ? { fetch: options.mcp.fetch } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
   const intelligence =
     options.intelligence ??
     (() => {
@@ -235,6 +254,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         db,
         mailstore,
         drafts,
+        mcp: mcp.clients,
         ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
         ...(options.judge ? { judge: options.judge } : {}),
         ...(options.demo ? { demo: options.demo } : {}),
@@ -341,12 +361,16 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       },
     });
   intelligence.extensions.external = external;
+  intelligence.extensions.mcpConnect = { registry: mcp.registry, connections: mcp.connections };
 
   // Rows earlier versions wrote in the clear (transcripts, Voice profiles,
   // integration secrets in the Setting) move under the envelope as soon as
   // the root key is in memory: now, or after POST /unlock.
   const log = options.log ?? ((m: string) => console.warn(m));
   const sealLegacy = async () => {
+    const first = await db.query.workspaces.findFirst({ columns: { id: true } });
+    const tokens = first ? await mcp.connections.adopt(first.id) : 0;
+    if (tokens > 0) log(`[hardening] sealed ${tokens} MCP server token(s)`);
     const moved = await intelligence.sealLegacy();
     const total = moved.transcripts + moved.voices + moved.integrations;
     if (total > 0) {
@@ -381,7 +405,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.use(
     "*",
     requireAuth(
-      [...PUBLIC_PATHS, ...EXTERNAL_PUBLIC_PATHS],
+      [...PUBLIC_PATHS, ...EXTERNAL_PUBLIC_PATHS, MCP_CALLBACK_PATH],
       [...PUBLIC_PREFIXES, ...EXTERNAL_PUBLIC_PREFIXES],
     ),
   );
@@ -437,6 +461,14 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
   app.route("/", integrationRoutes(intelligence.integrationSecrets));
+  app.route(
+    "/",
+    mcpServerRoutes({
+      connections: mcp.connections,
+      registry: mcp.registry,
+      ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+    }),
+  );
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
   app.route("/", workflowRoutes(intelligence.workflows));
@@ -507,6 +539,15 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }
     if (error instanceof McpServerUnknownError) {
       return c.json({ error: "unknown_mcp_server", server: error.server }, 400);
+    }
+    if (error instanceof McpConnectError) {
+      return c.json(
+        { error: error.code, message: error.message },
+        error.code === "exists" ? 409 : 400,
+      );
+    }
+    if (error instanceof McpLocalUnavailableError) {
+      return c.json({ error: "local_unavailable", message: error.message }, 400);
     }
     if (error instanceof ProviderError) {
       const status = PROVIDER_ERROR_STATUS[error.code];

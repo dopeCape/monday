@@ -531,17 +531,133 @@ export interface DryRunPreview {
 
 /* ------------------------------ MCP servers as steps ------------------------------ */
 
+/** How a connected MCP server proves who the user is (docs/spec/settings.md, "MCP servers"). */
+export const MCP_AUTH = ["none", "bearer", "oauth", "inputs"] as const;
+export type McpAuth = (typeof MCP_AUTH)[number];
+
 export const mcpServerSchema = z.object({
   name: z.string().min(1).max(60),
-  /** A command to spawn (stdio), or a URL (streamable HTTP). */
+  /** What the card shows; the name when absent. */
+  title: z.string().max(120).optional(),
+  /** The MCP Registry entry it was connected from ("io.github.owner/server"), when it came from there. */
+  registry: z.string().max(200).optional(),
+  /** A command to spawn (stdio), or a URL (streamable HTTP, or SSE for older servers). */
   command: z.string().min(1).optional(),
+  /** Arguments for the command, one per entry; absent, the command is split on spaces. */
+  args: z.array(z.string()).optional(),
   url: z.url().optional(),
-  /** A bearer token for a URL server. */
+  transport: z.enum(["streamable-http", "sse"]).optional(),
+  /**
+   * How it signs in. Absent means "none", or "bearer" for an older entry that
+   * still carries its token here. The secrets themselves (a token, OAuth
+   * tokens, secret headers and environment variables) are sealed rows on the
+   * Server; this Setting only names them.
+   */
+  auth: z.enum(MCP_AUTH).optional(),
+  /** Environment variables for a command that are not secret. */
+  env: z.record(z.string(), z.string()).optional(),
+  /** Headers for a URL server that are not secret. */
+  headers: z.record(z.string(), z.string()).optional(),
+  /** The names of the environment variables or headers whose values are sealed on the Server. */
+  secrets: z.array(z.string().min(1)).optional(),
+  /**
+   * A bearer token kept here by an older version. The Server moves it into
+   * its sealed store once it is unlocked and drops it from the Setting;
+   * until then it is still used.
+   */
   token: z.string().optional(),
   /** Which of its tools become Workflow steps and Agent tools; empty means every one. */
   tools: z.array(z.string().min(1)).default([]),
 });
 export type McpServerSetting = z.output<typeof mcpServerSchema>;
+
+/**
+ * One input a catalog entry declares: an environment variable, a header, or a
+ * `{variable}` in a URL, header value or argument. The Connect surface asks
+ * for these and nothing else.
+ */
+export interface McpDeclaredInput {
+  kind: "env" | "header" | "variable";
+  name: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
+  default: string | null;
+  choices: string[];
+}
+
+/** One MCP Registry entry, reduced to what the Connect surface shows and needs. */
+export interface McpCatalogEntry {
+  /** The registry's name, "io.github.owner/server". */
+  id: string;
+  /** A short name to save it under, derived from the id. */
+  name: string;
+  title: string;
+  /** Who published it: the owner or domain in the id. */
+  publisher: string;
+  description: string;
+  version: string;
+  websiteUrl: string | null;
+  iconUrl: string | null;
+  /** The hosted endpoint, when there is one. */
+  remote: {
+    url: string;
+    transport: "streamable-http" | "sse";
+    /** Header name to value template; `{name}` holes are filled from the inputs. */
+    headers: Record<string, string>;
+    inputs: McpDeclaredInput[];
+  } | null;
+  /** The package to run locally, when there is one. */
+  local: {
+    registryType: string;
+    identifier: string;
+    version: string;
+    command: string;
+    /** Arguments with `{name}` holes the inputs fill. */
+    args: string[];
+    /** Environment variable name to value template. */
+    env: Record<string, string>;
+    inputs: McpDeclaredInput[];
+  } | null;
+}
+
+export type McpServerStatus =
+  | "connected"
+  | "needs_sign_in"
+  | "needs_input"
+  | "error"
+  | "unavailable"
+  | "unknown";
+
+/** A connected server as GET /mcp-servers lists it; never a secret. */
+export interface McpServerView {
+  name: string;
+  title: string;
+  registry: string | null;
+  kind: "remote" | "local";
+  /** The URL, or the command line. */
+  target: string;
+  auth: McpAuth;
+  /** The names of the sealed inputs (never their values). */
+  secrets: string[];
+  /** The tools allowlist; empty means every tool. */
+  tools: string[];
+  status: McpServerStatus;
+  message: string | null;
+}
+
+export interface McpToolView {
+  name: string;
+  description: string;
+  /** Whether Workflows and the Agent may use it. */
+  enabled: boolean;
+}
+
+export type McpSignInStatus =
+  | { status: "pending" }
+  | { status: "done"; server: McpServerView }
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
 
 /* ------------------------------ Describing a document ------------------------------ */
 

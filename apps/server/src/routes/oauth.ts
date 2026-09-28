@@ -38,7 +38,8 @@ import { parseBody } from "./validate.ts";
  * a path, Entra wants plain localhost, so the provider picks the shape.
  */
 export interface LoopbackListener {
-  open(provider: OAuthIssuerName): Promise<{
+  /** "mcp" is an MCP server's sign-in (routes/mcp-servers.ts), shaped like Google's. */
+  open(provider: OAuthIssuerName | "mcp"): Promise<{
     redirectUri: string;
     /** The redirect's query parameters (code and state, or error). */
     callback: Promise<Record<string, string>>;
