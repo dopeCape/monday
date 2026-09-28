@@ -6,9 +6,14 @@
 //   DELETE /groups/:id                           204; Sub-groups go with it, Threads fall back
 //   GET    /routing/decisions?workspace=         {decisions: RoutingDecision[]}  Needs a decision, newest first
 //   POST   /routing/decisions/:threadId          {group: id | null, at?} -> CorrectionResult  the user's choice
-//   POST   /routing/rerun                        {workspace, recent?} -> RoutingPreview  a dry run, nothing moves
+//   POST   /routing/rerun                        {workspace, recent? | scope?} -> RoutingPreview  a dry run, nothing moves;
+//                                                 a scope over routing.rerun.preview_max is a sample (complete: false)
 //                                                 (Accept: application/x-ndjson streams {type:progress|done|error} lines)
 //   POST   /routing/rerun/apply                  {workspace, moves} -> RoutingApplied  the second call
+//   GET    /routing/backlog?workspace=           {backlog: RoutingBacklog | null}  the Backlog sort
+//   POST   /routing/backlog                      {workspace, scope, moves?, after?, done?} -> {backlog, applied} (202)
+//                                                 applies a preview's sample, then sorts the rest of the scope
+//   POST   /routing/backlog/{pause,resume,cancel} {workspace} -> {backlog}
 //   POST   /threads/:id/route                    {workspace} -> {jobId}  enqueues the route Job (202)
 //   GET    /threads/:id/route                    ThreadRoute, or 404 when never routed
 //   POST   /threads/:id/classify                 {workspace} -> Scored  scores without moving, for the Agent
@@ -16,6 +21,7 @@
 //                                                custom actions per Thread (slice 26): cached, plus the Judge for the rest
 
 import type { GroupInput, Predicate } from "@monday/shared";
+import { parseSortScope } from "@monday/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
@@ -49,9 +55,30 @@ const decideBody = z.object({
   group: z.string().min(1).nullable(),
   at: z.iso.datetime({ offset: true }).optional(),
 });
+const scopeText = z
+  .string()
+  .min(1)
+  .max(80)
+  .refine((v) => parseSortScope(v) !== null, { message: "not a Sort scope" });
 const rerunBody = z.object({
   workspace: z.string().min(1),
   recent: z.int().min(1).max(1000).optional(),
+  /** A Sort scope ("latest 50", "last 3 months", "since 2026-01-01", "all"); the Setting when absent. */
+  scope: scopeText.optional(),
+});
+const backlogBody = z.object({
+  workspace: z.string().min(1),
+  scope: scopeText,
+  /** A preview's sample, moved first; the Backlog sort goes on below `after`. */
+  moves: z
+    .array(z.lazy(() => moveShape))
+    .max(1000)
+    .optional(),
+  after: z
+    .object({ at: z.iso.datetime({ offset: true }), id: z.string().min(1) })
+    .nullable()
+    .optional(),
+  done: z.int().min(0).optional(),
 });
 /** POST /sections/judgments (slice 26): the judged Sections and custom actions per Thread. */
 const judgmentsBody = z.object({
@@ -102,7 +129,7 @@ function compact(value: Fields): Partial<GroupInput> {
 }
 
 export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
-  const { routing } = intelligence;
+  const { routing, backlog } = intelligence;
   const app = new Hono<AppEnv>();
 
   app.get("/groups", async (c) => {
@@ -162,7 +189,12 @@ export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
   app.post("/routing/rerun", async (c) => {
     const body = await parseBody(c, rerunBody);
     if (!body.ok) return body.response;
-    const recent = body.data.recent !== undefined ? { recent: body.data.recent } : {};
+    const scope = body.data.scope ? parseSortScope(body.data.scope) : null;
+    const recent = scope
+      ? { scope }
+      : body.data.recent !== undefined
+        ? { recent: body.data.recent }
+        : {};
     // Asked for NDJSON, the re-run streams a line per Thread scored, then the preview.
     if ((c.req.header("accept") ?? "").includes("application/x-ndjson")) {
       const encoder = new TextEncoder();
@@ -190,12 +222,7 @@ export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
         headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" },
       });
     }
-    return c.json(
-      await routing.preview(
-        body.data.workspace,
-        body.data.recent !== undefined ? { recent: body.data.recent } : {},
-      ),
-    );
+    return c.json(await routing.preview(body.data.workspace, recent));
   });
 
   app.post("/routing/rerun/apply", async (c) => {
@@ -203,6 +230,40 @@ export function routingRoutes(intelligence: Intelligence): Hono<AppEnv> {
     if (!body.ok) return body.response;
     return c.json(await routing.apply(body.data.workspace, body.data.moves));
   });
+
+  // The Backlog sort: what it is doing, starting one (after a preview's sample
+  // moves), and pause, resume and stop. One per Workspace.
+  app.get("/routing/backlog", async (c) => {
+    const workspace = c.req.query("workspace");
+    if (!workspace) return c.json({ error: "workspace_required" }, 400);
+    return c.json({ backlog: await backlog.status(workspace) });
+  });
+
+  app.post("/routing/backlog", async (c) => {
+    const body = await parseBody(c, backlogBody);
+    if (!body.ok) return body.response;
+    const { workspace, moves, after, done } = body.data;
+    const scope = parseSortScope(body.data.scope);
+    if (!scope) return c.json({ error: "bad_scope" }, 400);
+    const applied = moves?.length ? await routing.apply(workspace, moves) : { moved: 0, asked: 0 };
+    const started = await backlog.start(workspace, scope, {
+      after: after ?? null,
+      done: done ?? 0,
+      moved: applied.moved,
+      asked: applied.asked,
+    });
+    return c.json({ backlog: started, applied }, 202);
+  });
+
+  for (const action of ["pause", "resume", "cancel"] as const) {
+    app.post(`/routing/backlog/${action}`, async (c) => {
+      const body = await parseBody(c, workspaceBody);
+      if (!body.ok) return body.response;
+      const next = await backlog[action](body.data.workspace);
+      if (!next) return c.json({ error: "not_found" }, 404);
+      return c.json({ backlog: next });
+    });
+  }
 
   app.post("/threads/:id/route", async (c) => {
     const body = await parseBody(c, workspaceBody);

@@ -16,7 +16,14 @@ import type {
   ToolPreview,
   ViewSetting,
 } from "@monday/shared";
-import { levelAtLeast, sketchOf, validateSetting } from "@monday/shared";
+import {
+  describeSortScope,
+  levelAtLeast,
+  parseSortScope,
+  settingsSchema,
+  sketchOf,
+  validateSetting,
+} from "@monday/shared";
 import { z } from "zod";
 import type { OnboardingSeam } from "../../onboarding.ts";
 import type { ToolContext, ToolDefinition, ToolPlan } from "./catalog.ts";
@@ -26,6 +33,8 @@ const REFUSED = "Onboarding is not available from this host.";
 /** Above every preview threshold: the card asks (docs/spec/onboarding.md: nothing applied until approved). */
 const ALWAYS_ASK = Number.MAX_SAFE_INTEGER;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+/** The sample a proposal scores when no Setting reaches the tool (routing.backfill.sample's default). */
+const DEFAULT_SAMPLE = settingsSchema["routing.backfill.sample"].default;
 
 function seamOf(ctx: ToolContext): OnboardingSeam | null {
   return ctx.extensions?.onboarding ?? null;
@@ -115,14 +124,29 @@ export function groupsPreviewText(
   return `${lines.join("\n")}\nOver the newest ${plural(considered, "thread")}. Nothing moves until you approve; one Undo puts it all back.`;
 }
 
-const proposeGroups: ToolDefinition<{ groups: GroupProposal[]; recent?: number | undefined }> = {
+const proposeGroups: ToolDefinition<{
+  groups: GroupProposal[];
+  recent?: number | undefined;
+  scope?: string | undefined;
+}> = {
   name: "propose_groups",
   description:
-    "Propose Groups with their Routing rules for onboarding. Shows the list with each sentence and the count of existing Threads that would move, and asks; on approval the Groups are created and the moves applied, all undone by one Undo. Nothing is created before approval. Only at AI level automate.",
+    'Propose Groups with their Routing rules for onboarding. Scores the newest Threads of the Sort scope (how far back to sort: "latest 500", "last 3 months", "since 2026-01-01" or "all"; the Setting routing.backfill.scope unless the user named one) and shows each sentence with the count that would move, and asks. On approval the Groups are created, the scored Threads move at once, and the rest of the scope is sorted in the background (a Backlog sort); one Undo removes the Groups, puts the moved Threads back and stops the background sorting. Nothing is created before approval. Only at AI level automate.',
   tier: "reversible",
   input: z.object({
     groups: z.array(groupProposal).min(1).max(8),
-    recent: z.int().min(1).max(500).optional().describe("How many newest Threads to score"),
+    recent: z
+      .int()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe("How many of the newest Threads to score and move at once"),
+    scope: z
+      .string()
+      .min(1)
+      .max(80)
+      .optional()
+      .describe('How far back to sort: "latest 500", "last 6 months", "since 2026-01-01", "all"'),
   }),
   summarize: (i) => i.groups.map((g) => g.name).join(", "),
   async run(input, ctx): Promise<ToolPlan> {
@@ -141,8 +165,24 @@ const proposeGroups: ToolDefinition<{ groups: GroupProposal[]; recent?: number |
       return { kind: "refused", text: "Every proposed Group already exists; nothing to add." };
     }
     const candidates = fresh.map((g, i) => ({ id: `candidate-${i + 1}`, ...toInput(g) }));
-    const recent = input.recent ?? Math.max(ctx.settings.searchLimit, 100);
-    const preview = await seam.previewGroups(workspaceId, candidates, recent);
+    // The Sort scope (routing.backfill.*): its newest sample is scored and moved on
+    // approval, the rest sorted in the background. Without the seam, the newest sample only.
+    const backlog = ctx.extensions?.backlog;
+    const backfill = backlog ? await backlog.settings() : null;
+    const scope = backfill ? parseSortScope(input.scope ?? backfill.scope) : null;
+    if (input.scope && !scope) {
+      return {
+        kind: "refused",
+        text: `"${input.scope}" is not a Sort scope. Say "latest 500", "last 3 months", "since 2026-01-01" or "all".`,
+      };
+    }
+    const recent = input.recent ?? backfill?.sample ?? DEFAULT_SAMPLE;
+    const preview =
+      backlog && scope
+        ? await backlog.preview(workspaceId, scope, recent, candidates)
+        : await seam.previewGroups(workspaceId, candidates, recent);
+    const rest = backlog && scope && backfill && preview.complete === false ? scope : null;
+    const scopeWords = rest && backfill ? describeSortScope(rest, backfill.words) : "";
     const moves = preview.moves.filter(
       (m): m is ProposedMove & { proposed: { kind: "route" } } =>
         m.proposed.kind === "route" && m.proposed.groupId.startsWith("candidate-"),
@@ -155,7 +195,12 @@ const proposeGroups: ToolDefinition<{ groups: GroupProposal[]; recent?: number |
     return {
       kind: "action",
       // The card shows each Group as its own row; groupsPreviewText is the same list in words.
-      preview: { kind: "groups", groups: counts, considered: preview.considered },
+      preview: {
+        kind: "groups",
+        groups: counts,
+        considered: preview.considered,
+        ...(rest ? { backlog: { scope: scopeWords, threads: preview.inScope ?? 0 } } : {}),
+      },
       count: ALWAYS_ASK,
       apply: async () => {
         const ids = new Map<string, string>();
@@ -177,10 +222,28 @@ const proposeGroups: ToolDefinition<{ groups: GroupProposal[]; recent?: number |
           group: m.current.groupId,
           subgroup: m.current.subgroupId,
         }));
+        // The rest of the scope, in the background, from below the sample.
+        const started =
+          rest && backlog
+            ? await backlog.start(workspaceId, rest, {
+                after: preview.after ?? null,
+                done: preview.considered,
+                moved: applied.moved,
+                asked: applied.asked,
+              })
+            : null;
+        const tail = started
+          ? `; sorting the rest of ${scopeWords} (${plural(started.total, "thread")}) in the background`
+          : "";
         return {
-          text: `Created ${plural(created.length, "Group")} (${counts.map((c) => c.name).join(", ")}); ${plural(applied.moved, "thread")} moved.`,
-          data: { groups: created, moved: applied.moved },
-          undo: { kind: "groups", groupIds: created, intents: reverse },
+          text: `Created ${plural(created.length, "Group")} (${counts.map((c) => c.name).join(", ")}); ${plural(applied.moved, "thread")} moved${tail}.`,
+          data: { groups: created, moved: applied.moved, backlog: started },
+          undo: {
+            kind: "groups",
+            groupIds: created,
+            intents: reverse,
+            ...(started ? { backlog: true } : {}),
+          },
         };
       },
     };

@@ -23,7 +23,10 @@ import type {
 import {
   CUSTOM_ACTION_TOOLS,
   customActionIdFor,
+  describeSortScope,
   normalizeActionArgs,
+  PREVIEW_LIST_MAX,
+  parseSortScope,
   sectionIdFor,
   sectionLabel,
   TOOL_TIERS,
@@ -720,27 +723,156 @@ const updateGroup: ToolDefinition<
 
 /* ------------------------------ Existing mail ------------------------------ */
 
+/**
+ * organize_existing over a Sort scope: its newest sample is scored and the
+ * moves shown; approving applies them at once and, when the scope holds more
+ * than the sample, starts a Backlog sort for the rest (into every Group, the
+ * same routing as arrival). With `group`, only moves into that Group are
+ * shown and applied from the sample.
+ */
+async function organizeScope(
+  ctx: ToolContext,
+  seam: OrganizeSeam,
+  previewAbove: number,
+  scopeText: string,
+  sampleSize: number | undefined,
+  groupRef: string | undefined,
+): Promise<ToolPlan> {
+  const backlog = ctx.extensions?.backlog;
+  if (!backlog) {
+    return { kind: "refused", text: "Sorting a scope is not available from this host." };
+  }
+  const scope = parseSortScope(scopeText);
+  if (!scope) {
+    return {
+      kind: "refused",
+      text: `"${scopeText}" is not a Sort scope. Say "latest 500", "last 3 months", "since 2026-01-01" or "all".`,
+    };
+  }
+  const workspaceId = ctx.host.workspaceId;
+  const group = groupRef ? await resolveGroup(seam, workspaceId, groupRef) : undefined;
+  if (groupRef && !group) return { kind: "refused", text: `No Group "${groupRef}".` };
+  const backfill = await backlog.settings();
+  const words = describeSortScope(scope, backfill.words);
+  const preview = await backlog.preview(workspaceId, scope, sampleSize ?? backfill.sample);
+  const moves = preview.moves.filter((m) =>
+    group
+      ? m.proposed.kind === "route" &&
+        (m.proposed.groupId === group.id || m.proposed.subgroupId === group.id)
+      : m.proposed.kind !== "none" || m.current.groupId !== null,
+  );
+  const rest = preview.complete === false;
+  if (moves.length === 0 && !rest) {
+    return {
+      kind: "result",
+      text: `Nothing to move in ${words}${group ? ` into "${group.name}"` : ""}.`,
+      data: { moved: 0, considered: preview.considered },
+    };
+  }
+  const groups = await seam.listGroups(workspaceId);
+  const nameOf = (id: string) => groups.find((g) => g.id === id)?.name ?? id;
+  const target = (m: ProposedMove) =>
+    m.proposed.kind === "route"
+      ? nameOf(m.proposed.subgroupId ?? m.proposed.groupId)
+      : m.proposed.kind === "ask"
+        ? "Needs a decision"
+        : "no Group";
+  const list = moves
+    .slice(0, PREVIEW_LIST_MAX)
+    .map(
+      (m) =>
+        `  ${m.subject || "(no subject)"} (${m.from?.name || m.from?.email || "?"}) to ${target(m)}`,
+    )
+    .join("\n");
+  const more =
+    moves.length > PREVIEW_LIST_MAX ? `\n  and ${moves.length - PREVIEW_LIST_MAX} more` : "";
+  const tail = rest
+    ? `\nOn approval these move at once; then monday sorts the rest of ${words} (${plural(preview.inScope ?? 0, "thread")}) into your Groups in the background.`
+    : "";
+  return {
+    kind: "action",
+    preview: text(
+      `Move ${plural(moves.length, "thread")} of the newest ${preview.considered} in ${words}${group ? ` into "${group.name}"` : ""}:\n${list}${more}${tail}`,
+    ),
+    count: rest || moves.length > previewAbove ? ALWAYS_ASK : moves.length,
+    apply: async () => {
+      const applied = moves.length
+        ? await seam.applyMoves(workspaceId, moves)
+        : { moved: 0, asked: 0 };
+      const started = rest
+        ? await backlog.start(workspaceId, scope, {
+            after: preview.after ?? null,
+            done: preview.considered,
+            moved: applied.moved,
+            asked: applied.asked,
+          })
+        : null;
+      const reverse: (IntentArgs & { threadId: string })[] = moves.map((m) => ({
+        threadId: m.threadId,
+        kind: "move",
+        group: m.current.groupId,
+        subgroup: m.current.subgroupId,
+      }));
+      return {
+        text: `${plural(applied.moved, "thread")} moved${group ? ` into "${group.name}"` : ""}${
+          started
+            ? `; sorting the rest of ${words} (${plural(started.total, "thread")}) in the background`
+            : ""
+        }.`,
+        data: {
+          moved: applied.moved,
+          threadIds: moves.map((m) => m.threadId),
+          backlog: started,
+        },
+        undo: {
+          kind: "organize",
+          intents: reverse,
+          sectionId: null,
+          ...(started ? { backlog: true } : {}),
+        },
+      };
+    },
+  };
+}
+
 const organizeExisting: ToolDefinition<{
   group?: string | undefined;
   section?: string | undefined;
   recent?: number | undefined;
+  scope?: string | undefined;
 }> = {
   name: "organize_existing",
   description:
-    "Route the mail already there into a Group (id or name): scores the newest threads with the Group's rule and moves the ones it claims, with a preview above the threshold; or judge the newest threads for a Section with a judge statement so it fills at once. Reversible: undo puts every moved thread back and forgets the judgments.",
+    'Route the mail already there into a Group (id or name): scores the newest threads with the Group\'s rule and moves the ones it claims, with a preview above the threshold; or judge the newest threads for a Section with a judge statement so it fills at once. With `scope` ("latest 500", "last 6 months", "since 2026-01-01", "all"), the newest sample of that mail is scored and shown, moved at once on approval, and the rest of the scope is sorted into the Groups in the background (a Backlog sort, with its progress on the card); `scope` without a group sorts into every Group. Reversible: undo puts every moved thread back, stops the background sorting and forgets the judgments; what the background sorting already placed stays.',
   tier: "reversible",
   input: z.object({
     group: z.string().min(1).optional(),
     section: z.string().min(1).optional(),
     recent: z.int().min(1).max(5000).optional().describe("How many newest threads to consider"),
+    scope: z
+      .string()
+      .min(1)
+      .max(80)
+      .optional()
+      .describe('How far back to sort: "latest 500", "last 6 months", "since 2026-01-01", "all"'),
   }),
-  summarize: (i) => i.group ?? i.section ?? "",
+  summarize: (i) => [i.group ?? i.section ?? "", i.scope ?? ""].filter(Boolean).join(", "),
   async run(input, ctx): Promise<ToolPlan> {
     const seam = seamOf(ctx);
     if (!seam)
       return { kind: "refused", text: "Organizing existing mail is not available from this host." };
     const workspaceId = ctx.host.workspaceId;
     const settings = await seam.settings();
+    if (input.scope && !input.section) {
+      return organizeScope(
+        ctx,
+        seam,
+        settings.previewAbove,
+        input.scope,
+        input.recent,
+        input.group,
+      );
+    }
     const recent = input.recent ?? settings.recent;
     if (input.group) {
       const group = await resolveGroup(seam, workspaceId, input.group);
@@ -759,13 +891,13 @@ const organizeExisting: ToolDefinition<{
         };
       }
       const list = moves
-        .slice(0, 25)
+        .slice(0, PREVIEW_LIST_MAX)
         .map((m) => `  ${m.subject || "(no subject)"} (${m.from?.name || m.from?.email || "?"})`)
         .join("\n");
       return {
         kind: "action",
         preview: text(
-          `Move ${plural(moves.length, "thread")} of the newest ${preview.considered} into "${group.name}":\n${list}${moves.length > 25 ? `\n  and ${moves.length - 25} more` : ""}`,
+          `Move ${plural(moves.length, "thread")} of the newest ${preview.considered} into "${group.name}":\n${list}${moves.length > PREVIEW_LIST_MAX ? `\n  and ${moves.length - PREVIEW_LIST_MAX} more` : ""}`,
         ),
         count: moves.length > settings.previewAbove ? ALWAYS_ASK : moves.length,
         apply: async () => {
@@ -817,7 +949,7 @@ const organizeExisting: ToolDefinition<{
         },
       };
     }
-    return { kind: "refused", text: "Name a group or a section." };
+    return { kind: "refused", text: "Name a group, a section, or a scope to sort." };
   },
 };
 

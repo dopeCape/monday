@@ -35,14 +35,17 @@ import type {
   RoutingDecision,
   RoutingPreview,
   Score,
+  SortScope,
   ThreadRoute,
   Thresholds,
 } from "@monday/shared";
 import {
   domainMatches,
   domainOf,
+  formatSortScope,
   matchesPredicate,
   mergePredicates,
+  parseSortScope,
   place,
   settingsSchema,
 } from "@monday/shared";
@@ -69,6 +72,18 @@ import {
 } from "../runtime/index.ts";
 import { LocalRuntimeTimeoutError } from "../runtime/local.ts";
 import {
+  type BatchItem,
+  batchQuestion,
+  classifyBatchPrompt,
+  classifyBatchSystemPrompt,
+  estimateTokens,
+  groupsJson,
+  packBatches,
+  parseClassifyBatchOutput,
+  routeBatchQuestions,
+  threadJson,
+} from "./batch.ts";
+import {
   classifyPrompt,
   classifySystemPrompt,
   type GroupText,
@@ -79,6 +94,7 @@ import {
   type ThreadFacts,
 } from "./classify.ts";
 import { type JudgedStage, judgedPlacement, routeQuestion } from "./judge.ts";
+import { countInScope, pageInScope, resolveScope } from "./scope-query.ts";
 
 export type { GroupText, ThreadFacts } from "./classify.ts";
 export {
@@ -124,6 +140,57 @@ export interface RoutingSettings {
    * (no judge, no language model), instead of failing. Absent means the default.
    */
   waitSeconds?: number;
+  /** routing.rerun.scope: what a re-run covers when neither a scope nor a count is asked for. */
+  rerunScope?: string;
+  /** routing.rerun.preview_max: up to this many Threads a scoped re-run scores every one. */
+  rerunPreviewMax?: number;
+  /** routing.rerun.sample: how many of the newest a larger scoped re-run scores. */
+  rerunSample?: number;
+  /** The routing.backfill.* batch Settings a Backlog sort sends with; absent means the defaults. */
+  backfill?: BackfillSettings;
+}
+
+/** How a Backlog sort batches its requests (routing.backfill.*). */
+export interface BackfillSettings {
+  /** Threads per TypeSafe request. */
+  batchSize: number;
+  /** State plus every question, in tokens. */
+  requestTokens: number;
+  /** State plus the longest question, in tokens. */
+  stateTokens: number;
+  /** Threads per language model prompt. */
+  llmBatchSize: number;
+  /** Requests in flight at once on TypeSafe. */
+  concurrency: number;
+}
+
+export function defaultBackfillSettings(): BackfillSettings {
+  return {
+    batchSize: settingsSchema["routing.backfill.batch_size"].default,
+    requestTokens: settingsSchema["routing.backfill.request_tokens"].default,
+    stateTokens: settingsSchema["routing.backfill.state_tokens"].default,
+    llmBatchSize: settingsSchema["routing.backfill.llm_batch_size"].default,
+    concurrency: settingsSchema["routing.backfill.concurrency"].default,
+  };
+}
+
+/** What routing many Threads at once did (a Backlog sort's batch). */
+export interface RouteManyResult {
+  /** Placed in a Group other than where they were. */
+  moved: number;
+  /** Sent to Needs a decision. */
+  asked: number;
+  /** Left where they were, or out of every Group. */
+  left: number;
+  /** Placed by the user, so left alone. */
+  skipped: number;
+  /** Requests to whoever sorts. */
+  calls: number;
+  /** Batched requests sent, and the size of the last one. */
+  batches: number;
+  batchSize: number;
+  /** Who sorted: TypeSafe, a language model, or nobody (Predicates alone, or nothing to sort). */
+  sorter: "typesafe" | "llm" | null;
 }
 
 export interface RoutingOptions {
@@ -205,6 +272,14 @@ export interface Routing {
     workspaceId: Id,
     options?: {
       recent?: number;
+      /**
+       * The Sort scope to dry-run over, in place of `recent`. Up to
+       * routing.rerun.preview_max Threads every one is scored; above it the
+       * newest routing.rerun.sample are, and the preview says it is a sample.
+       */
+      scope?: SortScope;
+      /** With a scope: score only the newest this many, whatever the scope holds (a Group proposal). */
+      sample?: number;
       candidates?: readonly CandidateGroup[];
       /** Called after each Thread is scored, for a re-run that shows its progress. */
       onProgress?: (progress: RerunProgress) => void;
@@ -212,6 +287,19 @@ export interface Routing {
   ): Promise<RoutingPreview>;
   /** Applies moves a preview proposed. */
   apply(workspaceId: Id, moves: readonly ProposedMove[]): Promise<RoutingApplied>;
+  /**
+   * Scores and applies many Threads with batched requests (a Backlog sort):
+   * TypeSafe gets up to routing.backfill.batch_size Threads per request
+   * under its token budget, a language model a few per prompt. Same
+   * Predicates, thresholds and placement as arrival routing; a Thread the
+   * user placed is left alone. Throws what the runtime throws when nothing
+   * can sort (NoProviderKeyError, LocalRuntimeTimeoutError).
+   */
+  routeMany(
+    workspaceId: Id,
+    threadIds: readonly Id[],
+    options?: { jobId?: string | null },
+  ): Promise<RouteManyResult>;
   /**
    * Records a Thread as an Example for a Group, the way a correction does,
    * without moving it or revising the Group's criteria. Returns what the
@@ -726,6 +814,197 @@ export function createRouting(options: RoutingOptions): Routing {
     return { proposal, differs };
   };
 
+  /* ------------------------------ Many at once ------------------------------ */
+
+  interface Staged {
+    scores: Score[];
+    by: RouteBy;
+    judged?: JudgedStage;
+  }
+  interface ManyItem {
+    row: ThreadRow;
+    facts: ThreadFacts;
+  }
+  interface ManyContext {
+    workspaceId: Id;
+    settings: RoutingSettings;
+    backfill: BackfillSettings;
+    jobId: string | null;
+    useJudge: boolean;
+    owner: string | null;
+    thresholdOf: (id: GroupId) => Confidence | null;
+    calls: number;
+    batches: number;
+    batchSize: number;
+    sorter: "typesafe" | "llm" | null;
+  }
+
+  /** Runs `work` over every item, at most `limit` at a time. */
+  const inPool = async <T>(
+    items: readonly T[],
+    limit: number,
+    work: (item: T) => Promise<void>,
+  ) => {
+    let next = 0;
+    const worker = async () => {
+      while (next < items.length) {
+        const item = items[next++] as T;
+        await work(item);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  };
+
+  /** One Thread through the language model's one-Thread prompt. */
+  const classifyOne = async (item: ManyItem, candidates: GroupText[], ctx: ManyContext) => {
+    const { prompt, labels } = classifyPrompt(item.facts, candidates, ctx.settings);
+    const result = await runtime.run(
+      "classify",
+      { system: classifySystemPrompt(), prompt },
+      { workspaceId: ctx.workspaceId, jobId: ctx.jobId },
+    );
+    ctx.calls += 1;
+    return parseClassifyOutput(result.output, labels);
+  };
+
+  /** A stage for many Threads through TypeSafe: batches packed under the count and the token budgets. */
+  const judgeMany = async (
+    items: readonly ManyItem[],
+    candidates: GroupText[],
+    ctx: ManyContext,
+    out: Map<Id, Staged>,
+  ) => {
+    ctx.owner ??= await ownerOf(ctx.workspaceId);
+    const owner = ctx.owner;
+    const js = {
+      instructions: ctx.settings.judge.instructions,
+      noneOption: ctx.settings.judge.noneOption,
+      snippetChars: ctx.settings.snippetChars,
+      examplesInPrompt: ctx.settings.examplesInPrompt,
+    };
+    const shared = groupsJson(candidates, js);
+    const base = estimateTokens({ owner, groups: shared.groups, examples: shared.examples });
+    const question = estimateTokens(
+      batchQuestion("t000", shared.options, js, shared.examples.length > 0),
+    );
+    const batches = packBatches(
+      items,
+      base,
+      (it) => ({ state: estimateTokens(threadJson(it.facts, js.snippetChars)) + 4, question }),
+      {
+        count: ctx.backfill.batchSize,
+        requestTokens: ctx.backfill.requestTokens,
+        stateTokens: ctx.backfill.stateTokens,
+      },
+    );
+    await inPool(batches, ctx.backfill.concurrency, async (batch) => {
+      const keyed: BatchItem[] = batch.map((it, i) => ({ key: `t${i + 1}`, facts: it.facts }));
+      const asked = routeBatchQuestions(keyed, candidates, owner, js);
+      const answer = await runtime.judge("judge.route", asked.state, asked.questions, {
+        workspaceId: ctx.workspaceId,
+        jobId: ctx.jobId,
+      });
+      ctx.calls += 1;
+      ctx.batches += 1;
+      ctx.batchSize = batch.length;
+      ctx.sorter = "typesafe";
+      batch.forEach((it, i) => {
+        const a = answer.answers[`t${i + 1}`];
+        if (!a) return;
+        const judged = judgedPlacement(a, asked.options, ctx.settings.thresholds, ctx.thresholdOf);
+        out.set(it.row.id, { scores: judged.scores, by: "model", judged });
+      });
+    });
+  };
+
+  /** A stage for many Threads through the language model: a few Threads per prompt, one at a time. */
+  const promptMany = async (
+    items: readonly ManyItem[],
+    candidates: GroupText[],
+    ctx: ManyContext,
+    out: Map<Id, Staged>,
+  ) => {
+    const size = Math.max(1, ctx.backfill.llmBatchSize);
+    for (let i = 0; i < items.length; i += size) {
+      const chunk = items.slice(i, i + size);
+      ctx.sorter = "llm";
+      ctx.batches += 1;
+      ctx.batchSize = chunk.length;
+      if (chunk.length === 1) {
+        const only = chunk[0] as ManyItem;
+        out.set(only.row.id, { scores: await classifyOne(only, candidates, ctx), by: "model" });
+        continue;
+      }
+      const keyed: BatchItem[] = chunk.map((it, j) => ({ key: `t${j + 1}`, facts: it.facts }));
+      const asked = classifyBatchPrompt(keyed, candidates, ctx.settings);
+      const result = await runtime.run(
+        "classify",
+        { system: classifyBatchSystemPrompt(), prompt: asked.prompt },
+        { workspaceId: ctx.workspaceId, jobId: ctx.jobId },
+      );
+      ctx.calls += 1;
+      let parsed = new Map<string, Score[]>();
+      try {
+        parsed = parseClassifyBatchOutput(result.output, asked.labels, asked.threads);
+      } catch {
+        // An unreadable answer: every Thread of the prompt is asked alone below.
+      }
+      for (const [j, it] of chunk.entries()) {
+        const scores = parsed.get(`t${j + 1}`) ?? (await classifyOne(it, candidates, ctx));
+        out.set(it.row.id, { scores, by: "model" });
+      }
+    }
+  };
+
+  /** One stage for many Threads over the same candidates: the Predicate first, then batched requests. */
+  const stageMany = async (
+    items: readonly ManyItem[],
+    candidates: GroupText[],
+    ctx: ManyContext,
+  ): Promise<Map<Id, Staged>> => {
+    const out = new Map<Id, Staged>();
+    if (candidates.length === 0) {
+      for (const it of items) out.set(it.row.id, { scores: [], by: "model" });
+      return out;
+    }
+    const rest: ManyItem[] = [];
+    for (const it of items) {
+      if (ctx.settings.predicateFirst) {
+        const hits = candidates.filter((g) =>
+          matchesPredicate(g.predicate, {
+            from: it.facts.from,
+            participants: it.facts.participants,
+            subject: it.facts.subject,
+            hasAttachments: it.facts.hasAttachments,
+            headers: it.facts.headers,
+          }),
+        );
+        const hit = hits[0];
+        if (hits.length === 1 && hit) {
+          out.set(it.row.id, {
+            scores: candidates.map((g) => ({ groupId: g.id, confidence: g.id === hit.id ? 1 : 0 })),
+            by: "predicate",
+          });
+          continue;
+        }
+      }
+      rest.push(it);
+    }
+    if (rest.length === 0) return out;
+    if (ctx.useJudge) {
+      try {
+        await judgeMany(rest, candidates, ctx, out);
+      } catch (error) {
+        // The judge went away mid-way: the language model takes what is left.
+        if (!(error instanceof NoJudgeError)) throw error;
+        ctx.useJudge = false;
+      }
+    }
+    const left = rest.filter((it) => !out.has(it.row.id));
+    if (left.length > 0) await promptMany(left, candidates, ctx, out);
+    return out;
+  };
+
   /* ------------------------------ Corrections ------------------------------ */
 
   const upsertExample = async (
@@ -1122,6 +1401,12 @@ export function createRouting(options: RoutingOptions): Routing {
       const settings = await options.settings();
       const recent = Math.max(1, opts.recent ?? settings.rerunRecent);
       const at = now();
+      // No count asked for: the Setting's scope (routing.rerun.scope).
+      const scope =
+        opts.scope ??
+        (opts.recent === undefined && settings.rerunScope
+          ? (parseSortScope(settings.rerunScope) ?? undefined)
+          : undefined);
       const all = [
         ...(await groupTexts(workspaceId)),
         ...(opts.candidates ?? []).map((c) => ({
@@ -1147,19 +1432,47 @@ export function createRouting(options: RoutingOptions): Routing {
           examples: [],
         })),
       ];
-      if (all.every((g) => g.row.parentId !== null)) {
-        return { workspaceId, considered: 0, moves: [], calls: 0 };
+      // A scope: every Thread in it up to the preview size, else the newest sample.
+      let walked: ThreadRow[];
+      let scoped: Pick<RoutingPreview, "scope" | "inScope" | "complete" | "after"> = {};
+      if (scope) {
+        const resolved = resolveScope(scope, at);
+        const inScope = await countInScope(db, workspaceId, resolved);
+        const previewMax =
+          settings.rerunPreviewMax ?? settingsSchema["routing.rerun.preview_max"].default;
+        const size =
+          opts.sample !== undefined
+            ? Math.min(opts.sample, inScope)
+            : inScope <= previewMax
+              ? inScope
+              : Math.min(
+                  inScope,
+                  settings.rerunSample ?? settingsSchema["routing.rerun.sample"].default,
+                );
+        walked = await pageInScope(db, workspaceId, resolved, { limit: Math.max(0, size) });
+        const last = walked[walked.length - 1];
+        scoped = {
+          scope: formatSortScope(scope),
+          inScope,
+          complete: walked.length >= inScope,
+          after: last ? { at: last.lastActivity.toISOString(), id: last.id } : null,
+        };
+      } else {
+        const page = await mailstore.listThreads(workspaceId, { limit: recent });
+        const ids = page.threads.map((t) => t.id);
+        const rows = ids.length
+          ? await db.select().from(threads).where(inArray(threads.id, ids))
+          : [];
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        walked = ids.flatMap((id) => {
+          const row = byId.get(id);
+          return row ? [row] : [];
+        });
       }
-      const page = await mailstore.listThreads(workspaceId, { limit: recent });
-      const ids = page.threads.map((t) => t.id);
-      const rows = ids.length
-        ? await db.select().from(threads).where(inArray(threads.id, ids))
-        : [];
-      const byId = new Map(rows.map((r) => [r.id, r]));
-      const todo = ids.flatMap((id) => {
-        const row = byId.get(id);
-        return row && !userPlaced(row) ? [row] : [];
-      });
+      if (all.every((g) => g.row.parentId !== null)) {
+        return { workspaceId, considered: 0, moves: [], calls: 0, ...scoped };
+      }
+      const todo = walked.filter((row) => !userPlaced(row));
       // A few at a time: each score may wait on the Judge over the network.
       const found: Array<ProposedMove | null> = todo.map(() => null);
       let calls = 0;
@@ -1186,7 +1499,116 @@ export function createRouting(options: RoutingOptions): Routing {
       const pool = Math.max(1, Math.min(settings.rerunConcurrency ?? 1, todo.length));
       await Promise.all(Array.from({ length: pool }, worker));
       const moves = found.filter((m): m is ProposedMove => m !== null);
-      return { workspaceId, considered: todo.length, moves, calls };
+      if (!scope) return { workspaceId, considered: todo.length, moves, calls };
+      const byTarget: Record<string, number> = {};
+      for (const m of moves) {
+        const target =
+          m.proposed.kind === "route"
+            ? (m.proposed.subgroupId ?? m.proposed.groupId)
+            : m.proposed.kind === "ask"
+              ? "ask"
+              : "none";
+        byTarget[target] = (byTarget[target] ?? 0) + 1;
+      }
+      return { workspaceId, considered: todo.length, moves, calls, ...scoped, byTarget };
+    },
+
+    async routeMany(workspaceId, threadIds, opts = {}) {
+      const settings = await options.settings();
+      const result: RouteManyResult = {
+        moved: 0,
+        asked: 0,
+        left: 0,
+        skipped: 0,
+        calls: 0,
+        batches: 0,
+        batchSize: 0,
+        sorter: null,
+      };
+      if (threadIds.length === 0) return result;
+      const all = await groupTexts(workspaceId);
+      const top = all.filter((g) => g.row.parentId === null);
+      if (top.length === 0) return { ...result, left: threadIds.length };
+      const rows = await db
+        .select()
+        .from(threads)
+        .where(and(eq(threads.workspaceId, workspaceId), inArray(threads.id, [...threadIds])));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const items: ManyItem[] = [];
+      for (const id of threadIds) {
+        const row = byId.get(id);
+        if (!row || row.deleted) {
+          result.left += 1;
+          continue;
+        }
+        if (userPlaced(row)) {
+          result.skipped += 1;
+          continue;
+        }
+        items.push({ row, facts: await readFacts(row) });
+      }
+      const ctx: ManyContext = {
+        workspaceId,
+        settings,
+        backfill: settings.backfill ?? defaultBackfillSettings(),
+        jobId: opts.jobId ?? null,
+        useJudge: await runtime.judgeAvailable(),
+        owner: null,
+        thresholdOf: (id) => all.find((g) => g.id === id)?.row.threshold ?? null,
+        calls: 0,
+        batches: 0,
+        batchSize: 0,
+        sorter: null,
+      };
+      const placeOf = (st: Staged | undefined): RoutePlacement =>
+        st?.judged?.placement ?? place(st?.scores ?? [], settings.thresholds, ctx.thresholdOf);
+      const first = await stageMany(items, top, ctx);
+      // Sub-groups: the Threads routed into a Group with children, one stage per parent.
+      const subgroupOf = new Map<Id, { groupId: GroupId; confidence: Confidence }>();
+      const byParent = new Map<GroupId, ManyItem[]>();
+      for (const it of items) {
+        const placement = placeOf(first.get(it.row.id));
+        if (placement.kind !== "route") continue;
+        if (!all.some((g) => g.row.parentId === placement.groupId)) continue;
+        byParent.set(placement.groupId, [...(byParent.get(placement.groupId) ?? []), it]);
+      }
+      for (const [parent, list] of byParent) {
+        const children = all.filter((g) => g.row.parentId === parent);
+        const second = await stageMany(list, children, ctx);
+        for (const it of list) {
+          const inner = placeOf(second.get(it.row.id));
+          if (inner.kind === "route") {
+            subgroupOf.set(it.row.id, { groupId: inner.groupId, confidence: inner.confidence });
+          }
+        }
+      }
+      for (const it of items) {
+        const staged = first.get(it.row.id);
+        const placement = placeOf(staged);
+        const scored: Scored = {
+          scores: staged?.scores ?? [],
+          placement,
+          subgroup: subgroupOf.get(it.row.id) ?? null,
+          by: staged?.by ?? "model",
+          calls: 0,
+        };
+        const applied = await applyScored(it.row, scored, settings);
+        if (!applied) result.skipped += 1;
+        else if (placement.kind === "ask") result.asked += 1;
+        else if (
+          placement.kind === "route" &&
+          (it.row.groupId !== applied.groupId || it.row.subgroupId !== applied.subgroupId)
+        ) {
+          result.moved += 1;
+        } else result.left += 1;
+      }
+      return {
+        ...result,
+        calls: ctx.calls,
+        batches: ctx.batches,
+        batchSize: ctx.batchSize,
+        sorter: ctx.sorter,
+      };
     },
 
     async apply(workspaceId, moves) {

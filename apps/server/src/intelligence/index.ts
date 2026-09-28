@@ -26,6 +26,7 @@ import {
   type HostedSettings,
   resolveTaskModel,
   rolesFor,
+  scopeWordsFrom,
 } from "@monday/shared";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
@@ -65,6 +66,7 @@ import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
 import { type BriefPolicyRule, type BriefPolicySettings, createBriefPolicyRule } from "./policy.ts";
+import { type Backlog, type BacklogStepSettings, createBacklog } from "./routing/backlog.ts";
 import { createRouting, type Routing, type RoutingSettings } from "./routing/index.ts";
 import { createDemoChat, createDemoConverse, withDemoKey } from "./runtime/demo.ts";
 import {
@@ -142,6 +144,8 @@ export type {
   JudgePolicySettings,
 } from "./policy.ts";
 export { createBriefPolicyRule, judgedPolicy, rulePolicy, shouldCompute } from "./policy.ts";
+export type { Backlog, BacklogJobPayload, BacklogStart } from "./routing/backlog.ts";
+export { BACKLOG_STEP, backlogJobId, createBacklog } from "./routing/backlog.ts";
 export type {
   RouteJobPayload,
   Routing,
@@ -245,6 +249,8 @@ export interface Intelligence {
   /** The arrival request and its stored answers (slice 25). */
   judgments: Judgments;
   routing: Routing;
+  /** The Backlog sort: the mail already there, sorted in the background within a Sort scope. */
+  backlog: Backlog;
   agent: AgentHost;
   activity: ActivityLog;
   workflows: Workflows;
@@ -415,6 +421,34 @@ const ROUTING_SETTING_KEYS = [
   "routing.judge.instructions",
   "routing.judge.none_option",
   "routing.wait_seconds",
+  "routing.rerun.scope",
+  "routing.rerun.preview_max",
+  "routing.rerun.sample",
+  "routing.backfill.batch_size",
+  "routing.backfill.request_tokens",
+  "routing.backfill.state_tokens",
+  "routing.backfill.llm_batch_size",
+  "routing.backfill.concurrency",
+  "routing.backfill.sync_wait_seconds",
+] as const;
+
+const BACKLOG_TOOL_SETTING_KEYS = [
+  "routing.backfill.scope",
+  "routing.backfill.sample",
+  "strings.routing.scope.latest",
+  "strings.routing.scope.latest_one",
+  "strings.routing.scope.last",
+  "strings.routing.scope.last_one",
+  "strings.routing.scope.since",
+  "strings.routing.scope.all",
+  "strings.routing.scope.unit.day",
+  "strings.routing.scope.unit.days",
+  "strings.routing.scope.unit.week",
+  "strings.routing.scope.unit.weeks",
+  "strings.routing.scope.unit.month",
+  "strings.routing.scope.unit.months",
+  "strings.routing.scope.unit.year",
+  "strings.routing.scope.unit.years",
 ] as const;
 
 /**
@@ -642,6 +676,42 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
           noneOption: s["routing.judge.none_option"],
         },
         waitSeconds: s["routing.wait_seconds"],
+        rerunScope: s["routing.rerun.scope"],
+        rerunPreviewMax: s["routing.rerun.preview_max"],
+        rerunSample: s["routing.rerun.sample"],
+        backfill: {
+          batchSize: s["routing.backfill.batch_size"],
+          requestTokens: s["routing.backfill.request_tokens"],
+          stateTokens: s["routing.backfill.state_tokens"],
+          llmBatchSize: s["routing.backfill.llm_batch_size"],
+          concurrency: s["routing.backfill.concurrency"],
+        },
+      };
+    },
+  });
+  const judgeStateNow = async (): Promise<JudgeState> =>
+    judgeStateFor(
+      await hostedSettings(),
+      await keys.list(),
+      options.judge !== undefined,
+      (await local?.takes("classify")) ?? null,
+    );
+  const backlog = createBacklog({
+    db,
+    routing,
+    now,
+    level,
+    ...(options.log ? { log: options.log } : {}),
+    judgeAvailable: () => runtime.judgeAvailable(),
+    sorterIsLocal: async () => (await judgeStateNow()).runtime === "local",
+    settings: async (): Promise<BacklogStepSettings> => {
+      const s = await readGlobalSettings(db, ROUTING_SETTING_KEYS);
+      return {
+        batchSize: s["routing.backfill.batch_size"],
+        llmBatchSize: s["routing.backfill.llm_batch_size"],
+        concurrency: s["routing.backfill.concurrency"],
+        waitSeconds: s["routing.wait_seconds"],
+        syncWaitSeconds: s["routing.backfill.sync_wait_seconds"],
       };
     },
   });
@@ -785,6 +855,20 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
   extensions.organize = organize;
   extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
+  extensions.backlog = {
+    async settings() {
+      const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
+      return {
+        scope: s["routing.backfill.scope"],
+        sample: s["routing.backfill.sample"],
+        words: scopeWordsFrom(s),
+      };
+    },
+    preview: (workspaceId, scope, sample, candidates) =>
+      routing.preview(workspaceId, { scope, sample, ...(candidates ? { candidates } : {}) }),
+    start: (workspaceId, scope, from) => backlog.start(workspaceId, scope, from),
+    cancel: (workspaceId) => backlog.cancel(workspaceId),
+  };
 
   return {
     attachCalendar(seam) {
@@ -798,6 +882,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     policy,
     judgments,
     routing,
+    backlog,
     agent,
     activity,
     workflows,
@@ -855,6 +940,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       judgments.registerSteps(jobs);
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
+      backlog.registerSteps(jobs);
       workflows.registerSteps(jobs);
     },
   };
