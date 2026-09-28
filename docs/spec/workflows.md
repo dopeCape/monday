@@ -15,6 +15,7 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
 - One row per Workflow, switched-on first, then by name: the trigger's glyph, the name, the trigger in plain words ("Mail arrives in Hiring › Candidates", "On a schedule: Fridays 16:00"), a status pill, the last run ("Last run 9 min ago" or "Not run yet"), runs today, and the last Runs as outcome dots, oldest first.
 - Status, in this order: Locked (the AI level), Paused (switched off), "n waiting" (a Run waits for an approval), Failing (the newest finished Run failed), On.
 - The selection stays on a Workflow when a change reorders the list. The last row starts a new Workflow through the agent.
+- The page head's "Connect a tool" opens the MCP connect dialog (`settings.md`, "MCP servers and Connect a tool"); a connected server's tools become Steps. It is hidden while locked.
 - No Workflows: "Describe the next one" with the example sentences (`strings.workflows.examples`); each hands "Write a new workflow: …" to the composer.
 
 ## A Workflow

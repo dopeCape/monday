@@ -247,6 +247,7 @@ describe("the external MCP server", () => {
         "list_workflows",
         "dry_run_workflow",
         "list_workflow_runs",
+        "search_mcp_catalog",
         "onboarding_context",
         "propose_workflows",
         "list_calendars",
