@@ -22,6 +22,7 @@ import {
   messagesOf,
 } from "@monday/ui/fixtures";
 import { type FolderKey, folderThreads, type ThreadListKey } from "./folders.ts";
+import type { Facet, FacetKind } from "./list-filter.ts";
 
 export type { ThreadListKey } from "./folders.ts";
 
@@ -87,6 +88,20 @@ export interface InboxSource {
    * lets it go after the last one leaves. The same notifications as subscribe().
    */
   watchList?(list: ThreadListKey, listener: () => void): () => void;
+  /**
+   * Any list by key, held like threads(): the Filter menu's narrowed lists
+   * (`filter:`) are read this way. Absent, the screen filters the Threads it
+   * holds instead.
+   */
+  list?(key: ThreadListKey): readonly Thread[];
+  /** How many Threads a narrowed list holds over the whole Cache; null until counted. */
+  listTotal?(key: ThreadListKey): number | null;
+  /** The Filter menu's choices over a list, with how many of its Threads carry each. */
+  facets?(
+    key: ThreadListKey,
+    kind: FacetKind,
+    options: { needle?: string | undefined; limit: number; now?: Date | undefined },
+  ): Promise<Facet[]>;
   /** Totals over the whole Cache. Stable between changes; the same subscription as threads(). */
   counts?(): InboxCounts;
   /** Every Group of the Workspace, top-level first, for the move picker. Stable between changes. */

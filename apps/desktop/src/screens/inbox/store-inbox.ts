@@ -62,6 +62,7 @@ import {
 import type { ContentTransport } from "../../store/transport.ts";
 import type { BodyUnavailable, Inbox, InboxCounts, UndoToken } from "./actions.ts";
 import { type FolderKey, type ThreadList, type ThreadListKey, threadList } from "./folders.ts";
+import { countSql, facetSql, rowToFacet } from "./list-filter.ts";
 
 /**
  * What an undo puts back: the inverse intents, in the order the action ran.
@@ -78,6 +79,9 @@ export interface StoreInbox extends Inbox {
   /** A Mail folder's Threads (Starred, Snoozed, Sent, Archive), from its own bounded query. */
   folder(key: FolderKey): readonly Thread[];
   group(groupId: string): readonly Thread[];
+  list(key: ThreadListKey): readonly Thread[];
+  listTotal(key: ThreadListKey): number | null;
+  facets: NonNullable<Inbox["facets"]>;
   more(list: ThreadListKey): void;
   watchList(list: ThreadListKey, listener: () => void): () => void;
   counts(): InboxCounts;
@@ -454,6 +458,8 @@ export async function createStoreInbox(
     threads: readonly Thread[];
     /** The screens showing it; the last one to leave lets it go (the Inbox is always held). */
     watchers: number;
+    /** A filtered list's total over the whole Cache, once counted; null for the others. */
+    total: number | null;
   }
   const lists = new Map<ThreadListKey, Held>();
   const windowSize = () => Math.max(1, Math.floor(options.memoryWindow?.() ?? 1500));
@@ -636,7 +642,7 @@ export async function createStoreInbox(
         const after = fresh.get(id);
         const belongs =
           after !== undefined &&
-          h.list.keepsRow(after) &&
+          h.list.keepsRow(after, before !== undefined) &&
           (h.complete || (boundary !== undefined && h.compare(after, boundary) < 0));
         if (!belongs) {
           if (before) moved = true;
@@ -747,6 +753,23 @@ export async function createStoreInbox(
     return { inbox, snoozed, unread };
   };
   let countsStale = true;
+  /** Whether a filtered list's total wants counting again (a new list, a write to `threads`). */
+  let totalsStale = false;
+  /** Counts every loaded filtered list over the whole Cache; true when a total changed. */
+  const readTotals = async (): Promise<boolean> => {
+    let changed = false;
+    for (const h of [...lists.values()]) {
+      if (!h.list.filtered || lists.get(h.key) !== h) continue;
+      const { sql, params } = countSql(h.list.query);
+      const rows = await store.query<{ n: number }>(sql, params);
+      const n = Number(rows[0]?.n ?? 0);
+      if (n !== h.total) {
+        h.total = n;
+        changed = true;
+      }
+    }
+    return changed;
+  };
   const readCounts = async (): Promise<boolean> => {
     countRows = await store.query<CountRow>(INBOX_COUNTS_SQL);
     const next = deriveCounts();
@@ -766,7 +789,12 @@ export async function createStoreInbox(
   let listClosed = false;
   const readSome = async (ids: string[]) => applyRows(ids, await readById(ids));
   const busy = () =>
-    pendingAll || pendingIds.size > 0 || needFill.size > 0 || lookups.size > 0 || countsStale;
+    pendingAll ||
+    pendingIds.size > 0 ||
+    needFill.size > 0 ||
+    lookups.size > 0 ||
+    countsStale ||
+    totalsStale;
   /** Runs the queued reads one after another; resolves once none is left. */
   const drain = (): Promise<void> => {
     if (listClosed) return Promise.resolve();
@@ -798,6 +826,10 @@ export async function createStoreInbox(
             countsStale = false;
             countsChanged = await readCounts();
           }
+          if (totalsStale) {
+            totalsStale = false;
+            if (await readTotals()) countsChanged = true;
+          }
           if (changed) project();
           else if (countsChanged) for (const l of [...listeners]) l();
         }
@@ -821,6 +853,9 @@ export async function createStoreInbox(
   const stopWrites = store.onWrite((tables, threadIds) => {
     if (![...tables].some((t) => listTables.has(t))) return;
     if (tables.has("threads")) countsStale = true;
+    if (tables.has("threads") || tables.has("messages")) {
+      for (const h of lists.values()) if (h.list.filtered) totalsStale = true;
+    }
     if (threadIds === undefined) {
       pendingAll = true;
       absent.clear();
@@ -849,9 +884,11 @@ export async function createStoreInbox(
       loaded: false,
       threads: EMPTY_THREADS,
       watchers: 0,
+      total: null,
     };
     lists.set(key, h);
     needFill.add(h);
+    if (list.filtered) totalsStale = true;
     if (!listClosed) drainSoon();
     return h;
   };
@@ -1050,6 +1087,25 @@ export async function createStoreInbox(
     resolve: resolveThread,
     folder: (key) => ensureList(key).threads,
     group: (groupId) => ensureList(`group:${groupId}`).threads,
+    list: (key) => ensureList(key).threads,
+    listTotal(key) {
+      const h = lists.get(key);
+      if (!h?.loaded) return null;
+      if (h.complete) return h.rows.length;
+      return h.total;
+    },
+    async facets(key, kind, facetOptions) {
+      const { query } = threadList(key, owner);
+      const at = facetOptions.now ?? new Date();
+      const { sql, params } = facetSql(kind, query, {
+        needle: facetOptions.needle,
+        limit: facetOptions.limit,
+        offsetMinutes: -new Date(at.getFullYear(), 0, 1).getTimezoneOffset(),
+        owner,
+      });
+      const rows = await store.query<RawRow>(sql, params);
+      return rows.map((r) => rowToFacet(kind, r));
+    },
     more(key) {
       const h = lists.get(key);
       if (!h?.loaded || h.complete || needFill.has(h)) return;

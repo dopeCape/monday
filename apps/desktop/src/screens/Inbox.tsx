@@ -63,6 +63,7 @@ import { fixtureInbox, type Inbox as InboxData, type UndoToken } from "./inbox/a
 import { BatchPreview } from "./inbox/BatchPreview.tsx";
 import { type ComposeSeed, createActionRunner, judgedChips } from "./inbox/brief-actions.ts";
 import { createCustomActionRunner, customActionTier } from "./inbox/custom-actions.ts";
+import { chipLabel, FilterChips, FilterMenu } from "./inbox/FilterMenu.tsx";
 import type { FolderKey, ThreadListKey } from "./inbox/folders.ts";
 import { useHeldSections } from "./inbox/held-sections.ts";
 import { StreamTodayPanel, ThreadInviteBar } from "./inbox/InviteBar.tsx";
@@ -74,17 +75,24 @@ import {
   type IntentJudge,
   targetsOf,
 } from "./inbox/intents.ts";
+import {
+  type BaseListKey,
+  type FacetKind,
+  type FilterChip,
+  facetsOf,
+  filterKeepsThread,
+  filterListKey,
+  filterSearchText,
+  isFilterEmpty,
+  needsReply,
+  resolveFilter,
+  withoutFacet,
+} from "./inbox/list-filter.ts";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader, type ReaderAction } from "./inbox/Reader.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
 import { formatWake, snoozeKnobs, snoozeUntil } from "./inbox/snooze.ts";
-import {
-  filterKeeps,
-  localSearch,
-  STREAM_FILTERS,
-  type StreamFilter,
-  searchTerms,
-} from "./inbox/stream-filter.ts";
+import { localSearch, searchTerms } from "./inbox/stream-filter.ts";
 import { Toast } from "./inbox/Toast.tsx";
 import {
   extendSelection,
@@ -206,19 +214,12 @@ interface ListItem {
 type Pull = { older: OlderMail; progress: PullProgress | null; error: string | null };
 
 /**
- * The Filter menu's choice per View (the list's lens) of one mailbox, for
- * the session: not a Setting (docs/spec/inbox.md), and it outlives a
- * remount of the screen.
+ * The Filter menu's chips per Workspace (one mailbox seam each), for the
+ * session: not a Setting (docs/spec/inbox.md), kept across the lenses and
+ * across a remount of the screen, gone when the app restarts.
  */
-const filtersByInbox = new WeakMap<object, Map<string, StreamFilter>>();
-function filtersOf(inbox: object): Map<string, StreamFilter> {
-  let m = filtersByInbox.get(inbox);
-  if (!m) {
-    m = new Map();
-    filtersByInbox.set(inbox, m);
-  }
-  return m;
-}
+const chipsByInbox = new WeakMap<object, readonly FilterChip[]>();
+const NO_CHIPS: readonly FilterChip[] = [];
 type ToastState = { text: string; token: UndoToken | null; id: number };
 type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
 /** The scheduling card a typed sentence opened in the composer, without a Session (slice 27). */
@@ -394,15 +395,43 @@ function InboxBody({
   // over a large Cache holds the newest part of each list and reads more as
   // the list nears its end (listKey names which).
   const groupList = group !== undefined && inbox.group !== undefined;
-  const listKey: ThreadListKey = folder ? folder : groupList ? `group:${group}` : "inbox";
+  const baseKey: BaseListKey = folder ? folder : groupList ? `group:${group}` : "inbox";
+
+  // The Filter menu's chips, per Workspace for the session. A seam over the
+  // Cache reads the filtered list from SQL over every Thread (list-filter.ts),
+  // paged like the Inbox; a seam without one (the fixtures) is filtered here.
+  const [chipState, setChipState] = useState(() => ({
+    inbox: inbox as object,
+    chips: chipsByInbox.get(inbox) ?? NO_CHIPS,
+  }));
+  const filterChips =
+    chipState.inbox === inbox ? chipState.chips : (chipsByInbox.get(inbox) ?? NO_CHIPS);
+  const setFilterChips = useCallback(
+    (next: readonly FilterChip[]) => {
+      chipsByInbox.set(inbox, next);
+      setChipState({ inbox, chips: next });
+    },
+    [inbox],
+  );
+  const weekStartsMonday = settings["calendar.week_starts_monday"];
+  const today = now.toDateString();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dates resolve per day, not per clock tick
+  const resolved = useMemo(
+    () => resolveFilter(filterChips, now, weekStartsMonday),
+    [filterChips, today, weekStartsMonday],
+  );
+  const cacheFilter = inbox.list !== undefined && !isFilterEmpty(resolved);
+  const listKey: ThreadListKey = cacheFilter ? filterListKey(baseKey, resolved) : baseKey;
   const streamOf = useCallback(
     () =>
-      folder
-        ? (inbox.folder?.(folder) ?? NO_THREADS)
-        : group !== undefined && inbox.group
-          ? inbox.group(group)
-          : inbox.threads(),
-    [inbox, folder, group],
+      cacheFilter
+        ? (inbox.list?.(listKey) ?? NO_THREADS)
+        : folder
+          ? (inbox.folder?.(folder) ?? NO_THREADS)
+          : group !== undefined && inbox.group
+            ? inbox.group(group)
+            : inbox.threads(),
+    [inbox, folder, group, cacheFilter, listKey],
   );
   const subscribeList = useCallback(
     (listener: () => void) =>
@@ -410,6 +439,11 @@ function InboxBody({
     [inbox, listKey],
   );
   const liveThreads = useSyncExternalStore(subscribeList, streamOf, streamOf);
+  const totalOf = useCallback(
+    () => (cacheFilter ? (inbox.listTotal?.(listKey) ?? null) : null),
+    [inbox, cacheFilter, listKey],
+  );
+  const filteredTotal = useSyncExternalStore(subscribeList, totalOf, totalOf);
   const growAt = settings["inbox.memory_grow_rows"];
   const readMore = useCallback(() => inbox.more?.(listKey), [inbox, listKey]);
   // A row stays in the Section it was rendered in until the stream is rebuilt
@@ -422,7 +456,15 @@ function InboxBody({
   });
   const allThreads = useHeldSections(
     liveThreads,
-    [inbox, group, section, folder, settings["sections.rules"], settings["sections.order"]],
+    [
+      inbox,
+      group,
+      section,
+      folder,
+      listKey,
+      settings["sections.rules"],
+      settings["sections.order"],
+    ],
     () => {
       const c = cursor.current;
       return new Set([c.focus, c.open, ...c.selection].filter((id): id is string => id !== null));
@@ -459,38 +501,49 @@ function InboxBody({
 
   /* ------------------------------ Filter and search ------------------------------ */
 
-  // The Filter menu narrows the visible Sections (or the search results) to
-  // one kind of Thread; Esc or Clear lifts it. Per View, for the session.
+  // The chips narrow whichever list is shown (or the search results); they
+  // combine with AND, Escape takes the last one back, Clear all lifts them.
+  // Needs a reply reads the Section and the Judgments of the Threads held,
+  // so it filters here; the rest came from the Cache already, unless the seam
+  // has none. A Thread shown under a filter stays until the filter changes,
+  // so reading it under "Unread" does not pull it from under the cursor.
+  const filtering = filterChips.length > 0;
+  const needsReplyOn = filterChips.some((c) => c.kind === "needs_reply");
+  const filterHere = !cacheFilter && !isFilterEmpty(resolved);
   const viewKey = `${group ?? ""}|${section ?? ""}|${folder ?? ""}`;
-  const [filterState, setFilterState] = useState<{ view: string; filter: StreamFilter | null }>(
-    () => ({ view: viewKey, filter: filtersOf(inbox).get(viewKey) ?? null }),
-  );
-  const filter =
-    filterState.view === viewKey ? filterState.filter : (filtersOf(inbox).get(viewKey) ?? null);
-  const setFilter = useCallback(
-    (next: StreamFilter | null) => {
-      if (next) filtersOf(inbox).set(viewKey, next);
-      else filtersOf(inbox).delete(viewKey);
-      setFilterState({ view: viewKey, filter: next });
-    },
-    [viewKey, inbox],
-  );
-  // A Thread shown under the filter stays until the filter changes, so
-  // reading it under "Unread" does not pull it from under the cursor.
   const filterShown = useRef<{ key: string; ids: Set<string> }>({ key: "", ids: new Set() });
-  const filterKey = `${viewKey}|${filter ?? ""}`;
+  const filterKey = `${viewKey}|${listKey}|${needsReplyOn}|${JSON.stringify(resolved)}`;
   if (filterShown.current.key !== filterKey)
     filterShown.current = { key: filterKey, ids: new Set() };
   const keeps = useCallback(
     (th: Thread) => {
-      if (!filter) return true;
+      if (!needsReplyOn && !filterHere) return true;
       const shown = filterShown.current.ids;
       if (shown.has(th.id)) return true;
-      if (!filterKeeps(filter, th, inbox.judgments?.(th.id))) return false;
+      if (needsReplyOn && !needsReply(th, inbox.judgments?.(th.id))) return false;
+      if (filterHere && !filterKeepsThread(resolved, th)) return false;
       shown.add(th.id);
       return true;
     },
-    [filter, inbox],
+    [needsReplyOn, filterHere, resolved, inbox],
+  );
+  /** A facet's choices under the other chips: from the Cache, or over the Threads held. */
+  const facetLimit = settings["inbox.filter_facet_limit"];
+  const facets = useCallback(
+    async (kind: FacetKind, needle: string) => {
+      const others = withoutFacet(resolved, kind);
+      if (inbox.facets && inbox.list) {
+        const key = isFilterEmpty(others) ? baseKey : filterListKey(baseKey, others);
+        return inbox.facets(key, kind, { needle, limit: facetLimit });
+      }
+      const held = cacheFilter ? NO_THREADS : liveThreads;
+      return facetsOf(
+        kind,
+        held.filter((th) => filterKeepsThread(others, th)),
+        { needle, limit: facetLimit, owner: ws.address },
+      );
+    },
+    [resolved, inbox, baseKey, facetLimit, cacheFilter, liveThreads, ws.address],
   );
 
   // The inline search: the field in the list header runs the Cache search
@@ -503,11 +556,13 @@ function InboxBody({
   const [pull, setPull] = useState<Pull | null>(null);
   const searchSeq = useRef(0);
   const searchLimit = settings["search.results_limit"];
+  // Under chips the Cache search answers both at once, through its own operators.
+  const searchQuery = cacheFilter ? `${searchText} ${filterSearchText(resolved)}` : searchText;
   const runSearch = useCallback(async () => {
     const mine = ++searchSeq.current;
     if (!search || !searchText.trim()) return;
     try {
-      const r = await search.search(searchText, {
+      const r = await search.search(searchQuery, {
         workspace: workspaceId,
         limit: searchLimit,
         ...(nowProp ? { now: nowProp } : {}),
@@ -518,7 +573,7 @@ function InboxBody({
     } catch {
       if (mine === searchSeq.current) setHits([]);
     }
-  }, [search, searchText, workspaceId, searchLimit, nowProp]);
+  }, [search, searchText, searchQuery, workspaceId, searchLimit, nowProp]);
   useEffect(() => {
     if (!searching) {
       searchSeq.current++;
@@ -1268,7 +1323,7 @@ function InboxBody({
       } else if (stream && readerOpen) setReaderOpen(false);
       else if (searching) closeSearch();
       else if (selection.length) setSelection([]);
-      else if (filter) setFilter(null);
+      else if (filterChips.length) setFilterChips(filterChips.slice(0, -1));
     },
     "thread.archive": () => !overlay && request("archive", acting()),
     "thread.snooze": () => !overlay && openPicker("snooze", acting()),
@@ -1281,6 +1336,10 @@ function InboxBody({
       setPaletteOpen(true);
     },
     "thread.move": () => !overlay && openPicker("move", acting()),
+    "list.filter": () => {
+      if (overlay) return false;
+      openPicker("filter", []);
+    },
     "compose.new": () => !overlay && compose.openNew(),
     "compose.reply": () => !overlay && focus && startReply("reply"),
     "compose.reply_all": () => !overlay && focus && startReply("reply", true),
@@ -1584,19 +1643,15 @@ function InboxBody({
   };
   const headCount = selection.length
     ? fill(t("strings.inbox.selected"), { n: selection.length })
-    : searching || filter
+    : searching
       ? order.length
-      : threads.length;
-  const filterLabel = (f: StreamFilter) =>
-    t(
-      f === "unread"
-        ? "strings.inbox.filter.unread"
-        : f === "starred"
-          ? "strings.inbox.filter.starred"
-          : f === "attachments"
-            ? "strings.inbox.filter.attachments"
-            : "strings.inbox.filter.needs_reply",
-    );
+      : filtering
+        ? // Counted over the whole Cache, unless a filter here narrows the list further.
+          !needsReplyOn && !sectionLens && filteredTotal !== null
+          ? filteredTotal
+          : order.length
+        : threads.length;
+  const firstChip = filterChips[0];
   const olderMissing = older.reduce((n, o) => n + o.missing, 0);
   const renderItem = (item: ListItem) => {
     const { thread: th, leaving } = item.row;
@@ -1698,34 +1753,34 @@ function InboxBody({
           </label>
           {stream ? (
             <Btn
-              on={filter !== null}
+              on={filtering}
               className="filter-btn"
               aria-haspopup="menu"
+              title={`${t("strings.inbox.filter")} (${key("list.filter")})`}
               onClick={() => openPicker("filter", [])}
             >
-              <FunnelSimpleIcon /> {filter ? filterLabel(filter) : t("strings.inbox.filter")}
+              <FunnelSimpleIcon />{" "}
+              {filterChips.length === 1 && firstChip
+                ? chipLabel(firstChip, t, now)
+                : t("strings.inbox.filter")}
+              {filterChips.length > 1 ? (
+                <span className="filter-n">{filterChips.length}</span>
+              ) : null}
             </Btn>
           ) : null}
           <Btn icon title={t("strings.inbox.more")} onClick={() => openPicker("more", [])}>
             <DotsThreeIcon />
           </Btn>
         </ColHead>
+        <FilterChips chips={filterChips} t={t} now={now} onChange={setFilterChips} />
         {pickerExit.value === "filter" ? (
-          <Picker
-            className="filter-pop"
-            label={t("strings.inbox.filter")}
-            title={t("strings.inbox.filter.title")}
-            items={[
-              ...STREAM_FILTERS.map((f) => ({
-                key: f,
-                label: filterLabel(f),
-              })),
-              ...(filter ? [{ key: "", label: t("strings.inbox.filter.clear") }] : []),
-            ]}
-            onPick={(k) => {
-              closePicker();
-              setFilter(k === "" ? null : (k as StreamFilter));
-            }}
+          <FilterMenu
+            chips={filterChips}
+            t={t}
+            now={now}
+            needsReply={sectionsOn}
+            facets={facets}
+            onChange={setFilterChips}
             onClose={closePicker}
             leaving={pickerExit.leaving}
             onLeft={pickerExit.onEnd}
@@ -1783,7 +1838,7 @@ function InboxBody({
           render={renderItem}
           overscan={s["inbox.overscan_rows"]}
           focusKey={focus}
-          scrollKey={searching ? "search" : `stream:${filter ?? ""}`}
+          scrollKey={searching ? "search" : `stream:${listKey}|${needsReplyOn}`}
           onNearEnd={searching ? undefined : readMore}
           nearEnd={growAt}
           layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
@@ -1837,7 +1892,7 @@ function InboxBody({
                 <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
               ) : null}
               {items.length === 0 && !syncing ? (
-                lens && !searching && !(filter && rows.length > 0) ? (
+                lens && !searching && !filtering ? (
                   // A Group routes new mail as it arrives; what was already here moves
                   // only when it is sorted, which the Agent does with a preview first.
                   <div className="empty-line group-empty">
@@ -1857,7 +1912,7 @@ function InboxBody({
                   <div className="empty-line">
                     {searching
                       ? t("strings.search.empty")
-                      : filter && rows.length > 0
+                      : filtering
                         ? t("strings.inbox.filter.empty")
                         : t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
                   </div>

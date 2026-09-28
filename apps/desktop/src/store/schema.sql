@@ -43,6 +43,10 @@ create index if not exists threads_inbox_idx on threads (archived, deleted, snoo
 create index if not exists threads_recent_idx on threads (last_activity desc, rid desc);
 create index if not exists threads_starred_idx on threads (starred, deleted, last_activity desc, rid desc);
 create index if not exists threads_snoozed_idx on threads (snoozed_until, last_activity desc, rid desc) where snoozed_until is not null;
+-- The Filter menu's Unread and Has attachments walk their own slice of a
+-- list in order, so a sparse filter over a large Cache pages without a scan.
+create index if not exists threads_unread_idx on threads (archived, deleted, snoozed_until, last_activity desc, rid desc) where unread = 1;
+create index if not exists threads_attachments_idx on threads (archived, deleted, snoozed_until, last_activity desc, rid desc) where has_attachments = 1;
 
 -- Bodies are nullable: only Messages inside the Cache window carry them.
 -- `rid` is the stable rowid the FTS index points at. `body_at` is when the
@@ -63,6 +67,62 @@ create table if not exists messages (
 create index if not exists messages_thread_idx on messages (thread_id, date);
 create index if not exists messages_date_idx on messages (date desc);
 create index if not exists messages_body_idx on messages (body_at) where body_text is not null;
+
+-- Who sent into each Thread, one row per Thread and sender address, for the
+-- Filter menu's Person and Domain (and their counts) over the whole Cache.
+-- Derived from `messages` by the triggers below, so it never disagrees with
+-- the Message headers; the Store fills it once for a Cache that predates it.
+-- The triggers test for the row rather than say "or ignore": a trigger's
+-- conflict clause gives way to the outer statement's (the feed's upserts).
+create table if not exists thread_senders (
+  thread_id text not null,
+  email text not null,
+  domain text not null default '',
+  name text not null default '',
+  primary key (thread_id, email)
+) without rowid;
+create index if not exists thread_senders_email_idx on thread_senders (email);
+create index if not exists thread_senders_domain_idx on thread_senders (domain);
+
+-- Each Message's sender as thread_senders keys it: the address lowercased, its domain, the name.
+create view if not exists message_senders as
+  select rid, thread_id, email,
+    case when instr(email, '@') > 0 then substr(email, instr(email, '@') + 1) else '' end as domain,
+    name
+  from (select m.rid as rid, m.thread_id as thread_id,
+      lower(trim(coalesce(json_extract(m.sender, '$.email'), ''))) as email,
+      trim(coalesce(json_extract(m.sender, '$.name'), '')) as name
+    from messages m where json_valid(m.sender))
+  where email <> '';
+
+create trigger if not exists thread_senders_ai after insert on messages begin
+  insert into thread_senders (thread_id, email, domain, name)
+  select s.thread_id, s.email, s.domain, s.name from message_senders s
+  where s.rid = new.rid
+    and not exists (select 1 from thread_senders x where x.thread_id = s.thread_id and x.email = s.email);
+end;
+
+create trigger if not exists thread_senders_ad after delete on messages
+when json_valid(old.sender) begin
+  delete from thread_senders
+  where thread_id = old.thread_id
+    and email = lower(trim(coalesce(json_extract(old.sender, '$.email'), '')))
+    and not exists (select 1 from message_senders s where s.thread_id = old.thread_id
+      and s.email = lower(trim(coalesce(json_extract(old.sender, '$.email'), ''))));
+end;
+
+create trigger if not exists thread_senders_au after update of thread_id, sender on messages begin
+  delete from thread_senders
+  where json_valid(old.sender)
+    and thread_id = old.thread_id
+    and email = lower(trim(coalesce(json_extract(old.sender, '$.email'), '')))
+    and not exists (select 1 from message_senders s where s.thread_id = old.thread_id
+      and s.email = lower(trim(coalesce(json_extract(old.sender, '$.email'), ''))));
+  insert into thread_senders (thread_id, email, domain, name)
+  select s.thread_id, s.email, s.domain, s.name from message_senders s
+  where s.rid = new.rid
+    and not exists (select 1 from thread_senders x where x.thread_id = s.thread_id and x.email = s.email);
+end;
 
 create table if not exists attachments (
   id text primary key,

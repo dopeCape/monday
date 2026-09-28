@@ -341,6 +341,10 @@ describe("the Filter menu", () => {
       "Starred",
       "Has attachments",
       "Needs a reply",
+      "Year",
+      "Person",
+      "Domain",
+      "Date",
     ]);
     await act(async () => menu()[0]?.click());
     expect(rowIds()).toEqual(["e1", "e2"]);
@@ -351,7 +355,7 @@ describe("the Filter menu", () => {
     expect(button()?.textContent).toContain("Filter");
   });
 
-  test("Needs a reply and Starred narrow the list; Clear lifts the filter", async () => {
+  test("Needs a reply and Starred combine; Clear lifts every filter", async () => {
     await mount();
     await pick("Needs a reply");
     expect(rowIds()).toEqual(["e1", "e2", "e3"]);

@@ -1444,6 +1444,7 @@ const AREAS: Array<{ key: string; actions: KeyAction[] }> = [
       "thread.delete",
       "thread.label",
       "thread.move",
+      "list.filter",
       "undo",
     ],
   },

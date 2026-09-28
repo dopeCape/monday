@@ -14,21 +14,38 @@ import {
   NEWEST_FIRST,
   type ThreadListQuery,
 } from "../../store/queries.ts";
+import {
+  filteredQuery,
+  filterKeepsRow,
+  filterKeepsThread,
+  parseFilterListKey,
+  type ResolvedFilter,
+} from "./list-filter.ts";
 
 /** The folders the stream renders through its `folder` lens. */
 export const STREAM_FOLDERS = ["starred", "snoozed", "sent", "archive"] as const;
 export type FolderKey = (typeof STREAM_FOLDERS)[number];
 
-/** A Thread list the seam can hold in part: the Inbox, a Mail folder, or the Inbox within one Group. */
-export type ThreadListKey = "inbox" | FolderKey | `group:${string}`;
+/**
+ * A Thread list the seam can hold in part: the Inbox, a Mail folder, the
+ * Inbox within one Group, or one of those narrowed by the Filter menu
+ * (`filter:` and the resolved filter, list-filter.ts).
+ */
+export type ThreadListKey = "inbox" | FolderKey | `group:${string}` | `filter:${string}`;
 
 /** A Thread list as the Store's seam reads it: its SQL, and the same filter over a row and a Thread. */
 export interface ThreadList {
   query: ThreadListQuery;
-  /** Whether a Cache row (as ALL_THREADS_SQL reads it) belongs in the list. */
-  keepsRow(row: Row): boolean;
+  /**
+   * Whether a Cache row (as ALL_THREADS_SQL reads it) belongs in the list.
+   * `held` says the list holds the row already, which a filtered list lets
+   * keep its place when only a flag changed.
+   */
+  keepsRow(row: Row, held?: boolean): boolean;
   /** Whether a Thread an action just changed still belongs, before the Cache says so. */
   keepsThread(thread: Thread): boolean;
+  /** Whether the list is a narrowed one, whose total the seam counts on its own. */
+  filtered?: boolean;
 }
 
 const flag = (v: unknown) => v === 1 || v === true;
@@ -38,6 +55,24 @@ const inInbox = (t: Thread) => !t.archived && t.snoozedUntil === null;
 
 /** The SQL and the filters of one list; `owner` is the address Sent reads. */
 export function threadList(key: ThreadListKey, owner: string): ThreadList {
+  const narrowed = parseFilterListKey(key);
+  if (narrowed) {
+    const base = threadList(narrowed.base, owner);
+    const f = narrowed.filter;
+    const spanOnly: ResolvedFilter = {
+      ...(f.from !== undefined ? { from: f.from } : {}),
+      ...(f.to !== undefined ? { to: f.to } : {}),
+    };
+    return {
+      query: filteredQuery(base.query, f),
+      keepsRow: (r, held) => base.keepsRow(r, held) && filterKeepsRow(f, r, held === true),
+      // An action changes flags, never senders or dates: a Thread the list
+      // holds keeps its place until the filter changes, as long as the base
+      // list still wants it.
+      keepsThread: (t) => base.keepsThread(t) && filterKeepsThread(spanOnly, t),
+      filtered: true,
+    };
+  }
   if (key.startsWith("group:")) {
     const id = key.slice("group:".length);
     return {
@@ -50,7 +85,7 @@ export function threadList(key: ThreadListKey, owner: string): ThreadList {
       keepsThread: (t) => inInbox(t) && (t.group === id || t.subgroup === id),
     };
   }
-  switch (key as "inbox" | FolderKey) {
+  switch (key as "inbox" | FolderKey | `filter:${string}`) {
     case "inbox":
       return {
         query: { where: INBOX_WHERE, params: [], order: NEWEST_FIRST },
@@ -99,6 +134,13 @@ export function threadList(key: ThreadListKey, owner: string): ThreadList {
         keepsThread: (t) => t.archived,
       };
   }
+  // A `filter:` key that does not parse names no list.
+  return {
+    query: { where: "0", params: [], order: NEWEST_FIRST },
+    keepsRow: () => false,
+    keepsThread: () => false,
+    filtered: true,
+  };
 }
 
 export function isStreamFolder(key: string): key is FolderKey {

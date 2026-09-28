@@ -1,43 +1,8 @@
-// The list header's Filter menu and the inline search's fallback, as data:
-// which Threads a filter keeps, and which Threads a typed query matches when
-// the Store's search module is absent (the fixtures). Pure.
+// The inline search's fallback, as data: which Threads a typed query matches
+// when the Store's search module is absent (the fixtures), and the words a
+// row marks. The Filter menu is list-filter.ts. Pure.
 
-import type { Thread, ThreadJudgments } from "@monday/shared";
-import { DEFAULT_JUDGED_THRESHOLD } from "@monday/shared";
-
-/** The Filter menu's choices; per View, not a Setting. */
-export type StreamFilter = "unread" | "starred" | "attachments" | "needs_reply";
-
-export const STREAM_FILTERS: readonly StreamFilter[] = [
-  "unread",
-  "starred",
-  "attachments",
-  "needs_reply",
-];
-
-/**
- * Whether a Thread passes a filter. "Needs a reply" is the Thread's Section,
- * or its arrival Judgment when it has one (slice 25), so the filter reaches
- * Threads a user-defined Section claimed first.
- */
-export function filterKeeps(
-  filter: StreamFilter,
-  thread: Thread,
-  judgments?: Pick<ThreadJudgments, "needsReply"> | undefined,
-): boolean {
-  switch (filter) {
-    case "unread":
-      return thread.unread;
-    case "starred":
-      return thread.starred;
-    case "attachments":
-      return thread.hasAttachments;
-    case "needs_reply":
-      return (
-        thread.section === "needs-reply" || (judgments?.needsReply ?? 0) >= DEFAULT_JUDGED_THRESHOLD
-      );
-  }
-}
+import type { Thread } from "@monday/shared";
 
 /** The words of a typed query worth marking in a row: no operators, no quotes. */
 export function searchTerms(text: string): string[] {

@@ -12,6 +12,7 @@ Behaviors a tester can check. Every default below is a Setting (ADR 0004) unless
 - Inside any list, Threads are ordered by newest activity first.
 - A Section with no Threads stays in the nav with no count. An empty Inbox shows one line, "Nothing needs you", and nothing else.
 - A Thread is in exactly one Section and at most one Group plus one Sub-group.
+- **The Filter menu** in the list header narrows whichever list is shown (the Inbox, a Section, a Group, a Mail folder, the search results): Unread, Starred, Has attachments, Needs a reply, a Year, a Person (a sender), a Domain (a sender's domain) and a Date (this week, this month, or two days picked). Year, Person and Domain list their choices from the whole Cache with counts, years newest first, people and domains most mail first (`inbox.filter_facet_limit`), typed ahead over the whole Cache. Picks stack as chips under the header and combine with AND; a chip's click removes it, Escape removes the last one, Clear all removes every one. The list and its count come from the Cache, not from the Threads held in memory, and grow on scroll like the Inbox. Chips last for the session, per Workspace. The menu opens from its key (`list.filter`: Shift-F in Vim and Gmail) and from the palette.
 
 ## Rows
 
@@ -27,6 +28,7 @@ Row fields are a Setting; defaults per density:
 - Exactly one Group label per row, the deepest (Sub-group over Group). No Section label in the row.
 - No avatars, no colored pills, no icons other than the attachment mark (fixed, calm rule).
 - Hover reveals archive, snooze and ask actions on the right and hides the time.
+- The time reads "09:41" today, "Yesterday", a weekday within the week, "Mar 12" earlier this year, and "Mar 12, 2025" for anything from an earlier calendar year (fixed). The reader, Drafts and the other lists follow the same rule.
 
 ## Action semantics
 

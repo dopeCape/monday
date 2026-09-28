@@ -7129,6 +7129,7 @@ button.prov {
 /* the Filter menu sits under its button, left of the More button */
 .filter-pop {
   right: calc(var(--pad) + 34px);
+  width: 280px;
 }
 .pop-item .when {
   margin-left: auto;
@@ -7145,6 +7146,85 @@ button.prov {
   flex: 1;
   height: 30px;
   font-size: var(--fs-sm);
+}
+.filter-pop .pop-list {
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+}
+.filter-pop .pop-item span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-pop .pop-item.back {
+  color: var(--fg-muted);
+}
+.pop-item .pop-ic,
+.pop-item .pop-check {
+  flex: none;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  color: var(--fg-faint);
+}
+.pop-item .pop-check {
+  color: var(--fg);
+}
+.pop-empty {
+  padding: 8px 10px;
+  font-size: var(--fs-sm);
+  color: var(--fg-faint);
+}
+.pop-dates {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+.pop-dates label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 110px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.filter-btn .filter-n {
+  margin-left: 2px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* the chips under the list header: each removes itself, in the order added */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--pad) 10px;
+}
+.filter-chips .chip {
+  height: 24px;
+  padding: 0 8px 0 10px;
+  gap: 4px;
+  font-size: var(--fs-xs);
+}
+.filter-x {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+.filter-chip:hover .filter-x {
+  opacity: 1;
+}
+.filter-chips-clear {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  padding: 0 4px;
+}
+.filter-chips-clear:hover {
+  color: var(--fg);
 }
 
 /* batch preview: the list first, a count, one Apply (ADR 0002) */
