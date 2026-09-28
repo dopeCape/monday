@@ -36,12 +36,12 @@ import {
   SideCard,
   SourceView,
   Switch,
+  Tabs,
   Tag,
   WorkflowFlow,
   WorkflowStatus,
 } from "@monday/ui";
 import {
-  ClockCounterClockwiseIcon,
   CloudIcon,
   CodeIcon,
   FlaskIcon,
@@ -58,6 +58,7 @@ import { useWorkspace } from "../workspace.tsx";
 import { fill } from "./inbox/triage.ts";
 import { LevelLock, useLevelLock } from "./LevelLock.tsx";
 import { flowModel, flowStrings } from "./workflows/flow.ts";
+import { RunHistory } from "./workflows/RunHistory.tsx";
 import { statusLabel, workflowStatus } from "./workflows/status.ts";
 import { fixtureWorkflowsApi, type WorkflowsApi } from "./workflows/workflow-data.ts";
 
@@ -78,7 +79,12 @@ export interface WorkflowsProps {
    * leaving the page; absent, a bar that hands off to the Inbox's.
    */
   agent?: ReactNode | undefined;
+  /** Which view opens first: the Workflow list (default) or Run history. */
+  initialView?: WorkflowsView | undefined;
 }
+
+/** The page's two views: the Workflows with their flows, and every Run newest first. */
+export type WorkflowsView = "list" | "history";
 
 type Strings = Record<string, string>;
 
@@ -126,6 +132,7 @@ export function Workflows({
   groupName,
   now: nowProp,
   agent,
+  initialView = "list",
 }: WorkflowsProps) {
   const shell = useShell();
   const current = useWorkspace();
@@ -146,6 +153,7 @@ export function Workflows({
   const fs = useMemo(() => flowStrings(settings), [settings]);
   const now = nowProp ?? new Date();
 
+  const [view, setView] = useState<WorkflowsView>(initialView);
   const [workflows, setWorkflows] = useState<WorkflowView[] | null>(null);
   const [runs, setRuns] = useState<RunView[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -315,6 +323,7 @@ export function Workflows({
     setRenaming(null);
   };
 
+  const backToList = useCallback(() => setView("list"), []);
   const loading = workflows === null && !loadError;
   const empty = workflows !== null && list.length === 0;
   const status = (w: WorkflowView) => workflowStatus(w, runs, locked);
@@ -352,28 +361,58 @@ export function Workflows({
       <div className="page-wrap">
         <div className="page-in wf-page">
           <PageHead title={s.title ?? "Workflows"} subtitle={s.subtitle}>
-            <Btn outline onClick={() => onNavigate?.("activity")}>
-              <Icon icon={ClockCounterClockwiseIcon} /> {s.history ?? "Run history"}
-            </Btn>
             {locked ? null : (
               <Btn primary onClick={() => newWorkflow()}>
                 <Icon icon={PlusIcon} /> {s.new ?? "New workflow"}
               </Btn>
             )}
           </PageHead>
+          <Tabs
+            className="wf-tabs"
+            items={[
+              {
+                key: "list",
+                label: s["run_history.tab_list"] ?? "Workflows",
+                ...(workflows ? { count: list.length } : {}),
+              },
+              {
+                key: "history",
+                label: s.history ?? "Run history",
+                ...(workflows ? { count: runs.length } : {}),
+              },
+            ]}
+            active={view}
+            onChange={setView}
+          />
           {(error ?? loadError) ? (
             <p className="faint routing-error" role="alert">
               {error ?? loadError}
             </p>
           ) : null}
-          {lock}
-          {loading ? (
+          {view === "history" ? (
+            <RunHistory
+              runs={loadError && workflows === null ? [] : workflows === null ? null : runs}
+              workflows={list}
+              api={api}
+              settings={settings}
+              when={(iso) => ago(iso, now)}
+              groupName={groupName}
+              onOpenThread={(id) => onNavigate?.(`thread:${id}`)}
+              onOpenWorkflow={(id) => {
+                select(id);
+                setView("list");
+              }}
+              onBack={backToList}
+            />
+          ) : null}
+          {view === "list" ? lock : null}
+          {view === "list" && loading ? (
             <p className="faint wf-loading" aria-busy="true">
               {s.loading}
             </p>
           ) : null}
-          {empty && !locked ? examples : null}
-          {list.length > 0 && selected ? (
+          {view === "list" && empty && !locked ? examples : null}
+          {view === "list" && list.length > 0 && selected ? (
             <>
               {locked ? <h2 className="wf-kept">{s["locked.kept"]}</h2> : null}
               <div className="wfx" data-locked={locked ? "true" : undefined}>

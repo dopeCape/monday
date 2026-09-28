@@ -269,6 +269,11 @@ export function paletteNavigation(
   }
   out.push({ target: "routing", label: t("strings.palette.nav.routing"), icon: "group" });
   out.push({ target: "workflows", label: t("strings.palette.nav.workflows"), icon: "workflow" });
+  out.push({
+    target: "workflows:runs",
+    label: t("strings.palette.nav.run_history"),
+    icon: "workflow",
+  });
   out.push({ target: "calendar", label: t("strings.palette.nav.calendar"), icon: "calendar" });
   out.push({ target: "search", label: t("strings.palette.nav.search"), icon: "search" });
   // Set me up: onboarding again, from the three choices (docs/spec/onboarding.md, "Later and again").

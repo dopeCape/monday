@@ -546,3 +546,131 @@ describe("the Workflows page below automate", () => {
     expect(button(lock, "Raise to Mail that sorts and acts for me")).toBeUndefined();
   });
 });
+
+describe("Run history", () => {
+  const tab = (el: ParentNode, label: string) =>
+    [...el.querySelectorAll<HTMLElement>(".wf-tabs [role=tab]")].find((b) =>
+      b.textContent?.startsWith(label),
+    );
+  const historyRows = (el: ParentNode) => [
+    ...el.querySelectorAll<HTMLElement>(".wfh-list .wfh-row"),
+  ];
+  const pressEscape = async () => {
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await tick();
+    });
+  };
+
+  test("is a view of the Workflows page, not a trip to Settings: every Run newest first with its Workflow, Thread, trigger, state, when and length", async () => {
+    const navigated: string[] = [];
+    const el = await mount(pausedApi(), undefined, { onNavigate: (t) => navigated.push(t) });
+    expect(tab(el, "Run history")?.getAttribute("aria-selected")).toBe("false");
+    await click(tab(el, "Run history"));
+    expect(navigated).toEqual([]);
+    expect(tab(el, "Run history")?.getAttribute("aria-selected")).toBe("true");
+    // The Workflow list and its flow give way to the Runs.
+    expect(el.querySelector(".wfx-row:not(.wfh-row)")).toBeNull();
+    const rows = historyRows(el);
+    expect(rows.map((r) => r.dataset.run)).toEqual([
+      "r9",
+      "r1",
+      "r2",
+      "r4",
+      "r3",
+      "r5",
+      "r6",
+      "r7",
+    ]);
+    expect(rows.map((r) => r.dataset.state)).toEqual([
+      "waiting",
+      "done",
+      "done",
+      "done",
+      "failed",
+      "done",
+      "done",
+      "done",
+    ]);
+    const first = rows[0] as HTMLElement;
+    expect(first.querySelector("b")?.textContent).toBe("Candidate intake");
+    expect(first.querySelector(".wf-status")?.textContent).toBe("Waiting");
+    expect(first.querySelector(".wfx-row-trig")?.textContent).toBe("Priya Raman, Rust engineer");
+    expect(first.querySelector(".wfx-row-foot")?.textContent).toContain("Mail arrived");
+    expect(first.querySelector(".wfx-row-foot")?.textContent).toContain("2 min ago");
+    expect(first.querySelector(".wfx-row-foot")?.textContent).toContain("Still running");
+    expect(rows[1]?.querySelector(".wfx-row-foot")?.textContent).toContain("Took 0 s");
+    expect(rows[3]?.querySelector("b")?.textContent).toBe("Invoices to Drive");
+    // A failed Run says where it stopped and why.
+    const failed = rows[4] as HTMLElement;
+    expect(failed.querySelector(".wf-status")?.textContent).toBe("Failed");
+    expect(failed.querySelector(".wfh-error")?.textContent).toBe(
+      "Failed at step 1, Extract: Skipped: confidence 0.31, asked you to confirm",
+    );
+    expect(el.querySelector(".wfh-pick")?.textContent).toBe(
+      "Pick a run to see its steps laid over the workflow.",
+    );
+  });
+
+  test("picking a Run lays its Steps over the Workflow's flow; Escape closes it, then goes back to the list", async () => {
+    const el = await mount(fixtureWorkflowsApi());
+    await click(tab(el, "Run history"));
+    await click(el.querySelector('.wfh-row[data-run="r3"]'));
+    const detail = el.querySelector(".wfh-detail") as HTMLElement;
+    expect(detail.querySelector("h2")?.textContent).toBe("Unknown sender, no role detected");
+    expect(detail.querySelector(".wfh-failure")?.textContent).toContain(
+      "Failed at step 1, Extract",
+    );
+    expect(
+      [...detail.querySelectorAll(".wflow-node")].map(
+        (n) => n.querySelector(".wflow-run")?.textContent,
+      ),
+    ).toEqual([undefined, "Failed", "Not reached", "Not reached", "Not reached"]);
+    expect(el.querySelector('.wfh-row[data-run="r3"]')?.getAttribute("aria-current")).toBe("true");
+
+    await pressEscape();
+    expect(el.querySelector(".wfh-detail")).toBeNull();
+    expect(el.querySelector(".wfh-list")).not.toBeNull();
+    await pressEscape();
+    expect(el.querySelector(".wfh-list")).toBeNull();
+    expect(tab(el, "Workflows")?.getAttribute("aria-selected")).toBe("true");
+    expect(el.querySelector(".wfx-detail h2")?.textContent).toBe("Candidate intake");
+  });
+
+  test("Open workflow shows the Run's Workflow in the list; Open thread goes to the Thread", async () => {
+    const navigated: string[] = [];
+    const el = await mount(fixtureWorkflowsApi(), undefined, {
+      onNavigate: (t) => navigated.push(t),
+    });
+    await click(tab(el, "Run history"));
+    await click(el.querySelector('.wfh-row[data-run="r4"]'));
+    await click(button(el.querySelector(".wfh-detail") as HTMLElement, "Open thread"));
+    expect(navigated).toEqual(["thread:t-r4"]);
+    await click(button(el.querySelector(".wfh-detail") as HTMLElement, "Open workflow"));
+    expect(tab(el, "Workflows")?.getAttribute("aria-selected")).toBe("true");
+    expect(el.querySelector(".wfx-detail h2")?.textContent).toBe("Invoices to Drive");
+  });
+
+  test("says so while loading and when nothing has run yet", async () => {
+    const api = fixtureWorkflowsApi();
+    let release: (() => void) | null = null;
+    const slow: WorkflowsApi = {
+      ...api,
+      list: () =>
+        new Promise((resolve) => {
+          release = () => void api.list("ws").then(resolve);
+        }),
+      runs: async () => [],
+    };
+    const el = await mount(slow);
+    await click(tab(el, "Run history"));
+    expect(el.querySelector(".wf-loading")?.textContent).toBe("Loading the run history");
+    await act(async () => {
+      release?.();
+      await tick();
+      await tick();
+    });
+    expect(el.querySelector(".wfh-empty h3")?.textContent).toBe("No runs yet");
+    expect(el.querySelector(".wfh-list")).toBeNull();
+  });
+});

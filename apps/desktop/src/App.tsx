@@ -76,7 +76,7 @@ import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
 import { fill } from "./screens/settings/wizard.ts";
-import { Workflows } from "./screens/Workflows.tsx";
+import { Workflows, type WorkflowsView } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
@@ -237,6 +237,11 @@ export function App({
   /** The App's own bottom agent, on the pages that are not the stream: raised, and its text. */
   const [bottomOpen, setBottomOpen] = useState(false);
   const [bottomText, setBottomText] = useState("");
+  /** Which Workflows view "workflows" or "workflows:runs" asked for; each request remounts the page on it. */
+  const [workflowsView, setWorkflowsView] = useState<{ view: WorkflowsView; n: number }>({
+    view: "list",
+    n: 0,
+  });
   /** The Settings section the palette or the URL asked for, and whether to open on the search field. */
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     () => new URLSearchParams(location.search).get("section") ?? undefined,
@@ -651,8 +656,12 @@ export function App({
       } else if (target === "search") openSearch();
       else if (target === "agent") askHere();
       else if (target === "routing") setActive("routing");
-      else if (target === "workflows") setActive("workflows");
-      else if (target === "calendar") setActive("calendar");
+      else if (target === "workflows" || target === "workflows:runs") {
+        // Run history is a view of the Workflows page, never a Settings section.
+        const view: WorkflowsView = target === "workflows:runs" ? "history" : "list";
+        setWorkflowsView((v) => ({ view, n: v.n + 1 }));
+        setActive("workflows");
+      } else if (target === "calendar") setActive("calendar");
       else if (target.startsWith("calendar:")) {
         // A date from the palette's "Jump to date": the Calendar opens on that day.
         setCalendarJump((j) => ({ day: target.slice("calendar:".length), n: (j?.n ?? 0) + 1 }));
@@ -877,6 +886,11 @@ export function App({
     );
   }
 
+  // The nav's Workflows entry always opens the Workflow list.
+  const selectNav = (key: string) => {
+    if (key === "workflows") navigate("workflows");
+    else setActive(key);
+  };
   const cols: string[] = [];
   const parts: React.ReactNode[] = [];
   if (shell.layout.nav === "full") {
@@ -900,7 +914,7 @@ export function App({
         }
         automation={nav.automation}
         active={active}
-        onSelect={setActive}
+        onSelect={selectNav}
         onSearch={openSearch}
         onCompose={onCompose}
         onWorkspace={toggleSwitcher}
@@ -923,7 +937,7 @@ export function App({
         items={nav.rail}
         tail={nav.railTail}
         active={active}
-        onSelect={setActive}
+        onSelect={selectNav}
         onSearch={openSearch}
         onCompose={onCompose}
         onWorkspace={toggleSwitcher}
@@ -988,7 +1002,8 @@ export function App({
       />
     ) : active === "workflows" ? (
       <Workflows
-        key="screen"
+        key={`screen-workflows-${workflowsView.n}`}
+        initialView={workflowsView.view}
         workspaceId={ws.id}
         api={workflowsApi}
         groupName={(id) => {

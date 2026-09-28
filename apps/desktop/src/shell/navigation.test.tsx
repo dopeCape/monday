@@ -222,6 +222,25 @@ describe("the Mail folders", () => {
   });
 });
 
+describe("Workflow run history", () => {
+  test("Run history opens inside the Workflows page, never Settings; Escape goes back to the Workflow list; the palette jumps to it", async () => {
+    await mount({ settings: { "ai.level": "automate", "workflows.page.refresh_seconds": 0 } });
+    await click(navItem("Workflows"));
+    expect(document.title).toBe("Workflows · monday");
+    const historyTab = () =>
+      qa(".wf-tabs [role=tab]").find((b) => b.textContent?.startsWith("Run history"));
+    await click(historyTab());
+    expect(document.title).toBe("Workflows · monday");
+    expect(q(".settings")).toBeNull();
+    expect(qa(".wfh-list .wfh-row").length).toBeGreaterThan(0);
+    await key(document.body, "Escape");
+    expect(q(".wfh-list")).toBeNull();
+    expect(historyTab()?.getAttribute("aria-selected")).toBe("false");
+    const targets = paletteNavigation(defaultSettings(), false, []).map((n) => n.target);
+    expect(targets).toContain("workflows:runs");
+  });
+});
+
 describe("Sections in the nav", () => {
   const SECTION_NAMES = [
     "Needs your reply",
