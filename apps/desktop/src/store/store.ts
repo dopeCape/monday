@@ -232,6 +232,10 @@ const SCHEMA_VERSION_KEY = "schema_version";
  */
 export const SCHEMA_VERSION = 4;
 
+const SENDERS_KEY = "senders_format";
+/** Bumped when thread_senders must be filled again from `messages`. */
+const SENDERS_FORMAT = 1;
+
 const BODY_FORMAT_KEY = "body_format";
 /**
  * What a cached body is, bumped when that changes without the table changing
@@ -251,6 +255,11 @@ const REBUILD_SQL = `
   drop trigger if exists messages_fts_ad;
   drop trigger if exists messages_fts_au;
   drop trigger if exists messages_fts_subject;
+  drop trigger if exists thread_senders_ai;
+  drop trigger if exists thread_senders_ad;
+  drop trigger if exists thread_senders_au;
+  drop view if exists message_senders;
+  drop table if exists thread_senders;
   drop table if exists messages_fts;
   drop view if exists messages_content;
   drop table if exists threads_fts;
@@ -306,6 +315,22 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
     [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
   );
+  const sendersRows = await driver.query("select value from meta where key = ?", [SENDERS_KEY]);
+  if (Number(sendersRows[0]?.value ?? 0) < SENDERS_FORMAT) {
+    // A Cache from before thread_senders: its Messages' senders, filled once;
+    // the triggers keep it in step from here on.
+    await driver.batch([
+      { sql: "delete from thread_senders" },
+      {
+        sql: `insert or ignore into thread_senders (thread_id, email, domain, name)
+              select thread_id, email, domain, name from message_senders`,
+      },
+      {
+        sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+        params: [SENDERS_KEY, String(SENDERS_FORMAT)],
+      },
+    ]);
+  }
   const formatRows = await driver.query("select value from meta where key = ?", [BODY_FORMAT_KEY]);
   if (Number(formatRows[0]?.value ?? 0) < BODY_FORMAT) {
     // Bodies cached under an older format are dropped, headers kept; the

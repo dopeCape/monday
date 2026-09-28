@@ -46,13 +46,15 @@ export const INBOX_THREADS_SQL = `
 /**
  * The columns a Thread list row carries: the Thread, its tag and label ids in
  * the order they were applied, the newest Message's sender for the Section
- * rules ("lastFrom") and the Thread's Judgments (slice 25) as `j_*` columns.
- * Read over `threads t left join thread_judgments j`.
+ * rules ("lastFrom"), every sender's address (space-separated, for the
+ * Filter menu's Person and Domain) and the Thread's Judgments (slice 25) as
+ * `j_*` columns. Read over `threads t left join thread_judgments j`.
  */
 const THREAD_LIST_COLUMNS = `t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
     (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids,
     (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender,
+    (select group_concat(email, ' ') from thread_senders where thread_id = t.id) as sender_emails,
     j.needs_reply as j_needs_reply, j.waiting_on_others as j_waiting_on_others, j.newsletter as j_newsletter,
     j.automated as j_automated, j.brief_worth as j_brief_worth, j.urgency as j_urgency,
     j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at`;

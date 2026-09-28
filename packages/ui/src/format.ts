@@ -106,7 +106,15 @@ export function clock(d: Date): string {
   return `${hh}:${mm}`;
 }
 
+/**
+ * The day a list or a header names. A date in another calendar year than
+ * `now` always carries its year ("Dec 31, 2025"), even when it was
+ * yesterday; a date in this year keeps the short forms.
+ */
 function dayLabel(d: Date, now: Date): string {
+  if (d.getFullYear() !== now.getFullYear()) {
+    return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  }
   const days = daysBetween(d, now);
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
@@ -114,7 +122,7 @@ function dayLabel(d: Date, now: Date): string {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
 
-/** List time: "09:41" today, "Yesterday", "Mon" this week, "Sep 5" otherwise. */
+/** List time: "09:41" today, "Yesterday", "Mon" this week, "Sep 5" this year, "Sep 5, 2025" before it. */
 export function formatListTime(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -122,7 +130,7 @@ export function formatListTime(iso: string, now: Date = new Date()): string {
   return label === "Today" ? clock(d) : label;
 }
 
-/** Reader time: "Today 09:41", "Yesterday 17:20", "Mon 14:02", "Sep 5 16:00". */
+/** Reader time: "Today 09:41", "Yesterday 17:20", "Mon 14:02", "Sep 5 16:00", "Sep 5, 2025 16:00". */
 export function formatWhen(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
