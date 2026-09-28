@@ -4,11 +4,13 @@
 // (running, waiting, done, failed), when and how long; a failed Run says the
 // Step it stopped at and its error. Picking a Run lays its Step results over
 // the flow of the version it ran under, the same cards as the Workflow's own
-// page. Escape closes the Run, and from the list goes back to the Workflows.
+// page. A failed Run can run again: the same Workflow, on the same Thread.
+// Escape closes the Run, and from the list goes back to the Workflows.
 
 import type { RunView, Settings, WorkflowSketch, WorkflowView } from "@monday/shared";
 import { Btn, Icon, type IconComponent, RunSteps, WorkflowFlow } from "@monday/ui";
 import {
+  ArrowClockwiseIcon,
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleNotchIcon,
@@ -50,6 +52,10 @@ export interface RunHistoryProps {
   groupName?: ((id: string) => string) | undefined;
   onOpenThread?: ((threadId: string) => void) | undefined;
   onOpenWorkflow: (workflowId: string) => void;
+  /** Starts the Run's Workflow again on its Thread; absent hides "Run again". */
+  onRunAgain?: ((run: RunView) => void) | undefined;
+  /** An action is in flight: "Run again" waits for it. */
+  busy?: boolean | undefined;
   /** Escape with no Run open: back to the Workflow list. */
   onBack: () => void;
 }
@@ -74,6 +80,8 @@ export function RunHistory({
   groupName,
   onOpenThread,
   onOpenWorkflow,
+  onRunAgain,
+  busy = false,
   onBack,
 }: RunHistoryProps) {
   const s = useMemo(() => historyStrings(settings), [settings]);
@@ -203,6 +211,11 @@ export function RunHistory({
               ) : null}
             </div>
             <div className="wfx-acts">
+              {historyState(open) === "failed" && workflow && onRunAgain ? (
+                <Btn sm primary disabled={busy} onClick={() => onRunAgain(open)}>
+                  <Icon icon={ArrowClockwiseIcon} /> {s["strings.workflows.run_history.run_again"]}
+                </Btn>
+              ) : null}
               {open.threadId && onOpenThread ? (
                 <Btn sm onClick={() => onOpenThread(open.threadId ?? "")}>
                   <Icon icon={EnvelopeSimpleIcon} />{" "}

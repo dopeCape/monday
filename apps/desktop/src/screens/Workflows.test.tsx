@@ -637,6 +637,24 @@ describe("Run history", () => {
     expect(el.querySelector(".wfx-detail h2")?.textContent).toBe("Candidate intake");
   });
 
+  test("a failed Run runs again on the same Thread; a finished one offers no Run again", async () => {
+    const api = fixtureWorkflowsApi();
+    const started: Array<[string, string | null]> = [];
+    const el = await mount({
+      ...api,
+      run: async (id, threadId) => {
+        started.push([id, threadId]);
+        return api.run(id, threadId);
+      },
+    });
+    await click(tab(el, "Run history"));
+    await click(el.querySelector('.wfh-row[data-run="r4"]'));
+    expect(button(el.querySelector(".wfh-detail") as HTMLElement, "Run again")).toBeFalsy();
+    await click(el.querySelector('.wfh-row[data-run="r3"]'));
+    await click(button(el.querySelector(".wfh-detail") as HTMLElement, "Run again"));
+    expect(started).toEqual([["w1", "t-r3"]]);
+  });
+
   test("Open workflow shows the Run's Workflow in the list; Open thread goes to the Thread", async () => {
     const navigated: string[] = [];
     const el = await mount(fixtureWorkflowsApi(), undefined, {

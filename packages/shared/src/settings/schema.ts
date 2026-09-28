@@ -4558,6 +4558,11 @@ export const settingsSchema = {
     "Run history: open the Workflow",
     "Open workflow",
   ),
+  "strings.workflows.run_history.run_again": str(
+    "workflows",
+    "Run history: start a failed Run's Workflow again on the same Thread",
+    "Run again",
+  ),
   "strings.workflows.run_history.close": str(
     "workflows",
     "Run history: close the Run (Escape)",

@@ -404,6 +404,8 @@ export function Workflows({
                 select(id);
                 setView("list");
               }}
+              onRunAgain={(run) => void act(() => api.run(run.workflowId, run.threadId ?? null))}
+              busy={busy}
               onBack={backToList}
             />
           ) : null}
