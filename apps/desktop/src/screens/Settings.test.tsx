@@ -148,6 +148,16 @@ function scriptedApi(
     },
     // No sign-in app saved yet.
     oauth: { ...base.oauth, app: async () => ({ app: null }) },
+    // The MCP servers list asks the Server for each server's status; Remove goes there too.
+    mcp: {
+      ...base.mcp,
+      list: async () => {
+        throw new Error("no mcp list scripted");
+      },
+      remove: async (name: string) => {
+        calls.push({ name: "mcp.remove", args: [name] });
+      },
+    },
     // Each Account's card asks whether its calendar is a CalDAV link.
     calendar: {
       ...base.calendar,
@@ -1711,7 +1721,10 @@ describe("Settings › panels", () => {
     await clickText("Remove", mcp ?? document);
     expect(mcp?.textContent).toContain("Remove notes?");
     await clickText("Confirm", mcp ?? document);
-    expect(captured?.settings["workflows.mcp_servers"]).toEqual([]);
+    // The Server removes the entry and its sealed secrets; the screen asks it to.
+    expect(scripted.calls.filter((c) => c.name === "mcp.remove")).toEqual([
+      { name: "mcp.remove", args: ["notes"] },
+    ]);
     if (root) await act(async () => root?.unmount());
     root = null;
     host?.remove();

@@ -40,6 +40,7 @@ import {
   type ChoiceCard,
   ChoiceCards,
   CustomSwatch,
+  Icon,
   Input,
   Kbd,
   palettes,
@@ -48,7 +49,7 @@ import {
   Switch,
   Tag,
 } from "@monday/ui";
-import { KeyIcon, TerminalWindowIcon, XIcon } from "@phosphor-icons/react";
+import { KeyIcon, PlugsConnectedIcon, TerminalWindowIcon, XIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   chordLabel,
@@ -61,7 +62,10 @@ import {
   resolveKeymap,
 } from "../../keyboard/keymaps.ts";
 import { type AccountView, ApiError } from "../../platform/api.ts";
+import { openExternal } from "../../platform/open.ts";
 import { useShell } from "../../shell/Shell.tsx";
+import { useWorkspace } from "../../workspace.tsx";
+import { ConnectTool, McpServerList } from "../mcp/ConnectTool.tsx";
 import { ActionsBlock, SectionsBlock, sectionNameOf } from "../routing/OrganizeBlocks.tsx";
 import { Disclosure } from "./disclosure.tsx";
 import {
@@ -1563,103 +1567,54 @@ controlKinds.bindings = BindingsControl;
 
 /* ------------------------------ Workflows ------------------------------ */
 
-/** The form's draft: one target field that becomes `url` when it is http(s), else `command`. */
-interface McpDraft {
-  name: string;
-  target: string;
-  token: string;
-}
-const EMPTY_MCP: McpDraft = { name: "", target: "", token: "" };
-const mcpTarget = (m: McpServerSetting) => m.url ?? m.command ?? "";
-
-/** MCP servers as schema-backed records: add by command or URL, auth, tools, remove. */
+/**
+ * MCP servers (docs/spec/settings.md): each connected server with its
+ * status, Sign in or Reconnect, the tools it may use and Remove, and the
+ * Connect a tool dialog that searches the registry. The Server writes the
+ * Setting and seals the secrets; this re-reads Settings after a change.
+ */
 function McpServersControl({ k }: ControlProps) {
-  const { value, change, error, shell } = useSetting(k);
+  const { value, error, shell } = useSetting(k);
   const s = shell.settings;
+  const workspace = useWorkspace();
   const servers = (value ?? []) as McpServerSetting[];
-  const [draft, setDraft] = useState<McpDraft>(EMPTY_MCP);
-  const [tools, setTools] = useState("");
-  const add = () => {
-    if (!draft.name.trim() || !draft.target.trim()) return;
-    const target = draft.target.trim();
-    const token = draft.token.trim();
-    const next: McpServerSetting = {
-      name: draft.name.trim(),
-      ...(/^https?:\/\//.test(target) ? { url: target } : { command: target }),
-      ...(token ? { token } : {}),
-      tools: tools
-        .split(",")
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0),
-    };
-    void change([...servers, next]);
-    setDraft(EMPTY_MCP);
-    setTools("");
-  };
+  const [open, setOpen] = useState(false);
+  const pinned = shell.pinned.has(k);
   return (
     <Row k={k} block error={error}>
-      <div className="record">
-        {servers.length === 0 ? (
-          <div className="note">{s["strings.settings.mcp.empty"]}</div>
-        ) : null}
-        {servers.map((m, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: two servers may share a name; the position is the identity
-          <div className="record-row" key={`${m.name}-${i}`} data-mcp={m.name}>
-            <span className="record-key">
-              <b>{m.name}</b>
-              <span>
-                {mcpTarget(m)}
-                {m.token ? ` · ${s["strings.settings.mcp.has_token"]}` : ""} ·{" "}
-                {m.tools.length > 0 ? m.tools.join(", ") : s["strings.settings.mcp.all_tools"]}
-              </span>
-            </span>
+      <div className="record mcp-control">
+        <McpServerList
+          api={shell.api}
+          workspaceId={workspace.id}
+          s={s}
+          servers={servers}
+          openExternal={openExternal}
+          onChanged={() => void shell.refresh()}
+          removeAction={(server, remove) => (
             <DangerAction
               label={s["strings.settings.mcp.remove"]}
-              confirm={fill(s["strings.settings.mcp.remove_confirm"], { name: m.name })}
-              onConfirm={async () => {
-                const ok = await change(servers.filter((_, j) => j !== i));
-                if (!ok) throw new Error(error ?? "not saved");
-              }}
+              confirm={fill(s["strings.settings.mcp.remove_confirm"], { name: server.title })}
+              onConfirm={remove}
             />
+          )}
+        />
+        {pinned ? null : (
+          <div>
+            <Btn sm primary onClick={() => setOpen(true)}>
+              <Icon icon={PlugsConnectedIcon} /> {s["strings.mcp.connect"]}
+            </Btn>
           </div>
-        ))}
-        <div className="mcp-add">
-          <Input
-            className="text"
-            value={draft.name}
-            placeholder={s["strings.settings.mcp.name"]}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+        )}
+        {open ? (
+          <ConnectTool
+            api={shell.api}
+            workspaceId={workspace.id}
+            s={s}
+            openExternal={openExternal}
+            onClose={() => setOpen(false)}
+            onConnected={() => void shell.refresh()}
           />
-          <Input
-            className="text"
-            value={draft.target}
-            placeholder={s["strings.settings.mcp.target"]}
-            spellCheck={false}
-            onChange={(e) => setDraft({ ...draft, target: e.target.value })}
-          />
-          <Input
-            className="text"
-            value={draft.token}
-            placeholder={s["strings.settings.mcp.auth"]}
-            spellCheck={false}
-            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
-          />
-          <Input
-            className="text"
-            value={tools}
-            placeholder={s["strings.settings.mcp.tools"]}
-            spellCheck={false}
-            onChange={(e) => setTools(e.target.value)}
-          />
-          <Btn
-            sm
-            className="mcp-add-btn"
-            disabled={!draft.name.trim() || !draft.target.trim()}
-            onClick={add}
-          >
-            {s["strings.settings.mcp.add"]}
-          </Btn>
-        </div>
+        ) : null}
       </div>
     </Row>
   );
