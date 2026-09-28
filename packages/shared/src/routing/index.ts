@@ -36,6 +36,21 @@ export {
   predicateIsEmpty,
   subjectMatches,
 } from "./predicate.ts";
+export type { ScopeUnit, ScopeWords, SortScope, SortScopeKind } from "./scope.ts";
+export {
+  describeSortScope,
+  formatSortScope,
+  inSortScope,
+  isScopeDate,
+  parseSortScope,
+  SCOPE_MAX,
+  SCOPE_UNITS,
+  SORT_SCOPE_KINDS,
+  scopeLimit,
+  scopeStart,
+  scopeWordsFrom,
+  sortScopeOr,
+} from "./scope.ts";
 export type {
   JudgedWhen,
   SectionCreatedBy,
@@ -162,6 +177,65 @@ export interface RoutingPreview {
   moves: ProposedMove[];
   /** Hosted calls the dry run made. */
   calls: number;
+  /** The Sort scope the dry run covered (formatSortScope), when it was asked with one. */
+  scope?: string;
+  /** How many Inbox Threads the scope holds now; `considered` is all of them when `complete`. */
+  inScope?: number;
+  /**
+   * Whether every Thread in scope was scored. When not, the preview is the
+   * newest sample: Apply moves it and a Backlog sort does the rest, from `after`.
+   */
+  complete?: boolean;
+  /** The oldest Thread scored (its last activity and id), where a Backlog sort picks up. */
+  after?: BacklogCursor | null;
+  /** Moves per target: a Group id, "ask" for Needs a decision, "none" for out of every Group. */
+  byTarget?: Record<string, number>;
+}
+
+/** A place in the newest-first walk: a Thread's last activity and id. */
+export interface BacklogCursor {
+  at: IsoDate;
+  id: Id;
+}
+
+/**
+ * A Backlog sort (CONTEXT.md): the background Job that routes the mail
+ * already there, inside a Sort scope, newest first, in batches of the
+ * judge's size, one at a time per Workspace. What GET /routing/backlog says.
+ */
+export interface RoutingBacklog {
+  workspaceId: Id;
+  /** The Sort scope as a sentence (formatSortScope). */
+  scope: string;
+  status: "running" | "paused" | "waiting" | "done" | "cancelled";
+  /**
+   * Why it waits: nothing can sort (no TypeSafe key, no provider key, no
+   * coding agent), older mail is still arriving from the first sync, or the
+   * AI level is below "sorts and acts for me".
+   */
+  reason: "no_judge" | "sync" | "level" | null;
+  /** Who sorted the last batch: TypeSafe, or a language model (a coding agent is slow). */
+  sorter: "typesafe" | "llm" | null;
+  /** Whether the language model that sorts is a coding agent on this computer. */
+  local: boolean;
+  /** Threads looked at, user-placed ones included. */
+  done: number;
+  /** Threads the scope holds now; grows while mail keeps arriving. */
+  total: number;
+  moved: number;
+  asked: number;
+  /** Threads the user placed, left where they are. */
+  skipped: number;
+  /** Batches sent so far, and the size of the last one. */
+  batches: number;
+  batchSize: number;
+  /** Requests to whoever sorts. */
+  calls: number;
+  startedAt: IsoDate;
+  updatedAt: IsoDate;
+  finishedAt: IsoDate | null;
+  /** The last failure, kept while the Job retries; null once a batch lands. */
+  lastError: string | null;
 }
 
 /** What applying a preview did. */

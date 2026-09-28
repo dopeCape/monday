@@ -53,6 +53,7 @@ describe("migrations", () => {
       "oauth_refresh_tokens",
       "pairing_codes",
       "provider_keys",
+      "routing_backlogs",
       "routing_decisions",
       "scheduled_sends",
       "section_judgments",

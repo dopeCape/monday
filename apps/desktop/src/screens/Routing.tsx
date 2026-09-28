@@ -24,6 +24,7 @@ import type {
   Predicate,
   ProposedMove,
   RerunProgress,
+  RoutingPreview,
   Settings,
   ThreadRoute,
 } from "@monday/shared";
@@ -46,6 +47,7 @@ import {
   SideCard,
   type SubgroupItem,
   Tabs,
+  useEscape,
 } from "@monday/ui";
 import { groupIcon as fixtureGroupIcon } from "@monday/ui/fixtures";
 import { ArrowsClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
@@ -54,6 +56,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -63,6 +66,14 @@ import { useWorkspace } from "../workspace.tsx";
 import { fixtureInbox, type InboxSource } from "./inbox/actions.ts";
 import { fill } from "./inbox/triage.ts";
 import { LevelLock, useLevelLock } from "./LevelLock.tsx";
+import {
+  BacklogCard,
+  capitalized,
+  ScopePicker,
+  scopeWords,
+  useBacklog,
+  useBacklogShown,
+} from "./routing/backlog.tsx";
 import { ActionsBlock, SectionsBlock, sectionNameOf } from "./routing/OrganizeBlocks.tsx";
 import { fixtureRouting, type RoutingSource } from "./routing/routing-data.ts";
 import { predicateChips, whyRouted } from "./routing/why.ts";
@@ -95,9 +106,19 @@ export interface RoutingProps {
   groupIcon?: ((g: Group) => IconComponent | undefined) | undefined;
 }
 
-/** The routing routes; a re-run that streams its progress is optional (tests and older Servers). */
-export type RoutingApi = Omit<Api["routing"], "rerunWithProgress"> &
-  Partial<Pick<Api["routing"], "rerunWithProgress">>;
+/**
+ * The routing routes; a re-run that streams its progress and the Backlog
+ * sort's routes are optional (tests and older Servers).
+ */
+type OptionalRoutes = "rerunWithProgress" | "backlog" | "startBacklog" | "backlogAction";
+export type RoutingApi = Omit<Api["routing"], OptionalRoutes> &
+  Partial<Pick<Api["routing"], OptionalRoutes>>;
+
+/** A re-run's result as the page keeps it: the moves, and for a scope, whether it was a sample. */
+type Preview = Pick<
+  RoutingPreview,
+  "moves" | "considered" | "scope" | "inScope" | "complete" | "after" | "byTarget"
+>;
 
 type Strings = Record<string, string>;
 
@@ -228,10 +249,22 @@ export function Routing({
   const [views, setViews] = useState<Map<string, GroupView> | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [preview, setPreview] = useState<{ moves: ProposedMove[]; considered: number } | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The Re-run popover: which mail to sort, from routing.rerun.scope. */
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [scopeText, setScopeText] = useState<string>(settings["routing.rerun.scope"]);
+  const [scopeValid, setScopeValid] = useState(true);
+  const scopeRef = useRef<HTMLSpanElement | null>(null);
+  useEscape(() => setScopeOpen(false), scopeOpen);
+  useEffect(() => {
+    if (!scopeOpen) return;
+    const away = (e: MouseEvent) => {
+      if (scopeRef.current && !scopeRef.current.contains(e.target as Node)) setScopeOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [scopeOpen]);
   /** A re-run as it goes: shown above the tabs until its preview replaces it. */
   const [rerunning, setRerunning] = useState<RerunProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -405,15 +438,24 @@ export function Routing({
   };
 
   const rerun = async () => {
+    setScopeOpen(false);
     setBusy(true);
     setError(null);
     setPreview(null);
     setRerunning({ done: 0, total: 0, moves: 0, subject: null });
     try {
       const p = api.rerunWithProgress
-        ? await api.rerunWithProgress(workspaceId, setRerunning)
-        : await api.rerun(workspaceId);
-      setPreview({ moves: p.moves, considered: p.considered });
+        ? await api.rerunWithProgress(workspaceId, setRerunning, undefined, scopeText)
+        : await api.rerun(workspaceId, undefined, scopeText);
+      setPreview({
+        moves: p.moves,
+        considered: p.considered,
+        scope: p.scope ?? scopeText,
+        ...(p.inScope !== undefined ? { inScope: p.inScope } : {}),
+        ...(p.complete !== undefined ? { complete: p.complete } : {}),
+        ...(p.after !== undefined ? { after: p.after } : {}),
+        ...(p.byTarget !== undefined ? { byTarget: p.byTarget } : {}),
+      });
     } catch (e) {
       fail(e);
     } finally {
@@ -422,12 +464,55 @@ export function Routing({
     }
   };
 
+  // The Backlog sort: read on open, followed while it runs.
+  const backlogApi = api.backlog;
+  const backlogSource = useMemo(
+    () => (backlogApi ? { backlog: (w: string) => backlogApi(w) } : null),
+    [backlogApi],
+  );
+  const {
+    backlog,
+    set: setBacklog,
+    refresh: refreshBacklog,
+  } = useBacklog(backlogSource, workspaceId, settings["routing.backfill.poll_seconds"], remote);
+  const backlogShown = useBacklogShown(backlog);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: moved counts change the Group views.
+  useEffect(() => {
+    if (backlog?.moved) refreshViews();
+  }, [backlog?.moved]);
+  const backlogAction = async (action: "pause" | "resume" | "cancel") => {
+    if (!api.backlogAction) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setBacklog(await api.backlogAction(workspaceId, action));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+      refreshBacklog();
+    }
+  };
+
+  /** A sample of a large scope: Apply moves it and the Backlog sort does the rest. */
+  const sampled = preview?.complete === false && api.startBacklog !== undefined;
+
   const applyPreview = async () => {
     if (!preview) return;
     setBusy(true);
     setError(null);
     try {
-      await api.apply(workspaceId, preview.moves);
+      if (sampled && api.startBacklog && preview.scope) {
+        const started = await api.startBacklog(workspaceId, {
+          scope: preview.scope,
+          moves: preview.moves,
+          after: preview.after ?? null,
+          done: preview.considered,
+        });
+        setBacklog(started.backlog);
+      } else {
+        await api.apply(workspaceId, preview.moves);
+      }
       setPreview(null);
       refreshViews();
     } catch (e) {
@@ -678,9 +763,35 @@ export function Routing({
         <div className="page-in rt-page">
           <PageHead title={s.title ?? "Routing"} subtitle={s.subtitle}>
             {locked ? null : (
-              <Btn outline onClick={rerun} disabled={busy}>
-                <Icon icon={ArrowsClockwiseIcon} /> {s.rerun ?? "Re-run on inbox"}
-              </Btn>
+              <span className="rt-rerun-anchor" ref={scopeRef}>
+                <Btn
+                  outline
+                  onClick={() => setScopeOpen((o) => !o)}
+                  disabled={busy}
+                  aria-expanded={scopeOpen}
+                  aria-haspopup="dialog"
+                >
+                  <Icon icon={ArrowsClockwiseIcon} /> {s.rerun ?? "Re-run on inbox"}
+                </Btn>
+                {scopeOpen ? (
+                  <div className="pop rt-scope-pop" role="dialog" aria-label={s["rerun.pick"]}>
+                    <div className="pop-h">{s["rerun.pick"]}</div>
+                    <ScopePicker
+                      value={scopeText}
+                      settings={settings}
+                      onChange={(value) => {
+                        setScopeValid(value !== null);
+                        if (value) setScopeText(value);
+                      }}
+                    />
+                    <div className="rt-scope-go">
+                      <Btn sm primary onClick={rerun} disabled={busy || !scopeValid}>
+                        {s["rerun.go"] ?? "Show what would move"}
+                      </Btn>
+                    </div>
+                  </div>
+                ) : null}
+              </span>
             )}
             <Btn primary={!locked} outline={locked} onClick={newGroup} disabled={busy}>
               <Icon icon={PlusIcon} /> {s.new_group ?? "New group"}
@@ -751,10 +862,32 @@ export function Routing({
           {preview ? (
             <PreviewCard
               title={s["preview.title"] ?? "What would move"}
-              summary={fill(s["preview.considered"] ?? "{moves} of {n} threads would move", {
-                moves: preview.moves.length,
-                n: preview.considered,
-              })}
+              summary={
+                sampled
+                  ? [
+                      fill(s["preview.sample"] ?? "", {
+                        moves: preview.moves.length,
+                        n: preview.considered,
+                        scope: capitalized(scopeWords(preview.scope ?? scopeText, settings)),
+                        total: (preview.inScope ?? 0).toLocaleString(),
+                      }),
+                      ...Object.entries(preview.byTarget ?? {}).map(([target, n]) =>
+                        fill(s["preview.target"] ?? "{name}: {n}", {
+                          name:
+                            target === "ask"
+                              ? (s["preview.ask"] ?? "Needs a decision")
+                              : target === "none"
+                                ? (s["preview.out"] ?? "No group")
+                                : nameOfGroup(target),
+                          n,
+                        }),
+                      ),
+                    ].join(" · ")
+                  : fill(s["preview.considered"] ?? "{moves} of {n} threads would move", {
+                      moves: preview.moves.length,
+                      n: preview.considered,
+                    })
+              }
               moves={preview.moves.map((m) => ({
                 threadId: m.threadId,
                 name: nameOf(m.from),
@@ -762,11 +895,23 @@ export function Routing({
                 target: targetOf(m),
               }))}
               emptyLabel={s["preview.none"] ?? "Nothing would move"}
-              applyLabel={s["preview.apply"] ?? "Apply"}
+              applyLabel={
+                sampled ? (s["preview.apply_all"] ?? "Apply") : (s["preview.apply"] ?? "Apply")
+              }
+              applyEnabled={sampled ? true : undefined}
               cancelLabel={s["preview.cancel"] ?? "Cancel"}
               onApply={applyPreview}
               onCancel={() => setPreview(null)}
               busy={busy}
+            />
+          ) : null}
+          {backlog && backlogShown.shown ? (
+            <BacklogCard
+              backlog={backlog}
+              settings={settings}
+              busy={busy}
+              onAction={(action) => void backlogAction(action)}
+              onDismiss={backlogShown.dismiss}
             />
           ) : null}
           <div className="two rt-two">

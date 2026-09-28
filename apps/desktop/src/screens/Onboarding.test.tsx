@@ -190,6 +190,69 @@ async function mount(
   return { done };
 }
 
+describe("onboarding: how far back to sort", () => {
+  const typeInto = async (input: Element | null, value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(input, value);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle();
+  };
+
+  test("at automate the welcome asks how far back, with the Setting's default, and saves the pick", async () => {
+    await mount({ mode: "welcome", runtimes: detected });
+    await click(card("automate"));
+    await click(cont());
+    expect(step()).toBe("scope");
+    expect(q("#onb-title")?.textContent).toBe("How far back should monday sort your mail?");
+    // The progress line counts it: level, scope, keymap, connect.
+    expect(qa(".onb-progress > span")).toHaveLength(4);
+    // The default is the last 3 months.
+    expect(q(".scope-says")?.textContent).toBe("The last 3 months");
+    await clickText("The last");
+    await typeInto(q(".scope-n"), "2");
+    await clickText("years");
+    expect(q(".scope-says")?.textContent).toBe("The last 2 years");
+    await click(cont());
+    expect(captured?.settings["routing.backfill.scope"]).toBe("last 2 years");
+    expect(step()).toBe("keymap");
+    // Back goes to the scope step, which keeps the pick.
+    await key("Escape");
+    expect(step()).toBe("scope");
+    expect(q(".scope-says")?.textContent).toBe("The last 2 years");
+  });
+
+  test("Skip on the scope step keeps the default; Enter continues; below automate it is not asked", async () => {
+    await mount({ mode: "welcome", runtimes: detected }, { "routing.backfill.scope": "latest 20" });
+    await click(card("automate"));
+    await click(cont());
+    expect(step()).toBe("scope");
+    await click(q('[data-action="skip-scope"]'));
+    expect(captured?.settings["routing.backfill.scope"]).toBe("last 3 months");
+    expect(step()).toBe("keymap");
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+
+    // Everything as a pick, continued with Enter.
+    await mount({ mode: "welcome", runtimes: detected });
+    await click(card("automate"));
+    await click(cont());
+    await clickText("Everything");
+    await key("Enter");
+    expect(captured?.settings["routing.backfill.scope"]).toBe("all");
+    if (root) await act(async () => root?.unmount());
+    root = null;
+    host?.remove();
+
+    await mount({ mode: "welcome", runtimes: detected });
+    await click(card("assist"));
+    await click(cont());
+    expect(step()).toBe("keymap");
+  });
+});
+
 describe("onboarding: the first screen and the AI level", () => {
   test("density comes from the screen size and the chips follow the question", () => {
     expect(densityFor(1024)).toBe("compact");
@@ -420,6 +483,8 @@ describe("onboarding: the first screen and the AI level", () => {
     expect(cont()?.disabled).toBe(false);
     await click(cont());
     expect(captured?.settings["ai.level"]).toBe("automate");
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("scope");
+    await click(cont());
     expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
   });
 
@@ -571,6 +636,9 @@ describe("onboarding: the conversation", () => {
     await clickText("Continue");
     // A CLI is detected: no runtime step, the level is saved and the conversation opens on its own Session.
     expect(captured?.settings["ai.level"]).toBe("automate");
+    // Sorting runs at automate: how far back comes first, then the conversation.
+    expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("scope");
+    await click(cont());
     expect(q('[data-screen="onboarding"]')?.dataset.step).toBe("chat");
     await settle();
     expect(client.sessions).toHaveLength(1);

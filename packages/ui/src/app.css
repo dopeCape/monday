@@ -8756,6 +8756,24 @@ button.prov {
 .agent-groups .group-proposal .moves[data-moves="0"] {
   color: var(--fg-faint);
 }
+/* The Backlog sort a card started: one line under it that follows the Job. */
+.agent-backlog {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.agent-backlog[data-status="running"] {
+  color: var(--fg);
+}
+.onb-backlog {
+  max-width: 260px;
+  text-align: right;
+  line-height: 1.4;
+}
 
 /* Keyboard focus on the agent, routing, workflows, calendar and onboarding surfaces. */
 .agent-panel button:focus-visible,
@@ -11206,4 +11224,72 @@ button.appr-link:focus-visible {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* The Backlog sort (Routing): the re-run panel's frame, with its own buttons on the right. */
+.rt-backlog .rt-rerun-head .faint {
+  margin-left: 0;
+}
+.rt-backlog .rt-rerun-head .btn {
+  gap: 6px;
+}
+.rt-backlog[data-status="paused"] .rt-rerun-bar > span,
+.rt-backlog[data-status="waiting"] .rt-rerun-bar > span {
+  background: var(--fg-faint);
+}
+.rt-backlog-note {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+}
+
+/* Re-run's popover: which mail to sort, under its button. */
+.rt-rerun-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.pop.rt-scope-pop {
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  padding: 8px;
+}
+.rt-scope-go {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 4px 2px;
+}
+
+/* The Sort scope picker (the Re-run popover, onboarding's scope step). */
+.scope-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px;
+}
+.scope-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.scope-pick .input.scope-n {
+  width: 88px;
+  height: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.scope-pick .input.scope-date {
+  width: 170px;
+  height: 30px;
+}
+.scope-says {
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+.onb-scope {
+  display: flex;
+  justify-content: center;
+}
+.onb-scope .scope-pick {
+  align-items: center;
 }

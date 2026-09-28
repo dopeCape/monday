@@ -28,6 +28,7 @@ const COMPOSER_KEYS = [
   "strings.agent.preview_groups.moves",
   "strings.agent.preview_groups.none",
   "strings.agent.preview_groups.note",
+  "strings.agent.preview_groups.backlog",
   "strings.agent.preview_send",
   "strings.agent.preview_workflow.create",
   "strings.agent.preview_workflow.update",

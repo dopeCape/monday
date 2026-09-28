@@ -1,0 +1,31 @@
+CREATE TABLE "routing_backlogs" (
+	"workspace_id" text PRIMARY KEY NOT NULL,
+	"run_id" text NOT NULL,
+	"scope" text NOT NULL,
+	"status" text NOT NULL,
+	"reason" text,
+	"sorter" text,
+	"local" boolean DEFAULT false NOT NULL,
+	"since" timestamp with time zone,
+	"limit" integer,
+	"phase" text DEFAULT 'walk' NOT NULL,
+	"top_at" timestamp with time zone,
+	"top_id" text,
+	"cursor_at" timestamp with time zone,
+	"cursor_id" text,
+	"walked" integer DEFAULT 0 NOT NULL,
+	"done" integer DEFAULT 0 NOT NULL,
+	"total" integer DEFAULT 0 NOT NULL,
+	"moved" integer DEFAULT 0 NOT NULL,
+	"asked" integer DEFAULT 0 NOT NULL,
+	"skipped" integer DEFAULT 0 NOT NULL,
+	"batches" integer DEFAULT 0 NOT NULL,
+	"batch_size" integer DEFAULT 0 NOT NULL,
+	"calls" integer DEFAULT 0 NOT NULL,
+	"last_error" text,
+	"started_at" timestamp with time zone NOT NULL,
+	"updated_at" timestamp with time zone NOT NULL,
+	"finished_at" timestamp with time zone
+);
+--> statement-breakpoint
+ALTER TABLE "routing_backlogs" ADD CONSTRAINT "routing_backlogs_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;

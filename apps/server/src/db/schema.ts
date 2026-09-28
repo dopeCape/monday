@@ -940,6 +940,52 @@ export const routingDecisions = pgTable(
   (t) => [index("routing_decisions_workspace_idx").on(t.workspaceId, t.at)],
 );
 
+export type BacklogStatus = "running" | "paused" | "waiting" | "done" | "cancelled";
+
+/**
+ * A Backlog sort (CONTEXT.md): one per Workspace, the newest replacing the
+ * last. The route-backlog Job reads and advances it one round at a time, so
+ * a restart resumes from the cursor: the walk goes newest first from the
+ * Thread that was newest at the start (top) down to the scope's start date
+ * or count, then a catch-up pass takes Threads that landed above the top
+ * while it ran. `run_id` names the Job chain that owns the row; a Job whose
+ * id no longer matches stops.
+ */
+export const routingBacklogs = pgTable("routing_backlogs", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull(),
+  scope: text("scope").notNull(),
+  status: text("status").$type<BacklogStatus>().notNull(),
+  reason: text("reason").$type<"no_judge" | "sync" | "level">(),
+  sorter: text("sorter").$type<"typesafe" | "llm">(),
+  local: boolean("local").notNull().default(false),
+  /** Resolved once at the start for a date scope; null for a count or everything. */
+  since: timestamp("since", { withTimezone: true, mode: "date" }),
+  /** The count of a "latest N" scope; null otherwise. */
+  limit: integer("limit"),
+  phase: text("phase").$type<"walk" | "catchup">().notNull().default("walk"),
+  topAt: timestamp("top_at", { withTimezone: true, mode: "date" }),
+  topId: text("top_id"),
+  cursorAt: timestamp("cursor_at", { withTimezone: true, mode: "date" }),
+  cursorId: text("cursor_id"),
+  /** Threads the walk passed, for a count scope's limit. */
+  walked: integer("walked").notNull().default(0),
+  done: integer("done").notNull().default(0),
+  total: integer("total").notNull().default(0),
+  moved: integer("moved").notNull().default(0),
+  asked: integer("asked").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  batches: integer("batches").notNull().default(0),
+  batchSize: integer("batch_size").notNull().default(0),
+  calls: integer("calls").notNull().default(0),
+  lastError: text("last_error"),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
+});
+
 /* ------------------------------ Workflows (ADR 0003, slice 16) ------------------------------ */
 
 /**

@@ -28,6 +28,7 @@ import type { McpRegistry } from "../../../workflows/mcp-registry.ts";
 import type { GuardSeam } from "../../guard.ts";
 import type { OnboardingSeam } from "../../onboarding.ts";
 import type { OrganizeSeam } from "../../organize.ts";
+import type { BacklogSeam } from "../../routing/backlog.ts";
 import type { TuneSeam } from "../../tune.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
@@ -110,6 +111,8 @@ export interface ToolExtensions {
   organize?: OrganizeSeam | undefined;
   /** Explaining, listing, testing and changing the judgments behind routing and Sections. */
   tune?: TuneSeam | undefined;
+  /** The Backlog sort: a Sort scope's sample previewed, then the rest sorted in the background. */
+  backlog?: BacklogSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });

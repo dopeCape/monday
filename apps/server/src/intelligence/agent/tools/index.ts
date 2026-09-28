@@ -477,6 +477,8 @@ export async function replayUndo(
     }
     case "groups": {
       const onboarding = extensions?.onboarding;
+      // The background sorting the approval started stops first, so nothing lands after the Undo.
+      if (undo.backlog) await extensions?.backlog?.cancel(host.workspaceId);
       const { applied } = await host.applyIntents(undo.intents, { actor: "user" });
       if (!onboarding) {
         return `Undone: ${applied} of ${plural(undo.intents.length, "thread")} put back; the Groups stay because this host cannot delete them.`;
@@ -513,6 +515,7 @@ export async function replayUndo(
       return `Undone: the Group "${restored.name}" is back as it was.`;
     }
     case "organize": {
+      if (undo.backlog) await extensions?.backlog?.cancel(host.workspaceId);
       const { applied } = await host.applyIntents(undo.intents, { actor: "user" });
       let forgot = 0;
       if (undo.sectionId && extensions?.organize) {

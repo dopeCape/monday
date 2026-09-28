@@ -152,7 +152,17 @@ export type ToolPreview =
   | { kind: "event"; event: EventPreview }
   /** A calendar draft the Agent proposes: the card shows the summary with Apply and Discard. */
   | { kind: "calendar-draft"; draft: CalendarDraft }
-  | { kind: "groups"; groups: GroupProposalPreview[]; considered: number }
+  | {
+      kind: "groups";
+      groups: GroupProposalPreview[];
+      considered: number;
+      /**
+       * When the Sort scope holds more than the sample scored: the scope in
+       * the user's words and how many Threads it holds, which a Backlog sort
+       * routes after approval.
+       */
+      backlog?: { scope: string; threads: number } | undefined;
+    }
   /** A Workflow the Agent creates, changes or switches: the card draws its flow and, for an edit, what changed. */
   | WorkflowPreview
   | { kind: "text"; text: string };
@@ -229,7 +239,13 @@ export type UndoRecord =
   /** An external key the Agent created (slice 19): Undo revokes it. */
   | { kind: "external_key"; credentialId: Id }
   /** Onboarding's approved Group proposal: the Groups it created and the moves to put back. */
-  | { kind: "groups"; groupIds: Id[]; intents: (IntentArgs & { threadId: Id })[] }
+  | {
+      kind: "groups";
+      groupIds: Id[];
+      intents: (IntentArgs & { threadId: Id })[];
+      /** Approval started a Backlog sort; Undo cancels it. */
+      backlog?: boolean | undefined;
+    }
   /** An Event the scheduling tool made: Undo cancels it (the Provider mails the cancellation). */
   | { kind: "event"; eventId: Id }
   /** The Voice profile before a rebuild: Undo puts it back. */
@@ -244,7 +260,13 @@ export type UndoRecord =
    * Existing mail organized into a new Group or Section (slice 26): the moves
    * to put back, and the Section whose cached judgments Undo forgets.
    */
-  | { kind: "organize"; intents: (IntentArgs & { threadId: Id })[]; sectionId: string | null }
+  | {
+      kind: "organize";
+      intents: (IntentArgs & { threadId: Id })[];
+      sectionId: string | null;
+      /** Approval started a Backlog sort; Undo cancels it. */
+      backlog?: boolean | undefined;
+    }
   /**
    * An Example the Agent recorded for a Group (add_example): Undo removes it,
    * or puts back the Example the Thread already was for that Group.

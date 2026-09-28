@@ -82,6 +82,7 @@ import {
   onboardingFixtureClient,
 } from "./screens/onboarding-fixture.ts";
 import { Routing } from "./screens/Routing.tsx";
+import { BacklogContext } from "./screens/routing/backlog.tsx";
 import type { RoutingSource } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
 import type { RuntimeDetection } from "./screens/settings/render.tsx";
@@ -645,6 +646,20 @@ export function App({
         : [],
     [mentionsOn, mentionLimit, nav.sections, inboxThreads, navGroups, ws.address],
   );
+  // The Backlog sort the agent's Group and sorting cards follow (routing/backlog.tsx).
+  const routingApi = shell.server ? shell.api.routing : null;
+  const backlogFollow = useMemo(
+    () =>
+      routingApi
+        ? {
+            workspaceId: ws.id,
+            source: { backlog: (w: string) => routingApi.backlog(w) },
+            pollSeconds: shell.settings["routing.backfill.poll_seconds"],
+            settings: shell.settings,
+          }
+        : null,
+    [routingApi, ws.id, shell.settings],
+  );
   // New message opens the compose window over the screen that is open.
   const onCompose = () => compose.openNew();
 
@@ -1185,73 +1200,75 @@ export function App({
 
   const app = (
     <ComposerMentionsContext.Provider value={mentions}>
-      <div
-        className="app"
-        data-online={online ? "true" : "false"}
-        style={{ gridTemplateColumns: cols.join(" ") }}
-      >
-        {parts}
-        {reauth}
-        <ComposeLayer
-          compose={compose}
-          composer={composer}
-          now={composeNow}
-          toastMs={shell.settings["inbox.undo_toast_ms"]}
-          undoKey={chordLabel(
-            composeKeymap.undo,
-            typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
-          )}
-          undoLabel={shell.settings["strings.inbox.undo"]}
-        />
-        {approvalsOpen && !aiOff ? (
-          <ApprovalsSheet
-            items={approvals.items}
-            strings={shell.settings}
-            now={now}
-            onDecide={async (item, decision, standing) => {
-              if (item.kind === "run") await approvals.decideRun(item.run, decision, standing);
-              else if (item.kind === "session") {
-                // The Session's own approval stream resumes the paused turn (ADR 0002).
-                if (decision === "approved") await agent.approve(item.call.id);
-                else await agent.decline(item.call.id);
-              }
-            }}
-            onOpenRun={(item) => {
-              setApprovalsOpen(false);
-              navigate(`workflow-run:${item.run.workflowId}:${item.run.id}`);
-            }}
-            onOpenThread={(threadId) => {
-              setApprovalsOpen(false);
-              navigate(`thread:${threadId}`);
-            }}
-            onOpenSession={(item) => {
-              setApprovalsOpen(false);
-              const session = item.kind === "external" ? item.sessionId : null;
-              if (session) void agent.openSession(session);
-              askHere();
-            }}
-            onClose={() => setApprovalsOpen(false)}
-          />
-        ) : null}
-        {approvalNote ? (
-          <Toast
-            key={approvalNote.key}
-            className="ready-note"
-            text={`${approvalNote.title}. ${approvalNote.body}`}
-            undoLabel={shell.settings["strings.nav.approvals"]}
+      <BacklogContext.Provider value={backlogFollow}>
+        <div
+          className="app"
+          data-online={online ? "true" : "false"}
+          style={{ gridTemplateColumns: cols.join(" ") }}
+        >
+          {parts}
+          {reauth}
+          <ComposeLayer
+            compose={compose}
+            composer={composer}
+            now={composeNow}
+            toastMs={shell.settings["inbox.undo_toast_ms"]}
             undoKey={chordLabel(
-              composeKeymap["approvals.open"],
+              composeKeymap.undo,
               typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
             )}
-            onUndo={() => {
-              setApprovalNote(null);
-              setApprovalsOpen(true);
-            }}
-            ms={shell.settings["notifications.note_ms"]}
-            onExpire={() => setApprovalNote(null)}
+            undoLabel={shell.settings["strings.inbox.undo"]}
           />
-        ) : null}
-      </div>
+          {approvalsOpen && !aiOff ? (
+            <ApprovalsSheet
+              items={approvals.items}
+              strings={shell.settings}
+              now={now}
+              onDecide={async (item, decision, standing) => {
+                if (item.kind === "run") await approvals.decideRun(item.run, decision, standing);
+                else if (item.kind === "session") {
+                  // The Session's own approval stream resumes the paused turn (ADR 0002).
+                  if (decision === "approved") await agent.approve(item.call.id);
+                  else await agent.decline(item.call.id);
+                }
+              }}
+              onOpenRun={(item) => {
+                setApprovalsOpen(false);
+                navigate(`workflow-run:${item.run.workflowId}:${item.run.id}`);
+              }}
+              onOpenThread={(threadId) => {
+                setApprovalsOpen(false);
+                navigate(`thread:${threadId}`);
+              }}
+              onOpenSession={(item) => {
+                setApprovalsOpen(false);
+                const session = item.kind === "external" ? item.sessionId : null;
+                if (session) void agent.openSession(session);
+                askHere();
+              }}
+              onClose={() => setApprovalsOpen(false)}
+            />
+          ) : null}
+          {approvalNote ? (
+            <Toast
+              key={approvalNote.key}
+              className="ready-note"
+              text={`${approvalNote.title}. ${approvalNote.body}`}
+              undoLabel={shell.settings["strings.nav.approvals"]}
+              undoKey={chordLabel(
+                composeKeymap["approvals.open"],
+                typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+              )}
+              onUndo={() => {
+                setApprovalNote(null);
+                setApprovalsOpen(true);
+              }}
+              ms={shell.settings["notifications.note_ms"]}
+              onExpire={() => setApprovalNote(null)}
+            />
+          ) : null}
+        </div>
+      </BacklogContext.Provider>
     </ComposerMentionsContext.Provider>
   );
   return draftStore ? (
