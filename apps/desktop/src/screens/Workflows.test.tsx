@@ -643,7 +643,7 @@ describe("Run history", () => {
     const el = await mount({
       ...api,
       run: async (id, threadId) => {
-        started.push([id, threadId]);
+        started.push([id, threadId ?? null]);
         return api.run(id, threadId);
       },
     });
