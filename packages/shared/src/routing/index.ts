@@ -47,6 +47,7 @@ export type {
   SectionWhen,
 } from "./sections.ts";
 export {
+  DEFAULT_AUTOMATED_CEILING,
   DEFAULT_JUDGED_THRESHOLD,
   DEFAULT_SECTION_JUDGE_THRESHOLD,
   DEFAULT_SECTION_RULES,

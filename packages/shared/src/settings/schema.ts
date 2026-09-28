@@ -271,6 +271,8 @@ const sectionWhen = z.object({
   groups: z.array(z.string().min(1)).optional(),
   notGroups: z.array(z.string().min(1)).optional(),
   ungrouped: z.boolean().optional(),
+  /** The Thread has its arrival Judgments; true never holds on header guesses. */
+  judged: z.boolean().optional(),
 });
 export const sectionRuleShape = z.object({
   id: z.string().min(1),
@@ -1314,6 +1316,15 @@ export const settingsSchema = {
     tier: "primary",
     label: "Sections",
     help: "Which Threads each Section holds: conditions over Thread state and Group, checked in Section order on this device. A rule may also bound a Judgment (needs a reply, waiting, newsletter, automated, urgency); once a Thread has been judged those bounds decide in place of the unread, bulk, message count and last sender conditions. A rule with a judge statement asks it for what the conditions leave open. Each rule says where its Section shows: the stream, the nav, or both. The shipped four are rows like any other.",
+  }),
+  "sections.require_ai": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: "Sections",
+    label: "Sections need AI",
+    help: "Show Sections only when an AI can sort mail: a TypeSafe key, a language model key, or a coding agent (Claude Code, Codex, OpenCode) on this device. Without one the Inbox is one list and the nav shows no Sections. Turn this off to keep Sections on their header rules alone.",
   }),
   "sections.judge_threshold": setting({
     type: confidence,
@@ -3955,6 +3966,12 @@ export const settingsSchema = {
   "strings.nav.mail": str("appearance", "Nav: mail heading", "Mail"),
   "strings.nav.groups": str("appearance", "Nav: groups heading", "Groups"),
   "strings.nav.sections": str("appearance", "Nav: sections heading", "Sections"),
+  "strings.nav.sections_off": str(
+    "appearance",
+    "Nav: sections need AI",
+    "Sections sort your mail by what it needs once an AI can read it.",
+  ),
+  "strings.nav.sections_off_action": str("appearance", "Nav: set up AI for sections", "Set up AI"),
   "strings.nav.automation": str("appearance", "Nav: automation heading", "Automation"),
   "strings.nav.inbox": str("appearance", "Nav: inbox", "Inbox"),
   "strings.nav.starred": str("appearance", "Nav: starred", "Starred"),

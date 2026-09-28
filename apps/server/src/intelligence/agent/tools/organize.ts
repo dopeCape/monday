@@ -96,6 +96,7 @@ function describeWhen(when: SectionWhen): string {
   if (when.groups?.length) parts.push(`in ${when.groups.join(" or ")}`);
   if (when.notGroups?.length) parts.push(`not in ${when.notGroups.join(" or ")}`);
   if (when.ungrouped !== undefined) parts.push(when.ungrouped ? "in no group" : "in a group");
+  if (when.judged !== undefined) parts.push(when.judged ? "judged by the AI" : "not judged yet");
   return parts.length ? parts.join(", ") : "every thread";
 }
 

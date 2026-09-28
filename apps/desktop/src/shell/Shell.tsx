@@ -309,6 +309,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       if (!p.isTauri && !demoServer) {
         setStored((s) => ({
           "ai.level": "automate",
+          // The fixture world sorts without a runtime on this Device: its Sections show as the mock's do.
+          "sections.require_ai": false,
           // The mock's nav shows one Section the user placed there (design/js/data.js).
           "sections.rules": [
             ...defaultSettings()["sections.rules"],

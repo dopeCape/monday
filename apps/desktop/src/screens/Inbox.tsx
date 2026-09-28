@@ -177,6 +177,12 @@ export interface InboxProps {
    */
   section?: string | undefined;
   /**
+   * Whether Sections are on (sections.require_ai and an AI that can sort).
+   * Off, the palette names no Section and no chip counts Needs your reply.
+   * Default on.
+   */
+  sectionsOn?: boolean | undefined;
+  /**
    * A Mail folder lens (Starred, Snoozed, Sent, Archive): the stream over
    * the folder's Threads instead of the Inbox's, one list with no Section
    * headings, under the folder's name with its own empty line; Snoozed rows
@@ -364,6 +370,7 @@ function InboxBody({
   calendar,
   group,
   section,
+  sectionsOn = true,
   folder,
   judge,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
@@ -575,10 +582,12 @@ function InboxBody({
   /** The Sections the palette may name: every rule not hidden, in the user's order (they all live in the nav). */
   const sectionOptions = useMemo(
     () =>
-      orderedSectionRules(settings["sections.rules"], settings["sections.order"])
-        .filter((r) => !r.hidden)
-        .map((r) => ({ id: r.id, name: sectionName(settings, r) })),
-    [settings],
+      sectionsOn
+        ? orderedSectionRules(settings["sections.rules"], settings["sections.order"])
+            .filter((r) => !r.hidden)
+            .map((r) => ({ id: r.id, name: sectionName(settings, r) }))
+        : [],
+    [settings, sectionsOn],
   );
 
   /** The list order the keyboard walks. Leaving rows are not in it. */
@@ -1511,9 +1520,9 @@ function InboxBody({
         waiting: agent.waiting,
         external: externalPending,
         // Sections are decided on the client, so this counts within the Threads the list holds.
-        needsReply: threads.filter((th) => th.section === "needs-reply"),
+        needsReply: sectionsOn ? threads.filter((th) => th.section === "needs-reply") : [],
       }),
-    [s, agent.waiting, externalPending, threads],
+    [s, agent.waiting, externalPending, threads, sectionsOn],
   );
   /** The same chips as lines in the palette's "Ask the agent" section. */
   const paletteSuggestions = useMemo(

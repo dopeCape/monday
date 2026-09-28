@@ -6,6 +6,8 @@ Behaviors a tester can check. Every default below is a Setting (ADR 0004) unless
 
 - **The Inbox is one plain list of every Thread in the Inbox, newest activity first.** No Section headings and no routing in it: it is the whole mailbox at a glance. Groups and Sections never split or reorder it.
 - **Sections live in the nav only**, under Groups, in the user's order, with unread counts. Clicking one shows that Section's Threads as their own list (a lens). Default Sections: Needs your reply, Waiting on you, For your information, Newsletters; a Section the user defined ("Invoices I still owe") sits beside them. A Section is a view onto the Inbox, never a move out of it.
+- **Sections need an AI that can sort** (`sections.require_ai`, default on): a TypeSafe key, a language model key (here or shared with the Server), or a coding agent CLI, at an AI level above Just mail. Without one the nav lists no Sections, only one quiet line (`strings.nav.sections_off`) with a link to the AI settings; the Inbox stays one list. Turning the Setting off keeps rule-only Sections.
+- **Needs your reply decides on Judgments alone**: judged to need a reply, and neither automated nor a newsletter. Shipment notices, one-time codes and payment receipts never land there, and a Thread not judged yet sits in For your information until the Judge answers.
 - The nav lists every Group and Sub-group the user has, in the user's order, with unread counts; a Group or Section created a moment ago by the Agent appears without a reload.
 - Inside any list, Threads are ordered by newest activity first.
 - A Section with no Threads stays in the nav with no count. An empty Inbox shows one line, "Nothing needs you", and nothing else.

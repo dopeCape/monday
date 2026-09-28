@@ -81,6 +81,7 @@ import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
+import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
 import { useWindowTitle, windowTitle } from "./shell/title.ts";
 import { useWorkspace } from "./workspace.tsx";
 
@@ -278,6 +279,30 @@ export function App({
   const pinned = shell.pinned;
   const wantedRuntime = useMemo(() => desiredRuntime(shell.settings), [shell.settings]);
   const detection = useMemo(() => detectionOf(runtimes), [runtimes]);
+  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
+  useEffect(() => {
+    if (keysProp !== undefined) return;
+    let live = true;
+    void platform().then((p) => {
+      if (live) setKeys(deviceProviderKeys(p));
+    });
+    return () => {
+      live = false;
+    };
+  }, [keysProp]);
+  // Sections only when an AI can sort (sections.require_ai): a TypeSafe key, a
+  // language model key or a coding agent. Re-read on every screen change, so a
+  // key added in Settings counts on the way back.
+  const sharedKeys = useMemo(
+    () => (shell.server ? () => shell.api.keys.shared() : null),
+    [shell.server, shell.api],
+  );
+  const runtimeState = useRuntimeStateOf({ runtimes: detection, keys, shared: sharedKeys }, active);
+  const sectionsOn = sectionsShown({
+    requireAi: shell.settings["sections.require_ai"],
+    level: shell.settings["ai.level"],
+    state: runtimeState,
+  });
   const agentSession = useAgentSession({
     client: aiOff ? null : client,
     workspaceId: ws.id,
@@ -383,9 +408,11 @@ export function App({
         pausedRuns,
         external: externalPending,
         // Sections are decided on the client: this counts within the Threads the Inbox holds.
-        needsReply: inbox?.threads().filter((t) => t.section === "needs-reply") ?? [],
+        needsReply: sectionsOn
+          ? (inbox?.threads().filter((t) => t.section === "needs-reply") ?? [])
+          : [],
       }),
-    [shell.settings, agent.waiting, pausedRuns, externalPending, inbox],
+    [shell.settings, agent.waiting, pausedRuns, externalPending, inbox, sectionsOn],
   );
   /* ------------------------------ Onboarding ------------------------------ */
 
@@ -455,17 +482,6 @@ export function App({
     setOnboarding({ account: fresh, rerun: false, afterWelcome: welcomed });
     setActive("onboarding");
   }, [found]);
-  const [keys, setKeys] = useState<DeviceProviderKeys | null>(keysProp ?? null);
-  useEffect(() => {
-    if (keysProp !== undefined) return;
-    let live = true;
-    void platform().then((p) => {
-      if (live) setKeys(deviceProviderKeys(p));
-    });
-    return () => {
-      live = false;
-    };
-  }, [keysProp]);
   const senders = useMemo(
     () =>
       topSenders(
@@ -529,9 +545,11 @@ export function App({
         folderCounts: { drafts: draftCount, snoozed: snoozedCount },
         sections: shell.settings["sections.rules"],
         sectionOrder: shell.settings["sections.order"],
+        sectionsOff: !sectionsOn,
         strings: shell.settings,
       }),
     [
+      sectionsOn,
       ws.address,
       online,
       syncing,
@@ -874,6 +892,12 @@ export function App({
         groupIcon={nav.groupIcon}
         counts={nav.counts}
         sections={nav.sections}
+        // The line waits for the runtimes to answer, so it never flashes on start.
+        sectionsHint={
+          nav.sectionsHint && runtimeState !== null
+            ? { ...nav.sectionsHint, onAction: () => navigate("settings:ai") }
+            : undefined
+        }
         automation={nav.automation}
         active={active}
         onSelect={setActive}
@@ -886,7 +910,9 @@ export function App({
   }
   // A Group in the nav opens the Inbox as a lens on it; a Section placed in the nav likewise.
   const groupLens = navGroups.some((g) => g.id === active) ? active : undefined;
-  const sectionLens = active.startsWith("section:") ? active.slice("section:".length) : undefined;
+  // While Sections are off a Section key opens the whole Inbox.
+  const sectionLens =
+    sectionsOn && active.startsWith("section:") ? active.slice("section:".length) : undefined;
   if (shell.layout.nav === "rail") {
     cols.push("var(--rail-w)");
     parts.push(
@@ -1020,6 +1046,7 @@ export function App({
         calendar={calendar}
         group={groupLens}
         section={sectionLens}
+        sectionsOn={sectionsOn}
         folder={folderLens}
         judge={shell.api.judge}
       />

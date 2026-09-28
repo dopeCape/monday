@@ -395,14 +395,15 @@ describe("Section rules in the Store", () => {
     const fake = await createFakeStore({ driver: bunDriver(), seed });
     const inbox = await createStoreInbox(fake.store, { sections: { rules, order, owner } });
     const section = (id: string) => inbox.thread(id)?.section;
-    // e1: unread, Aoife wrote last.
-    expect(section("e1")).toBe("needs-reply");
-    // e4: read, five Messages, Mateus wrote last: reading it did not answer it.
-    expect(section("e4")).toBe("needs-reply");
+    // Nothing is judged yet, so nothing lands in Needs your reply by guesswork.
+    for (const id of ["e1", "e4", "e7", "e10"]) expect(section(id)).not.toBe("needs-reply");
+    // e4: read, five Messages, Mateus wrote last: an ongoing exchange, Waiting on you.
+    expect(section("e4")).toBe("waiting");
     // e10: list mail.
     expect(section("e10")).toBe("newsletters");
-    // e7: read, one Message, someone else wrote last: still waiting for the owner's reply.
-    expect(section("e7")).toBe("needs-reply");
+    // e7: read, one Message, someone else wrote last: For your information until judged.
+    expect(section("e7")).toBe("fyi");
+    expect(["fyi", "waiting"]).toContain(section("e1") ?? "");
     // e2 kept the Section the seed gave it.
     expect(section("e2")).toBe(threads.find((t) => t.id === "e2")?.section);
     inbox.close();
@@ -471,10 +472,10 @@ describe("Section rules in the Store", () => {
     const inbox = await createStoreInbox(fake.store, {
       sections: { rules: () => current, order, owner },
     });
-    expect(inbox.thread("e1")?.section).toBe("needs-reply");
-    current = [{ id: "fyi", when: {} }];
+    expect(inbox.thread("e1")?.section).not.toBe("later");
+    current = [{ id: "later", when: {} }];
     inbox.resection();
-    expect(inbox.thread("e1")?.section).toBe("fyi");
+    expect(inbox.thread("e1")?.section).toBe("later");
     inbox.close();
   });
 });

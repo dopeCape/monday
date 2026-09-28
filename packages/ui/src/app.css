@@ -307,6 +307,25 @@ i.ph-bold > svg {
   font-weight: 500;
   color: var(--fg-faint);
 }
+/* Sections off: one quiet line where they would be, with a link to turn them on. */
+.nav-hint {
+  margin: 2px 0 0;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-faint);
+}
+.nav-hint-link {
+  color: var(--fg-muted);
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.nav-hint-link:hover {
+  color: var(--fg);
+  text-decoration-color: currentColor;
+}
 .nav-item {
   display: flex;
   align-items: center;

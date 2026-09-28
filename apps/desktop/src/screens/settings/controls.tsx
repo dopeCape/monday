@@ -62,6 +62,7 @@ import {
 } from "../../keyboard/keymaps.ts";
 import { type AccountView, ApiError } from "../../platform/api.ts";
 import { useShell } from "../../shell/Shell.tsx";
+import { type RuntimeState, readRuntimeState } from "../../shell/sorting-ai.ts";
 import { ActionsBlock, SectionsBlock, sectionNameOf } from "../routing/OrganizeBlocks.tsx";
 import { Disclosure } from "./disclosure.tsx";
 import {
@@ -570,14 +571,7 @@ function PerAccountText({
 
 /* ------------------------------ AI and agent ------------------------------ */
 
-/** What this Device can run on: a detected CLI, a language model key, a TypeSafe key (here or shared). */
-export interface RuntimeState {
-  cli: boolean;
-  /** A language model's key on this Device or shared with the Server. */
-  language: boolean;
-  /** A TypeSafe key on this Device or shared with the Server (ADR 0012). */
-  judge: boolean;
-}
+export type { RuntimeState };
 
 /**
  * The runtimes reachable from this Device: a detected CLI, Device keys, and
@@ -592,22 +586,12 @@ export function useRuntimeState(): RuntimeState | null {
   // biome-ignore lint/correctness/useExhaustiveDependencies: a key write bumps the version, which re-runs the check
   useEffect(() => {
     let live = true;
-    const run = async (): Promise<RuntimeState> => {
-      const detected = await (screen.runtimes?.detect() ?? Promise.resolve([])).catch(() => []);
-      const cli = detected.some((d) => d.status !== "missing");
-      const have = new Set<KeyProvider>();
-      if (screen.keys) {
-        for (const p of KEY_PROVIDERS) if (await screen.keys.get(p)) have.add(p);
-      }
-      try {
-        for (const p of (await shell.api.keys.shared()).shared) have.add(p);
-      } catch {}
-      return {
-        cli,
-        language: HOSTED_PROVIDERS.some((p) => have.has(p)),
-        judge: JUDGE_PROVIDERS.some((p) => have.has(p)),
-      };
-    };
+    const run = () =>
+      readRuntimeState({
+        runtimes: screen.runtimes,
+        keys: screen.keys,
+        shared: () => shell.api.keys.shared(),
+      });
     void run().then((next) => {
       if (live) setState(next);
     });
