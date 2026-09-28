@@ -34,3 +34,9 @@ webkit2gtk = { version = "2.0", features = ["v2_34"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Debug builds keep monday's own code unoptimised (fast rebuilds, real stack
+# traces) but optimise every dependency: unoptimised SQLCipher made each Cache
+# write cost several times the CPU while a mailbox synced.
+[profile.dev.package."*"]
+opt-level = 2
