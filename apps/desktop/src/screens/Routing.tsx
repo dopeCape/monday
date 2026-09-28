@@ -20,7 +20,7 @@ import type {
   Group,
   GroupInput,
   GroupView,
-  KeyProvider,
+  JudgeState,
   Predicate,
   ProposedMove,
   Settings,
@@ -84,8 +84,12 @@ export interface RoutingProps {
   agent?: ReactNode | undefined;
   /** The Server side of the page; the Shell's client by default, a fake in tests. */
   api?: RoutingApi | undefined;
-  /** Which Hosted providers hold a shared key; the Shell's client by default, null where no Server is. */
-  keys?: Pick<Api["keys"], "shared"> | null | undefined;
+  /**
+   * Who sorts on the Server now (ADR 0012): TypeSafe, a language model (a
+   * shared key or a connected Local runtime), or none. The Server's
+   * /capabilities by default; null where no Server is.
+   */
+  sorting?: { state(): Promise<JudgeState> } | null | undefined;
   /** An icon per Group, when the nav has one; the mock's on the dev server, none in the app. */
   groupIcon?: ((g: Group) => IconComponent | undefined) | undefined;
 }
@@ -175,7 +179,7 @@ export function Routing({
   onNavigate,
   onAsk,
   api: apiOverride,
-  keys: keysProp,
+  sorting: sortingProp,
   groupIcon: groupIconProp,
   agent,
 }: RoutingProps) {
@@ -194,7 +198,15 @@ export function Routing({
   const routing = routingProp ?? fallbackRouting;
   const inbox = inboxProp ?? fallbackInbox;
   const groupIcon = groupIconProp ?? (server ? undefined : fixtureGroupIcon);
-  const keys = keysProp === undefined ? (shell.server ? shell.api.keys : null) : keysProp;
+  const sorting = useMemo(
+    () =>
+      sortingProp === undefined
+        ? shell.server
+          ? { state: () => shell.api.capabilities().then((c) => c.hosted.judge) }
+          : null
+        : sortingProp,
+    [sortingProp, shell.server, shell.api],
+  );
   const api = apiOverride ?? shell.api.routing;
   const s = useMemo(() => routingStrings(settings), [settings]);
   // Just mail (CONTEXT.md "AI level"): the Groups stay, hand-made; nothing here asks the Agent.
@@ -223,8 +235,8 @@ export function Routing({
   const [leaving, setLeaving] = useState<Set<string>>(() => new Set());
   /** Delete asks once: the button names the Group until the second click. */
   const [confirmDelete, setConfirmDelete] = useState(false);
-  /** Whether a shared key exists for routing on the Server; null until known or where it cannot be. */
-  const [sharedKeys, setSharedKeys] = useState<KeyProvider[] | null>(null);
+  /** Who sorts on the Server; null until known or where it cannot be. */
+  const [judge, setJudge] = useState<JudgeState | null>(null);
   const [tab, setTab] = useState<"groups" | "sections" | "actions">("groups");
   /** Groups whose corrections (Examples) are open. */
   const [openLearned, setOpenLearned] = useState<Set<string>>(() => new Set());
@@ -241,21 +253,22 @@ export function Routing({
     refreshViews();
   }, [refreshViews]);
   useEffect(() => {
-    if (!keys) return;
+    if (!sorting) return;
     let live = true;
-    keys
-      .shared()
-      .then((r) => {
-        if (live) setSharedKeys(r.shared);
+    sorting
+      .state()
+      .then((state) => {
+        if (live) setJudge(state);
       })
       .catch(() => {
-        if (live) setSharedKeys(null);
+        if (live) setJudge(null);
       });
     return () => {
       live = false;
     };
-  }, [keys]);
-  const hostedNeeded = settings["ai.level"] === "automate" && sharedKeys?.length === 0;
+  }, [sorting]);
+  // Nothing on the Server can sort: no TypeSafe key, no language model key, no coding agent.
+  const hostedNeeded = settings["ai.level"] === "automate" && judge?.provider === "none";
 
   const byId = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
   const top = groups.filter((g) => g.parentId === null);

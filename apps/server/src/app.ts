@@ -3,6 +3,7 @@
 // the process-level pieces (research 22, section 2.1).
 
 import type { DeploymentMode, HostedProvider } from "@monday/shared";
+import { DEPLOYMENT_FEATURES } from "@monday/shared";
 import { eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "./auth/cors.ts";
@@ -55,6 +56,7 @@ import {
   TurnBusyError,
   WorkflowNotFoundError,
 } from "./intelligence/index.ts";
+import { createLocalBridge, type LocalBridge } from "./intelligence/runtime/local.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
 import { createCredentialStore as createAccountCredentialStore } from "./providers/credentials.ts";
@@ -76,6 +78,7 @@ import {
 } from "./routes/external.ts";
 import { integrationRoutes } from "./routes/integrations.ts";
 import { intelligenceRoutes } from "./routes/intelligence.ts";
+import { localRuntimeRoutes } from "./routes/local-runtime.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
@@ -228,6 +231,22 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       }
       return created;
     })();
+  // A Device's Local runtime takes background work only where a client drives
+  // this Server over loopback: the Sidecar (ADR 0005, runtime/local.ts).
+  const localBridge: LocalBridge | null =
+    options.intelligence?.localBridge ??
+    (DEPLOYMENT_FEATURES[mode].localRuntimes
+      ? createLocalBridge({
+          presenceMs: async () =>
+            (await readGlobalSettings(db, ["ai.local.background.presence_seconds"] as const))[
+              "ai.local.background.presence_seconds"
+            ] * 1000,
+          timeoutMs: async () =>
+            (await readGlobalSettings(db, ["ai.local.background.timeout_seconds"] as const))[
+              "ai.local.background.timeout_seconds"
+            ] * 1000,
+        })
+      : null);
   const intelligence =
     options.intelligence ??
     (() => {
@@ -235,6 +254,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         db,
         mailstore,
         drafts,
+        ...(localBridge ? { localBridge } : {}),
         ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
         ...(options.judge ? { judge: options.judge } : {}),
         ...(options.demo ? { demo: options.demo } : {}),
@@ -436,6 +456,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
+  app.route("/", localRuntimeRoutes(localBridge));
   app.route("/", integrationRoutes(intelligence.integrationSecrets));
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));

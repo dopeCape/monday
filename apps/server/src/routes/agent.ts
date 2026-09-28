@@ -182,9 +182,17 @@ export function agentRoutes(agent: AgentHost, routeOptions: AgentRoutesOptions =
           .map((k) => k.trim())
           .filter(Boolean)
       : undefined;
+    // `?tools=none`: a Local runtime answering background work (runtime/local.ts)
+    // gets no tools of its own; the Server's loop runs monday's tools for it.
+    const noTools = c.req.query("tools") === "none";
     // Stateless: no MCP session id, one server per request, the JSON answer once the tool returns.
     const transport = await createMcpHttpTransport();
-    const server = await createMondayMcpServer(agent, { workspaceId, sessionId, pinned });
+    const server = await createMondayMcpServer(agent, {
+      workspaceId,
+      sessionId,
+      pinned,
+      ...(noTools ? { noTools: true } : {}),
+    });
     await server.connect(transport);
     try {
       return await transport.handleRequest(c.req.raw);

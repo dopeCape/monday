@@ -7,6 +7,7 @@
 // run on this Device with a Device key resolves the same way as on the Server.
 
 import type { KeyProvider } from "@monday/shared";
+import { KEY_PROVIDERS } from "@monday/shared";
 import type { Api } from "./api.ts";
 import type { Platform } from "./tauri.ts";
 
@@ -19,9 +20,9 @@ export interface DeviceProviderKeys {
   /** The runtime's key resolver over this Device's keychain. */
   resolver(provider: KeyProvider): Promise<string | null>;
   /** "Let the server use this key": sends the Device key for `provider` to the Server. */
-  share(api: Api, workspaceId: string, provider: KeyProvider): Promise<boolean>;
+  share(api: Pick<Api, "keys">, workspaceId: string, provider: KeyProvider): Promise<boolean>;
   /** Forgets the Server copy; the Device copy stays. */
-  unshare(api: Api, provider: KeyProvider): Promise<void>;
+  unshare(api: Pick<Api, "keys">, provider: KeyProvider): Promise<void>;
 }
 
 export function deviceProviderKeys(
@@ -41,4 +42,37 @@ export function deviceProviderKeys(
     unshare: (api, provider) => api.keys.unshare(provider),
   };
   return keys;
+}
+
+/**
+ * On start, and whenever the Server changes: every provider whose share
+ * Setting is on and whose key is in this Device's keychain but not on the
+ * Server is shared again. A key saved while the switch was off by default, or
+ * a Server that lost its copy (a new Sidecar database), gets it without the
+ * user entering it again. A switch the user turned off stays off. Returns the
+ * providers it shared; a failure for one provider does not stop the others.
+ */
+export async function reconcileSharedKeys(options: {
+  keys: Pick<DeviceProviderKeys, "get" | "share">;
+  api: Pick<Api, "keys">;
+  workspaceId: string;
+  /** Whether `ai.share_key.<provider>` is on. */
+  wantsShare: (provider: KeyProvider) => boolean;
+  log?: ((line: string) => void) | undefined;
+}): Promise<KeyProvider[]> {
+  const { keys, api, workspaceId, wantsShare } = options;
+  const onServer = new Set((await api.keys.shared()).shared);
+  const done: KeyProvider[] = [];
+  for (const provider of KEY_PROVIDERS) {
+    if (!wantsShare(provider) || onServer.has(provider)) continue;
+    try {
+      if (!(await keys.get(provider))) continue;
+      if (await keys.share(api, workspaceId, provider)) done.push(provider);
+    } catch (error) {
+      options.log?.(
+        `share ${provider} key: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return done;
 }

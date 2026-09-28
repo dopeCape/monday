@@ -45,6 +45,25 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
 - An enable carries its Dry run under the flow while `workflows.ask_before_enable` asks.
 - Apply, Approve, Decline and Undo are the card's own buttons from the approval path (ADR 0002); Undo of a create deletes the Workflow, of an update points back at the previous version.
 
+## Local runtime work
+
+A Workflow runs "on the Server with a Hosted runtime, or on a Local runtime while the client is open" (CONTEXT.md, Placement). Behaviors a tester can check:
+
+- While a Device's `ai.mode` is local, monday is open and its command-line agent (Claude Code, Codex, OpenCode) was detected ready, the app asks its Sidecar for background work (`GET /local-runtime/next`, a long-poll of `ai.local.background.poll_seconds`, `ai.local.background.concurrency` at a time). Asking is what counts the Device as connected, for `ai.local.background.presence_seconds` after the last ask.
+- While a Device is connected, every Task in `ai.local.background.tasks` that needs a language model (by default Workflow agentic Steps, draft in voice, classify, route, sections, tags, summaries) goes to its command-line agent before any provider key is looked at. The composer's own Session never moves, and a call that names its provider (a Hosted Session the user picked) stays Hosted.
+- Each prompt runs in a fresh CLI process with the Server's system prompt and no tools of its own: monday's MCP server lists none for it (`/mcp/local?tools=none`). An agentic Step stays the Server's loop: the CLI answers each model step in text, asking for monday's tools as JSON, and the Server runs them with their Tiers, Standing approvals and Budget exactly as for a Hosted provider (ADR 0002). Nothing about the prompt is written to the database; the Job keeps its lease while it waits (`ai.local.background.timeout_seconds`).
+- A Step of a Workflow placed on this computer (`placement` local, a `needs-process` Job the Sidecar claims) waits while no Device is connected: the Run stays queued with "Waiting for monday to be open with its coding agent connected." (`strings.workflows.waiting_local`) and looks again every `workflows.local_wait_seconds`. Nothing fails meanwhile.
+- A Step placed on the Server with neither a shared provider key nor a connected Local runtime fails at once, without retries, with `strings.ai.no_language_model`, which names the fixes: add the provider's key, or open monday with a coding agent connected (a TypeSafe key is enough for sorting alone).
+- The Meter counts Hosted calls only; Local runtime work is not metered.
+
+Left for later:
+
+- A warm CLI process per worker slot instead of one per prompt, and batching several Threads' classify prompts into one, so re-sorting a large inbox on a Local runtime is not one process per Thread.
+- The agentic Step as a native CLI session with monday's MCP tools scoped to the Run (its allowed tools, Budget and Standing approvals enforced by the MCP endpoint), instead of the JSON tool protocol over single prompts.
+- Background work from a Cloud server: a Cloud has no bridge, so Local runtime work runs only on the Sidecar. A Cloud-claimed route or Workflow Job with no key waits or fails as above; handing it to the Sidecar needs a claim that moves a Job's needs.
+- Briefs on the Local runtime in the background (`brief` is not in the default `ai.local.background.tasks`; Briefs on open still need a key).
+- Showing on the Workflows page which Runtime answered each Step.
+
 ## Strings
 
 Every user-visible string is a Setting keyed by name: `strings.workflows.*`, `strings.workflows.flow.*`, `strings.agent.preview_workflow.*`, and the shared `strings.ai.lock.*`.

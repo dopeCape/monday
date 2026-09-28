@@ -36,6 +36,7 @@ export const HOSTED_SETTING_KEYS = [
   "ai.endpoint.openrouter",
   "ai.endpoint.typesafe",
   "ai.max_output_tokens",
+  "strings.ai.no_language_model",
 ] as const satisfies readonly SettingKey[];
 
 export type HostedSettingKey = (typeof HOSTED_SETTING_KEYS)[number];

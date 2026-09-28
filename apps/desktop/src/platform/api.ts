@@ -45,6 +45,9 @@ import type {
   InviteIntent,
   KeyProvider,
   KeyValidation,
+  LocalAnnounce,
+  LocalAnswer,
+  LocalCall,
   MessageBodiesPage,
   MeterMonth,
   ProposedMove,
@@ -398,6 +401,30 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
        */
       validate: (provider: KeyProvider, key: string) =>
         request<KeyValidation>(`/keys/${provider}/validate`, json("POST", { key })),
+    },
+    /**
+     * Background work for this Device's Local runtime (the Sidecar only;
+     * docs/spec/workflows.md, "Local runtime work"). `next` holds the request
+     * open up to `waitSeconds` and resolves null when no work came.
+     */
+    localRuntime: {
+      next: async (
+        announce: LocalAnnounce,
+        waitSeconds: number,
+        signal?: AbortSignal,
+      ): Promise<LocalCall | null> => {
+        const q = new URLSearchParams({ cli: announce.cli, wait: String(waitSeconds) });
+        if (announce.model) q.set("model", announce.model);
+        const res = await raw(`/local-runtime/next?${q}`, signal ? { signal } : {});
+        if (res.status === 204) return null;
+        return ((await res.json()) as { call: LocalCall }).call;
+      },
+      answer: async (id: string, answer: LocalAnswer): Promise<void> => {
+        await raw(`/local-runtime/calls/${encodeURIComponent(id)}`, {
+          ...json("POST", answer),
+          headers: { "content-type": "application/json" },
+        });
+      },
     },
     meter: {
       /** This month by Task and provider with cost; `month` is "YYYY-MM", default now. */

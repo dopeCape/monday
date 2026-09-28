@@ -436,7 +436,9 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
     expect(job?.id).toBe(jobId);
     expect(job?.class).toBe(BRIEF_STEP);
     expect(await jobs.run(job as NonNullable<typeof job>, 30_000)).toBe("failed");
-    expect((await jobs.get(jobId))?.lastError).toContain("no anthropic key");
+    // The words name the fixes: a key for the provider, or a coding agent.
+    expect((await jobs.get(jobId))?.lastError).toContain("Add your Anthropic key");
+    expect((await jobs.get(jobId))?.lastError).toContain("coding agent");
     await jobs.cancel(jobId);
     expect(chat.calls).toHaveLength(0);
     expect((await intelligence.meter.month(workspaceId, "2026-09")).lines).toEqual([]);
@@ -611,9 +613,10 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
     expect((await send("/keys/anthropic/validate", { key: "sk-ant" })).status).toBe(404);
     expect((await send("/keys/typesafe/validate", {})).status).toBe(400);
 
-    // Before the key is shared, judgments go to the language model (auto).
+    // Before the key is shared, auto finds neither TypeSafe nor a language model
+    // the user has (no Anthropic key, no Local runtime): nothing judges.
     let caps = (await (await request("/capabilities")).json()) as Capabilities;
-    expect(caps.hosted.judge).toEqual({ provider: "llm", model: "claude-haiku-4-5" });
+    expect(caps.hosted.judge).toEqual({ provider: "none", model: "" });
     expect(await intelligence.runtime.judgeAvailable()).toBe(false);
 
     // The share switch: the key lands under the envelope like any provider's.
@@ -649,9 +652,17 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
     expect(line).toMatchObject({ provider: "typesafe", calls: 1, outputTokens: 0 });
     expect(line?.costMicros).toBe(result.costMicros);
 
-    // Forgetting the shared key sends judgments back to the language model.
+    // Forgetting the shared key: with no language model key either, nothing judges.
     expect((await request("/keys/typesafe", { method: "DELETE" })).status).toBe(204);
     caps = (await (await request("/capabilities")).json()) as Capabilities;
-    expect(caps.hosted.judge.provider).toBe("llm");
+    expect(caps.hosted.judge.provider).toBe("none");
+    // With an Anthropic key shared, auto falls back to the language model the user has.
+    await send("/keys/anthropic", { workspace: workspaceId, key: "sk-ant" }, "PUT");
+    caps = (await (await request("/capabilities")).json()) as Capabilities;
+    expect(caps.hosted.judge).toEqual({
+      provider: "llm",
+      model: "claude-haiku-4-5",
+      runtime: "hosted",
+    });
   });
 });

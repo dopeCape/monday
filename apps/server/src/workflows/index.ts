@@ -40,6 +40,7 @@ import {
   nextCronRun,
   parseCron,
   renderTemplate,
+  settingsSchema,
   stepMutates,
 } from "@monday/shared";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
@@ -68,7 +69,12 @@ import {
   publicActivity,
 } from "../intelligence/agent/index.ts";
 import { ROUTE_STEP } from "../intelligence/routing/index.ts";
-import { type HostedRuntime, NoJudgeError } from "../intelligence/runtime/index.ts";
+import {
+  type HostedRuntime,
+  NoJudgeError,
+  NoProviderKeyError,
+} from "../intelligence/runtime/index.ts";
+import { LocalRuntimeTimeoutError } from "../intelligence/runtime/local.ts";
 import type { Job, StepContext as JobContext, Jobs, StepResult } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import type { Integrations } from "./integrations.ts";
@@ -106,6 +112,13 @@ export interface WorkflowSettings {
   budget: { calls: number; tokens: number; minutes: number };
   agenticSystemPrompt: string;
   stepRetries: number;
+  /**
+   * workflows.local_wait_seconds: how long a Step placed on the Local runtime
+   * sleeps while no Device's Local runtime is connected. Absent means the default.
+   */
+  localWaitSeconds?: number;
+  /** strings.workflows.waiting_local: the Run's line while it waits. */
+  waitingLocal?: string;
   routingWaitSeconds: number;
   dryRunRecent: number;
   /** When the silence triggers look for Threads gone quiet (a cron). */
@@ -1127,7 +1140,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         where: and(eq(workflowRunSteps.runId, runId), eq(workflowRunSteps.index, index)),
       })) ?? null;
     const decision = run.status === "paused" ? run.decision : null;
-    await patchRun(run.id, { status: "running", currentStep: index });
+    await patchRun(run.id, { status: "running", currentStep: index, error: null });
     const thread = run.threadId ? await threadRow(run.threadId) : null;
     const env: StepEnv = {
       workspaceId: run.workspaceId,
@@ -1155,6 +1168,26 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`run ${run.id} step ${index} (${step.id}): ${message}`);
+      const noModel =
+        error instanceof NoProviderKeyError || error instanceof LocalRuntimeTimeoutError;
+      // A Step placed on the Local runtime waits for the app and its coding
+      // agent (CONTEXT.md, Placement): the Run stays queued with a line saying
+      // so, and the Step runs once the agent is connected again.
+      if (noModel && (await placementOf(doc)) === "local") {
+        await patchRun(run.id, {
+          status: decision ? "paused" : "queued",
+          error: settings.waitingLocal ?? settingsSchema["strings.workflows.waiting_local"].default,
+        });
+        const wait =
+          settings.localWaitSeconds ?? settingsSchema["workflows.local_wait_seconds"].default;
+        return { sleepMs: wait * 1000 };
+      }
+      // With no language model at all, retrying changes nothing: the Step
+      // fails at once with the words that name the fix.
+      if (error instanceof NoProviderKeyError) {
+        outcome = { kind: "failed", detail: message };
+        return settle(run, w, doc, index, step, outcome, settings);
+      }
       // Transient errors get the Jobs table's retries with backoff (ADR 0005); then the policy.
       if (job.attempts <= settings.stepRetries) {
         await patchRun(run.id, { status: decision ? "paused" : "queued" });

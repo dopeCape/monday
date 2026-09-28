@@ -6,7 +6,7 @@
 // under a StaticShell with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { GroupView, HostedProvider, ProposedMove, RoutingPreview } from "@monday/shared";
+import type { GroupView, JudgeState, ProposedMove, RoutingPreview } from "@monday/shared";
 import { groups, threads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
@@ -120,7 +120,7 @@ function fakeApi(): RoutingApi & { calls: string[] } {
 async function mount(
   api: RoutingApi,
   routing = fixtureRouting(),
-  keys: { shared(): Promise<{ shared: HostedProvider[] }> } | null = null,
+  sorting: { state(): Promise<JudgeState> } | null = null,
   level: "off" | "assist" | "automate" = "automate",
 ) {
   host = document.createElement("div");
@@ -129,7 +129,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <StaticShell settings={{ "ai.level": level }}>
-        <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} keys={keys} />
+        <Routing routing={routing} inbox={fixtureInbox(threads)} api={api} sorting={sorting} />
       </StaticShell>,
     );
   });
@@ -259,7 +259,7 @@ describe("Routing page", () => {
             routing={fixtureRouting()}
             inbox={fixtureInbox(threads)}
             api={fakeApi()}
-            keys={null}
+            sorting={null}
             onAsk={(t) => asked.push(t)}
           />
         </StaticShell>,
@@ -338,17 +338,29 @@ describe("Routing page", () => {
     expect(el.querySelector(".rgrp-stats span")?.textContent).toBe("1 unread");
   });
 
-  test("at automate with no shared key the page says routing needs one; with a key it says nothing", async () => {
-    const el = await mount(fakeApi(), fixtureRouting(), { shared: async () => ({ shared: [] }) });
+  test("at automate with nothing to sort with the page names the three ways; with TypeSafe or a coding agent it says nothing", async () => {
+    const el = await mount(fakeApi(), fixtureRouting(), {
+      state: async (): Promise<JudgeState> => ({ provider: "none", model: "" }),
+    });
     expect(el.querySelector(".routing-note")?.textContent).toBe(
-      "Routing runs on the Server with a shared key. Share one under AI and agent.",
+      "Sorting needs TypeSafe, an AI provider key, or a coding agent. Add one under AI and agent and sorting picks up again on its own.",
     );
     await act(async () => root?.unmount());
     host?.remove();
     const el2 = await mount(fakeApi(), fixtureRouting(), {
-      shared: async () => ({ shared: ["anthropic"] }),
+      state: async (): Promise<JudgeState> => ({ provider: "typesafe", model: "jev-1.13.0" }),
     });
     expect(el2.querySelector(".routing-note")).toBeNull();
+    await act(async () => root?.unmount());
+    host?.remove();
+    const el3 = await mount(fakeApi(), fixtureRouting(), {
+      state: async (): Promise<JudgeState> => ({
+        provider: "llm",
+        model: "Claude Code",
+        runtime: "local",
+      }),
+    });
+    expect(el3.querySelector(".routing-note")).toBeNull();
   });
 
   test("Recently routed says why each Thread went where it did", async () => {

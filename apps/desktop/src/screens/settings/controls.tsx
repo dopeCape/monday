@@ -1067,16 +1067,33 @@ function RolesControl({ k }: ControlProps) {
 controlKinds.roles = RolesControl;
 
 /**
+ * Where a new key's share switch starts before the key exists: a TypeSafe key
+ * by `ai.judge.share_by_default` (on, so mail is sorted on the Server, ADR
+ * 0012); a language model's key by `ai.keys.share_with_sidecar` when the only
+ * Server is the Sidecar on this computer, and off beside a Cloud, where
+ * sharing stays the user's explicit choice (ADR 0007).
+ */
+export function shareOnSaveFor(
+  provider: KeyProvider,
+  settings: Pick<Settings, "ai.judge.share_by_default" | "ai.keys.share_with_sidecar">,
+  sidecarOnly: boolean,
+): boolean {
+  if (provider === "typesafe") return settings["ai.judge.share_by_default"];
+  return sidecarOnly && settings["ai.keys.share_with_sidecar"];
+}
+
+/**
  * The key itself (add, replace, remove; never displayed) and the "Let the
  * server use this key" switch with its threat model, which is the Setting.
  * Sharing sends the Device key to the Server; unsharing forgets the copy. A
- * TypeSafe key is checked live through the Server before it is saved. With
- * `shareOnSave` (onboarding's TypeSafe card) the switch starts on and a saved
- * key is shared at once.
+ * TypeSafe key is checked live through the Server before it is saved. Before
+ * a key exists the switch starts where `shareOnSaveFor` says, and a saved key
+ * is shared at once when it is on; a replaced key that was shared is sent
+ * again, so the Server never keeps the old one.
  */
 export function ProviderKeyRow({
   k,
-  shareOnSave = false,
+  shareOnSave,
 }: {
   k: SettingKey;
   shareOnSave?: boolean | undefined;
@@ -1092,7 +1109,9 @@ export function ProviderKeyRow({
   const [checking, setChecking] = useState(false);
   const [accepted, setAccepted] = useState(false);
   // Before a key exists the switch is a wish; once one is saved it is the Setting.
-  const [wantShare, setWantShare] = useState(shareOnSave);
+  const [wantShare, setWantShare] = useState(
+    () => shareOnSave ?? shareOnSaveFor(provider, s, shell.cloud === null),
+  );
   const has = onDevice.has(provider);
   const switchOn = has ? Boolean(value) : wantShare;
   const shareNow = async (): Promise<boolean> => {
@@ -1137,12 +1156,17 @@ export function ProviderKeyRow({
     }
     setDraft("");
     setEditing(false);
-    if (wantShare && !value) {
+    // A first key follows the wish; a replaced one follows the Setting, and a
+    // shared one is sent again so the Server holds the new key.
+    const shareIt = has ? Boolean(value) : wantShare;
+    if (shareIt) {
       try {
         await shareNow();
       } catch (e) {
         setProblem(e instanceof Error ? e.message : String(e));
       }
+    } else if (value) {
+      await change(false);
     }
     refresh();
   };
@@ -1260,8 +1284,9 @@ controlKinds["judge-provider"] = JudgeProviderControl;
 
 /**
  * One line above the TypeSafe group saying who answers judgments (ADR 0012):
- * TypeSafe on its pinned model when a key exists and Settings allow it, the
- * language model otherwise, or no key when Settings pin TypeSafe without one.
+ * TypeSafe on its pinned model when a key exists and Settings allow it; else
+ * the language model the user actually has (a coding agent in local mode, or
+ * a key for the chosen provider); else nothing, never a provider with no key.
  */
 export function JudgeStatusPanel(_: PanelProps) {
   const s = useShell().settings;
@@ -1269,14 +1294,26 @@ export function JudgeStatusPanel(_: PanelProps) {
   const choice = s["ai.judge.provider"];
   const here = onDevice.has("typesafe");
   const there = shared.has("typesafe");
+  const provider = s["ai.hosted.provider"];
+  const hasLlm = s["ai.mode"] === "local" || onDevice.has(provider) || shared.has(provider);
   const status =
-    choice === "llm" ? "llm" : here || there ? "typesafe" : choice === "auto" ? "llm" : "none";
+    choice === "llm"
+      ? hasLlm
+        ? "llm"
+        : "none"
+      : here || there
+        ? "typesafe"
+        : choice === "auto" && hasLlm
+          ? "llm"
+          : "none";
   const line =
     status === "typesafe"
       ? fill(s["strings.settings.judge.status.typesafe"], { model: s["ai.judge.model"] })
       : status === "llm"
         ? s["strings.settings.judge.status.llm"]
-        : s["strings.settings.judge.status.none"];
+        : choice === "typesafe"
+          ? s["strings.settings.judge.status.none"]
+          : s["strings.settings.judge.status.nothing"];
   const deviceOnly = status === "typesafe" && !there && s["ai.level"] === "automate";
   return (
     <div className="note" data-panel="judge-status" data-judge={status}>

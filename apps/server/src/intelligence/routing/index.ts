@@ -37,7 +37,14 @@ import type {
   ThreadRoute,
   Thresholds,
 } from "@monday/shared";
-import { domainMatches, domainOf, matchesPredicate, mergePredicates, place } from "@monday/shared";
+import {
+  domainMatches,
+  domainOf,
+  matchesPredicate,
+  mergePredicates,
+  place,
+  settingsSchema,
+} from "@monday/shared";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { LockedError } from "../../crypto/keys.ts";
 import type { Db, Tx } from "../../db/client.ts";
@@ -53,7 +60,13 @@ import {
 } from "../../db/schema.ts";
 import type { Job, Jobs } from "../../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../../mailstore/index.ts";
-import { type HostedRuntime, type JudgeResult, NoJudgeError } from "../runtime/index.ts";
+import {
+  type HostedRuntime,
+  type JudgeResult,
+  NoJudgeError,
+  NoProviderKeyError,
+} from "../runtime/index.ts";
+import { LocalRuntimeTimeoutError } from "../runtime/local.ts";
 import {
   classifyPrompt,
   classifySystemPrompt,
@@ -103,6 +116,11 @@ export interface RoutingSettings {
   briefPolicyDefault: BriefPolicy;
   /** The routing Choice's wording (routing.judge.*), for the judge path. */
   judge: { instructions: string; noneOption: string };
+  /**
+   * routing.wait_seconds: how long a route Job sleeps when nothing can sort
+   * (no judge, no language model), instead of failing. Absent means the default.
+   */
+  waitSeconds?: number;
 }
 
 export interface RoutingOptions {
@@ -1227,6 +1245,16 @@ export function createRouting(options: RoutingOptions): Routing {
           if (error instanceof NotFoundError) {
             log(`route ${job.payload.threadId}: ${error.message}`);
             return "done";
+          }
+          // Nothing can sort right now (no TypeSafe key, no provider key, no
+          // coding agent connected, or the agent went away): the Thread waits
+          // and sorting picks up again once one is there. Never a failed Job.
+          if (error instanceof NoProviderKeyError || error instanceof LocalRuntimeTimeoutError) {
+            const wait =
+              (await options.settings()).waitSeconds ??
+              settingsSchema["routing.wait_seconds"].default;
+            log(`route ${job.payload.threadId}: waiting ${wait}s: ${error.message}`);
+            return { sleepMs: wait * 1000 };
           }
           throw error;
         }

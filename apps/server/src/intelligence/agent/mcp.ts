@@ -32,6 +32,8 @@ export interface McpContext {
   actor?: { kind: "external"; name: string } | undefined;
   /** The external search cap (external.search_cap). */
   searchLimit?: number | undefined;
+  /** A Local runtime answering background work (runtime/local.ts): it lists and calls nothing. */
+  noTools?: boolean | undefined;
   /** Runs around every call: the external module's rate limit and approval timeout. */
   around?:
     | ((run: () => Promise<CallToolResult>, name: string) => Promise<CallToolResult>)
@@ -112,10 +114,19 @@ export async function createMondayMcpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } },
   );
-  const listing = () => toolsForScope(agent.tools(context.workspaceId).mcpTools(), context.scope);
+  const listing = () =>
+    context.noTools
+      ? []
+      : toolsForScope(agent.tools(context.workspaceId).mcpTools(), context.scope);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listing() }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
+    if (context.noTools) {
+      return {
+        content: [{ type: "text", text: `"${name}" is not available here.` }],
+        isError: true,
+      };
+    }
     const run = async (): Promise<CallToolResult> => {
       if (context.scope) {
         const tool = agent
