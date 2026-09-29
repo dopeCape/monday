@@ -1132,7 +1132,7 @@ export function McpServerList(props: McpServerListProps) {
   const update = (next: McpServerView) =>
     setViews((current) => (current ?? rows).map((v) => (v.name === next.name ? next : v)));
 
-  const probe = async (name: string) => {
+  const probe = async (name: string): Promise<McpServerView | null> => {
     setBusy(name);
     setError(null);
     try {
@@ -1140,8 +1140,10 @@ export function McpServerList(props: McpServerListProps) {
       update(found.server);
       setTools((t) => ({ ...t, [name]: found.tools }));
       setOpen(name);
+      return found.server;
     } catch (e) {
       setError(errorText(e));
+      return null;
     } finally {
       setBusy(null);
     }
@@ -1156,7 +1158,9 @@ export function McpServerList(props: McpServerListProps) {
       }
       return;
     }
-    await probe(server.name);
+    const now = await probe(server.name);
+    // The Server found it wants an OAuth sign-in after all: open it now.
+    if (now?.auth === "oauth" && now.status === "needs_sign_in") await reconnect(now);
   };
 
   if (rows.length === 0) return <div className="note">{s["strings.mcp.empty"]}</div>;

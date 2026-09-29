@@ -457,6 +457,25 @@ describe("Connect a tool through the Server", () => {
     await send("/settings/workflows.mcp_registry.enabled", { value: true }, "PUT");
   });
 
+  test("Reconnect on a server saved without a sign-in finds OAuth on offer and switches to it", async () => {
+    const added = await send("/mcp-servers", {
+      workspace: workspaceId,
+      name: "Late OAuth",
+      url: oauthMcp.url,
+      auth: "none",
+    });
+    expect(added.status).toBe(200);
+    const saved = (await added.json()) as { server: McpServerView };
+    expect(saved.server.auth).toBe("none");
+    // Reconnect reads its tools: refused with 401, and the server offers OAuth.
+    const again = (await (await request("/mcp-servers/late-oauth/tools")).json()) as {
+      server: McpServerView;
+    };
+    expect(again.server).toMatchObject({ auth: "oauth", status: "needs_sign_in" });
+    expect((await serverSetting()).find((e) => e.name === "late-oauth")?.auth).toBe("oauth");
+    await send("/mcp-servers/late-oauth", {}, "DELETE");
+  });
+
   test("OAuth end to end: 401, resource metadata, registration, PKCE, code, tool call, refresh", async () => {
     // Connecting by URL alone finds out the server wants an OAuth sign-in.
     const added = await send("/mcp-servers", {

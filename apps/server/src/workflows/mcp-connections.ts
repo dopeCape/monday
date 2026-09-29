@@ -404,8 +404,19 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
     },
 
     async tools(name) {
-      const setting = await find(name);
-      const found = await probe(setting);
+      let setting = await find(name);
+      let found = await probe(setting);
+      // Saved without a sign-in but now refused, and OAuth is on offer: it signs in from here.
+      if (
+        setting.url &&
+        (setting.auth === "none" || setting.auth === undefined) &&
+        found.status.status === "needs_sign_in" &&
+        (await offersOAuth(new URL(setting.url), fetchFn))
+      ) {
+        setting = { ...setting, auth: "oauth" };
+        await replaceEntry(setting, name);
+        found = { status: { status: "needs_sign_in", message: null }, tools: [] };
+      }
       return {
         server: viewOf(setting, found.status),
         tools: toolViews(found.tools, setting.tools),
@@ -628,12 +639,21 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
 
 /** Whether a server that refused us publishes OAuth metadata (RFC 9728), the sign that OAuth is how it wants to be met. */
 export async function offersOAuth(serverUrl: URL, fetchFn?: FetchLike): Promise<boolean> {
+  const sdk = await import("@modelcontextprotocol/sdk/client/auth.js");
   try {
-    const { discoverOAuthProtectedResourceMetadata } = await import(
-      "@modelcontextprotocol/sdk/client/auth.js"
-    );
-    const found = await discoverOAuthProtectedResourceMetadata(serverUrl, {}, fetchFn);
-    return Array.isArray(found.authorization_servers) && found.authorization_servers.length > 0;
+    const found = await sdk.discoverOAuthProtectedResourceMetadata(serverUrl, {}, fetchFn);
+    if (Array.isArray(found.authorization_servers) && found.authorization_servers.length > 0) {
+      return true;
+    }
+  } catch {
+    // No protected-resource metadata: an earlier-spec server (Atlassian's, for
+    // one) publishes only its authorization server's metadata at its root.
+  }
+  try {
+    const meta = await sdk.discoverAuthorizationServerMetadata(new URL("/", serverUrl), {
+      ...(fetchFn ? { fetchFn } : {}),
+    });
+    return typeof meta?.authorization_endpoint === "string";
   } catch {
     return false;
   }
