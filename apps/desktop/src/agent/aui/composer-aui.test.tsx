@@ -35,6 +35,7 @@ afterEach(async () => {
 const NOW = new Date(2026, 8, 17, 10, 0);
 const strings = composerStrings(defaultSettings());
 const opened: string[] = [];
+const openedThreads: string[] = [];
 
 function Harness({ client }: { client: AgentClient }) {
   const agent = useAgentSession({
@@ -62,6 +63,7 @@ function ColumnComposer({ agent }: { agent: ReturnType<typeof useAgentSession> }
         textState.value = t;
       }}
       onOpenLink={(href) => opened.push(href)}
+      onOpenThread={(id) => openedThreads.push(id)}
     />
   );
 }
@@ -181,6 +183,55 @@ describe("the composer on Assistant UI", () => {
     expect(q(".agent-md script")).toBeNull();
     expect(q(".agent-md img")).toBeNull();
     expect((window as { pwned?: boolean }).pwned).toBeUndefined();
+  });
+
+  test("a found Thread opens from the search step, and a Thread link in an answer opens it in the app", async () => {
+    const client = fakeAgentClient({
+      turns: [
+        () => [
+          toolEvent(
+            { id: "s1", tool: "search_threads", status: "done", inputSummary: "invoice" },
+            {
+              kind: "threads",
+              action: "found",
+              count: 1,
+              threads: [
+                {
+                  id: "t-9",
+                  subject: "Invoice 2041",
+                  from: "Aoife",
+                  lastActivity: "2026-09-16T09:00:00.000Z",
+                },
+              ],
+            },
+          ),
+        ],
+        () => [
+          {
+            kind: "text",
+            id: "t2",
+            text: "Found it: [Invoice 2041](monday://thread/t-9). Also [bad](javascript:alert(1)).",
+          },
+        ],
+      ],
+    });
+    await mount(client);
+    openedThreads.length = 0;
+    opened.length = 0;
+    await send("find the invoice");
+    const row = q<HTMLButtonElement>('.agent-preview .r.open[data-thread="t-9"]');
+    expect(row?.textContent).toContain("Invoice 2041");
+    await click(row);
+    expect(openedThreads).toEqual(["t-9"]);
+
+    await send("where is it?");
+    const link = q<HTMLAnchorElement>('.agent-md a.agent-thread-link[data-thread="t-9"]');
+    expect(link?.textContent).toBe("Invoice 2041");
+    await click(link);
+    expect(openedThreads).toEqual(["t-9", "t-9"]);
+    // Never a browser for a Thread link; the unsafe one stays text.
+    expect(opened).toEqual([]);
+    expect(qa(".agent-md a").length).toBe(1);
   });
 
   test("read-only steps group under their turn, fold once the answer starts, and reopen on a click", async () => {

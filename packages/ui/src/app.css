@@ -11424,3 +11424,25 @@ button.appr-link:focus-visible {
 .win-btn.close {
   font-size: 15px;
 }
+
+/* A found Thread in the agent's steps opens it, and so does a Thread link in an answer. */
+.agent-preview .results .r.open {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.agent-preview .results .r.open:hover,
+.agent-preview .results .r.open:focus-visible {
+  background: var(--hover);
+}
+.agent-thread-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}

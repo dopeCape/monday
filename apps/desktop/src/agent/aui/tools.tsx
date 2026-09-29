@@ -101,10 +101,13 @@ export function PreviewView({
   preview,
   strings,
   now,
+  onOpenThread,
 }: {
   preview: ToolPreview;
   strings: ComposerStrings;
   now: Date;
+  /** Opens a found Thread; absent, the rows are plain text. */
+  onOpenThread?: ((threadId: string) => void) | undefined;
 }): ReactNode {
   switch (preview.kind) {
     case "threads": {
@@ -115,13 +118,27 @@ export function PreviewView({
             {fill(strings["strings.agent.preview_threads"], { n: preview.count })}
           </div>
           <div className="results">
-            {preview.threads.map((t) => (
-              <div key={t.id} className="r">
-                <b>{t.subject}</b>
-                <span>{t.from}</span>
-                <span className="t">{formatListTime(t.lastActivity, now)}</span>
-              </div>
-            ))}
+            {preview.threads.map((t) =>
+              onOpenThread ? (
+                <button
+                  type="button"
+                  key={t.id}
+                  className="r open"
+                  data-thread={t.id}
+                  onClick={() => onOpenThread(t.id)}
+                >
+                  <b>{t.subject}</b>
+                  <span>{t.from}</span>
+                  <span className="t">{formatListTime(t.lastActivity, now)}</span>
+                </button>
+              ) : (
+                <div key={t.id} className="r">
+                  <b>{t.subject}</b>
+                  <span>{t.from}</span>
+                  <span className="t">{formatListTime(t.lastActivity, now)}</span>
+                </div>
+              ),
+            )}
           </div>
           {more > 0 ? (
             <div className="more">{fill(strings["strings.agent.preview_more"], { n: more })}</div>
@@ -421,7 +438,14 @@ function MondayTool(props: ToolCallMessagePartProps) {
       preview={
         preview || follows ? (
           <>
-            {preview ? <PreviewView preview={preview} strings={strings} now={now} /> : null}
+            {preview ? (
+              <PreviewView
+                preview={preview}
+                strings={strings}
+                now={now}
+                onOpenThread={actions.openThread}
+              />
+            ) : null}
             {follows ? <BacklogToolLine /> : null}
           </>
         ) : undefined
