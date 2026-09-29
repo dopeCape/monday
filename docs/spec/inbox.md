@@ -59,7 +59,7 @@ Each action maps to the provider's native concept where one exists and is emulat
 
 ## Briefs
 
-- A Brief is at most three bullets: what happened; what is asked of you or waiting; context (Group, a Workflow that already ran, a related Thread). Then up to three action chips from a fixed catalog: reply with a proposed line, forward to a person, add to calendar, snooze until, archive, open a link. Each chip is an ordinary tool call with its Tier.
+- A Brief is at most three bullets: what happened; what is asked of you or waiting; context (Group, a Workflow that already ran, a related Thread). Then up to three action chips from a fixed catalog: reply with a proposed line, forward to a person, add to calendar, snooze until, archive, open a link. Each chip is an ordinary tool call with its Tier. Recommended actions (`actions.md`, slices 34 and 35) replace this choice: the chips come from Signals before any Brief exists, and the Brief keeps only the reply's proposed line.
 - Shown only in the reader, never in a row.
 - A Thread with one message under 120 words gets no Brief.
 - Recomputed when a new message arrives on the Thread, or when the user asks.

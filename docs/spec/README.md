@@ -7,9 +7,9 @@ This directory is the spec. It is an index, not a restatement: every decision li
 ## Read in this order
 
 1. [`CONTEXT.md`](../../CONTEXT.md), the glossary. Every term in every document below is defined there.
-2. The eleven ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
+2. The ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
 3. [`architecture.md`](./architecture.md), how the modules, deployments and data fit together, with the data model and API shape.
-4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
+4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md), and the Signal specs: [`signals.md`](./signals.md) (the foundation), [`actions.md`](./actions.md), [`templates.md`](./templates.md), [`boards.md`](./boards.md), [`signal-features.md`](./signal-features.md).
 5. [`slices.md`](./slices.md), the ordered implementation plan.
 6. The research under [`docs/research/`](../research/) on the `research/*` branches, for the provider and platform facts behind the decisions.
 
@@ -28,10 +28,16 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Install, cloud upgrade, channels, CI | ADR 0008 |
 | Repo, modules, store, tests, UI stack | ADR 0009 |
 | Drafts, send, voice, attachments | ADR 0010 |
-| Search and command palette | ADR 0011 |
+| Search and command palette | ADR 0011; re-ranking in `signal-features.md` |
 | Calendar | `calendar.md`, issue 15, issue 16, research 6 |
 | External MCP | `external-mcp.md` |
 | Onboarding | `onboarding.md` |
+| Judgments, the Judge, TypeSafe | ADR 0012 |
+| Signals, Facts, the one-Thread request, backfill and budget | ADR 0014, `signals.md` |
+| Recommended actions | `actions.md` |
+| Templates and Placeholders | `templates.md` |
+| Boards and Lanes | `boards.md` |
+| Screening on arrival, the Interruption policy, the Digest | `signal-features.md` |
 | Design system and layouts | `design/README.md`, `design/` mock |
 
 ## Standing rules
@@ -52,7 +58,7 @@ Mobile clients, multi-user servers, PGP, a unified inbox across accounts, shared
 - Flathub policy on prebuilt Bun and Postgres binaries; whether the Nix package builds from source.
 - Plain-language schedule to cron: supported phrases and how ambiguity is confirmed.
 - Attachment preview in the reader and Server storage limits.
-- Desktop notification policy beyond calendar and workflow failures.
+- Desktop notification policy beyond calendar, workflow failures and the Interruption policy (`signal-features.md`).
 - Agent memory across Sessions beyond the Voice profile.
 - Backup, export and account deletion.
 - Spam handling.
