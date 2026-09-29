@@ -1,7 +1,7 @@
 // One Thread in the list. The same markup serves both list knobs: the CSS
 // under :root[data-list="split"] reflows it into two lines.
 import type { Tag, Thread } from "@monday/shared";
-import { ArchiveIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
+import { ArchiveIcon, CheckIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { cx, formatListTime, highlightParts, personName } from "../format.ts";
 import { Icon } from "./icon.tsx";
@@ -28,6 +28,15 @@ export interface MessageRowProps {
   className?: string | undefined;
   /** Words a search matched, marked in the sender, subject and snippet. */
   highlight?: readonly string[] | undefined;
+  /**
+   * The multi-select checkbox, drawn over the dot on hover or while a
+   * selection exists (the list's CSS decides). Absent, no checkbox.
+   */
+  onCheck?: ((threadId: string, event: MouseEvent) => void) | undefined;
+  /** Whether the row is in the multi-select. */
+  checked?: boolean | undefined;
+  /** The checkbox's name and tooltip, with its key. */
+  checkLabel?: string | undefined;
 }
 
 /** Text with the matched words in <mark>. */
@@ -54,6 +63,9 @@ export function MessageRow({
   onDragEnd,
   className,
   highlight,
+  onCheck,
+  checked,
+  checkLabel,
 }: MessageRowProps) {
   const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
@@ -76,6 +88,22 @@ export function MessageRow({
       }}
       tabIndex={-1}
     >
+      {onCheck ? (
+        <button
+          type="button"
+          className={cx("check", checked && "on")}
+          aria-pressed={checked ?? false}
+          aria-label={checkLabel ?? "Select"}
+          title={checkLabel ?? "Select"}
+          tabIndex={-1}
+          onClick={(e) => {
+            e.stopPropagation();
+            onCheck(thread.id, e);
+          }}
+        >
+          {checked ? <CheckIcon weight="bold" /> : null}
+        </button>
+      ) : null}
       {thread.unread ? (
         <span className="dot" role="img" aria-label="Unread" />
       ) : (

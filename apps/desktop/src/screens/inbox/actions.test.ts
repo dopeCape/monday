@@ -74,7 +74,7 @@ describe("fixtureInbox", () => {
     expect(inbox.thread("e4")?.group).toBeNull();
   });
 
-  test("mark-all-read is one undoable action", async () => {
+  test("marking many read is one undoable action", async () => {
     const inbox = fixtureInbox();
     const all = inbox.threads().map((t) => t.id);
     const token = await inbox.markRead(all);

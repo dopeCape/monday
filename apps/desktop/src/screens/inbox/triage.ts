@@ -69,6 +69,26 @@ export function extendSelection(
   return { selection: out, focus: next };
 }
 
+/**
+ * A shift-click on a row's checkbox: every row from the last one toggled to
+ * this one joins the selection (docs/spec/inbox.md, Multi-select). Without an
+ * anchor still in the list it toggles the one row, like X.
+ */
+export function rangeSelect(
+  order: readonly string[],
+  selection: readonly string[],
+  anchor: string | null,
+  id: string,
+): string[] {
+  const from = anchor === null ? -1 : order.indexOf(anchor);
+  const to = order.indexOf(id);
+  if (from < 0 || to < 0) return toggleSelected(selection, id);
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  const out = [...selection];
+  for (const x of order.slice(lo, hi + 1)) if (!out.includes(x)) out.push(x);
+  return out;
+}
+
 /** A batch above the Setting previews first (ADR 0002). */
 export function needsPreview(count: number, above: number): boolean {
   return count > above;

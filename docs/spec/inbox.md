@@ -28,6 +28,7 @@ Row fields are a Setting; defaults per density:
 - Exactly one Group label per row, the deepest (Sub-group over Group). No Section label in the row.
 - No avatars, no colored pills, no icons other than the attachment mark (fixed, calm rule).
 - Hover reveals archive, snooze and ask actions on the right and hides the time.
+- Hover shows a checkbox where the dot sits; while any row is selected every row shows one. At rest there is no checkbox column.
 - The time reads "09:41" today, "Yesterday", a weekday within the week, "Mar 12" earlier this year, and "Mar 12, 2025" for anything from an earlier calendar year (fixed). The reader, Drafts and the other lists follow the same rule.
 
 ## Action semantics
@@ -46,9 +47,9 @@ Each action maps to the provider's native concept where one exists and is emulat
 
 - Snooze removes the Thread from Inbox with archive semantics and stores a wake time on the Server. A Job returns it to Inbox as unread at the top of its Section. Snooze picker offers later today, tomorrow morning, next week, pick a time; the presets are Settings.
 - Read state syncs both ways with the provider; reading elsewhere clears it here within one poll.
-- Every action shows an undo toast; Z undoes the last one. Mark-all-read is undoable.
+- Every action shows an undo toast; Z undoes the last one, whole batches included.
 - Custom actions: a Thread whose Group or Section carries custom actions shows them in the reader toolbar after the built-in ones and as chips under the Brief; each is a tool call with its Tier, so a "forward to accounting" asks and an "archive and tag" just runs with Undo.
-- Batch actions above 10 Threads preview first (ADR 0002).
+- Batch actions above 10 Threads preview first (ADR 0002), whichever way they start: a key, the selection bar, a typed sentence.
 
 ## Composing several messages at once
 
@@ -71,6 +72,15 @@ Each action maps to the provider's native concept where one exists and is emulat
 - Vim defaults: J/K move, Enter opens, Esc closes the sheet, E archive, H snooze, S star, # delete, L label, M move to Group, R reply, A reply all, F forward, X toggle multi-select, Shift-J and Shift-K extend selection, Z undo, / agent, ⌘K palette, ⌘1..9 views.
 - After archive, snooze or delete the selection advances to the next Thread and the row collapses; in the sheet the next Thread opens. Direction and open-next are Settings.
 - Multi-select applies the same keys to every selected Thread.
+
+## Multi-select
+
+- A row's checkbox toggles it without opening it; Shift-click selects every row from the last one toggled (by click or X). X and Shift-J/K select the same way and show in the checkboxes. The rows selected carry the selected style.
+- While a selection exists the **selection bar** replaces the list header: a checkbox, the count ("3 selected"), and the actions, each with its key in the tooltip: Archive, Delete, Mark read or Mark unread (whichever fits most of the selection), Star or Unstar (Unstar only when every one is starred), Snooze (the snooze picker), Move to (the Group picker), and More. More holds the other read and star action, Label, and the custom actions every selected Thread carries (one that asks first confirms on a second pick; forward and draft stay in the reader, one Thread at a time). Clear or Esc ends the selection and the header comes back.
+- The bar's checkbox selects every row shown, or none once all are. When the list holds more Threads than the rows shown (the Store keeps only a window in memory), a link then offers "Select all N in <list>", counted over the whole Cache; picked, the bar says "All N in <list> selected" and every action, from the bar or a key, applies to the list's Threads by its query, not only the rows held. It works in the Inbox, a Group lens, a Mail folder and a list the Filter menu narrowed; a search, a Section lens and Needs a reply select only the rows shown. Unchecking a row falls back to the rows shown, less that one.
+- In Archive the bar offers Unarchive in place of Archive.
+- Every bar action runs the batch path: the preview above `inbox.batch_preview_above` (it names the Threads the list holds and counts them all), the same undo toast ("Archived, 12 threads"), the same approvals.
+- The list header carries the search and the Filter menu only; there is no More menu and no mark-all-read. Selecting all, then Mark read, does the same.
 
 ## First sync and offline
 

@@ -25,7 +25,19 @@ import {
   ToolCard,
   VirtualList,
 } from "@monday/ui";
-import { DotsThreeIcon, FunnelSimpleIcon, MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArchiveIcon,
+  ClockIcon,
+  EnvelopeSimpleIcon,
+  EnvelopeSimpleOpenIcon,
+  FolderSimpleIcon,
+  FunnelSimpleIcon,
+  MagnifyingGlassIcon,
+  StarIcon,
+  TrashIcon,
+  TrayArrowUpIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import {
   Fragment,
   useCallback,
@@ -90,6 +102,7 @@ import {
 } from "./inbox/list-filter.ts";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader, type ReaderAction } from "./inbox/Reader.tsx";
+import { SelectionBar } from "./inbox/SelectionBar.tsx";
 import { SnoozePicker } from "./inbox/SnoozePicker.tsx";
 import { formatWake, snoozeKnobs, snoozeUntil } from "./inbox/snooze.ts";
 import { localSearch, searchTerms } from "./inbox/stream-filter.ts";
@@ -100,6 +113,7 @@ import {
   needsPreview,
   neighbor,
   nextFocus,
+  rangeSelect,
   targets,
   toggleSelected,
 } from "./inbox/triage.ts";
@@ -204,7 +218,28 @@ export interface InboxProps {
   judge?: IntentJudge | null | undefined;
 }
 
-type RemovingKind = "archive" | "snooze" | "delete";
+/** An action that takes Threads out of the list shown ("unarchive" out of Archive). */
+type RemovingKind = "archive" | "snooze" | "delete" | "unarchive";
+type FlagKind = "star" | "unstar" | "read" | "unread";
+/** What a batch does: a removing action, a flag, a move to a Group, or a custom action. */
+type BatchKind = RemovingKind | FlagKind | "move" | "custom";
+const FLAG_TOAST = {
+  star: "strings.inbox.toast.starred",
+  unstar: "strings.inbox.toast.unstarred",
+  read: "strings.inbox.toast.read",
+  unread: "strings.inbox.toast.unread",
+} as const;
+const BATCH_WORD = {
+  archive: "strings.inbox.action.archive",
+  unarchive: "strings.inbox.select.unarchive",
+  delete: "strings.inbox.action.delete",
+  snooze: "strings.inbox.action.snooze",
+  star: "strings.inbox.action.star",
+  unstar: "strings.inbox.action.unstar",
+  read: "strings.inbox.action.read",
+  unread: "strings.inbox.action.unread",
+  move: "strings.inbox.action.move",
+} as const;
 /** One row of the virtual list. */
 interface ListItem {
   key: string;
@@ -221,7 +256,19 @@ type Pull = { older: OlderMail; progress: PullProgress | null; error: string | n
 const chipsByInbox = new WeakMap<object, readonly FilterChip[]>();
 const NO_CHIPS: readonly FilterChip[] = [];
 type ToastState = { text: string; token: UndoToken | null; id: number };
-type Batch = { kind: RemovingKind | "read"; ids: string[]; until?: Date };
+/**
+ * A batch waiting on its preview. `byQuery` marks one over the whole list
+ * ("Select all N"), whose Threads the seam may not hold: the preview lists
+ * only the ones it does.
+ */
+type Batch = {
+  kind: BatchKind;
+  ids: string[];
+  until?: Date;
+  group?: string | null;
+  action?: string;
+  byQuery?: boolean;
+};
 /** The scheduling card a typed sentence opened in the composer, without a Session (slice 27). */
 type IntentCard = {
   id: string;
@@ -232,6 +279,8 @@ type IntentCard = {
 };
 
 const defaultInbox = fixtureInbox();
+/** Where a custom action picked from the selection bar waits on its confirming second pick. */
+const SELECTION = "selection";
 const NO_THREADS: readonly Thread[] = [];
 
 /** A snoozed row says when it wakes, ahead of its snippet (strings.folder.snoozed.wakes). */
@@ -672,6 +721,34 @@ function InboxBody({
     const multi = new URLSearchParams(location.search).get("multi");
     return multi ? multi.split(",").filter(Boolean) : [];
   });
+  // "Select all N": the whole list over the Cache is selected, by its key,
+  // not only the rows held. It lasts while the selection does, on that list.
+  const [selectAll, setSelectAll] = useState<ThreadListKey | null>(null);
+  /** The row a shift-click ranges from: the last one toggled, by click or X. */
+  const anchor = useRef<string | null>(null);
+  const selecting = selection.length > 0;
+  const allMode = selecting && selectAll === listKey;
+  useEffect(() => {
+    if (!selecting) setSelectAll(null);
+  }, [selecting]);
+  const clearSelection = useCallback(() => {
+    setSelection([]);
+    setSelectAll(null);
+  }, []);
+  // "Select all N" reaches past the rows held only where the list is the
+  // seam's own query: not a search, a Section lens or a filter decided here.
+  const byQuery =
+    inbox.listIds !== undefined &&
+    !searching &&
+    !sectionLens &&
+    !needsReplyOn &&
+    !filterHere &&
+    !(lens && !groupList);
+  const selTotalOf = useCallback(
+    () => (selecting && byQuery ? (inbox.listTotal?.(listKey) ?? null) : null),
+    [selecting, byQuery, inbox, listKey],
+  );
+  const selTotal = useSyncExternalStore(subscribeList, selTotalOf, selTotalOf);
   const [readerOpen, setReaderOpen] = useState(!stream || urlSel !== null);
   const [agentOpen, setAgentOpen] = useState(initialAgentText !== undefined);
   const [agentText, setAgentText] = useState(initialAgentText ?? "");
@@ -696,6 +773,8 @@ function InboxBody({
   const [intentCard, setIntentCard] = useState<IntentCard | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const lastToken = useRef<UndoToken | null>(null);
+  /** A token that stands for several (a custom action run on each selected Thread). */
+  const multiUndo = useRef(new Map<UndoToken, UndoToken[]>());
   const toastSeq = useRef(0);
 
   // The focus follows the list: a focus that left it (without an action moving
@@ -742,10 +821,17 @@ function InboxBody({
   }, [searching, order, focus]);
   const openSearch = useCallback((text?: string) => {
     if (text !== undefined) setSearchText(text);
-    queueMicrotask(() => {
+    const field = () => {
       searchInput.current?.focus();
       searchInput.current?.select();
-    });
+    };
+    // The selection bar holds the header's place: asking to search ends the
+    // selection, and the field is focused once the header is back.
+    if (cursor.current.selection.length > 0) {
+      setSelection([]);
+      setTimeout(field, 0);
+    }
+    queueMicrotask(field);
   }, []);
   const closeSearch = useCallback(() => {
     setSearchText("");
@@ -888,6 +974,9 @@ function InboxBody({
       if (kind === "archive") {
         token = await inbox.archive(ids);
         text = t("strings.inbox.toast.archived");
+      } else if (kind === "unarchive") {
+        token = await inbox.unarchive(ids);
+        text = t("strings.inbox.toast.unarchived");
       } else if (kind === "delete") {
         token = await inbox.delete(ids);
         text = t("strings.inbox.toast.deleted");
@@ -902,61 +991,22 @@ function InboxBody({
     [t, inbox, now, advanceAfter, showToast, countText],
   );
 
-  /** Previews a batch above the Setting, else runs it. */
-  const request = useCallback(
-    (kind: RemovingKind, ids: readonly string[], until?: Date) => {
+  /** Star, unstar, read or unread on ids, with the toast; the selection stays. */
+  const flag = useCallback(
+    async (kind: FlagKind, ids: readonly string[]) => {
       if (ids.length === 0) return;
-      if (needsPreview(ids.length, s["inbox.batch_preview_above"])) {
-        setBatch(until ? { kind, ids: [...ids], until } : { kind, ids: [...ids] });
-        return;
-      }
-      void remove(kind, ids, until);
-    },
-    [s, remove],
-  );
-
-  const toggleStar = useCallback(
-    async (ids: readonly string[]) => {
-      if (ids.length === 0) return;
-      const all = ids.every((id) => inbox.thread(id)?.starred);
-      const token = all ? await inbox.unstar(ids) : await inbox.star(ids);
-      showToast(
-        countText(
-          t(all ? "strings.inbox.toast.unstarred" : "strings.inbox.toast.starred"),
-          ids.length,
-        ),
-        token,
-      );
+      const token =
+        kind === "star"
+          ? await inbox.star(ids)
+          : kind === "unstar"
+            ? await inbox.unstar(ids)
+            : kind === "read"
+              ? await inbox.markRead(ids)
+              : await inbox.markUnread(ids);
+      showToast(countText(t(FLAG_TOAST[kind]), ids.length), token);
     },
     [inbox, showToast, countText, t],
   );
-
-  const toggleRead = useCallback(
-    async (ids: readonly string[]) => {
-      if (ids.length === 0) return;
-      const anyUnread = ids.some((id) => inbox.thread(id)?.unread);
-      const token = anyUnread ? await inbox.markRead(ids) : await inbox.markUnread(ids);
-      showToast(
-        countText(
-          t(anyUnread ? "strings.inbox.toast.read" : "strings.inbox.toast.unread"),
-          ids.length,
-        ),
-        token,
-      );
-    },
-    [inbox, showToast, countText, t],
-  );
-
-  const markAllRead = useCallback(async () => {
-    const ids = order.filter((id) => inbox.thread(id)?.unread);
-    if (ids.length === 0) return;
-    if (needsPreview(ids.length, s["inbox.batch_preview_above"])) {
-      setBatch({ kind: "read", ids });
-      return;
-    }
-    const token = await inbox.markRead(ids);
-    showToast(countText(t("strings.inbox.toast.read"), ids.length), token);
-  }, [order, inbox, s, t, showToast, countText]);
 
   const moveTo = useCallback(
     async (ids: readonly string[], groupId: string | null) => {
@@ -971,25 +1021,104 @@ function InboxBody({
     [inbox, groups, showToast, countText, t],
   );
 
+  /** A custom action over several Threads; set once the custom action runner exists, below. */
+  const customBatch = useRef<(actionId: string, ids: readonly string[]) => Promise<void>>(
+    async () => {},
+  );
+  /** Runs a batch now: the same calls, toasts and undo as one Thread's. */
+  const runBatch = useCallback(
+    async (b: Batch) => {
+      switch (b.kind) {
+        case "archive":
+        case "unarchive":
+        case "delete":
+        case "snooze":
+          return remove(b.kind, b.ids, b.until);
+        case "move":
+          return moveTo(b.ids, b.group ?? null);
+        case "custom":
+          return b.action ? customBatch.current(b.action, b.ids) : undefined;
+        default:
+          return flag(b.kind, b.ids);
+      }
+    },
+    [remove, moveTo, flag],
+  );
+
+  /**
+   * Every action on Threads comes this way, from a key, a row, the reader or
+   * the selection bar: above the Setting it previews first (ADR 0002), else
+   * it runs.
+   */
+  const request = useCallback(
+    (
+      kind: BatchKind,
+      ids: readonly string[],
+      until?: Date,
+      extra: { group?: string | null; action?: string } = {},
+    ) => {
+      if (ids.length === 0) return;
+      const b: Batch = {
+        kind,
+        ids: [...ids],
+        ...(until ? { until } : {}),
+        ...(extra.group !== undefined ? { group: extra.group } : {}),
+        ...(extra.action !== undefined ? { action: extra.action } : {}),
+        ...(allMode ? { byQuery: true } : {}),
+      };
+      if (needsPreview(ids.length, s["inbox.batch_preview_above"])) {
+        setBatch(b);
+        return;
+      }
+      void runBatch(b);
+    },
+    [s, runBatch, allMode],
+  );
+
+  /**
+   * The Threads of ids the list holds. Under "Select all N" the rest are not
+   * read one by one: star and read decide on the ones shown.
+   */
+  const heldOf = useCallback(
+    (ids: readonly string[]) =>
+      ids.flatMap((id) => {
+        const th = liveById.get(id) ?? (allMode ? undefined : inbox.thread(id));
+        return th ? [th] : [];
+      }),
+    [liveById, allMode, inbox],
+  );
+  /** S: unstar when every one is starred, else star. */
+  const toggleStar = useCallback(
+    (ids: readonly string[]) => {
+      const held = heldOf(ids);
+      request(held.length > 0 && held.every((th) => th.starred) ? "unstar" : "star", ids);
+    },
+    [heldOf, request],
+  );
+  /** Mark read when any is unread, else mark unread. */
+  const toggleRead = useCallback(
+    (ids: readonly string[]) => {
+      request(heldOf(ids).some((th) => th.unread) ? "read" : "unread", ids);
+    },
+    [heldOf, request],
+  );
+
   const undo = useCallback(async () => {
     const token = lastToken.current;
     if (!token) return;
     lastToken.current = null;
-    await inbox.undo(token);
+    // A custom action over several Threads undoes each one's, last first.
+    const several = multiUndo.current.get(token);
+    multiUndo.current.delete(token);
+    for (const one of several ? [...several].reverse() : [token]) await inbox.undo(one);
     setToast({ text: t("strings.inbox.toast.undone"), token: null, id: ++toastSeq.current });
   }, [inbox, t]);
 
   const applyBatch = useCallback(async () => {
     const b = batch;
     setBatch(null);
-    if (!b) return;
-    if (b.kind === "read") {
-      const token = await inbox.markRead(b.ids);
-      showToast(countText(t("strings.inbox.toast.read"), b.ids.length), token);
-      return;
-    }
-    await remove(b.kind, b.ids, b.until);
-  }, [batch, inbox, remove, showToast, countText, t]);
+    if (b) await runBatch(b);
+  }, [batch, runBatch]);
 
   const openPicker = useCallback(
     (which: "snooze" | "move" | "more" | "filter", ids: readonly string[]) => {
@@ -1274,6 +1403,54 @@ function InboxBody({
     [thread, threadActions, confirming, customRunner, advanceAfter, showToast, t],
   );
 
+  // The selection's Threads the list holds, and the custom actions every one
+  // of them carries (the selection bar's More menu). One that hands a draft
+  // to compose stays with one Thread at a time, in the reader.
+  const selectedHeld = useMemo(() => heldOf(selection), [heldOf, selection]);
+  const selectionActions = useMemo<CustomActionSetting[]>(() => {
+    if (allMode || selectedHeld.length === 0 || selectedHeld.length !== selection.length) return [];
+    const per = selectedHeld.map((th) =>
+      customActionsFor(customActions, th, {
+        groupNames,
+        judged: inbox.judged?.(th.id),
+        judgeThreshold,
+      }).filter((a) => a.tool !== "forward_thread" && a.tool !== "draft_message"),
+    );
+    const [first, ...rest] = per;
+    return (first ?? []).filter((a) => rest.every((list) => list.some((b) => b.id === a.id)));
+  }, [allMode, selectedHeld, selection.length, customActions, groupNames, inbox, judgeThreshold]);
+  customBatch.current = async (actionId, ids) => {
+    const action = customActions.find((a) => a.id === actionId);
+    if (!action) return;
+    const tokens: UndoToken[] = [];
+    let failed = 0;
+    for (const th of heldOf(ids)) {
+      const outcome = await customRunner.run(action, th);
+      if (!outcome.ok) failed += 1;
+      else if (outcome.undo) tokens.push(outcome.undo);
+    }
+    if (tokens.length === 0 && failed > 0) {
+      showToast(fill(t("strings.actions.toast.unavailable"), { label: action.label }), null);
+      return;
+    }
+    if (
+      action.tool === "archive_threads" ||
+      action.tool === "snooze_threads" ||
+      action.tool === "trash_threads"
+    ) {
+      advanceAfter(ids);
+    }
+    let token: UndoToken | null = tokens[0] ?? null;
+    if (tokens.length > 1) {
+      token = `several:${tokens.join("+")}`;
+      multiUndo.current.set(token, tokens);
+    }
+    showToast(
+      countText(fill(t("strings.actions.toast.done"), { label: action.label }), ids.length),
+      token,
+    );
+  };
+
   const applyView = useCallback(
     (n: number) => {
       const view = s["views.list"][n - 1];
@@ -1298,6 +1475,29 @@ function InboxBody({
   const ctx: KeyContext = { pane, focus, selection };
   const overlay = pane === "overlay";
   const acting = () => targets(focus, selection);
+  /**
+   * Runs fn on the Threads an action applies to: the whole list over the
+   * Cache under "Select all N", else the selection or the focus row.
+   */
+  const withTargets = (fn: (ids: string[]) => void) => {
+    if (allMode && inbox.listIds) {
+      void inbox.listIds(listKey).then(fn);
+      return;
+    }
+    fn(acting());
+  };
+  /** X or a row's checkbox: one row joins or leaves; under "Select all N" the rest of the rows shown stay. */
+  const toggleRow = (id: string, range = false) => {
+    if (allMode) {
+      setSelectAll(null);
+      setSelection(order.filter((x) => x !== id));
+    } else {
+      setSelection(
+        range ? rangeSelect(order, selection, anchor.current, id) : toggleSelected(selection, id),
+      );
+    }
+    anchor.current = id;
+  };
 
   const handlers: KeyHandlers = {
     "move.down": () => {
@@ -1321,21 +1521,21 @@ function InboxBody({
         setAgentOpen(false);
         (document.activeElement as HTMLElement | null)?.blur?.();
       } else if (stream && readerOpen) setReaderOpen(false);
+      else if (selection.length) clearSelection();
       else if (searching) closeSearch();
-      else if (selection.length) setSelection([]);
       else if (filterChips.length) setFilterChips(filterChips.slice(0, -1));
     },
-    "thread.archive": () => !overlay && request("archive", acting()),
-    "thread.snooze": () => !overlay && openPicker("snooze", acting()),
-    "thread.delete": () => !overlay && request("delete", acting()),
-    "thread.star": () => !overlay && void toggleStar(acting()),
-    "thread.toggle_read": () => !overlay && void toggleRead(acting()),
+    "thread.archive": () => !overlay && withTargets((ids) => request("archive", ids)),
+    "thread.snooze": () => !overlay && withTargets((ids) => openPicker("snooze", ids)),
+    "thread.delete": () => !overlay && withTargets((ids) => request("delete", ids)),
+    "thread.star": () => !overlay && withTargets(toggleStar),
+    "thread.toggle_read": () => !overlay && withTargets(toggleRead),
     "thread.label": () => {
       if (overlay) return false;
       setPaletteQuery(t("strings.inbox.action.label"));
       setPaletteOpen(true);
     },
-    "thread.move": () => !overlay && openPicker("move", acting()),
+    "thread.move": () => !overlay && withTargets((ids) => openPicker("move", ids)),
     "list.filter": () => {
       if (overlay) return false;
       openPicker("filter", []);
@@ -1344,7 +1544,7 @@ function InboxBody({
     "compose.reply": () => !overlay && focus && startReply("reply"),
     "compose.reply_all": () => !overlay && focus && startReply("reply", true),
     "compose.forward": () => !overlay && focus && startReply("forward"),
-    "select.toggle": () => !overlay && focus && setSelection(toggleSelected(selection, focus)),
+    "select.toggle": () => !overlay && focus && toggleRow(focus),
     "select.extend_down": () => {
       if (overlay) return false;
       const r = extendSelection(order, selection, focus, 1);
@@ -1641,20 +1841,25 @@ function InboxBody({
     snooze: `${t("strings.inbox.action.snooze")} (${key("thread.snooze")})`,
     ask: t("strings.inbox.action.ask"),
   };
-  const headCount = selection.length
-    ? fill(t("strings.inbox.selected"), { n: selection.length })
-    : searching
-      ? order.length
-      : filtering
-        ? // Counted over the whole Cache, unless a filter here narrows the list further.
-          !needsReplyOn && !sectionLens && filteredTotal !== null
-          ? filteredTotal
-          : order.length
-        : threads.length;
+  const headCount = searching
+    ? order.length
+    : filtering
+      ? // Counted over the whole Cache, unless a filter here narrows the list further.
+        !needsReplyOn && !sectionLens && filteredTotal !== null
+        ? filteredTotal
+        : order.length
+      : threads.length;
+  /** An action's name with its key, for a tooltip. */
+  const titled = (label: string, action: KeyAction) => {
+    const k = key(action);
+    return k ? `${label} (${k})` : label;
+  };
+  const checkLabel = titled(t("strings.inbox.select.row"), "select.toggle");
   const firstChip = filterChips[0];
   const olderMissing = older.reduce((n, o) => n + o.missing, 0);
   const renderItem = (item: ListItem) => {
     const { thread: th, leaving } = item.row;
+    const checked = allMode || selection.includes(th.id);
     return (
       <MessageRow
         key={th.id}
@@ -1662,9 +1867,11 @@ function InboxBody({
         tags={tagsOf(th)}
         selected={th.id === focus}
         className={
-          [selection.includes(th.id) && "picked", leaving && "leaving"].filter(Boolean).join(" ") ||
-          undefined
+          [checked && "picked", leaving && "leaving"].filter(Boolean).join(" ") || undefined
         }
+        checked={checked}
+        checkLabel={checkLabel}
+        onCheck={(id, e) => toggleRow(id, e.shiftKey)}
         now={now}
         titles={rowTitles}
         highlight={highlight}
@@ -1693,85 +1900,228 @@ function InboxBody({
   };
 
   const shownBatch = batchExit.value;
+  // Over the whole list the preview names the Threads held; the count says how many in all.
   const batchThreads = shownBatch
     ? shownBatch.ids.flatMap((id) => {
-        const th = inbox.thread(id);
+        const th = liveById.get(id) ?? (shownBatch.byQuery ? undefined : inbox.thread(id));
         return th ? [th] : [];
       })
     : [];
-  const batchAction = shownBatch
-    ? t(
-        shownBatch.kind === "archive"
-          ? "strings.inbox.action.archive"
-          : shownBatch.kind === "delete"
-            ? "strings.inbox.action.delete"
-            : shownBatch.kind === "snooze"
-              ? "strings.inbox.action.snooze"
-              : "strings.inbox.action.read",
-      )
-    : "";
+  const batchAction = !shownBatch
+    ? ""
+    : shownBatch.kind === "custom"
+      ? (customActions.find((a) => a.id === shownBatch.action)?.label ?? "")
+      : t(BATCH_WORD[shownBatch.kind]);
+
+  /* The selection bar: what is selected, and what applies to all of it. */
+  const selectedSet = new Set(selection);
+  const shownPicked = allMode ? order.length : order.filter((id) => selectedSet.has(id)).length;
+  const shownState: "none" | "some" | "all" =
+    allMode || (order.length > 0 && shownPicked === order.length)
+      ? "all"
+      : shownPicked > 0
+        ? "some"
+        : "none";
+  // Read and star show the one that fits most of the selection; the other is under More.
+  const unreadHeld = selectedHeld.filter((th) => th.unread).length;
+  const readFirst: FlagKind = unreadHeld * 2 >= selectedHeld.length ? "read" : "unread";
+  const starFirst: FlagKind =
+    selectedHeld.length > 0 && selectedHeld.every((th) => th.starred) ? "unstar" : "star";
+  const readOther: FlagKind = readFirst === "read" ? "unread" : "read";
+  const starOther: FlagKind = starFirst === "star" ? "unstar" : "star";
+  const onBar = (kind: BatchKind) => () => withTargets((ids) => request(kind, ids));
+  const moreItems = [
+    { key: readOther, label: t(BATCH_WORD[readOther]) },
+    { key: starOther, label: t(BATCH_WORD[starOther]) },
+    { key: "label", label: t("strings.inbox.action.label"), detail: key("thread.label") },
+    ...selectionActions.map((a) => ({
+      key: `custom:${a.id}`,
+      label: a.label,
+      detail:
+        customActionTier(a, alwaysAsk) === "always-ask"
+          ? t("strings.actions.tier.always_ask")
+          : undefined,
+    })),
+  ];
+  /** A custom action from the More menu: one that asks first confirms on a second pick, as in the reader. */
+  const pickSelectionAction = (actionId: string) => {
+    const action = selectionActions.find((a) => a.id === actionId);
+    if (!action) return;
+    const asked = confirming?.id === actionId && confirming.threadId === SELECTION;
+    if (customActionTier(action, alwaysAsk) === "always-ask" && !asked) {
+      setConfirming({ id: actionId, threadId: SELECTION });
+      showToast(fill(t("strings.actions.toast.confirm"), { label: action.label }), null);
+      return;
+    }
+    setConfirming(null);
+    withTargets((ids) => request("custom", ids, undefined, { action: actionId }));
+  };
+  const pickMore = (k: string) => {
+    closePicker();
+    if (k === "label") {
+      setPaletteQuery(t("strings.inbox.action.label"));
+      setPaletteOpen(true);
+    } else if (k.startsWith("custom:")) {
+      pickSelectionAction(k.slice("custom:".length));
+    } else if (k === "read" || k === "unread" || k === "star" || k === "unstar") {
+      withTargets((ids) => request(k, ids));
+    }
+  };
+  const selectionBar = selecting ? (
+    <SelectionBar
+      label={t("strings.inbox.select.bar")}
+      title={
+        allMode
+          ? fill(t("strings.inbox.select.all_selected"), {
+              n: (selTotal ?? selection.length).toLocaleString("en-US"),
+              list: listTitle,
+            })
+          : fill(t("strings.inbox.selected"), { n: selection.length })
+      }
+      shown={shownState}
+      checkLabel={t(
+        shownState === "all" ? "strings.inbox.select.none" : "strings.inbox.select.all",
+      )}
+      onCheck={() => {
+        if (shownState === "all") clearSelection();
+        else setSelection([...selection, ...order.filter((id) => !selectedSet.has(id))]);
+      }}
+      offer={
+        !allMode && shownState === "all" && byQuery && selTotal !== null && selTotal > order.length
+          ? {
+              label: fill(t("strings.inbox.select.all_in_list"), {
+                n: selTotal.toLocaleString("en-US"),
+                list: listTitle,
+              }),
+              onClick: () => setSelectAll(listKey),
+            }
+          : undefined
+      }
+      actions={[
+        folder === "archive"
+          ? {
+              key: "unarchive",
+              label: t("strings.inbox.select.unarchive"),
+              title: t("strings.inbox.select.unarchive"),
+              icon: <TrayArrowUpIcon />,
+              onClick: onBar("unarchive"),
+            }
+          : {
+              key: "archive",
+              label: t("strings.inbox.action.archive"),
+              title: titled(t("strings.inbox.action.archive"), "thread.archive"),
+              icon: <ArchiveIcon />,
+              onClick: onBar("archive"),
+            },
+        {
+          key: "delete",
+          label: t("strings.inbox.action.delete"),
+          title: titled(t("strings.inbox.action.delete"), "thread.delete"),
+          icon: <TrashIcon />,
+          onClick: onBar("delete"),
+        },
+        {
+          key: readFirst,
+          label: t(BATCH_WORD[readFirst]),
+          title: titled(t(BATCH_WORD[readFirst]), "thread.toggle_read"),
+          icon: readFirst === "read" ? <EnvelopeSimpleOpenIcon /> : <EnvelopeSimpleIcon />,
+          onClick: onBar(readFirst),
+        },
+        {
+          key: starFirst,
+          label: t(BATCH_WORD[starFirst]),
+          title: titled(t(BATCH_WORD[starFirst]), "thread.star"),
+          icon: <StarIcon weight={starFirst === "unstar" ? "fill" : "regular"} />,
+          onClick: onBar(starFirst),
+        },
+        {
+          key: "snooze",
+          label: t("strings.inbox.action.snooze"),
+          title: titled(t("strings.inbox.action.snooze"), "thread.snooze"),
+          icon: <ClockIcon />,
+          onClick: () => withTargets((ids) => openPicker("snooze", ids)),
+        },
+        {
+          key: "move",
+          label: t("strings.inbox.move.title"),
+          title: titled(t("strings.inbox.move.title"), "thread.move"),
+          icon: <FolderSimpleIcon />,
+          onClick: () => withTargets((ids) => openPicker("move", ids)),
+        },
+      ]}
+      more={{ label: t("strings.inbox.select.more"), onClick: () => openPicker("more", []) }}
+      clear={{
+        label: t("strings.inbox.select.clear"),
+        title: titled(t("strings.inbox.select.clear"), "sheet.close"),
+        onClick: clearSelection,
+      }}
+    />
+  ) : null;
 
   return (
     <div
       className={`main inbox ${stream && readerExit.mounted ? "has-sheet" : ""}`}
       data-pane={pane}
     >
-      <section className="col list" data-fields={fields} aria-label={listTitle}>
-        <ColHead title={listTitle} count={headCount}>
-          <label className={`list-search${searching ? " on" : ""}`}>
-            <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
-            <input
-              ref={searchInput}
-              type="search"
-              value={searchText}
-              placeholder={t("strings.inbox.search.placeholder")}
-              aria-label={t("strings.inbox.search.placeholder")}
-              spellCheck={false}
-              onChange={(e) => setSearchText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === "ArrowDown") {
-                  e.preventDefault();
-                  searchInput.current?.blur();
-                  if (e.key === "Enter" && order[0]) {
-                    if (search && searching) void search.remember(searchText);
-                    open(focus && order.includes(focus) ? focus : order[0]);
+      <section
+        className={`col list${selecting ? " selecting" : ""}`}
+        data-fields={fields}
+        aria-label={listTitle}
+      >
+        {selectionBar ?? (
+          <ColHead title={listTitle} count={headCount}>
+            <label className={`list-search${searching ? " on" : ""}`}>
+              <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
+              <input
+                ref={searchInput}
+                type="search"
+                value={searchText}
+                placeholder={t("strings.inbox.search.placeholder")}
+                aria-label={t("strings.inbox.search.placeholder")}
+                spellCheck={false}
+                onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "ArrowDown") {
+                    e.preventDefault();
+                    searchInput.current?.blur();
+                    if (e.key === "Enter" && order[0]) {
+                      if (search && searching) void search.remember(searchText);
+                      open(focus && order.includes(focus) ? focus : order[0]);
+                    }
                   }
-                }
-              }}
-            />
-            {searching ? (
-              <button
-                type="button"
-                className="search-clear"
-                title={t("strings.inbox.search.clear")}
-                aria-label={t("strings.inbox.search.clear")}
-                onClick={closeSearch}
-              >
-                <XIcon />
-              </button>
-            ) : null}
-          </label>
-          {stream ? (
-            <Btn
-              on={filtering}
-              className="filter-btn"
-              aria-haspopup="menu"
-              title={`${t("strings.inbox.filter")} (${key("list.filter")})`}
-              onClick={() => openPicker("filter", [])}
-            >
-              <FunnelSimpleIcon />{" "}
-              {filterChips.length === 1 && firstChip
-                ? chipLabel(firstChip, t, now)
-                : t("strings.inbox.filter")}
-              {filterChips.length > 1 ? (
-                <span className="filter-n">{filterChips.length}</span>
+                }}
+              />
+              {searching ? (
+                <button
+                  type="button"
+                  className="search-clear"
+                  title={t("strings.inbox.search.clear")}
+                  aria-label={t("strings.inbox.search.clear")}
+                  onClick={closeSearch}
+                >
+                  <XIcon />
+                </button>
               ) : null}
-            </Btn>
-          ) : null}
-          <Btn icon title={t("strings.inbox.more")} onClick={() => openPicker("more", [])}>
-            <DotsThreeIcon />
-          </Btn>
-        </ColHead>
+            </label>
+            {stream ? (
+              <Btn
+                on={filtering}
+                className="filter-btn"
+                aria-haspopup="menu"
+                title={`${t("strings.inbox.filter")} (${key("list.filter")})`}
+                onClick={() => openPicker("filter", [])}
+              >
+                <FunnelSimpleIcon />{" "}
+                {filterChips.length === 1 && firstChip
+                  ? chipLabel(firstChip, t, now)
+                  : t("strings.inbox.filter")}
+                {filterChips.length > 1 ? (
+                  <span className="filter-n">{filterChips.length}</span>
+                ) : null}
+              </Btn>
+            ) : null}
+          </ColHead>
+        )}
         <FilterChips chips={filterChips} t={t} now={now} onChange={setFilterChips} />
         {pickerExit.value === "filter" ? (
           <FilterMenu
@@ -1788,12 +2138,9 @@ function InboxBody({
         ) : null}
         {pickerExit.value === "more" ? (
           <Picker
-            label={t("strings.inbox.more")}
-            items={[{ key: "read-all", label: t("strings.inbox.mark_all_read") }]}
-            onPick={() => {
-              closePicker();
-              void markAllRead();
-            }}
+            label={t("strings.inbox.select.more")}
+            items={moreItems}
+            onPick={pickMore}
             onClose={closePicker}
             leaving={pickerExit.leaving}
             onLeft={pickerExit.onEnd}
@@ -1824,7 +2171,7 @@ function InboxBody({
             ]}
             onPick={(k) => {
               closePicker();
-              void moveTo(pickerIds, k === "" ? null : k);
+              request("move", pickerIds, undefined, { group: k === "" ? null : k });
             }}
             onClose={closePicker}
             leaving={pickerExit.leaving}

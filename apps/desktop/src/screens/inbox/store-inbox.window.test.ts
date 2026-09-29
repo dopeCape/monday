@@ -9,6 +9,7 @@ import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { bunDriver } from "../../store/bun-driver.ts";
 import { createFakeStore } from "../../store/fake.ts";
 import { fixtureSeed } from "../../store/seed.ts";
+import { filterListKey } from "./list-filter.ts";
 import { createStoreInbox, type StoreInbox } from "./store-inbox.ts";
 
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
@@ -190,6 +191,31 @@ describe("storeInbox holds a window of the Cache", () => {
     inbox.group("investors");
     await settled(() => inbox.group("investors").length === investors.length);
     expect(inbox.group("investors").map((t) => t.id)).toEqual(investors.map((t) => t.id));
+    inbox.close();
+  });
+
+  test("Select all: a list's total and every id over the whole Cache, not only the window held", async () => {
+    const { inbox, sqls } = await openBig(10);
+    const counted = () => sqls.filter((q) => q.includes("count(*) as n")).length;
+    const before = counted();
+    await tick(20);
+    // The Inbox's total is not counted until someone asks.
+    expect(counted()).toBe(before);
+    expect(inbox.listTotal("inbox")).toBeNull();
+    await settled(() => inbox.listTotal("inbox") === TOTAL);
+    expect(await inbox.listIds("inbox")).toEqual(range(0, TOTAL));
+    const investors = bigThreads().filter((t) => t.group === "investors");
+    expect(await inbox.listIds("group:investors")).toEqual(investors.map((t) => t.id));
+    // A list narrowed by the Filter menu: its own query, whole.
+    const unread = filterListKey("inbox", { unread: true });
+    expect(await inbox.listIds(unread)).toEqual(
+      bigThreads()
+        .filter((t) => t.unread)
+        .map((t) => t.id),
+    );
+    // Kept counted: an action out of the list lowers it.
+    await inbox.archive([id(29)]);
+    await settled(() => inbox.listTotal("inbox") === TOTAL - 1);
     inbox.close();
   });
 
