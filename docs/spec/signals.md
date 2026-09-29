@@ -1,6 +1,6 @@
 # Signals
 
-Behaviors a tester can check. Signal, Fact, Question version and Unsure are defined in `CONTEXT.md`; the decision is ADR 0014 on top of ADR 0012; every default below is a Setting (ADR 0004) and every word a `strings.signals.*` Setting. Recommended actions (`actions.md`), Templates (`templates.md`), Boards (`boards.md`) and the smaller features (`signal-features.md`) all read what this page defines.
+Behaviors a tester can check. Signal, Fact, Question version and Unsure are defined in `CONTEXT.md`; the decision is ADR 0014 on top of ADR 0012; every default below is a Setting (ADR 0004) and every word a `strings.signals.*` Setting. Recommended actions (`actions.md`), Templates (`templates.md`), Views (`boards.md`) and the smaller features (`signal-features.md`) all read what this page defines.
 
 ## Why
 
@@ -52,8 +52,8 @@ Why these numbers: one point on a 10,000 Thread backlog is 100 Threads in the wr
 type SignalKind = "noul" | "choice" | "score";
 
 interface SignalDef {
-  id: string;                  // "needs_reply", "section:invoices-owed", "action:forward.fits", "board:<boardId>:severity"
-  owner: { kind: "shipped" | "section" | "custom_action" | "recommended_action" | "board" | "interruption"; id: string | null };
+  id: string;                  // "needs_reply", "section:invoices-owed", "action:forward.fits", "board:<viewId>:severity"
+  owner: { kind: "shipped" | "section" | "custom_action" | "recommended_action" | "view" | "interruption"; id: string | null };
   kind: SignalKind;
   question: NoulQuestion | ChoiceQuestion | ScoreQuestion;   // exactly as sent (packages/shared/src/judge.ts)
   version: number;             // the Question version
@@ -66,7 +66,7 @@ interface SignalDef {
 
 interface SignalScope {
   window: SortScope;           // "last 3 months" by default; "arrival only" for the Interruption policy
-  facts?: FactFilter;          // a Board's exact filters: senders, domains, received today, in the Inbox
+  facts?: FactFilter;          // a View's exact filters: senders, domains, received today, in the Inbox
 }
 
 interface SignalAnswer {
@@ -86,7 +86,7 @@ interface SignalAnswer {
 ```
 
 - Two owners asking the same question (the same hash) share one Signal and its answers.
-- A Signal is **active** while it has a consumer and its owner is enabled. Deleting a Board or a Section removes its consumer; the answers stay `signals.keep_inactive_days` so an Undo brings them back without asking again, then a sweep deletes them.
+- A Signal is **active** while it has a consumer and its owner is enabled. Deleting a View or a Section removes its consumer; the answers stay `signals.keep_inactive_days` so an Undo brings them back without asking again, then a sweep deletes them.
 - Per-Thread options (an amount, an address, a link) are built by code for each Thread; the question's wording is versioned, the options are not, and the answer keeps the picked span verbatim.
 
 ## The shipped Signals
@@ -250,9 +250,9 @@ The state (code builds it; nothing else goes in):
 - The request is cut to fit Jev's budgets (64,000 tokens for everything, 32,000 for the state plus the longest question). If the questions would not fit, they go in a second request over the same state, still one Thread; the Signal request never mixes Threads.
 - Typical size: 2,000 to 3,000 tokens of state and 30 to 40 questions, about 5,000 tokens, about $0.0002 per Thread at $0.042 per million.
 
-**Which Signals a Thread gets.** Every shipped Signal on every Thread in scope; a Section's, Custom action's or Board's Signal only on Threads its scope's Facts admit (a Board about today's support mail asks only about today's mail to support); gated Signals only when their gate holds (`money_amount` needs an amount, `rsvp` needs an Invite). Code decides; the model is never asked whether a question applies.
+**Which Signals a Thread gets.** Every shipped Signal on every Thread in scope; a Section's, Custom action's or View's Signal only on Threads its scope's Facts admit (a View about today's support mail asks only about today's mail to support); gated Signals only when their gate holds (`money_amount` needs an amount, `rsvp` needs an Invite). Code decides; the model is never asked whether a question applies.
 
-**Without TypeSafe.** `signals.llm_fallback` decides: `shipped_sections` (default) asks the language model only the Signals the shipped Sections read, as the arrival path does today; `all` asks every Signal through the prompt path, one Thread per prompt, with a line on the Signals page saying it is slow and costs more; `none` asks nothing. Board and action Signals without an answer show as not read yet.
+**Without TypeSafe.** `signals.llm_fallback` decides: `shipped_sections` (default) asks the language model only the Signals the shipped Sections read, as the arrival path does today; `all` asks every Signal through the prompt path, one Thread per prompt, with a line on the Signals page saying it is slow and costs more; `none` asks nothing. View and action Signals without an answer show as not read yet.
 
 ## Where answers live
 
@@ -263,8 +263,8 @@ The state (code builds it; nothing else goes in):
 
 ## Versions and staleness
 
-- Rewording a Signal (a Setting, a Section's statement, a Board edit) makes a new hash and a new Question version. A new `ai.judge.model` counts the same way for every Signal: answers from the old model are stale.
-- **Lists may show a stale answer; nothing that acts reads one.** Sections, Boards and the nav read the newest answer whatever its version (marked stale in the Signals page and in Explain) while `signals.stale_answers` is `show` (default), so a reworded shipped question does not empty the Inbox's Sections for an afternoon. Recommended actions, Workflow conditions, the Interruption policy and anything the Agent acts on read only answers of the current version and the current Thread version.
+- Rewording a Signal (a Setting, a Section's statement, a View edit) makes a new hash and a new Question version. A new `ai.judge.model` counts the same way for every Signal: answers from the old model are stale.
+- **Lists may show a stale answer; nothing that acts reads one.** Sections, Views and the nav read the newest answer whatever its version (marked stale in the Signals page and in Explain) while `signals.stale_answers` is `show` (default), so a reworded shipped question does not empty the Inbox's Sections for an afternoon. Recommended actions, Workflow conditions, the Interruption policy and anything the Agent acts on read only answers of the current version and the current Thread version.
 - The same Thread version is never asked the same Question version twice. A new Message makes a new Thread version and the whole request is asked again on arrival.
 
 ## Backfill
@@ -272,16 +272,16 @@ The state (code builds it; nothing else goes in):
 - When a Signal is created or gets a new version, or the model changes, a `signals-backfill` Job (ADR 0005) walks the Signal's scope newest first and asks each Thread only the Signals it lacks at their current version, one Thread per request. One walk per Workspace, kept in `signal_backfills` (the same cursor shape as `routing_backlogs`: top, cursor, done, total, calls, status, reason), so a restart resumes; a second change while one runs widens the running walk instead of starting another.
 - A running Backlog sort carries missing Signals in the same requests, so the two never ask one Thread twice.
 - Above `signals.backfill.confirm_above` Threads, the Agent's card or the Signals page asks first with the count and an estimate from the recent average tokens per Thread ("About 5,400 threads, about $1.10 at TypeSafe's price. Read them now?"). Smaller backfills just run.
-- Progress shows where the change was made (the Board's test card, the Section's card, the Signals page): "Reading your mail for Support today: 120 of 480".
+- Progress shows where the change was made (the View's test card, the Section's card, the Signals page): "Reading your mail for Support today: 120 of 480".
 
 ## Budget and rate
 
 - **Rate.** Every judge request from one Server passes one limiter: at most `signals.rate.requests_per_minute` (default 600, half of Jev 1.13's published 1,200, because TypeSafe says its limits move while it scales and arrival needs headroom) and `signals.backfill.concurrency` requests in flight for background work. Arrival requests go first. A 429 honours `retry-after`, halves background concurrency for `signals.rate.cooldown_seconds`, then grows it back one at a time. With a Cloud and a Sidecar both running, each limits itself; background walks are one per Workspace, so they do not double.
-- **Money.** `signals.budget.background_monthly_usd` (default 3.00) caps what background walks (Signal backfills, the Backlog sort, Board tests beyond their sample) may spend on `judge.*` in a calendar month, from the Meter's estimates. Reaching it pauses the walks with the reason shown ("Paused: this month's background reading budget of $3.00 is spent."), with Raise and Resume next month. Arrival requests are never capped: they are the product working, about $0.0002 a Thread.
+- **Money.** `signals.budget.background_monthly_usd` (default 3.00) caps what background walks (Signal backfills, the Backlog sort, View tests beyond their sample) may spend on `judge.*` in a calendar month, from the Meter's estimates. Reaching it pauses the walks with the reason shown ("Paused: this month's background reading budget of $3.00 is spent."), with Raise and Resume next month. Arrival requests are never capped: they are the product working, about $0.0002 a Thread.
 
 ## Unsure, flicker and Jev's limits
 
-- **The Unsure band.** A Noul holds at or above its high threshold and fails below its low one; between them it is Unsure. Defaults `signals.unsure.noul_low` 0.3 and `signals.unsure.noul_high` 0.7; a consumer may set its own (a Section's `judge_threshold`, a Lane's condition). A Choice or Score answer under `signals.unsure.confidence_below` (0.5) is Unsure whatever it picked. Unsure is shown as Unsure: a Board's Unsure Lane, no chip, a Section that does not claim the Thread.
+- **The Unsure band.** A Noul holds at or above its high threshold and fails below its low one; between them it is Unsure. Defaults `signals.unsure.noul_low` 0.3 and `signals.unsure.noul_high` 0.7; a consumer may set its own (a Section's `judge_threshold`, a Lane's condition). A Choice or Score answer under `signals.unsure.confidence_below` (0.5) is Unsure whatever it picked. Unsure is shown as Unsure: a View's Unsure Lane, no chip, a Section that does not claim the Thread.
 - **Flicker.** Answers are consistent for the same state, but a new Message changes the state and a probability near a threshold can cross it back and forth. Sections and Lanes use hysteresis: a Thread that is in leaves only when its new answer is past the threshold by `signals.hysteresis` (0.05), and the other way round.
 - **Literal reading.** Every shipped question states the exact condition and its boundary in `criteria`; one judgment per question; a reworded question is tested with the Agent's tune tools on the newest 50 matching Threads before it is saved (`tune.ts`).
 - **Yes-bias and base rates.** The Signals page shows, for each Signal, how often it held over the last `signals.stats.window` (500) Threads. A Signal that holds on most of the mailbox, or on none, is flagged ("Holds on 91% of your mail. Its question may be too broad."). Questions are phrased so yes is the rare, interesting case.
@@ -301,7 +301,7 @@ The state (code builds it; nothing else goes in):
 
 Settings › AI and agent › Signals (and the Agent's `list_judgments`, `explain_thread`, `test_judgment` tools, which already exist in `tune.ts` and gain Signals):
 - One row per active Signal: its question in words, who uses it ("Needs your reply, Recommended action: reply"), its kind, version, how many Threads carry a current answer ("4,210 of 5,400 read"), how often it holds, and the stale count while a backfill runs.
-- A shipped Signal's row edits its Setting; any other row says where it is edited ("Edit on the Board").
+- A shipped Signal's row edits its Setting; any other row says where it is edited ("Edit on the View").
 - Explain on a Thread (reader overflow menu, "Why these?") lists its Signals with probability, confidence, version and when asked.
 
 ## Settings
@@ -328,7 +328,7 @@ Settings › AI and agent › Signals (and the Agent's `list_judgments`, `explai
 | `signals.stale_answers` | `show` | Lists keep old answers until re-read; `hide` treats them as not read |
 | `signals.non_english` | `unsure` | Jev is English-first |
 | `signals.max_active` | 64 | Every active Signal is paid on every arrival |
-| `signals.keep_inactive_days` | 30 | Undo of a deleted Board or Section costs nothing |
+| `signals.keep_inactive_days` | 30 | Undo of a deleted View or Section costs nothing |
 | `signals.llm_fallback` | `shipped_sections` | Without TypeSafe, keep the Sections working and nothing else |
 | `signals.stats.window` | 500 | Threads the page's base rates are measured over |
 | `ai.judge.eval_enabled` | off | The batching harness endpoint (advanced) |
@@ -352,7 +352,7 @@ Settings › AI and agent › Signals (and the Agent's `list_judgments`, `explai
 - The user places a Thread by hand: its answers are unchanged; the placement wins where it applies (routing), and a Section or Lane correction becomes an Example for that Signal.
 - The root key is locked (a Cloud without it): the Signal request cannot read bodies and waits, like Briefs.
 - A Signal's owner is paused by the AI level: its Signal stays active but nothing asks it below `automate`; answers already stored still read.
-- `signals.max_active` reached: creating a Board or Section with a new Signal is refused with the count and the Signals page link, before anything is saved.
+- `signals.max_active` reached: creating a View or Section with a new Signal is refused with the count and the Signals page link, before anything is saved.
 - A candidate list is empty: the gated Choice is not asked, and its consumer (an amount on a chip) is simply absent.
 - The same Signal wording from two owners: one Signal; deleting one owner keeps it for the other.
 
@@ -360,7 +360,7 @@ Settings › AI and agent › Signals (and the Agent's `list_judgments`, `explai
 
 | Code | Jev | Language model |
 |---|---|---|
-| Facts; candidate spans; date assembly and every comparison; scopes, gates, thresholds, hysteresis; the limiter and budget; which questions go in a request | Every Signal: Nouls, Choices over closed sets and over candidates, Scores; the Group Choice | Nothing in the Signal request. It writes Board questions, Templates and Briefs elsewhere, and answers Signals only as the fallback path |
+| Facts; candidate spans; date assembly and every comparison; scopes, gates, thresholds, hysteresis; the limiter and budget; which questions go in a request | Every Signal: Nouls, Choices over closed sets and over candidates, Scores; the Group Choice | Nothing in the Signal request. It writes View questions, Templates and Briefs elsewhere, and answers Signals only as the fallback path |
 
 ## Acceptance criteria
 
