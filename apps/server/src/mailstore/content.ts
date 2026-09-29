@@ -37,6 +37,7 @@ export const CONTENT_KINDS: readonly ContentKind[] = [
   "checkpoint",
   "voice",
   "integration",
+  "template",
 ];
 
 export function isContentKind(value: unknown): value is ContentKind {

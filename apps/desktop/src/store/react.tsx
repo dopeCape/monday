@@ -218,6 +218,11 @@ export function useStore(): Store {
   return s;
 }
 
+/** The open Store, or null outside a StoreProvider (a screen rendered on its own). */
+export function useOptionalStore(): Store | null {
+  return useContext(StoreContext);
+}
+
 /** The content routes for the open Store; null until the platform is known. */
 export function useContent(): ContentTransport | null {
   return useContext(ContentContext);

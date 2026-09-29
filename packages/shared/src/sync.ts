@@ -22,6 +22,7 @@ import type {
 } from "./domain.ts";
 import type { ThreadJudgments } from "./judge.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
+import type { TemplateChange } from "./templates/types.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -230,7 +231,8 @@ export type ChangeKind =
   | "event"
   | "invite"
   | "settings"
-  | "run";
+  | "run"
+  | "template";
 
 /**
  * A Workflow Run moved: it started, reached a Step, paused for an approval or
@@ -447,7 +449,8 @@ export type ChangePayload =
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange }
   | { kind: "settings"; payload: SettingsChange }
-  | { kind: "run"; payload: RunChange };
+  | { kind: "run"; payload: RunChange }
+  | { kind: "template"; payload: TemplateChange };
 
 export type Change = ChangePayload & {
   seq: number;

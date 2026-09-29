@@ -25,6 +25,7 @@ import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
+import { TEMPLATE_SETTINGS } from "./templates.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -9170,6 +9171,9 @@ export const settingsSchema = {
     "Consent page expired",
     "This request expired. Start again from the client.",
   ),
+
+  /* Templates and Placeholders (docs/spec/templates.md; settings/templates.ts) */
+  ...TEMPLATE_SETTINGS,
 } satisfies Record<string, SettingEntry>;
 
 /* ------------------------------ Derived types and helpers ------------------------------ */

@@ -18,6 +18,9 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTemplateCompose } from "../../templates/compose.tsx";
+import { useTemplateLink } from "../../templates/link.ts";
+import { UnfilledPlaceholderError } from "../../templates/placeholders.ts";
 import { AssistMenu, SuggestionPanel, useAssist } from "./Assist.tsx";
 import { Attachments } from "./Attachments.tsx";
 import { useAgentEdits } from "./agent-edits.ts";
@@ -116,8 +119,25 @@ export function ComposeWindow({
     strings: strings.assist,
   });
 
+  const templateLink = useTemplateLink(composer);
+  const templates = useTemplateCompose({
+    composer,
+    link: templateLink,
+    editor: tiptap,
+    threadId: content.threadId,
+    to: content.to,
+    subject: content.subject,
+    setSubject: editor.setSubject,
+    bodyHtml: content.bodyHtml,
+  });
+  const blocked = templates.blocked;
+
   const send = useCallback(
     async (options?: SendOptions) => {
+      if (blocked) {
+        onError(blocked);
+        return;
+      }
       try {
         const result = await editor.send(options ?? { delaySeconds });
         onSent({ ...result, draftId, later: options?.runAt !== undefined });
@@ -125,11 +145,13 @@ export function ComposeWindow({
         onError(
           error instanceof Error && error.message === "no_recipients"
             ? strings.noRecipients
-            : String(error),
+            : error instanceof UnfilledPlaceholderError
+              ? (blocked ?? error.message)
+              : String(error),
         );
       }
     },
-    [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients],
+    [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients, blocked],
   );
 
   const minimize = link
@@ -208,6 +230,7 @@ export function ComposeWindow({
         strings={strings.overlay}
         note={suggestion?.note ? { text: suggestion.note } : undefined}
         canSend={editor.canSend}
+        sendBlocked={blocked}
         leaving={leaving}
         onLeft={onLeft}
         bare={bare}
@@ -328,6 +351,7 @@ export function ComposeWindow({
           onClose={() => setLater(false)}
         />
       ) : null}
+      {templates.overlay}
       <input
         ref={fileInput}
         type="file"

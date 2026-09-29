@@ -10,6 +10,9 @@ import { Btn, Icon, ReplyBox } from "@monday/ui";
 import { MinusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useTemplateCompose } from "../../templates/compose.tsx";
+import { useTemplateLink } from "../../templates/link.ts";
+import { UnfilledPlaceholderError } from "../../templates/placeholders.ts";
 import { AssistMenu, SuggestionPanel, useAssist } from "./Assist.tsx";
 import { Attachments } from "./Attachments.tsx";
 import { useAgentEdits } from "./agent-edits.ts";
@@ -104,7 +107,24 @@ export function ReplyCompose({
     originalAttachments.length > 0 &&
     originalAttachments.every((a) => content.attachments.some((c) => c.blobId === a.blobId));
 
+  const templateLink = useTemplateLink(composer);
+  const templates = useTemplateCompose({
+    composer,
+    link: templateLink,
+    editor: tiptap,
+    threadId: content.threadId,
+    to: content.to,
+    subject: content.subject,
+    setSubject: editor.setSubject,
+    bodyHtml: content.bodyHtml,
+  });
+  const blocked = templates.blocked;
+
   const send = useCallback(async () => {
+    if (blocked) {
+      onError(blocked);
+      return;
+    }
     try {
       const result = await editor.send({ delaySeconds });
       onSent({ ...result, draftId });
@@ -112,10 +132,12 @@ export function ReplyCompose({
       onError(
         error instanceof Error && error.message === "no_recipients"
           ? strings.noRecipients
-          : String(error),
+          : error instanceof UnfilledPlaceholderError
+            ? (blocked ?? error.message)
+            : String(error),
       );
     }
-  }, [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients]);
+  }, [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients, blocked]);
 
   const toggleOriginals = (on: boolean) => {
     const without = content.attachments.filter(
@@ -153,6 +175,7 @@ export function ReplyCompose({
           forward: strings.overlay.forward,
         }}
         onSend={() => void send()}
+        sendBlocked={blocked}
         onDraft={onDraft}
         onAttach={() => fileInput.current?.click()}
         onReplyAll={() => {
@@ -282,6 +305,7 @@ export function ReplyCompose({
           />
         }
       />
+      {templates.overlay}
       <input
         ref={fileInput}
         type="file"

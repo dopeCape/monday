@@ -45,6 +45,7 @@ import {
   KeyboardIcon,
   LayoutIcon,
   MagnifyingGlassIcon,
+  NoteIcon,
   NotePencilIcon,
   PaperPlaneTiltIcon,
   ShareFatIcon,
@@ -114,6 +115,7 @@ const ICONS: Record<string, IconComponent> = {
   workflow: FlowArrowIcon,
   sent: PaperPlaneTiltIcon,
   calendar: CalendarBlankIcon,
+  template: NoteIcon,
 };
 
 const ACTION_ICON: Partial<Record<KeyAction, string>> = {
@@ -150,6 +152,7 @@ const FEATURED_ACTIONS: readonly string[] = [
 ];
 
 const NO_SUGGESTIONS: readonly PaletteSuggestion[] = [];
+const NO_TEMPLATES: readonly { id: string; name: string }[] = [];
 const NO_GROUPS: readonly Group[] = [];
 
 const fill = (template: string, vars: Record<string, string | number>) =>
@@ -334,6 +337,8 @@ export interface PaletteProps {
   onLeft?: (() => void) | undefined;
   /** Which screen's actions to list: the mail screens' (default) or the Calendar's. */
   scope?: Exclude<KeyScope, "global"> | undefined;
+  /** The Template library: each is a row, "Template: Confirm the time", picked as `template:<id>`. */
+  templates?: readonly { id: string; name: string }[] | undefined;
 }
 
 /** "Fri 3 Oct 2026" for the palette's date row. */
@@ -365,6 +370,7 @@ export function Palette({
   leaving,
   onLeft,
   scope = "mail",
+  templates = NO_TEMPLATES,
 }: PaletteProps) {
   const { settings } = useShell();
   const mac = isMac();
@@ -378,11 +384,18 @@ export function Palette({
 
   const agent = settings["ai.level"] !== "off";
   const actions = useMemo(
-    () =>
-      paletteActions(keymap, settings, mac, scope).filter(
+    () => [
+      ...paletteActions(keymap, settings, mac, scope).filter(
         (a) => agent || a.action !== "agent.focus",
       ),
-    [keymap, settings, mac, agent, scope],
+      // "Template: Confirm the time" (docs/spec/templates.md, "The picker").
+      ...(settings["templates.enabled"] ? templates : []).map((tpl) => ({
+        action: `template:${tpl.id}`,
+        label: fill(settings["strings.templates.palette"], { name: tpl.name }),
+        icon: "template",
+      })),
+    ],
+    [keymap, settings, mac, agent, scope, templates],
   );
   // A typed date offers the Calendar on that day ("Jump to date").
   const pinned = useMemo(() => {

@@ -96,6 +96,7 @@ import { groupIconFor, navModel } from "./shell/nav.ts";
 import { useShell } from "./shell/Shell.tsx";
 import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
 import { titleWithWaiting, useWindowBadge, useWindowTitle, windowTitle } from "./shell/title.ts";
+import { TemplatesBridge } from "./templates/Bridge.tsx";
 import { useWorkspace } from "./workspace.tsx";
 
 export interface AppProps {
@@ -1224,6 +1225,7 @@ export function App({
         >
           {parts}
           {reauth}
+          <TemplatesBridge composer={composer} />
           <ComposeLayer
             compose={compose}
             composer={composer}

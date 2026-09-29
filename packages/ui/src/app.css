@@ -11552,3 +11552,182 @@ button.appr-link:focus-visible {
   text-underline-offset: 2px;
   cursor: pointer;
 }
+
+/* ------------------------------ Templates (docs/spec/templates.md) ------------------------------ */
+
+/* an unfilled Placeholder: an inline chip in the editor until it is filled */
+.tiptap .ph-chip {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 1px;
+  border-radius: var(--r-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.92em;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.tiptap .ph-chip[data-optional="true"] {
+  background: transparent;
+  outline: 1px dashed var(--border-strong);
+  color: var(--fg-muted);
+}
+.tiptap .ph-chip.ProseMirror-selectednode {
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+/* a filled Placeholder: plain text with a faint underline until edited or sent */
+.tiptap .ph-filled {
+  text-decoration: underline;
+  text-decoration-color: var(--accent-ring);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+/* why Send is refused */
+.c-status.c-blocked {
+  color: var(--warning);
+}
+/* the picker at the caret */
+.tpl-picker {
+  width: 360px;
+  max-width: calc(100vw - 24px);
+}
+.tpl-picker .pop-list {
+  max-height: min(340px, 50vh);
+  overflow-y: auto;
+}
+.tpl-picker .tpl-item {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  height: auto;
+  min-height: 40px;
+  padding: 6px 10px;
+}
+.tpl-picker .tpl-name {
+  font-size: var(--fs-md);
+}
+.tpl-picker .tpl-fit {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.ph-menu .pop-item .when {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Settings › Templates */
+.tpl-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.tpl-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tpl-bar .sp {
+  flex: 1;
+}
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+}
+.tpl-list.builtin {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.tpl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-radius: var(--r-sm);
+}
+.tpl-row:hover {
+  background: var(--hover);
+}
+.tpl-row[data-hidden] .tpl-row-text {
+  opacity: 0.5;
+}
+.tpl-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.tpl-row-text span {
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tpl-badges,
+.tpl-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.tpl-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.tpl-notice.err {
+  color: var(--danger);
+}
+.tpl-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tpl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-sm);
+}
+.tpl-field.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.tpl-field > span,
+.tpl-field > label {
+  color: var(--fg-muted);
+}
+.tpl-body {
+  min-height: 140px;
+  resize: vertical;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+.tpl-phs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tpl-ph {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 160px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.tpl-ph code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--accent);
+}

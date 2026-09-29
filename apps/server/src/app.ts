@@ -95,6 +95,7 @@ import { peopleRoutes } from "./routes/people.ts";
 import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { storageRoutes } from "./routes/storage.ts";
+import { templateRoutes } from "./routes/templates.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
 import { webhookRoutes } from "./routes/webhooks.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
@@ -547,6 +548,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   );
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
+  app.route("/", templateRoutes(intelligence.templates));
   app.route("/", workflowRoutes(intelligence.workflows));
   // Before the provider OAuth wizard routes, whose /oauth/:provider/* must not catch these.
   app.route(

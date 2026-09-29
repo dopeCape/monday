@@ -70,6 +70,7 @@ import {
 } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { queueTemplate, useTemplateLink } from "../templates/link.ts";
 import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
@@ -1649,13 +1650,22 @@ function InboxBody({
     handlers[action]?.(ctx);
   });
 
+  const templateLink = useTemplateLink(composer);
+
   /** What a palette row does once picked. */
   const runCommand = (command: PaletteCommand) => {
     setPaletteOpen(false);
     switch (command.type) {
       case "action":
         if (isKeyAction(command.action)) pendingAction.current = command.action;
-        else if (command.action === "workflow.from_thread") {
+        else if (command.action.startsWith("template:")) {
+          // A Template from the palette: a reply on the open Thread, else a new Message.
+          const picked = templateLink?.library.find((x) => `template:${x.id}` === command.action);
+          if (!picked) break;
+          queueTemplate(composer, picked.id);
+          if (picked.kind === "reply" && thread) startReply("reply");
+          else compose.openNew();
+        } else if (command.action === "workflow.from_thread") {
           askAgent(t("strings.palette.workflow_from_thread"));
         }
         break;
@@ -2622,6 +2632,7 @@ function InboxBody({
           contacts={contacts}
           sections={sectionOptions}
           describeIntent={describe}
+          templates={templateLink?.library}
         />
       ) : null}
       {viewing ? (

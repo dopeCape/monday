@@ -335,6 +335,8 @@ export interface ReplyBoxProps {
   extra?: ReactNode | undefined;
   /** Rendered after the send button: the saved line. */
   status?: ReactNode | undefined;
+  /** Why Send is refused ("Fill invoice number first"): the button is disabled and the line says so. */
+  sendBlocked?: string | null | undefined;
   strings?: Partial<ReplyBoxStrings> | undefined;
   className?: string | undefined;
 }
@@ -352,6 +354,7 @@ export function ReplyBox({
   editor,
   extra,
   status,
+  sendBlocked,
   strings: stringOverrides,
   className,
 }: ReplyBoxProps) {
@@ -371,9 +374,19 @@ export function ReplyBox({
       )}
       {extra}
       <div className="reply-bottom">
-        <Btn primary onClick={onSend}>
+        <Btn
+          primary
+          onClick={onSend}
+          disabled={Boolean(sendBlocked)}
+          title={sendBlocked || undefined}
+        >
           {strings.send}
         </Btn>
+        {sendBlocked ? (
+          <span className="c-status c-blocked" role="status">
+            {sendBlocked}
+          </span>
+        ) : null}
         {onDraft ? (
           <Btn onClick={onDraft}>
             <Mark small /> {strings.draft}

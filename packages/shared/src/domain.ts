@@ -235,7 +235,9 @@ export type ContentKind =
   /** The Voice profile: a description of how the user writes with excerpts from sent mail. */
   | "voice"
   /** A Workflow integration's token or webhook URL, one sealed row per integration. */
-  | "integration";
+  | "integration"
+  /** A Template's name, fits-when, subject, body and Placeholders (docs/spec/templates.md). */
+  | "template";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read
