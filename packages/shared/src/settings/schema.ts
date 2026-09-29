@@ -4385,6 +4385,10 @@ export const settingsSchema = {
     "Window title while approvals wait",
     "({n}) {title}",
   ),
+  "strings.window.minimize": str("appearance", "Window button: minimize", "Minimize"),
+  "strings.window.maximize": str("appearance", "Window button: maximize", "Maximize"),
+  "strings.window.restore": str("appearance", "Window button: restore", "Restore"),
+  "strings.window.close": str("appearance", "Window button: close", "Close"),
   "strings.nav.approvals": str("appearance", "Nav: approvals", "Approvals"),
   "strings.nav.workflows_running": str("appearance", "Nav: workflows running", "{n} running now"),
   "strings.nav.approvals_waiting": str(

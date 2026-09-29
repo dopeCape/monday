@@ -28,7 +28,7 @@ import {
   splitKey,
   validateSetting,
 } from "@monday/shared";
-import { Btn, cx, type IconComponent, Input, Seg, Switch, Tag } from "@monday/ui";
+import { Btn, cx, type IconComponent, Input, Seg, Select, Switch, Tag } from "@monday/ui";
 import { MonitorIcon, MoonIcon, SunIcon, XIcon } from "@phosphor-icons/react";
 import {
   createContext,
@@ -896,12 +896,15 @@ export function EnumPicker({
   onChange,
   labels,
   icons,
+  label: name,
 }: {
   options: readonly string[];
   value: string;
   onChange: (v: string) => void;
   labels?: ((option: string) => string) | undefined;
   icons?: Record<string, IconComponent> | undefined;
+  /** The accessible name of the dropdown a long list becomes. */
+  label?: string | undefined;
 }) {
   const label = labels ?? optionLabel;
   if (options.length <= 4) {
@@ -914,13 +917,12 @@ export function EnumPicker({
     );
   }
   return (
-    <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
-      {options.map((o) => (
-        <option key={o} value={o}>
-          {label(o)}
-        </option>
-      ))}
-    </select>
+    <Select
+      label={name}
+      value={value}
+      options={options.map((o) => ({ value: o, label: label(o) }))}
+      onChange={onChange}
+    />
   );
 }
 
@@ -939,6 +941,7 @@ function EnumControl({ k, shape }: ControlProps) {
         value={String(value)}
         onChange={(v) => void change(v)}
         icons={enumIcons[k]}
+        label={(settingsSchema[k] as SettingEntry).label}
       />
     </Row>
   );
@@ -1017,21 +1020,23 @@ function ItemEditor({
   value,
   onChange,
   placeholder,
+  label,
 }: {
   shape: ControlShape;
   value: unknown;
   onChange: (v: unknown) => void;
   placeholder?: string | undefined;
+  /** The accessible name of an enum's dropdown; the placeholder otherwise. */
+  label?: string | undefined;
 }) {
   if (shape.kind === "enum") {
     return (
-      <select className="select" value={String(value)} onChange={(e) => onChange(e.target.value)}>
-        {shape.options.map((o) => (
-          <option key={o} value={o}>
-            {optionLabel(o)}
-          </option>
-        ))}
-      </select>
+      <Select
+        label={label ?? placeholder}
+        value={String(value)}
+        options={shape.options.map((o) => ({ value: o, label: optionLabel(o) }))}
+        onChange={onChange}
+      />
     );
   }
   if (shape.kind === "number") {
@@ -1149,6 +1154,7 @@ export function RecordEditor({
             shape={valueShape}
             value={v}
             onChange={(next) => onChange({ ...value, [key]: next })}
+            label={keyLabel ? keyLabel(key) : key}
           />
           <Btn
             sm
@@ -1166,17 +1172,12 @@ export function RecordEditor({
       {free && free.length === 0 ? null : (
         <div className="record-row add">
           {free ? (
-            <select
-              className="select"
-              value={newKey || free[0]}
-              onChange={(e) => setNewKey(e.target.value)}
-            >
-              {free.map((o) => (
-                <option key={o} value={o}>
-                  {keyLabel ? keyLabel(o) : o}
-                </option>
-              ))}
-            </select>
+            <Select
+              label={s["strings.settings.record.key"]}
+              value={newKey || (free[0] ?? "")}
+              options={free.map((o) => ({ value: o, label: keyLabel ? keyLabel(o) : o }))}
+              onChange={setNewKey}
+            />
           ) : (
             <Input
               className="text"

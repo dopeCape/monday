@@ -13,7 +13,16 @@ body {
   height: 100%;
   margin: 0;
 }
+/* The window's title strip (title-bar.tsx) takes this much of the top in the
+   desktop app, where the native decorations are off; nothing elsewhere. */
+:root {
+  --titlebar-h: 0px;
+}
+:root[data-titlebar="custom"] {
+  --titlebar-h: 32px;
+}
 body {
+  padding-top: var(--titlebar-h);
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
@@ -124,9 +133,9 @@ i.ph-bold > svg {
 
 /* =========================== SHELL =========================== */
 .app {
-  height: 100vh;
+  height: calc(100vh - var(--titlebar-h));
   /* biome-ignore lint/suspicious/noDuplicateProperties: dvh with a vh fallback */
-  height: 100dvh;
+  height: calc(100dvh - var(--titlebar-h));
   display: grid;
   grid-template-rows: 100%;
   background: var(--bg);
@@ -3492,24 +3501,84 @@ form.agent-bar {
   font-family: var(--font-mono);
   font-size: 12px;
 }
-select.select {
+/* monday's dropdown (the Select): a field-like button with a caret; its list
+   is a .pop.anchored menu in a portal. The Calendar's .cal-dd restyles it. */
+.dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   height: 30px;
-  padding: 0 28px 0 10px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 9px 0 10px;
   border-radius: var(--r-md);
   border: 1px solid var(--border-strong);
   background: var(--panel);
-  font-size: var(--fs-sm);
   color: var(--fg);
-  appearance: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+.dd:hover {
+  border-color: var(--fg-faint);
+}
+.dd.open,
+.dd:focus-visible {
   outline: 0;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--fg-faint) 50%),
-    linear-gradient(135deg, var(--fg-faint) 50%, transparent 50%);
-  background-position:
-    calc(100% - 14px) 12px,
-    calc(100% - 10px) 12px;
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
+  border-color: var(--fg-faint);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.dd:disabled {
+  opacity: 0.55;
+  background: var(--sunken);
+  cursor: not-allowed;
+}
+.dd.wide {
+  width: 100%;
+}
+.dd > i {
+  color: var(--fg-muted);
+}
+.dd .dd-caret {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: 12px;
+  transition: transform var(--t-fast) var(--ease);
+}
+.dd.open .dd-caret {
+  transform: rotate(180deg);
+}
+.dd-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dd-float {
+  padding: 4px;
+  max-width: 360px;
+}
+.dd-float .pop-item {
+  height: 30px;
+  font-size: var(--fs-sm);
+  gap: 8px;
+}
+.dd-float .pop-item .when {
+  white-space: nowrap;
+}
+.dd-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dd-check {
+  color: var(--accent);
+  font-size: 13px;
 }
 .pinned {
   display: flex;
@@ -3841,7 +3910,7 @@ select.select {
 }
 .mcp-scrim {
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-h) 0 0;
   z-index: 60;
   display: grid;
   place-items: start center;
@@ -5765,6 +5834,7 @@ button.prov {
 .cal-dd:hover,
 .cal-field-btn:hover {
   background: var(--active);
+  border-color: transparent;
 }
 .cal-dd.open,
 .cal-field-btn.open,
@@ -5774,23 +5844,6 @@ button.prov {
   background: var(--panel);
   border-color: var(--border-strong);
   box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.cal-dd > i {
-  color: var(--fg-muted);
-}
-.cal-dd .cal-dd-caret {
-  margin-left: auto;
-  color: var(--fg-faint);
-  font-size: 12px;
-  transition: transform var(--t-fast) var(--ease);
-}
-.cal-dd.open .cal-dd-caret {
-  transform: rotate(180deg);
-}
-.cal-dd-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .cal-time {
   width: 68px;
@@ -5812,17 +5865,6 @@ button.prov {
 }
 .cal-float .pop-item .when {
   white-space: nowrap;
-}
-.cal-dd-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cal-dd-check {
-  color: var(--accent);
-  font-size: 13px;
 }
 .cal-time-list {
   max-height: 240px;
@@ -6015,7 +6057,7 @@ button.prov {
 .cal-editor-scrim,
 .cal-dialog-scrim {
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-h) 0 0;
   z-index: 50;
   display: grid;
   place-items: center;
@@ -6147,7 +6189,7 @@ button.prov {
   background: transparent;
   color: var(--fg-muted);
 }
-.cal-dd-add .cal-dd-caret {
+.cal-dd-add .dd-caret {
   display: none;
 }
 .cal-notes {
@@ -7548,7 +7590,7 @@ button.prov {
   width: auto;
   max-width: none;
   max-height: none;
-  height: calc(100vh - 48px);
+  height: calc(100vh - var(--titlebar-h) - 48px);
 }
 .compose.is-docked,
 .compose.is-bare {
@@ -9235,7 +9277,7 @@ button.prov {
 /* ------------------------------ The sign-in notice: an Account the provider stopped accepting ------------------------------ */
 .reauth-notice {
   position: fixed;
-  top: 12px;
+  top: calc(var(--titlebar-h) + 12px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
@@ -9269,6 +9311,7 @@ button.prov {
 /* ------------------------------ The attachment viewer: a floating window over the reader ------------------------------ */
 .scrim.viewer-scrim {
   position: fixed;
+  top: var(--titlebar-h);
   place-items: center;
   padding: 24px;
   z-index: 70;
@@ -9563,7 +9606,7 @@ button.prov {
   align-content: center;
   justify-items: center;
   gap: 10px;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--titlebar-h));
   padding: 32px;
   background: var(--bg);
   color: var(--fg);
@@ -9645,7 +9688,7 @@ button.prov {
   place-items: center;
   align-content: center;
   gap: 10px;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--titlebar-h));
   padding: 32px;
   color: var(--fg-muted);
   font-size: var(--fs-sm);
@@ -11320,4 +11363,64 @@ button.appr-link:focus-visible {
   filter: grayscale(0.4);
   pointer-events: none;
   user-select: none;
+}
+
+/* ------------------------------ The title strip: the window's own frame (title-bar.tsx) ------------------------------ */
+/* A band as quiet as the page: it moves the window, and the three buttons at
+   its right stay faint until hovered. Above every scrim and sheet, which all
+   start below it. */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  background: var(--bg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.win-ctl {
+  display: flex;
+  align-items: stretch;
+}
+.win-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  color: var(--fg-faint);
+  font-size: 14px;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.win-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.win-btn:active {
+  background: var(--active);
+}
+.win-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.win-btn.close:hover,
+.win-btn.close:focus-visible {
+  background: var(--danger);
+  color: #fff;
+  outline: 0;
+}
+.win-btn.close:active {
+  background: color-mix(in srgb, var(--danger) 82%, #000);
+}
+/* The restore glyph reads smaller than the square; the X a touch larger. */
+.win-btn[data-state="maximized"] {
+  font-size: 13px;
+}
+.win-btn.close {
+  font-size: 15px;
 }

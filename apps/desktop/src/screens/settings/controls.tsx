@@ -26,6 +26,7 @@ import {
   presetForLayout,
   type Role,
   type SectionRuleValue,
+  type SettingEntry,
   type SettingKey,
   type Settings,
   settingsSchema,
@@ -45,6 +46,7 @@ import {
   Kbd,
   palettes,
   Seg,
+  Select,
   Swatch,
   Switch,
   Tag,
@@ -267,24 +269,21 @@ function FontControl({ k }: ControlProps) {
   return (
     <Row k={k} error={error}>
       <span className="font-pick">
-        <select
-          className="select"
+        <Select
+          label={(settingsSchema[k] as SettingEntry).label}
           value={known && !other ? current : "other"}
-          onChange={(e) => {
-            if (e.target.value === "other") setOther(true);
+          options={[
+            ...choices.map((f) => ({ value: f, label: f })),
+            { value: "other", label: s["strings.settings.font.other"] },
+          ]}
+          onChange={(v) => {
+            if (v === "other") setOther(true);
             else {
               setOther(false);
-              void change(e.target.value);
+              void change(v);
             }
           }}
-        >
-          {choices.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-          <option value="other">{s["strings.settings.font.other"]}</option>
-        </select>
+        />
         {other || !known ? (
           <Input
             className="text"
@@ -355,19 +354,18 @@ function ViewsControl({ k }: ControlProps) {
                 {current ? s["strings.settings.views.current"] : s["strings.settings.views.by"]}
               </span>
               <span className="view-actions">
-                <select
-                  className="select"
-                  aria-label={s["strings.settings.views.shortcut"]}
+                <Select
+                  label={s["strings.settings.views.shortcut"]}
                   value={v.shortcut ?? ""}
-                  onChange={(e) => update(v.id, { shortcut: e.target.value || null })}
-                >
-                  <option value="">{s["strings.settings.views.none"]}</option>
-                  {VIEW_SLOTS.map((n) => (
-                    <option key={n} value={`mod+${n}`}>
-                      {chordLabel(`mod+${n}`, mac)}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: s["strings.settings.views.none"] },
+                    ...VIEW_SLOTS.map((n) => ({
+                      value: `mod+${n}`,
+                      label: chordLabel(`mod+${n}`, mac),
+                    })),
+                  ]}
+                  onChange={(next) => update(v.id, { shortcut: next || null })}
+                />
                 <Btn sm onClick={() => setRenaming({ id: v.id, name: v.name })}>
                   {s["strings.settings.views.rename"]}
                 </Btn>
@@ -465,14 +463,15 @@ function GroupPickControl({ k }: ControlProps) {
   if (current && !options.includes(current)) options.push(current);
   return (
     <Row k={k} error={error}>
-      <select className="select" value={current} onChange={(e) => void change(e.target.value)}>
-        <option value="">{shell.settings["strings.settings.groups.none"]}</option>
-        {options.map((id) => (
-          <option key={id} value={id}>
-            {names[id] ?? id}
-          </option>
-        ))}
-      </select>
+      <Select
+        label={(settingsSchema[k] as SettingEntry).label}
+        value={current}
+        options={[
+          { value: "", label: shell.settings["strings.settings.groups.none"] },
+          ...options.map((id) => ({ value: id, label: names[id] ?? id })),
+        ]}
+        onChange={(v) => void change(v)}
+      />
     </Row>
   );
 }
@@ -1360,18 +1359,12 @@ function TaskModelControl({ k }: ControlProps) {
             if (e.key === "Enter") model.flush();
           }}
         />
-        <select
-          className="select"
-          aria-label={s["strings.settings.tasks.effort"]}
+        <Select
+          label={s["strings.settings.tasks.effort"]}
           value={tm.effort}
-          onChange={(e) => void change({ ...tm, effort: e.target.value })}
-        >
-          {EFFORTS.map((e) => (
-            <option key={e} value={e}>
-              {optionLabel(e)}
-            </option>
-          ))}
-        </select>
+          options={EFFORTS.map((e) => ({ value: e, label: optionLabel(e) }))}
+          onChange={(effort) => void change({ ...tm, effort })}
+        />
       </span>
     </Row>
   );

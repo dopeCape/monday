@@ -131,7 +131,7 @@ const WEATHER: McpCatalogEntry = {
         required: false,
         secret: false,
         default: "metric",
-        choices: [],
+        choices: ["metric", "imperial"],
       },
       {
         kind: "env",
@@ -350,6 +350,31 @@ describe("Connect a tool", () => {
       secret: ["WEATHER_KEY"],
     });
     expect(qa(".mcp-tool").length).toBe(2);
+  });
+
+  test("an input with choices is monday's Select, named by its label; Escape in it leaves the dialog open", async () => {
+    const server = fakeServer();
+    let closed = false;
+    await mountDialog(server, { onClose: () => (closed = true) });
+    await type(q<HTMLInputElement>(".mcp-search input"), "weather");
+    await key(q(".mcp-search input"), "Enter");
+    const units = q<HTMLButtonElement>('[data-input="UNITS"] button.dd');
+    expect(units?.id).toBe("mcp-in-UNITS");
+    expect(q('label[for="mcp-in-UNITS"]')).not.toBeNull();
+    expect(units?.textContent).toBe("metric");
+    await click(units);
+    expect(qa("[role='option']").map((o) => o.textContent)).toEqual(["metric", "imperial"]);
+    await key(document.activeElement, "Escape");
+    expect(closed).toBe(false);
+    expect(qa("[role='option']")).toHaveLength(0);
+    await click(units);
+    await click(qa("[role='option']")[1]);
+    expect(units?.textContent).toBe("imperial");
+    await type(q<HTMLInputElement>('[data-input="region"] input'), "eu");
+    await type(q<HTMLInputElement>('[data-input="WEATHER_KEY"] input'), "wk-otter");
+    await clickText("Connect", q(".mcp-form") ?? document);
+    const post = server.requests.find((r) => r.method === "POST" && r.path === "/mcp-servers");
+    expect(post?.body).toMatchObject({ values: { UNITS: "imperial" } });
   });
 
   test("keyboard: typing or / focuses the search, arrows move, Escape closes", async () => {
