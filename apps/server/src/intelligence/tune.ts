@@ -81,6 +81,7 @@ import { judgedPolicy } from "./policy.ts";
 import type { Routing, RoutingOverride, Scored } from "./routing/index.ts";
 import { AiOffError, type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
 import type { Signals } from "./signals/index.ts";
+import { mapPool, valuesOf } from "./signals/pool.ts";
 
 /* ------------------------------ The registry ------------------------------ */
 
@@ -1275,6 +1276,23 @@ export function createTune(options: TuneOptions): TuneSeam {
     costMicros: number;
     rows: Array<ThreadChange & { moved: boolean; flipped: boolean }>;
   }
+  type CollectedRow = Collected["rows"][number];
+
+  /**
+   * Runs one test per Thread, signals.backfill.concurrency Threads in flight
+   * at once, and keeps the rows in the Threads' order.
+   */
+  const perThread = async <T>(
+    c: Collected,
+    items: readonly T[],
+    test: (item: T) => Promise<CollectedRow | null>,
+  ) => {
+    const pace = (await readGlobalSettings(db, ["signals.backfill.concurrency"] as const))[
+      "signals.backfill.concurrency"
+    ];
+    const rows = valuesOf(await mapPool(items, pace, test));
+    for (const row of rows) if (row) c.rows.push(row);
+  };
 
   const summarize = (
     p: ProposalPlan,
@@ -1386,15 +1404,18 @@ export function createTune(options: TuneOptions): TuneSeam {
       : [];
     const byId = new Map(rows.map((r) => [r.id, r]));
     const c: Collected = { considered: 0, skipped: 0, requests: 0, costMicros: 0, rows: [] };
-    for (const t of page.threads) {
+    await perThread(c, page.threads, async (t) => {
       const row = byId.get(t.id);
       if (!row || row.writes.placement?.by === "user") {
         c.skipped += 1;
-        continue;
+        return null;
       }
       c.considered += 1;
-      const before = await routing.classify(t.id);
-      const after = await routing.classify(t.id, { override });
+      // The current wording and the proposed one, asked at the same time.
+      const [before, after] = await Promise.all([
+        routing.classify(t.id),
+        routing.classify(t.id, { override }),
+      ]);
       c.requests += before.calls + after.calls;
       const prob = (s: Scored) =>
         Object.fromEntries(
@@ -1410,7 +1431,7 @@ export function createTune(options: TuneOptions): TuneSeam {
         probabilities: prob(after),
         placement: placementOfScored(after, names, fallback),
       };
-      c.rows.push({
+      return {
         threadId: t.id,
         subject: t.subject,
         from: t.participants[0]?.email ?? null,
@@ -1418,8 +1439,8 @@ export function createTune(options: TuneOptions): TuneSeam {
         after: a,
         moved: b.placement !== a.placement,
         flipped: b.answer !== a.answer,
-      });
-    }
+      };
+    });
     return c;
   };
 
@@ -1458,20 +1479,17 @@ export function createTune(options: TuneOptions): TuneSeam {
       const id = sectionOf(t, { ...facts, judgments: sectionJudgmentsOf(j) }, ctx.rules, ctx.order);
       return sectionName(ctx, id);
     };
-    for (const t of ctx.threads) {
+    await perThread(c, ctx.threads, async (t) => {
       const facts = ctx.facts.get(t.id);
-      if (!facts) continue;
+      if (!facts) return null;
       c.considered += 1;
       const judgmentFacts = await judgments.facts(t.id);
       const state = judgmentState(judgmentFacts, settings.snippetChars);
-      const before = await ask(
-        "judge.section",
-        workspaceId,
-        state,
-        judgmentQuestions(settings.questions),
-        c,
-      );
-      const after = await ask("judge.section", workspaceId, state, judgmentQuestions(proposed), c);
+      // One request per version, both in flight at once.
+      const [before, after] = await Promise.all([
+        ask("judge.section", workspaceId, state, judgmentQuestions(settings.questions), c),
+        ask("judge.section", workspaceId, state, judgmentQuestions(proposed), c),
+      ]);
       const jb = read(before.answers, t.id, settings.questions);
       const ja = read(after.answers, t.id, proposed);
       const vb = round(arrivalValue(jb, target.field));
@@ -1479,7 +1497,7 @@ export function createTune(options: TuneOptions): TuneSeam {
       const b: Outcome = { answer: vb, placement: consequence(t, facts, jb) };
       const a: Outcome = { answer: va, placement: consequence(t, facts, ja) };
       const sideOf = (v: number) => (target.type === "score" ? Math.round(v) : v >= 0.5 ? 1 : 0);
-      c.rows.push({
+      return {
         threadId: t.id,
         subject: t.subject,
         from: facts.lastSender ?? t.participants[0]?.email ?? null,
@@ -1487,8 +1505,8 @@ export function createTune(options: TuneOptions): TuneSeam {
         after: a,
         moved: b.placement !== a.placement,
         flipped: sideOf(vb) !== sideOf(va),
-      });
-    }
+      };
+    });
     return c;
   };
 
@@ -1515,18 +1533,24 @@ export function createTune(options: TuneOptions): TuneSeam {
       const f = ctx.facts.get(t.id);
       return f ? sectionMatches(rule.when, t, f) : false;
     });
-    for (const t of matching.slice(0, sample)) {
+    await perThread(c, matching.slice(0, sample), async (t) => {
       const facts = ctx.facts.get(t.id);
-      if (!facts) continue;
+      if (!facts) return null;
       c.considered += 1;
       const state = await ctx.state(t);
-      const pb = beforeQ
-        ? (await ask("judge.section", workspaceId, state, { s: beforeQ.question }, c)).answers.s
-            .noul
-        : null;
-      const pa = afterQ
-        ? (await ask("judge.section", workspaceId, state, { s: afterQ.question }, c)).answers.s.noul
-        : null;
+      // One request per version, both in flight at once.
+      const [pb, pa] = await Promise.all([
+        beforeQ
+          ? ask("judge.section", workspaceId, state, { s: beforeQ.question }, c).then(
+              (r) => r.answers.s.noul,
+            )
+          : null,
+        afterQ
+          ? ask("judge.section", workspaceId, state, { s: afterQ.question }, c).then(
+              (r) => r.answers.s.noul,
+            )
+          : null,
+      ]);
       const judgedWith = (v: number | null) => {
         const out: Record<string, number> = { ...(facts.judged ?? {}) };
         if (v === null) delete out[rule.id];
@@ -1548,7 +1572,7 @@ export function createTune(options: TuneOptions): TuneSeam {
         answer: pa === null ? null : round(pa),
         placement: sectionName(ctx, sa, nextRules),
       };
-      c.rows.push({
+      return {
         threadId: t.id,
         subject: t.subject,
         from: facts.lastSender ?? null,
@@ -1556,8 +1580,8 @@ export function createTune(options: TuneOptions): TuneSeam {
         after: a,
         moved: b.placement !== a.placement,
         flipped: (pb ?? 0) >= ctx.threshold !== (pa ?? 0) >= thresholdAfter,
-      });
-    }
+      };
+    });
     return c;
   };
 

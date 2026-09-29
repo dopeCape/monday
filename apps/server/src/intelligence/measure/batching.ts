@@ -30,6 +30,7 @@ import {
 } from "../routing/batch.ts";
 import type { GroupText, ThreadFacts } from "../routing/classify.ts";
 import { judgedPlacement, type RouteJudgeSettings } from "../routing/judge.ts";
+import { eachPool } from "../signals/pool.ts";
 
 /** The four arrival Nouls the measurement carries, by their Signal ids. */
 export const EVAL_NOULS = ["needs_reply", "waiting_on_others", "newsletter", "automated"] as const;
@@ -236,17 +237,6 @@ export function evalRequest(
 
 /* ------------------------------ Running the arms ------------------------------ */
 
-async function inPool<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>) {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const item = items[next++] as T;
-      await work(item);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
-}
-
 const outcomeOf = (placement: ReturnType<typeof judgedPlacement>["placement"]) =>
   placement.kind === "route" ? `route:${placement.groupId}` : placement.kind;
 
@@ -293,7 +283,7 @@ export async function runArms(input: EvalInput): Promise<EvalRun[]> {
         answers: new Map(),
       };
       const started = now();
-      await inPool(batches, input.concurrency, async (batch) => {
+      await eachPool(batches, input.concurrency, async (batch) => {
         const req = evalRequest(batch, input.candidates, input.owner, input.settings);
         const asked = await input.ask(req.state, req.questions);
         run.requests += 1;

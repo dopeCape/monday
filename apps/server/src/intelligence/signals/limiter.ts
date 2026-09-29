@@ -3,7 +3,9 @@
 // signals.rate.requests_per_minute requests start in any minute, and at most
 // signals.backfill.concurrency background requests are in flight. Arrival
 // requests go first: a background request waits while an arrival one is
-// queued. A 429 honours retry-after, halves the background concurrency for
+// queued, background leaves signals.rate.arrival_reserve_per_minute of each
+// minute to arrival, and it is spread across the minute (its share over 60
+// in any one second) instead of spending the minute in a burst. A 429 honours retry-after, halves the background concurrency for
 // signals.rate.cooldown_seconds, then grows it back one request at a time.
 // A 503 is never guessed around: the caller's Job keeps its retry.
 
@@ -14,6 +16,8 @@ export interface LimiterSettings {
   /** The most background requests in flight. */
   concurrency: number;
   cooldownSeconds: number;
+  /** Requests a minute background never takes, so new mail is not queued behind a backfill. */
+  arrivalReservePerMinute?: number;
 }
 
 export interface LimiterState {
@@ -101,6 +105,21 @@ export function createJudgeLimiter(options: LimiterOptions): JudgeLimiter {
           // Arrival first; background within its concurrency.
           if (queued.arrival > 0 || inFlight.background >= backgroundLimit) {
             await waitAWhile(50);
+            continue;
+          }
+          // Background within its share of the minute, spread across it.
+          const share = Math.max(
+            1,
+            Math.max(1, s.requestsPerMinute) - Math.max(0, s.arrivalReservePerMinute ?? 0),
+          );
+          if (started.length >= share) {
+            await waitAWhile((started[0] as number) + MINUTE - at);
+            continue;
+          }
+          const perSecond = Math.ceil(share / 60);
+          const first = started.findIndex((t) => t > at - 1000);
+          if (first >= 0 && started.length - first >= perSecond) {
+            await waitAWhile((started[first] as number) + 1000 - at);
             continue;
           }
         }
