@@ -18,7 +18,7 @@ import type {
   McpToolView,
   Settings,
 } from "@monday/shared";
-import { Btn, Icon, Input, Seg, Tag, useEscape, useFocusTrap } from "@monday/ui";
+import { Btn, Icon, Input, Seg, Select, Tag, useEscape, useFocusTrap } from "@monday/ui";
 import {
   ArrowSquareOutIcon,
   CloudIcon,
@@ -786,13 +786,14 @@ function InputField({
         {input.required ? <em>{s["strings.mcp.required"]}</em> : null}
       </label>
       {input.choices.length > 0 ? (
-        <select id={id} className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-          {input.choices.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+        <Select
+          id={id}
+          className="wide"
+          label={input.name}
+          value={value}
+          options={input.choices.map((c) => ({ value: c, label: c }))}
+          onChange={onChange}
+        />
       ) : (
         <Input
           id={id}

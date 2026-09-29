@@ -6,7 +6,7 @@
 // above it when there is not. Arrows or J/K move, Enter picks, Escape and a
 // click outside close, and the focus goes back to the button.
 
-import { cx } from "@monday/ui";
+import { cx, type Placement, placeMenu } from "@monday/ui";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -17,7 +17,6 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { type Placement, placeMenu } from "./placement.ts";
 
 export interface MenuItem {
   key: string;

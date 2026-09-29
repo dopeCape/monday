@@ -2007,3 +2007,42 @@ describe("the Agent's change_setting tool reaches every page", () => {
     expect(text()).toContain("No telemetry, ever.");
   });
 });
+
+describe("Settings: dropdowns are monday's Select", () => {
+  const optionsOpen = () => qa<HTMLButtonElement>(".dd-float [role='option']");
+  const key = (k: string) =>
+    act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }),
+      );
+    });
+
+  test("a long enum (Meeting link) is a Select: typing and Enter pick, the Setting changes", async () => {
+    await mountOpen({ initialSection: "accounts" }, { api: scriptedApi().api });
+    const card = q('[data-setting="calendar.meeting_link"]');
+    const button = card?.querySelector<HTMLButtonElement>("button.dd");
+    expect(button?.getAttribute("aria-label")).toBe("Meeting link");
+    expect(button?.getAttribute("aria-haspopup")).toBe("listbox");
+    await click(button);
+    expect(optionsOpen().map((o) => o.textContent)).toContain("Jitsi");
+    await key("j");
+    await key("Enter");
+    await settle();
+    expect(captured?.settings["calendar.meeting_link"]).toBe("jitsi");
+    expect(optionsOpen()).toHaveLength(0);
+    expect(button?.textContent).toBe("Jitsi");
+  });
+
+  test("the font picker is a Select; Other shows the family field", async () => {
+    await mountOpen({ initialSection: "appearance" }, { api: scriptedApi().api });
+    const card = q('[data-setting="appearance.font"]');
+    const button = card?.querySelector<HTMLButtonElement>("button.dd");
+    expect(button?.textContent).toBe("Geist Variable");
+    await click(button);
+    await click(optionsOpen().find((o) => o.textContent === "Inter"));
+    expect(captured?.settings["appearance.font"]).toBe("Inter");
+    await click(button);
+    await click(optionsOpen().find((o) => o.textContent === "Other"));
+    expect(card?.querySelector("input.text")).not.toBeNull();
+  });
+});

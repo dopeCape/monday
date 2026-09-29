@@ -16,7 +16,7 @@ import {
   TOOL_TIERS,
   tierOf,
 } from "@monday/shared";
-import { Btn, Input, Seg, Switch, Tag } from "@monday/ui";
+import { Btn, Input, Seg, Select, Switch, Tag } from "@monday/ui";
 import { ArrowDownIcon, ArrowUpIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { fill } from "../inbox/triage.ts";
@@ -443,38 +443,32 @@ export function ActionsBlock({
             />
           </div>
           {draft.onKind === "group" ? (
-            <label>
+            <div className="rule-edit-row">
               <span>{s["strings.actions.on_group"]}</span>
-              <select
-                className="select"
+              <Select
+                label={s["strings.actions.on_group"]}
                 value={draft.onValue}
-                onChange={(e) => setDraft({ ...draft, onValue: e.currentTarget.value })}
-              >
-                <option value="">{s["strings.settings.groups.none"]}</option>
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={[
+                  { value: "", label: s["strings.settings.groups.none"] },
+                  ...groups.map((g) => ({ value: g.id, label: g.name })),
+                ]}
+                onChange={(onValue) => setDraft({ ...draft, onValue })}
+              />
+            </div>
           ) : null}
           {draft.onKind === "section" ? (
-            <label>
+            <div className="rule-edit-row">
               <span>{s["strings.actions.on_section"]}</span>
-              <select
-                className="select"
+              <Select
+                label={s["strings.actions.on_section"]}
                 value={draft.onValue}
-                onChange={(e) => setDraft({ ...draft, onValue: e.currentTarget.value })}
-              >
-                <option value="" />
-                {sections.map((sec) => (
-                  <option key={sec.id} value={sec.id}>
-                    {sec.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={[
+                  { value: "", label: "" },
+                  ...sections.map((sec) => ({ value: sec.id, label: sec.name })),
+                ]}
+                onChange={(onValue) => setDraft({ ...draft, onValue })}
+              />
+            </div>
           ) : null}
           {draft.onKind === "judge" ? (
             <label>
@@ -486,20 +480,15 @@ export function ActionsBlock({
               />
             </label>
           ) : null}
-          <label>
+          <div className="rule-edit-row">
             <span>{s["strings.actions.tool"]}</span>
-            <select
-              className="select"
+            <Select
+              label={s["strings.actions.tool"]}
               value={draft.tool}
-              onChange={(e) => setDraft({ ...draft, tool: e.currentTarget.value })}
-            >
-              {CUSTOM_ACTION_TOOLS.map((tool) => (
-                <option key={tool} value={tool}>
-                  {tool}
-                </option>
-              ))}
-            </select>
-          </label>
+              options={CUSTOM_ACTION_TOOLS.map((tool) => ({ value: tool, label: tool }))}
+              onChange={(tool) => setDraft({ ...draft, tool })}
+            />
+          </div>
           <label>
             <span>{s["strings.actions.args"]}</span>
             <textarea

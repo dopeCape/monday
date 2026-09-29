@@ -10,7 +10,7 @@
 // settings shared by every Account live in the groups below this one.
 
 import { describeSetting, settingsSchema } from "@monday/shared";
-import { Btn, formatWhen, Tag } from "@monday/ui";
+import { Btn, formatWhen, Select, Tag } from "@monday/ui";
 import {
   EnvelopeSimpleIcon,
   GoogleLogoIcon,
@@ -112,24 +112,20 @@ function AccountMeetingLink({ address }: { address: string }) {
       }
     >
       <Pinned k="calendar.meeting_links">
-        <select
-          className="select"
-          aria-label={entry.label}
+        <Select
+          label={entry.label}
           value={map[address] ?? ""}
-          onChange={(e) => {
+          options={[
+            { value: "", label: `${shared} (${optionLabel(s["calendar.meeting_link"])})` },
+            ...options.map((o) => ({ value: o, label: optionLabel(o) })),
+          ]}
+          onChange={(v) => {
             const next = { ...map };
-            if (e.target.value) next[address] = e.target.value;
+            if (v) next[address] = v;
             else delete next[address];
             void change(next);
           }}
-        >
-          <option value="">{`${shared} (${optionLabel(s["calendar.meeting_link"])})`}</option>
-          {options.map((o) => (
-            <option key={o} value={o}>
-              {optionLabel(o)}
-            </option>
-          ))}
-        </select>
+        />
       </Pinned>
     </Card>
   );

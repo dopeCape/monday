@@ -6,10 +6,18 @@
 // below its field or above when there is no room. Arrows move, Enter
 // picks, Escape closes the panel without closing what holds it.
 
-import { cx, Icon, MONTH_SHORT, WEEKDAY_SHORT } from "@monday/ui";
-import { CaretDownIcon, CaretLeftIcon, CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
 import {
-  type CSSProperties,
+  cx,
+  Icon,
+  MONTH_SHORT,
+  type Placement,
+  placeMenu,
+  Select,
+  type SelectOption,
+  WEEKDAY_SHORT,
+} from "@monday/ui";
+import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import {
   type KeyboardEvent,
   type ReactNode,
   useEffect,
@@ -20,7 +28,6 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { type Placement, placeMenu } from "../compose/placement.ts";
 import { addDays, addMonths, dayKey, fromDayKey, sameDay, startOfMonth } from "./dates.ts";
 import { monthWeeks } from "./layout.ts";
 
@@ -99,16 +106,7 @@ function Floating({ anchor, onClose, label, className, children, onKeyDown }: Fl
 
 /* ------------------------------ Dropdown ------------------------------ */
 
-export interface DropdownOption<V extends string> {
-  value: V;
-  label: string;
-  /** Muted words on the right. */
-  detail?: string | undefined;
-  /** A colour dot before the label (a calendar). */
-  color?: string | undefined;
-  /** A heading the option sits under; options of one group stay together. */
-  group?: string | undefined;
-}
+export type DropdownOption<V extends string> = SelectOption<V>;
 
 export interface DropdownProps<V extends string> {
   value: V;
@@ -121,126 +119,9 @@ export interface DropdownProps<V extends string> {
   disabled?: boolean | undefined;
 }
 
-export function Dropdown<V extends string>({
-  value,
-  options,
-  onChange,
-  label,
-  className,
-  leading,
-  disabled,
-}: DropdownProps<V>) {
-  const button = useRef<HTMLButtonElement | null>(null);
-  const [open, setOpen] = useState(false);
-  const current = options.find((o) => o.value === value);
-  const [active, setActive] = useState(0);
-  const list = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const i = Math.max(
-      0,
-      options.findIndex((o) => o.value === value),
-    );
-    setActive(i);
-    requestAnimationFrame(() =>
-      list.current?.querySelectorAll<HTMLElement>(".pop-item")[i]?.focus(),
-    );
-  }, [open, options, value]);
-  const pick = (v: V) => {
-    setOpen(false);
-    onChange(v);
-    button.current?.focus();
-  };
-  const keys = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      e.stopPropagation();
-      const n = Math.min(
-        options.length - 1,
-        Math.max(0, active + (e.key === "ArrowDown" ? 1 : -1)),
-      );
-      setActive(n);
-      list.current?.querySelectorAll<HTMLElement>(".pop-item")[n]?.focus();
-    } else if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      e.stopPropagation();
-      const o = options[active];
-      if (o) pick(o.value);
-    } else if (e.key.length === 1 && /\S/.test(e.key)) {
-      // A letter jumps to the next option starting with it.
-      const k = e.key.toLowerCase();
-      const n = options.findIndex((o, i) => i > active && o.label.toLowerCase().startsWith(k));
-      const m = n >= 0 ? n : options.findIndex((o) => o.label.toLowerCase().startsWith(k));
-      if (m >= 0) {
-        setActive(m);
-        list.current?.querySelectorAll<HTMLElement>(".pop-item")[m]?.focus();
-      }
-      e.stopPropagation();
-    }
-  };
-  let lastGroup: string | undefined;
-  return (
-    <>
-      <button
-        ref={button}
-        type="button"
-        className={cx("cal-dd", open && "open", className)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown" && !open) {
-            e.preventDefault();
-            setOpen(true);
-          }
-        }}
-      >
-        {leading}
-        {current?.color ? (
-          <span className="cal-dot" style={{ "--ev": current.color } as CSSProperties} />
-        ) : null}
-        <span className="cal-dd-value">{current?.label ?? ""}</span>
-        <Icon icon={CaretDownIcon} className="cal-dd-caret" />
-      </button>
-      {open ? (
-        <Floating
-          anchor={button.current}
-          onClose={() => setOpen(false)}
-          label={label}
-          onKeyDown={keys}
-        >
-          <div ref={list} className="cal-dd-list" role="listbox" aria-label={label}>
-            {options.map((o, i) => {
-              const head = o.group && o.group !== lastGroup ? o.group : null;
-              lastGroup = o.group;
-              return (
-                <div key={o.value}>
-                  {head ? <div className="pop-h">{head}</div> : null}
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={o.value === value}
-                    className={cx("pop-item", i === active && "on")}
-                    onMouseEnter={() => setActive(i)}
-                    onClick={() => pick(o.value)}
-                  >
-                    {o.color ? (
-                      <span className="cal-dot" style={{ "--ev": o.color } as CSSProperties} />
-                    ) : null}
-                    <span className="cal-dd-label">{o.label}</span>
-                    {o.detail ? <span className="when">{o.detail}</span> : null}
-                    {o.value === value ? <Icon icon={CheckIcon} className="cal-dd-check" /> : null}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </Floating>
-      ) : null}
-    </>
-  );
+/** monday's Select, in the Calendar's quieter field style. */
+export function Dropdown<V extends string>({ className, ...props }: DropdownProps<V>) {
+  return <Select {...props} className={cx("cal-dd", className)} panelClassName="cal-float" />;
 }
 
 /* ------------------------------ Date ------------------------------ */

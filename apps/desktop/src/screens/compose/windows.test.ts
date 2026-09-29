@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DraftContent } from "@monday/shared";
-import { placeMenu } from "./placement.ts";
+import { placeMenu } from "@monday/ui";
 import {
   type ComposeWindow,
   cycleOrder,

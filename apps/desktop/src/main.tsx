@@ -22,6 +22,7 @@ import { createPrewarm } from "./search/prewarm.ts";
 import { ActivePaneContext } from "./shell/active.ts";
 import { ErrorBoundary } from "./shell/ErrorBoundary.tsx";
 import { Shell, useShell } from "./shell/Shell.tsx";
+import { WindowFrame } from "./shell/WindowFrame.tsx";
 import {
   StorePoolProvider,
   StoreProvider,
@@ -515,6 +516,7 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <ErrorBoundary area="app">
       <Shell>
+        <WindowFrame />
         <StorePoolProvider>
           <WorkspaceGate />
         </StorePoolProvider>

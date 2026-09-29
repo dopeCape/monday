@@ -32,6 +32,26 @@ export interface PowerInfo {
   level: number | null;
 }
 
+/**
+ * The window's own frame, drawn by monday since the native decorations are
+ * off: the title strip's buttons and its drag. Present only in the desktop
+ * app; the browser dev server and tests have none, so no buttons show.
+ */
+export interface WindowFrame {
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  /**
+   * Closes the window the way the window manager would: Rust sees the window
+   * destroyed and stops the Sidecar and its Postgres (src-tauri/src/lib.rs).
+   */
+  close(): Promise<void>;
+  /** Moves the window with the pointer, from a press on the title strip. */
+  startDragging(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  /** Called on every resize (a maximize, a restore, a snap); returns the unsubscribe. */
+  onResized(cb: () => void): () => void;
+}
+
 export interface Platform {
   readConfig(): Promise<ConfigFile>;
   /** Only after the user explicitly asked (ADR 0001). */
@@ -79,6 +99,8 @@ export interface Platform {
    * free path; a path override from Settings goes in front of PATH.
    */
   spawn: ProcessRunner;
+  /** The window's frame buttons and drag; absent outside the desktop app. */
+  frame?: WindowFrame | undefined;
   isTauri: boolean;
 }
 
@@ -90,6 +112,7 @@ async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
   const { openUrl } = await import("@tauri-apps/plugin-opener");
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { Command } = await import("@tauri-apps/plugin-shell");
   const spawn: ProcessRunner = async (command, options: SpawnOptions): Promise<Process> => {
     const env: Record<string, string> = { ...(options.env ?? {}) };
@@ -142,8 +165,31 @@ async function tauriPlatform(): Promise<Platform> {
       un?.();
     };
   };
+  const win = getCurrentWindow();
+  const frame: WindowFrame = {
+    minimize: () => win.minimize(),
+    toggleMaximize: () => win.toggleMaximize(),
+    close: () => win.close(),
+    startDragging: () => win.startDragging(),
+    isMaximized: () => win.isMaximized(),
+    onResized: (cb) => {
+      let un: (() => void) | undefined;
+      let cancelled = false;
+      void win
+        .onResized(() => cb())
+        .then((u) => {
+          if (cancelled) u();
+          else un = u;
+        });
+      return () => {
+        cancelled = true;
+        un?.();
+      };
+    },
+  };
   return {
     isTauri: true,
+    frame,
     readConfig: () => invoke<ConfigFile>("read_config"),
     writeConfig: (text) => invoke("write_config", { text }),
     onConfigChanged: (cb) => sub<ConfigFile>("config:changed", cb),
@@ -178,6 +224,8 @@ export interface FakePlatformOptions {
   notified?: (title: string, body: string) => void;
   /** Palette files by path, as `appearance.palette` would name them. */
   files?: Record<string, string>;
+  /** A window frame for tests of the title strip; none by default, as in a browser. */
+  frame?: WindowFrame;
 }
 
 /** The recovery file the Rust side writes, over a base64 key (src-tauri/src/rootkey.rs). */
@@ -269,6 +317,7 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
   });
   return {
     isTauri: false,
+    frame: options.frame,
     readConfig: async () => file(),
     writeConfig: async (t) => {
       text = t;
