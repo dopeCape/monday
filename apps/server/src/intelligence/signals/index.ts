@@ -19,6 +19,7 @@
 
 import type {
   AiLevel,
+  FactsChange,
   Id,
   JsonValue,
   JudgeAnswer,
@@ -35,6 +36,8 @@ import type {
   SignalReading,
   SignalRules,
   SignalsChange,
+  SignalsExplain,
+  SignalsPage,
   ThreadJudgments,
 } from "@monday/shared";
 import {
@@ -51,10 +54,12 @@ import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import {
   accounts,
+  invites,
   messages,
   signalAnswers,
   signalDefs,
   signalVersions,
+  threadFacts,
   threads,
   workspaces,
 } from "../../db/schema.ts";
@@ -63,12 +68,26 @@ import { readGlobalSettings } from "../../settings/read.ts";
 import { sectionQuestion } from "../organize.ts";
 import { estimateTokens } from "../routing/batch.ts";
 import { extractJson } from "../routing/classify.ts";
+import { countInScope, resolveScope } from "../routing/scope-query.ts";
 import { type HostedRuntime, NoJudgeError, NoProviderKeyError } from "../runtime/index.ts";
 import {
+  assembleDeadline,
+  type ClearFacts,
+  computeFacts,
+  type DeadlineParts,
+  type FactMessage,
+  mayStateDeadline,
+  parseAmount,
+  type SealedFacts,
+  type SenderStats,
+} from "./facts.ts";
+import {
+  amountOptions,
   SHIPPED_SETTING_KEYS,
   type ShippedSettings,
   shippedSignals,
   type WantedSignal,
+  yearOptions,
 } from "./shipped.ts";
 import { type StateMessage, signalState } from "./state.ts";
 
@@ -78,6 +97,11 @@ export { dateInWords, ownWords, signalState } from "./state.ts";
 const SETTING_KEYS = [
   ...SHIPPED_SETTING_KEYS,
   "signals.enabled",
+  "signals.candidates.max",
+  "signals.stats.window",
+  "signals.stats.broad_above",
+  "signals.stats.min_answers",
+  "signals.deadline.min_confidence",
   "signals.state.newest_chars",
   "signals.state.thread_chars",
   "signals.state.earlier_chars",
@@ -199,6 +223,10 @@ export interface Signals {
     signalIds: readonly string[],
     since: Date,
   ): Promise<Map<Id, Record<string, StoredAnswer>>>;
+  /** The Signals page (slice 32): every active Signal with its reach and base rate. */
+  page(workspaceId: Id): Promise<SignalsPage>;
+  /** Explain on a Thread: its Signals with their numbers, versions and when asked, and its Facts. */
+  explain(threadId: Id): Promise<SignalsExplain | null>;
   /** The Signals the arrival request would ask that this Thread version lacks. */
   missing(workspaceId: Id, threadId: Id): Promise<string[]>;
   version(threadId: Id): Promise<ThreadVersion>;
@@ -211,6 +239,39 @@ export interface Signals {
   setDefsListener(
     listener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null,
   ): void;
+}
+
+/** Which Setting words each shipped Signal. */
+function shippedSettingKeys(): Record<string, string> {
+  const out: Record<string, string> = {
+    needs_reply: "judgments.questions.needs_reply",
+    waiting_on_others: "judgments.questions.waiting_on_others",
+    newsletter: "judgments.questions.newsletter",
+    automated: "judgments.questions.automated",
+    brief_worth: "judgments.questions.brief_worth",
+    urgency: "judgments.questions.urgency",
+    chip_reply: "judgments.questions.chip.reply",
+    chip_call: "judgments.questions.chip.call",
+    chip_pay_or_file: "judgments.questions.chip.pay_or_file",
+    chip_snooze: "judgments.questions.chip.snooze",
+  };
+  for (const id of [
+    "waiting_on_me",
+    "personal",
+    "has_deadline",
+    "money_involved",
+    "money_amount",
+    "money_direction",
+    "frustrated",
+    "owner_promised",
+    "they_promised",
+  ]) {
+    out[id] = `signals.questions.${id}`;
+  }
+  for (const part of ["form", "month", "day", "year", "anchor", "weekday", "week", "hour"]) {
+    out[`deadline_${part}`] = "signals.questions.deadline_parts";
+  }
+  return out;
 }
 
 export interface SignalsOptions {
@@ -754,22 +815,39 @@ export function createSignals(options: SignalsOptions): Signals {
     workspaceId: Id,
     threadId: Id,
     version: ThreadVersion,
-    items: Array<{ def: Pick<StoredDef, "id" | "version" | "question">; answer: JudgeAnswer }>,
+    items: Array<{
+      def: Pick<StoredDef, "id" | "version" | "question">;
+      answer: JudgeAnswer;
+      /** Who answered when not the request's model: code, for a Signal its gate kept out. */
+      model?: string;
+      /** The option stored in place of the picked one (a span stays sealed with the Facts). */
+      choice?: string;
+    }>,
     model: string,
+    lowTrust: LowTrust | null = null,
   ) => {
     if (items.length === 0) return;
     const judgedAt = now();
     const written: AnswerRow[] = [];
-    for (const { def, answer } of items) {
+    for (const item of items) {
+      const { def, answer } = item;
+      const shaped = answerValues(def.question, answer);
       const values = {
         workspaceId,
         version: def.version,
-        model,
+        model: item.model ?? model,
         judgedAt,
         messageCount: version.messageCount,
         latestMessageId: version.latestMessageId,
-        ...answerValues(def.question, answer),
-        lowTrust: null,
+        ...shaped,
+        ...(item.choice !== undefined
+          ? {
+              choice: item.choice,
+              // A span's probabilities would name it: only the picked-or-not share is kept.
+              probabilities: null,
+            }
+          : {}),
+        lowTrust,
         legacyKey: null,
       };
       const [row] = await db
@@ -790,16 +868,52 @@ export function createSignals(options: SignalsOptions): Signals {
     });
   };
 
-  /** Everything the state needs about one Thread; decrypts, so it needs the root key. */
-  const stateOf = async (workspaceId: Id, threadId: Id, s: Settings): Promise<JsonValue> => {
+  /** What the newest sender's past with the owner looks like, counted by code (Facts). */
+  const senderStats = async (
+    workspaceId: Id,
+    sender: string,
+    owner: string,
+  ): Promise<SenderStats> => {
+    const rows = await db.execute<{
+      threads: number;
+      replied: number;
+      archived_unread: number;
+    }>(sql`
+      select count(*)::int as threads,
+        count(*) filter (where exists (
+          select 1 from messages o where o.thread_id = t.id and lower(o."from"->>'email') = ${owner}
+        ))::int as replied,
+        count(*) filter (where t.archived and t.unread)::int as archived_unread
+      from threads t
+      where t.workspace_id = ${workspaceId} and t.deleted = false and exists (
+        select 1 from messages m where m.thread_id = t.id and lower(m."from"->>'email') = ${sender}
+      )`);
+    const r = (
+      rows as unknown as Array<{ threads: number; replied: number; archived_unread: number }>
+    )[0];
+    return {
+      threads: Number(r?.threads ?? 0),
+      ownerReplied: Number(r?.replied ?? 0),
+      archivedUnread: Number(r?.archived_unread ?? 0),
+    };
+  };
+
+  /**
+   * Everything a Signal request reads about one Thread: the state, and the
+   * Facts code computes for it. Decrypts, so it needs the root key.
+   */
+  const loadThread = async (workspaceId: Id, threadId: Id, s: Settings) => {
     const [owner] = await db
       .select({ address: accounts.address, name: accounts.displayName })
       .from(workspaces)
       .innerJoin(accounts, eq(accounts.id, workspaces.accountId))
       .where(eq(workspaces.id, workspaceId));
+    const ownerAddress = (owner?.address ?? "").toLowerCase();
+    const row = await db.query.threads.findFirst({ where: eq(threads.id, threadId) });
     const subject = await mailstore.readThreadSubject(threadId);
     const headers = await mailstore.listMessages(threadId);
     const texts: StateMessage[] = [];
+    const factMessages: FactMessage[] = [];
     // Only the newest few Messages can fit; older ones are not decrypted.
     const room = Math.max(
       1,
@@ -808,12 +922,16 @@ export function createSignals(options: SignalsOptions): Signals {
     );
     for (const h of headers.slice(-room)) {
       const body = await mailstore.readMessageBody(h.id);
-      texts.push({
+      const text = body.text || body.snippet;
+      texts.push({ from: h.from, to: h.to, cc: h.cc, date: h.date, text });
+      factMessages.push({
         from: h.from,
         to: h.to,
         cc: h.cc,
         date: h.date,
-        text: body.text || body.snippet,
+        headers: h.headers,
+        text,
+        hasImages: /<img\b/i.test(body.html ?? ""),
       });
     }
     const newest = headers[headers.length - 1];
@@ -822,18 +940,46 @@ export function createSignals(options: SignalsOptions): Signals {
       const v = newest?.headers[k];
       if (v) listHeaders[k] = v;
     }
-    const ownerPerson: Person = {
-      name: owner?.name ?? "",
-      email: (owner?.address ?? "").toLowerCase(),
-    };
-    return signalState(
+    const sender = newest ? newest.from.email.toLowerCase() : "";
+    const stats =
+      sender && sender !== ownerAddress
+        ? await senderStats(workspaceId, sender, ownerAddress)
+        : null;
+    const [invite] = await db
+      .select({ id: invites.id })
+      .from(invites)
+      .where(eq(invites.threadId, threadId))
+      .limit(1);
+    const attachmentNames = headers.flatMap((h) => h.attachments.map((a) => a.name));
+    const facts = computeFacts({
+      owner: ownerAddress,
+      messages: factMessages,
+      attachmentNames,
+      participants: row?.participants ?? [],
+      sender: stats,
+      hasInvite: invite !== undefined,
+      candidatesMax: s["signals.candidates.max"],
+    });
+    // The first Message's date, not only the newest few's.
+    facts.clear.received_at = headers[0]?.date ?? facts.clear.received_at;
+    facts.clear.message_count = headers.length;
+    const ownerPerson: Person = { name: owner?.name ?? "", email: ownerAddress };
+    const state = signalState(
       {
         owner: ownerPerson,
         subject,
         messages: texts,
-        attachmentNames: headers.flatMap((h) => h.attachments.map((a) => a.name)).slice(0, 10),
+        attachmentNames: attachmentNames.slice(0, 10),
         listHeaders,
         timeZone: s["calendar.time_zone"],
+        senderHistory: stats
+          ? {
+              threadsFromSender: stats.threads,
+              ownerReplied: stats.ownerReplied,
+              ownerArchivedUnread: stats.archivedUnread,
+              ownerForwardedTo: [],
+            }
+          : null,
       },
       {
         newestChars: s["signals.state.newest_chars"],
@@ -841,6 +987,120 @@ export function createSignals(options: SignalsOptions): Signals {
         earlierChars: s["signals.state.earlier_chars"],
       },
     );
+    const lowTrust: LowTrust | null = facts.clear.image_only
+      ? "image_only"
+      : facts.clear.language === "other"
+        ? "not_english"
+        : null;
+    return {
+      state,
+      facts,
+      lowTrust,
+      text: factMessages.map((m) => m.text).join("\n\n"),
+      written: newest?.date ?? now().toISOString(),
+    };
+  };
+
+  /** Whether code lets a gated Signal be asked of this Thread. */
+  const gateHolds = (d: StoredDef, loaded: Awaited<ReturnType<typeof loadThread>>) => {
+    if (d.gate === "amounts") return loaded.facts.sealed.amounts.length > 0;
+    if (d.gate === "deadline") return mayStateDeadline(loaded.text);
+    if (d.gate === "invite") return loaded.facts.clear.has_invite;
+    return true;
+  };
+
+  /** A Signal's question for one Thread: per-Thread options built by code. */
+  const questionFor = (
+    d: StoredDef,
+    loaded: Awaited<ReturnType<typeof loadThread>>,
+  ): JudgeQuestion => {
+    if (d.optionsFrom === "amounts") return amountOptions(d.question, loaded.facts.sealed.amounts);
+    if (d.id === "deadline_year") return yearOptions(d.question, new Date(loaded.written));
+    return d.question;
+  };
+
+  /** The Facts stored for the Thread version, what this request learnt folded in; tells the feed. */
+  const storeFacts = async (
+    workspaceId: Id,
+    threadId: Id,
+    version: ThreadVersion,
+    loaded: Awaited<ReturnType<typeof loadThread>>,
+    answers: Record<string, JudgeAnswer | undefined>,
+    s: Settings,
+  ) => {
+    const { clear, sealed } = loaded.facts;
+    const previous = await db.query.threadFacts.findFirst({
+      where: eq(threadFacts.threadId, threadId),
+    });
+    const before = (previous?.facts ?? {}) as Partial<ClearFacts>;
+    const choice = (id: string) => {
+      const a = answers[id];
+      return a?.type === "choice" ? { choice: a.choice, confidence: a.confidence } : undefined;
+    };
+    if (answers.deadline_form) {
+      const parts: DeadlineParts = {};
+      for (const k of [
+        "form",
+        "month",
+        "day",
+        "year",
+        "anchor",
+        "weekday",
+        "week",
+        "hour",
+      ] as const) {
+        const p = choice(`deadline_${k}`);
+        if (p) parts[k] = p;
+      }
+      const date = assembleDeadline(
+        parts,
+        loaded.written,
+        s["calendar.time_zone"],
+        s["signals.deadline.min_confidence"],
+      );
+      clear.deadline_at = date.at;
+      clear.deadline_unclear = date.unclear;
+    } else {
+      clear.deadline_at = before.deadline_at ?? null;
+      clear.deadline_unclear = before.deadline_unclear ?? false;
+    }
+    const picked = answers.money_amount;
+    if (picked?.type === "choice" && sealed.amounts.includes(picked.choice)) {
+      const parsed = parseAmount(picked.choice);
+      sealed.amount = parsed ? { span: picked.choice, ...parsed } : null;
+    } else if (!picked && previous?.contentEnc && previous.contentKey) {
+      try {
+        const old = JSON.parse(
+          await mailstore.readText({
+            workspaceId,
+            kind: "facts",
+            key: previous.contentKey,
+            chunks: [previous.contentEnc],
+            size: -1,
+          }),
+        ) as SealedFacts;
+        sealed.amount = old.amount ?? null;
+      } catch {
+        sealed.amount = null;
+      }
+    }
+    const stored = await mailstore.storeContent(workspaceId, "facts", JSON.stringify(sealed));
+    const values = {
+      workspaceId,
+      messageCount: version.messageCount,
+      latestMessageId: version.latestMessageId,
+      facts: clear as unknown as Record<string, unknown>,
+      deadlineAt: clear.deadline_at ? new Date(clear.deadline_at) : null,
+      contentEnc: stored.chunks[0] ?? null,
+      contentKey: stored.key,
+      computedAt: now(),
+    };
+    await db
+      .insert(threadFacts)
+      .values({ threadId, ...values })
+      .onConflictDoUpdate({ target: threadFacts.threadId, set: values });
+    const payload: FactsChange = { threadId, facts: clear as unknown as Record<string, unknown> };
+    await mailstore.recordChange(db, { workspaceId, kind: "facts", entityId: threadId, payload });
   };
 
   const currentFor = (a: AnswerRow | undefined, def: StoredDef, version: ThreadVersion) =>
@@ -897,10 +1157,30 @@ export function createSignals(options: SignalsOptions): Signals {
       const extra = opts.extra ?? {};
       const result: AskResult = { asked: [], extra: {}, calls: 0, by: null };
       if (need.length === 0 && Object.keys(extra).length === 0) return result;
-      const state = await stateOf(workspaceId, threadId, s);
+      const loaded = await loadThread(workspaceId, threadId, s);
+      const state = loaded.state;
+      // Code decides what applies: a gated Signal whose gate fails is answered by code as not stated.
+      const gatedOut = need.filter((d) => !gateHolds(d, loaded));
+      const asked = need.filter((d) => gateHolds(d, loaded));
       const questions: Record<string, JudgeQuestion> = {};
-      for (const d of need) questions[d.id] = d.question;
+      for (const d of asked) questions[d.id] = questionFor(d, loaded);
       for (const [id, q] of Object.entries(extra)) questions[id] = q;
+      const notStated = gatedOut.map((d) => ({
+        def: d,
+        model: "code",
+        answer: {
+          type: "choice" as const,
+          choice: "none",
+          probabilities: { none: 1 },
+          confidence: 1,
+        },
+      }));
+      if (Object.keys(questions).length === 0) {
+        await write(workspaceId, threadId, version, notStated, "code", loaded.lowTrust);
+        await storeFacts(workspaceId, threadId, version, loaded, {}, s);
+        result.asked = notStated.map((i) => i.def.id);
+        return result;
+      }
       if (await runtime.judgeAvailable()) {
         const answers: Record<string, JudgeAnswer> = {};
         let model = "";
@@ -920,14 +1200,27 @@ export function createSignals(options: SignalsOptions): Signals {
           }
         } catch (error) {
           if (!(error instanceof NoJudgeError)) throw error;
-          return llmAsk(workspaceId, threadId, s, need, state, version, opts, error);
+          return llmAsk(workspaceId, threadId, s, asked, state, version, opts, error, loaded);
         }
-        const items = need.flatMap((d) => {
+        const items = asked.flatMap((d) => {
           const a = answers[d.id];
-          return a ? [{ def: d, answer: a }] : [];
+          if (!a) return [];
+          // A picked span stays sealed with the Facts; the answer keeps only whether one was picked.
+          if (d.optionsFrom && a.type === "choice") {
+            return [{ def: d, answer: a, choice: a.choice === "none" ? "none" : "picked" }];
+          }
+          return [{ def: d, answer: a }];
         });
-        await write(workspaceId, threadId, version, items, model);
-        result.asked = items.map((i) => i.def.id);
+        await write(
+          workspaceId,
+          threadId,
+          version,
+          [...items, ...notStated],
+          model,
+          loaded.lowTrust,
+        );
+        await storeFacts(workspaceId, threadId, version, loaded, answers, s);
+        result.asked = [...items, ...notStated].map((i) => i.def.id);
         for (const id of Object.keys(extra)) result.extra[id] = answers[id];
         result.by = "typesafe";
         return result;
@@ -936,11 +1229,12 @@ export function createSignals(options: SignalsOptions): Signals {
         workspaceId,
         threadId,
         s,
-        need,
+        asked,
         state,
         version,
         opts,
         new NoJudgeError("no_key"),
+        loaded,
       );
     },
 
@@ -1022,6 +1316,127 @@ export function createSignals(options: SignalsOptions): Signals {
       return readings(rows.map((r) => r.threadId));
     },
 
+    async page(workspaceId) {
+      const s = await readSettings();
+      const defs = (await syncDefs(workspaceId, s)).filter((d) => d.active);
+      const scope = parseSortScope(s["signals.backfill.scope"]) ?? { kind: "all" as const };
+      const total = await countInScope(db, workspaceId, resolveScope(scope, now()));
+      const counts = await db
+        .select({
+          signalId: signalAnswers.signalId,
+          version: signalAnswers.version,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(signalAnswers)
+        .where(eq(signalAnswers.workspaceId, workspaceId))
+        .groupBy(signalAnswers.signalId, signalAnswers.version);
+      // Base rates over the newest Threads that have answers.
+      const recent = await db
+        .select({ threadId: signalAnswers.threadId })
+        .from(signalAnswers)
+        .innerJoin(threads, eq(threads.id, signalAnswers.threadId))
+        .where(eq(signalAnswers.workspaceId, workspaceId))
+        .groupBy(signalAnswers.threadId, threads.lastActivity)
+        .orderBy(sql`${threads.lastActivity} desc`)
+        .limit(s["signals.stats.window"]);
+      const window = recent.map((r) => r.threadId);
+      const rows = window.length
+        ? await db.select().from(signalAnswers).where(inArray(signalAnswers.threadId, window))
+        : [];
+      const rules = rulesOf(s);
+      const shippedKey = shippedSettingKeys();
+      const signals = defs.map((d) => {
+        const current = counts.find((c) => c.signalId === d.id && c.version === d.version)?.n ?? 0;
+        const stale = counts
+          .filter((c) => c.signalId === d.id && c.version < d.version)
+          .reduce((n, c) => n + c.n, 0);
+        const answers = rows.filter((r) => r.signalId === d.id && r.model !== "code");
+        const holding = answers.filter((r) =>
+          d.kind === "noul"
+            ? (r.noul ?? 0) >= rules.noulHigh
+            : d.kind === "score"
+              ? (r.score ?? 0) >= 1 && (r.confidence ?? 0) >= rules.confidenceBelow
+              : r.choice !== null && r.choice !== "none" && r.choice !== "unclear",
+        ).length;
+        const share = answers.length > 0 ? holding / answers.length : null;
+        const flag: SignalsPage["signals"][number]["flag"] =
+          share === null || answers.length < s["signals.stats.min_answers"]
+            ? null
+            : share >= s["signals.stats.broad_above"]
+              ? "too_broad"
+              : share === 0
+                ? "never"
+                : null;
+        return {
+          id: d.id,
+          label: questionLabel(d.question),
+          kind: d.kind,
+          version: d.version,
+          owner: d.owner,
+          consumers: d.consumers,
+          read: current,
+          stale,
+          holds: share,
+          flag,
+          setting: d.owner.kind === "shipped" ? (shippedKey[d.id] ?? null) : null,
+        };
+      });
+      return { workspaceId, total, signals };
+    },
+
+    async explain(threadId) {
+      const all = (await readings([threadId])).get(threadId);
+      const row = await db.query.threads.findFirst({
+        where: eq(threads.id, threadId),
+        columns: { workspaceId: true },
+      });
+      if (!row) return null;
+      const defs = new Map((await api.defs(row.workspaceId)).map((d) => [d.id, d]));
+      const facts = await db.query.threadFacts.findFirst({
+        where: eq(threadFacts.threadId, threadId),
+      });
+      let amount: SealedFacts["amount"] = null;
+      if (facts?.contentEnc && facts.contentKey) {
+        try {
+          const sealed = JSON.parse(
+            await mailstore.readText({
+              workspaceId: row.workspaceId,
+              kind: "facts",
+              key: facts.contentKey,
+              chunks: [facts.contentEnc],
+              size: -1,
+            }),
+          ) as SealedFacts;
+          amount = sealed.amount;
+        } catch {
+          amount = null;
+        }
+      }
+      return {
+        threadId,
+        signals: Object.values(all ?? {}).map((a) => {
+          const d = defs.get(a.signalId);
+          return {
+            id: a.signalId,
+            label: d ? questionLabel(d.question) : a.signalId,
+            kind: d?.kind ?? "noul",
+            noul: a.noul ?? null,
+            choice: a.choice ?? null,
+            score: a.score ?? null,
+            confidence: a.confidence ?? null,
+            version: a.version,
+            currentVersion: d?.version ?? a.version,
+            stale: a.stale,
+            lowTrust: a.lowTrust ?? null,
+            model: a.model,
+            judgedAt: a.judgedAt,
+          };
+        }),
+        facts: (facts?.facts ?? null) as Record<string, unknown> | null,
+        amount,
+      };
+    },
+
     async missing(workspaceId, threadId) {
       const s = await readSettings();
       return (await needed(workspaceId, threadId, s, { reason: "arrival" })).need.map((d) => d.id);
@@ -1089,6 +1504,7 @@ export function createSignals(options: SignalsOptions): Signals {
     version: ThreadVersion,
     opts: AskOptions,
     cause: NoJudgeError,
+    loaded?: Awaited<ReturnType<typeof loadThread>>,
   ): Promise<AskResult> {
     const mode = s["signals.llm_fallback"];
     // Routing's Choices never go this way: routing keeps its own prompt path.
@@ -1126,7 +1542,8 @@ export function createSignals(options: SignalsOptions): Signals {
     });
     if (items.length === 0)
       log(`signals ${threadId}: the language model answered nothing readable`);
-    await write(workspaceId, threadId, version, items, model);
+    await write(workspaceId, threadId, version, items, model, loaded?.lowTrust ?? null);
+    if (loaded) await storeFacts(workspaceId, threadId, version, loaded, {}, s);
     return { asked: items.map((i) => i.def.id), extra: {}, calls: 1, by: "llm" };
   }
 

@@ -45,9 +45,109 @@ export const SHIPPED_SETTING_KEYS = [
   "judgments.questions.chip.call",
   "judgments.questions.chip.pay_or_file",
   "judgments.questions.chip.snooze",
+  "signals.questions.personal",
+  "signals.questions.personal.true",
+  "signals.questions.personal.false",
+  "signals.questions.has_deadline",
+  "signals.questions.has_deadline.true",
+  "signals.questions.has_deadline.false",
+  "signals.questions.deadline_parts",
+  "signals.questions.money_involved",
+  "signals.questions.money_involved.true",
+  "signals.questions.money_involved.false",
+  "signals.questions.money_amount",
+  "signals.questions.money_amount.none",
+  "signals.questions.money_direction",
+  "signals.questions.money_direction.options",
+  "signals.questions.frustrated",
+  "signals.questions.frustrated.levels",
+  "signals.questions.owner_promised",
+  "signals.questions.they_promised",
 ] as const;
 
-export type ShippedSettings = Record<(typeof SHIPPED_SETTING_KEYS)[number], string | string[]>;
+type PartWords = Record<
+  string,
+  { instructions: string; criteria?: Record<string, string | null> | undefined }
+>;
+
+export type ShippedSettings = Record<
+  (typeof SHIPPED_SETTING_KEYS)[number],
+  string | string[] | PartWords | Record<string, string>
+>;
+
+/** The Signals added in slice 32, which the arrival request asks only while signals.enabled is on. */
+export const NEW_SHIPPED_SIGNALS: readonly string[] = [
+  "personal",
+  "has_deadline",
+  "deadline_form",
+  "deadline_month",
+  "deadline_day",
+  "deadline_year",
+  "deadline_anchor",
+  "deadline_weekday",
+  "deadline_week",
+  "deadline_hour",
+  "money_involved",
+  "money_amount",
+  "money_direction",
+  "frustrated",
+  "owner_promised",
+  "they_promised",
+];
+
+const MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+/** A date part's options: the ones code enumerates (months, days, weekdays, hours), then the described ones. */
+function partOptions(
+  id: string,
+  described: Record<string, string | null>,
+): Record<string, string | null> {
+  const listed: string[] =
+    id === "deadline_month"
+      ? MONTHS
+      : id === "deadline_day"
+        ? Array.from({ length: 31 }, (_, i) => String(i + 1))
+        : id === "deadline_weekday"
+          ? WEEKDAYS
+          : id === "deadline_hour"
+            ? Array.from({ length: 24 }, (_, i) => String(i))
+            : [];
+  const out: Record<string, string | null> = {};
+  for (const k of listed) out[k] = null;
+  return { ...out, ...described };
+}
+
+/**
+ * The year part's options, built by code for the Thread: the year it was
+ * written and the next, before the described ones (none, other).
+ */
+export function yearOptions(q: JudgeQuestion, written: Date): JudgeQuestion {
+  if (q.type !== "choice") return q;
+  const y = written.getUTCFullYear();
+  return { ...q, criteria: { [String(y)]: null, [String(y + 1)]: null, ...q.criteria } };
+}
+
+/** The amount Choice's options for one Thread: the spans code found, verbatim, then none. */
+export function amountOptions(template: JudgeQuestion, spans: readonly string[]): JudgeQuestion {
+  if (template.type !== "choice") return template;
+  const criteria: Record<string, null | string> = {};
+  for (const span of spans) criteria[span] = null;
+  return { ...template, criteria: { ...criteria, ...template.criteria } };
+}
 
 const text = (s: ShippedSettings, key: (typeof SHIPPED_SETTING_KEYS)[number]) => s[key] as string;
 
@@ -112,5 +212,73 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
     const key = `judgments.questions.chip.${chip}` as (typeof SHIPPED_SETTING_KEYS)[number];
     add(chipSignalId(chip as ChipName), "noul", noul(text(s, key)), ["Suggested actions"]);
   }
+
+  /* Slice 32. */
+  const withCriteria = (id: string) =>
+    noul(text(s, `signals.questions.${id}` as (typeof SHIPPED_SETTING_KEYS)[number]), {
+      true: text(s, `signals.questions.${id}.true` as (typeof SHIPPED_SETTING_KEYS)[number]),
+      false: text(s, `signals.questions.${id}.false` as (typeof SHIPPED_SETTING_KEYS)[number]),
+    });
+  add("personal", "noul", withCriteria("personal"), ["Recommended actions", "Boards"]);
+  add("has_deadline", "noul", withCriteria("has_deadline"), ["Recommended actions", "Boards"]);
+  const parts = s["signals.questions.deadline_parts"] as PartWords;
+  for (const id of [
+    "deadline_form",
+    "deadline_month",
+    "deadline_day",
+    "deadline_year",
+    "deadline_anchor",
+    "deadline_weekday",
+    "deadline_week",
+    "deadline_hour",
+  ]) {
+    const words = parts[id];
+    if (!words) continue;
+    const criteria = partOptions(id, words.criteria ?? { none: null });
+    out.push({
+      id,
+      kind: "choice",
+      question: { type: "choice", instructions: words.instructions, criteria },
+      window,
+      // Asked only when code finds the text may state a date the owner acts by.
+      gate: "deadline",
+      consumers: ["The deadline's date"],
+    });
+  }
+  add("money_involved", "noul", withCriteria("money_involved"), ["Recommended actions", "Boards"]);
+  out.push({
+    id: "money_amount",
+    kind: "choice",
+    question: {
+      type: "choice",
+      instructions: text(s, "signals.questions.money_amount"),
+      criteria: { none: text(s, "signals.questions.money_amount.none") },
+    },
+    window,
+    gate: "amounts",
+    optionsFrom: "amounts",
+    consumers: ["The amount on a bill"],
+  });
+  add(
+    "money_direction",
+    "choice",
+    {
+      type: "choice",
+      instructions: text(s, "signals.questions.money_direction"),
+      criteria: s["signals.questions.money_direction.options"] as Record<string, string>,
+    },
+    ["Recommended actions"],
+  );
+  add(
+    "frustrated",
+    "score",
+    score(
+      text(s, "signals.questions.frustrated"),
+      s["signals.questions.frustrated.levels"] as string[],
+    ),
+    ["Boards"],
+  );
+  add("owner_promised", "noul", noul(text(s, "signals.questions.owner_promised")), ["Boards"]);
+  add("they_promised", "noul", noul(text(s, "signals.questions.they_promised")), ["Boards"]);
   return out;
 }

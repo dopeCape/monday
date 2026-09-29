@@ -858,8 +858,10 @@ describe("judgments over the fixture mailbox", () => {
       (c) =>
         c.questions.includes("brief_worth") && subjectOf(c.state) === "Draft contract for review",
     );
-    // The shipped Signals: five Nouls, two Scores, four chips (slice 30).
-    expect(sectionCall?.questions).toHaveLength(11);
+    // The shipped Signals in one request: the slice 25 set, waiting_on_me, and slice 32's.
+    expect(sectionCall?.questions).toEqual(
+      expect.arrayContaining(["needs_reply", "brief_worth", "chip_reply", "money_involved"]),
+    );
     expect(sectionCall?.questions).toContain("waiting_on_me");
     expect(sectionCall?.state).toMatchObject({
       owner: { address: fixture.address },
@@ -891,7 +893,8 @@ describe("judgments over the fixture mailbox", () => {
       (c) => c.entityId === threadOf("Weekly digest").id,
     )?.payload;
     const answer = (id: string) => digestChange?.answers.find((a) => a.signalId === id);
-    expect(digestChange?.answers).toHaveLength(11);
+    // Every shipped Signal, the gated ones answered by code as not stated.
+    expect(digestChange?.answers).toHaveLength(27);
     expect(answer("newsletter")).toMatchObject({ version: 1, noul: 0.93, stale: false });
     expect(answer("urgency")).toMatchObject({ score: 1, noul: null });
     expect(answer("chip_snooze")?.noul).toBe(0.7);

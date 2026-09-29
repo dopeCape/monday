@@ -121,6 +121,18 @@ export interface SignalsChange {
   deleted?: boolean | undefined;
 }
 
+/**
+ * The Changes feed's `facts` change (slice 32): a Thread's Facts computed by
+ * code for the Thread version a Signal request asked, the ones kept in the
+ * clear only (counts, headers, flags, the deadline's date). What code drew
+ * from the text stays sealed on the Server.
+ */
+export interface FactsChange {
+  threadId: Id;
+  facts: Record<string, unknown>;
+  deleted?: boolean | undefined;
+}
+
 /** The Changes feed's `signal_def` change: a Signal created, reworded, retired. */
 export interface SignalDefChange {
   id: string;
@@ -157,6 +169,53 @@ export interface SignalBackfill {
   updatedAt: IsoDate;
   finishedAt: IsoDate | null;
   lastError: string | null;
+}
+
+/** The Signals page's data. */
+export interface SignalsPage {
+  workspaceId: Id;
+  /** Threads in signals.backfill.scope. */
+  total: number;
+  signals: Array<{
+    id: string;
+    label: string;
+    kind: SignalKind;
+    version: number;
+    owner: SignalOwner;
+    consumers: string[];
+    /** Threads with an answer at the current version. */
+    read: number;
+    /** Answers asked with an earlier wording. */
+    stale: number;
+    /** How often it holds over the newest signals.stats.window Threads; null before any answer. */
+    holds: number | null;
+    flag: "too_broad" | "never" | null;
+    /** The Setting that words a shipped Signal; null when its owner edits it. */
+    setting: string | null;
+  }>;
+}
+
+/** Explain on a Thread. */
+export interface SignalsExplain {
+  threadId: Id;
+  signals: Array<{
+    id: string;
+    label: string;
+    kind: SignalKind;
+    noul: number | null;
+    choice: string | null;
+    score: number | null;
+    confidence: number | null;
+    version: number;
+    currentVersion: number;
+    stale: boolean;
+    lowTrust: LowTrust | null;
+    model: string;
+    judgedAt: string;
+  }>;
+  facts: Record<string, unknown> | null;
+  /** The picked amount, decrypted for the owner. */
+  amount: { span: string; value: number; currency: string } | null;
 }
 
 /* ------------------------------ The shipped Signals ------------------------------ */

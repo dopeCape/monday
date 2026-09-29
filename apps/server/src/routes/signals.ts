@@ -81,6 +81,17 @@ export function signalsRoutes(
     });
   }
 
+  // The Signals page and Explain on a Thread (slice 32).
+  app.get("/signals", async (c) => {
+    const workspace = c.req.query("workspace");
+    if (!workspace) return c.json({ error: "invalid_query" }, 400);
+    return c.json(await intelligence.signals.page(workspace));
+  });
+  app.get("/threads/:id/signals", async (c) => {
+    const explained = await intelligence.signals.explain(c.req.param("id"));
+    return explained ? c.json(explained) : c.json({ error: "not_found" }, 404);
+  });
+
   app.get("/intelligence/eval/batching/:id", (c) => {
     const status = intelligence.batchingEval.status(c.req.param("id"));
     return status ? c.json(status) : c.json({ error: "not_found" }, 404);

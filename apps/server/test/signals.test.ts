@@ -160,8 +160,9 @@ describe("the Signal store", () => {
     expect(await runDue()).toEqual({ [JUDGE_STEP]: 2 });
     const sent = judge.calls.slice(before);
     expect(sent).toHaveLength(2);
-    expect(sent[0]?.questions.sort()).toEqual(
-      [
+    // The slice 25 set and waiting_on_me; the slice 32 Signals ride too (signals-facts.test.ts).
+    expect(sent[0]?.questions).toEqual(
+      expect.arrayContaining([
         "automated",
         "brief_worth",
         "chip_call",
@@ -173,7 +174,7 @@ describe("the Signal store", () => {
         "urgency",
         "waiting_on_me",
         "waiting_on_others",
-      ].sort(),
+      ]),
     );
     // The state is the one Thread: the owner, the newest message's own words, the earlier ones.
     const state = sent.find((c) => subjectOf(c.state) === "Contract for signature")?.state as {
@@ -200,7 +201,7 @@ describe("the Signal store", () => {
     expect(await runDue()).toEqual({});
     expect(judge.calls.length - before).toBe(2);
     const rows = await db.handle.db.select().from(signalAnswers);
-    expect(rows.filter((r) => r.threadId === contract)).toHaveLength(11);
+    expect(rows.filter((r) => r.threadId === contract).length).toBeGreaterThanOrEqual(11);
     expect(rows.every((r) => r.version === 1)).toBe(true);
     // One `signals` change per request, numbers only.
     const changes = (await feed()).filter((c) => c.kind === "signals" && c.entityId === contract);

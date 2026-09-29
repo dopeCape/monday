@@ -79,6 +79,7 @@ import {
   sessionEvents,
   sessions,
   tags,
+  threadFacts,
   threadLabels,
   threads,
   threadTags,
@@ -1508,6 +1509,12 @@ interface RewrapSpec {
 /** Every wrapped data key in the schema, by table (docs/spec/architecture.md, "Data model"). */
 const REWRAP_SPECS: readonly RewrapSpec[] = [
   { table: threads, id: threads.id, workspace: threads.workspaceId, keys: [threads.subjectKey] },
+  {
+    table: threadFacts,
+    id: threadFacts.threadId,
+    workspace: threadFacts.workspaceId,
+    keys: [threadFacts.contentKey],
+  },
   {
     table: messages,
     id: messages.id,

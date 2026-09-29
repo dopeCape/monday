@@ -35,6 +35,8 @@ import type {
   SectionWhen,
   SettingKey,
   Settings,
+  SignalsExplain,
+  SignalsPage,
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
@@ -80,6 +82,7 @@ import {
 import { judgedPolicy } from "./policy.ts";
 import type { Routing, RoutingOverride, Scored } from "./routing/index.ts";
 import { AiOffError, type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
+import type { Signals } from "./signals/index.ts";
 
 /* ------------------------------ The registry ------------------------------ */
 
@@ -489,6 +492,10 @@ export interface TuneSeam {
   plan(workspaceId: Id, proposal: JudgmentProposal): Promise<ProposalPlan>;
   explain(workspaceId: Id, threadId: Id): Promise<PlacementExplanation>;
   list(workspaceId: Id): Promise<JudgmentListing>;
+  /** Every active Signal with its reach and base rate (slice 32); absent without the Signal store. */
+  signals?(workspaceId: Id): Promise<SignalsPage>;
+  /** A Thread's Signals with their numbers and versions, and its Facts (slice 32). */
+  threadSignals?(threadId: Id): Promise<SignalsExplain | null>;
   /** Re-runs a judgment beside the proposal. Throws TuneRefusal (no judge, untestable, invalid). */
   test(workspaceId: Id, proposal: JudgmentProposal, sample?: number): Promise<JudgmentTest>;
   /** The last test of this proposal in a Session, for the update card. */
@@ -520,6 +527,8 @@ export interface TuneOptions {
   routing: Routing;
   judgments: Judgments;
   organize: OrganizeSeam;
+  /** The Signal store, for the Signals the tools list and explain (slice 32). */
+  signals?: Pick<Signals, "page" | "explain"> | undefined;
   now?: () => Date;
 }
 
@@ -1699,6 +1708,14 @@ export function createTune(options: TuneOptions): TuneSeam {
     ]);
 
   return {
+    ...(options.signals
+      ? {
+          signals: (workspaceId: Id) =>
+            (options.signals as Pick<Signals, "page">).page(workspaceId),
+          threadSignals: (threadId: Id) =>
+            (options.signals as Pick<Signals, "explain">).explain(threadId),
+        }
+      : {}),
     settings: tuneSettings,
     judgeAvailable,
     entries,

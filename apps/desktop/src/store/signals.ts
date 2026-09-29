@@ -11,6 +11,7 @@
 // `judgments` change (a Cache rebuilt from an old log) lands here the same way.
 
 import type {
+  FactsChange,
   JudgmentsChange,
   LowTrust,
   SignalDefChange,
@@ -38,6 +39,25 @@ export const SIGNALS_SCHEMA_SQL = `
   );
   create index if not exists thread_signals_noul_idx on thread_signals (signal_id, noul);
   create index if not exists thread_signals_score_idx on thread_signals (signal_id, score);
+  create table if not exists thread_facts (
+    thread_id text primary key,
+    received_at text,
+    last_activity_at text,
+    from_address text,
+    from_domain text,
+    to_me_directly integer not null default 0,
+    owner_wrote_last integer not null default 0,
+    known_sender integer not null default 0,
+    list_id text,
+    has_invite integer not null default 0,
+    language text not null default 'en',
+    image_only integer not null default 0,
+    amount_count integer not null default 0,
+    deadline_at text,
+    deadline_unclear integer not null default 0,
+    facts text not null default '{}'
+  );
+  create index if not exists thread_facts_deadline_idx on thread_facts (deadline_at);
   create table if not exists signal_defs (
     id text primary key,
     kind text not null,
@@ -51,6 +71,7 @@ export const SIGNALS_SCHEMA_SQL = `
 
 export const SIGNALS_DROP_SQL = `
   drop table if exists thread_signals;
+  drop table if exists thread_facts;
   drop table if exists signal_defs;
 `;
 
@@ -117,6 +138,50 @@ export function signalsStatements(c: SignalsChange): Statement[] {
     });
   }
   return out;
+}
+
+/** A Thread's Facts as the feed carries them (slice 32): the clear ones, as columns and whole. */
+export function factsStatements(c: FactsChange): Statement[] {
+  if (c.deleted)
+    return [{ sql: "delete from thread_facts where thread_id = ?", params: [c.threadId] }];
+  const f = c.facts;
+  const text = (k: string) => (typeof f[k] === "string" ? (f[k] as string) : null);
+  const flag = (k: string) => (f[k] === true ? 1 : 0);
+  return [
+    {
+      sql: `insert into thread_facts (thread_id, received_at, last_activity_at, from_address, from_domain,
+              to_me_directly, owner_wrote_last, known_sender, list_id, has_invite, language, image_only,
+              amount_count, deadline_at, deadline_unclear, facts)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (thread_id) do update set
+              received_at = excluded.received_at, last_activity_at = excluded.last_activity_at,
+              from_address = excluded.from_address, from_domain = excluded.from_domain,
+              to_me_directly = excluded.to_me_directly, owner_wrote_last = excluded.owner_wrote_last,
+              known_sender = excluded.known_sender, list_id = excluded.list_id,
+              has_invite = excluded.has_invite, language = excluded.language,
+              image_only = excluded.image_only, amount_count = excluded.amount_count,
+              deadline_at = excluded.deadline_at, deadline_unclear = excluded.deadline_unclear,
+              facts = excluded.facts`,
+      params: [
+        c.threadId,
+        text("received_at"),
+        text("last_activity_at"),
+        text("from_address"),
+        text("from_domain"),
+        flag("to_me_directly"),
+        flag("owner_wrote_last"),
+        flag("known_sender"),
+        text("list_id"),
+        flag("has_invite"),
+        text("language") ?? "en",
+        flag("image_only"),
+        typeof f.amount_count === "number" ? f.amount_count : 0,
+        text("deadline_at"),
+        flag("deadline_unclear"),
+        JSON.stringify(f),
+      ],
+    },
+  ];
 }
 
 /** A Signal's definition as the feed carries it. */

@@ -262,6 +262,7 @@ const PANEL_LEVELS: Partial<Record<SettingSection, Record<string, AiLevel>>> = {
   ai: {
     TypeSafe: "assist",
     Meter: "assist",
+    Signals: "assist",
     "Activity log": "assist",
     "External access": "assist",
   },

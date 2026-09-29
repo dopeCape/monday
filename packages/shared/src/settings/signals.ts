@@ -28,6 +28,21 @@ function criterion(signal: string, side: "true" | "false", value: string) {
   });
 }
 
+/** A shipped Signal's question in words (ADR 0012: the user's to reword). */
+function question(signal: string, value: string) {
+  return setting({
+    type: z.string().min(1),
+    default: value,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    control: "sentence",
+    tier: "advanced",
+    label: `Question: ${signal.replaceAll("_", " ")}`,
+    help: "The judge reads it literally. A reworded question is a new version: its answers are read again in the background.",
+  });
+}
+
 function str(section: SettingSection, label: string, value: string) {
   return setting({
     type: z.string(),
@@ -295,6 +310,279 @@ export const signalsSettings = {
     help: "What reading older mail may spend in a calendar month: Signal backfills and background sorting. Reaching it pauses them until you raise it or the month turns. New mail is never capped.",
   }),
   "strings.meter.judge.backfill": str("ai", "Meter line: background reading", "Background reading"),
+
+  /* Slice 32: the new shipped Signals and Facts. */
+  "signals.questions.personal": question(
+    "personal",
+    "A person typed the newest message and wrote it to the mailbox owner, alone or in a small group.",
+  ),
+  "signals.questions.personal.true": criterion(
+    "personal",
+    "true",
+    "A named person wrote it for these recipients: a colleague, client, friend, candidate or supplier writing in their own words.",
+  ),
+  "signals.questions.personal.false": criterion(
+    "personal",
+    "false",
+    "A system, a template or a mass mailing sent it: notifications, receipts, newsletters, marketing, alerts, automatic replies.",
+  ),
+  "signals.questions.has_deadline": question(
+    "has_deadline",
+    "The thread gives a date or time by which the mailbox owner has to do something: reply, pay, sign, attend, deliver or decide.",
+  ),
+  "signals.questions.has_deadline.true": criterion(
+    "has_deadline",
+    "true",
+    "A date, weekday or time is attached to something the owner must do, such as 'by Friday', 'due 3 October', 'before the 5pm call'.",
+  ),
+  "signals.questions.has_deadline.false": criterion(
+    "has_deadline",
+    "false",
+    "No date is attached to anything the owner must do. Dates that only describe the past, someone else's plans, or a newsletter's contents do not count.",
+  ),
+  "signals.questions.deadline_parts": setting({
+    type: z.record(
+      z.string(),
+      z.object({
+        instructions: z.string().min(1),
+        criteria: z.record(z.string(), z.string().nullable()).optional(),
+      }),
+    ),
+    default: {
+      deadline_form: {
+        instructions: "How is the date the owner has to act by written?",
+        criteria: {
+          absolute: "A calendar date naming a month, such as '3 October' or '10/03'.",
+          relative:
+            "Relative to when it was written, such as 'tomorrow', 'Friday', 'next week', 'end of the month'.",
+          none: "The thread states no such date.",
+        },
+      },
+      deadline_month: {
+        instructions: "If that date names a month, which one?",
+        criteria: { none: "No month is stated." },
+      },
+      deadline_day: {
+        instructions: "If that date names a day of the month, which day (1 to 31)?",
+        criteria: { none: "No day of the month is stated." },
+      },
+      deadline_year: {
+        instructions: "If that date names a year, which one?",
+        criteria: { none: "No year is stated.", other: "A year other than these is stated." },
+      },
+      deadline_anchor: {
+        instructions: "If that date is relative, what is it relative to?",
+        criteria: {
+          today: null,
+          tomorrow: null,
+          weekday: "A named day of the week.",
+          end_of_week: null,
+          next_week: "Some time next week, no day named.",
+          end_of_month: null,
+          none: "It is not relative.",
+        },
+      },
+      deadline_weekday: {
+        instructions: "If that date names a day of the week, which one?",
+        criteria: { none: "No weekday is named." },
+      },
+      deadline_week: {
+        instructions: "If that date names a weekday, which week is meant?",
+        criteria: {
+          this: "This week, or the next such day.",
+          next: "The week after this one, as in 'next Thursday' said to mean the following week.",
+          none: "No weekday is named.",
+        },
+      },
+      deadline_hour: {
+        instructions:
+          "If that date names a time of day, in which hour of the day does it fall, on a 24-hour clock?",
+        criteria: { none: "No time of day is stated." },
+      },
+    },
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Questions: the parts of a deadline",
+    help: "The deadline's date is read in parts, each a pick-one question with a 'not stated' option; code puts the date together. Months, days, weekdays, hours and years are added as options by code.",
+  }),
+  "signals.questions.money_involved": question(
+    "money_involved",
+    "The thread is about money the mailbox owner pays, is owed, or is asked to approve: an invoice, bill, quote, refund, payment request, charge or salary.",
+  ),
+  "signals.questions.money_involved.true": criterion(
+    "money_involved",
+    "true",
+    "An amount or a payment is the subject of at least one message.",
+  ),
+  "signals.questions.money_involved.false": criterion(
+    "money_involved",
+    "false",
+    "Money is only mentioned in passing, in a signature, an advertisement or a newsletter.",
+  ),
+  "signals.questions.money_amount": question(
+    "money_amount",
+    "Which of these amounts is the one the mailbox owner is asked to pay, is owed, or was charged on this thread?",
+  ),
+  "signals.questions.money_amount.none": question(
+    "money_amount none",
+    "None of these amounts is what the owner pays, is owed or was charged.",
+  ),
+  "signals.questions.money_direction": question(
+    "money_direction",
+    "Which way does the money on this thread move?",
+  ),
+  "signals.questions.money_direction.options": setting({
+    type: z.record(z.string(), z.string()),
+    default: {
+      owner_pays: "The owner is asked to pay, or will be charged.",
+      owner_is_paid: "Someone owes the owner, or will pay them.",
+      already_settled: "It is a receipt or confirmation of a payment already made.",
+      unclear: "The thread does not say.",
+    },
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Question: which way the money moves, options",
+    help: "The options of the money direction question and what each means.",
+  }),
+  "signals.questions.frustrated": question(
+    "frustrated",
+    "How frustrated is the newest message written by someone other than the mailbox owner?",
+  ),
+  "signals.questions.frustrated.levels": setting({
+    type: z.array(z.string().min(1)).min(2).max(10),
+    default: [
+      "Calm or friendly: no complaint.",
+      "Mildly impatient: a reminder, a second ask, or a small complaint stated politely.",
+      "Clearly frustrated: repeats a complaint, calls something unacceptable, or sets a demand.",
+      "Angry: threatens to cancel, leave, escalate or take legal action, or uses hostile words.",
+    ],
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Frustration levels",
+    help: "The levels of the frustration question, lowest first. Describe situations, not degrees.",
+  }),
+  "signals.questions.owner_promised": question(
+    "owner_promised",
+    "In one of their messages on this thread, the mailbox owner committed to do something for someone (send, reply, pay, deliver, call, decide), and no later message shows it done.",
+  ),
+  "signals.questions.they_promised": question(
+    "they_promised",
+    "Someone other than the mailbox owner committed on this thread to do something for the owner (send, reply, pay, deliver, call, decide), and no later message shows it done.",
+  ),
+  "signals.candidates.max": setting({
+    type: z.int().min(1).max(50),
+    default: 12,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Options per found value",
+    help: "The most amounts (or addresses, or links) code offers the judge to pick from on one thread. More candidates dilute the pick.",
+  }),
+  "signals.deadline.min_confidence": setting({
+    type: confidence,
+    default: 0.6,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Deadline date confidence",
+    help: "Below this the deadline's date is shown as unclear rather than guessed.",
+  }),
+  "signals.non_english": setting({
+    type: z.enum(["unsure", "trust"]),
+    default: "unsure",
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Threads not in English",
+    help: "monday's judge reads English best. Unsure keeps its answers on such threads out of anything that acts; Trust uses them as they are.",
+  }),
+  "signals.stats.window": setting({
+    type: z.int().min(10).max(10_000),
+    default: 500,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Threads for the base rates",
+    help: "How many of the newest threads the Signals page measures how often each Signal holds over.",
+  }),
+  "signals.stats.broad_above": setting({
+    type: confidence,
+    default: 0.85,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Flag a Signal that holds on more than",
+    help: "A Signal that holds on this share of your mail or more is flagged on the Signals page: its question may be too broad.",
+  }),
+  "signals.stats.min_answers": setting({
+    type: z.int().min(1).max(10_000),
+    default: 20,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Answers before a base rate counts",
+    help: "The Signals page flags a Signal as too broad or never holding only once it has this many answers.",
+  }),
+  "strings.signals.non_english": str(
+    "ai",
+    "Signals: thread not in English",
+    "monday reads English best, so this thread's answers count as unsure.",
+  ),
+  "strings.signals.too_broad": str(
+    "ai",
+    "Signals: question too broad",
+    "Holds on {share} of your mail. Its question may be too broad.",
+  ),
+  "strings.signals.too_narrow": str(
+    "ai",
+    "Signals: question never holds",
+    "Holds on none of your mail. Its question may be too narrow.",
+  ),
+  "strings.signals.page.title": str("ai", "Signals page: heading", "Signals"),
+  "strings.signals.page.intro": str(
+    "ai",
+    "Signals page: intro",
+    "The standing answers monday keeps on every thread, asked in one request per thread.",
+  ),
+  "strings.signals.page.read": str("ai", "Signals page: how many read", "{read} of {total} read"),
+  "strings.signals.page.holds": str("ai", "Signals page: base rate", "Holds on {share}"),
+  "strings.signals.page.stale": str(
+    "ai",
+    "Signals page: stale count",
+    "{count} read with an earlier wording",
+  ),
+  "strings.signals.page.version": str("ai", "Signals page: version", "Version {version}"),
+  "strings.signals.page.edit_setting": str(
+    "ai",
+    "Signals page: edit a shipped question",
+    "Edit the question",
+  ),
+  "strings.signals.page.edit_owner": str(
+    "ai",
+    "Signals page: edited elsewhere",
+    "Edit it where it is used: {owner}",
+  ),
+  "strings.signals.page.empty": str("ai", "Signals page: nothing yet", "No Signals yet."),
+  "strings.signals.page.unavailable": str(
+    "ai",
+    "Signals page: not reachable",
+    "The Signals could not be read from the Server.",
+  ),
+  "strings.signals.kind.noul": str("ai", "Signals: yes or no", "Yes or no"),
+  "strings.signals.kind.choice": str("ai", "Signals: pick one", "Pick one"),
+  "strings.signals.kind.score": str("ai", "Signals: scale", "Scale"),
   "strings.signals.reading": str(
     "ai",
     "Signals: background reading progress",

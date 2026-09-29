@@ -108,8 +108,8 @@ function countingJudge() {
         confidence: 0.93,
       };
     }
-    const routed = Object.values(call.questions).filter(
-      (q) => (q as { type: string }).type === "choice",
+    const routed = Object.keys(call.questions).filter(
+      (id) => id === "group" || id.startsWith("subgroup_") || /^t\d+$/.test(id),
     ).length;
     requests.push({ questions: routed, subjects });
     return {

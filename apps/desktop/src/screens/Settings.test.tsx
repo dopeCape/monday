@@ -14,6 +14,7 @@
 // shell.refresh().
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import type { SignalBackfill, SignalsPage } from "@monday/shared";
 import {
   type ActivityRecord,
   type Device,
@@ -129,6 +130,8 @@ function scriptedApi(
     shared?: KeyProvider[];
     credentials?: ExternalCredential[];
     consents?: ExternalConsent[];
+    signals?: SignalsPage;
+    backfill?: SignalBackfill | null;
   } = {},
 ): Scripted {
   const calls: Scripted["calls"] = [];
@@ -216,6 +219,15 @@ function scriptedApi(
     meter: {
       month: async () =>
         over.meter ?? { workspaceId: "ws-1", month: "2026-09", lines: [], costMicros: 0 },
+    },
+    signals: {
+      ...base.signals,
+      page: async () => over.signals ?? { workspaceId: "ws-1", total: 0, signals: [] },
+      backfill: async () => over.backfill ?? null,
+      backfillAction: async (workspaceId, action) => {
+        calls.push({ name: "signals.backfill", args: [workspaceId, action] });
+        return { ...(over.backfill as SignalBackfill), status: "running" };
+      },
     },
     voice: {
       get: async () =>
@@ -933,6 +945,42 @@ describe("Settings › AI and agent", () => {
     ];
     const scripted = scriptedApi({
       activity,
+      signals: {
+        workspaceId: "ws-1",
+        total: 5400,
+        signals: [
+          {
+            id: "money_involved",
+            label: "The thread is about money the mailbox owner pays.",
+            kind: "noul",
+            version: 2,
+            owner: { kind: "shipped", id: null },
+            consumers: ["Recommended actions"],
+            read: 4210,
+            stale: 30,
+            holds: 0.91,
+            flag: "too_broad",
+            setting: "signals.questions.money_involved",
+          },
+        ],
+      },
+      backfill: {
+        workspaceId: "ws-1",
+        status: "confirm",
+        reason: null,
+        signals: ["money_involved"],
+        scope: "last 3 months",
+        done: 0,
+        total: 5400,
+        asked: 0,
+        calls: 0,
+        estimate: { threads: 5400, costMicros: 1_100_000 },
+        budget: { spentMicros: 0, budgetMicros: 3_000_000 },
+        startedAt: "2026-09-17T09:00:00Z",
+        updatedAt: "2026-09-17T09:00:00Z",
+        finishedAt: null,
+        lastError: null,
+      },
       meter: {
         workspaceId: "ws-1",
         month: "2026-09",
@@ -960,6 +1008,16 @@ describe("Settings › AI and agent", () => {
     expect(captured?.settings["agent.always_ask"]).toEqual(["draft_message"]);
     expect(q('[data-tool="send_draft"]')?.textContent).toContain("Always ask");
     expect(q('[data-tool="send_draft"] .switch')).toBeNull();
+
+    // The Signals page: the row with its reach, base rate and flag; a large read asks first.
+    const signals = q('[data-panel="signals"]');
+    expect(q('[data-signal="money_involved"]')?.textContent).toContain("4,210 of 5,400 read");
+    expect(q('[data-signal="money_involved"]')?.textContent).toContain("Holds on 91% of your mail");
+    expect(signals?.textContent).toContain(
+      "About 5,400 threads, about $1.10 at TypeSafe's price. Read them now?",
+    );
+    await clickText("Read them now", signals ?? document);
+    expect(scripted.calls).toContainEqual({ name: "signals.backfill", args: ["ws-1", "confirm"] });
 
     // The Meter by Task and provider with the estimate.
     const meter = q('[data-panel="meter"]');

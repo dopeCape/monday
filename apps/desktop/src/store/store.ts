@@ -48,6 +48,7 @@ import {
 } from "./people.ts";
 import schemaSql from "./schema.sql?raw";
 import {
+  factsStatements,
   legacyJudgmentsStatements,
   SIGNALS_DROP_SQL,
   SIGNALS_FILL_SQL,
@@ -83,6 +84,7 @@ const THREAD_SCOPED_TABLES = new Set([
   "thread_labels",
   "thread_judgments",
   "thread_signals",
+  "thread_facts",
   "briefs",
 ]);
 
@@ -96,6 +98,7 @@ function threadOfChange(c: Change): Id | undefined {
     case "thread_labels":
     case "judgments":
     case "signals":
+    case "facts":
     case "brief":
       return c.payload.threadId;
     default:
@@ -711,6 +714,8 @@ export function changeStatements(change: Change): Statement[] {
       return signalsStatements(change.payload);
     case "signal_def":
       return signalDefStatements(change.payload);
+    case "facts":
+      return factsStatements(change.payload);
     case "calendar":
       return [calendarUpsert(change.payload)];
     case "event":

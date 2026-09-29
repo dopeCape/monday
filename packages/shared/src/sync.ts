@@ -22,7 +22,7 @@ import type {
 } from "./domain.ts";
 import type { ThreadJudgments } from "./judge.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
-import type { SignalDefChange, SignalsChange } from "./signals.ts";
+import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -229,6 +229,7 @@ export type ChangeKind =
   | "judgments"
   | "signals"
   | "signal_def"
+  | "facts"
   | "calendar"
   | "event"
   | "invite"
@@ -448,6 +449,7 @@ export type ChangePayload =
   | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "signals"; payload: SignalsChange }
   | { kind: "signal_def"; payload: SignalDefChange }
+  | { kind: "facts"; payload: FactsChange }
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange }

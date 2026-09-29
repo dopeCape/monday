@@ -115,6 +115,37 @@ describe("the Cache's Signals", () => {
         "select thread_id from thread_signals where signal_id = 'money_involved' and noul >= 0.7",
       ),
     ).toEqual([{ thread_id: "t1" }]);
+    // The Facts land beside them; "money involved and a deadline before Friday" is one SQL query, offline.
+    await driver.batch(
+      changeStatements({
+        seq: 5,
+        workspaceId: "w",
+        entityId: "t1",
+        at,
+        kind: "facts",
+        payload: {
+          threadId: "t1",
+          facts: {
+            deadline_at: "2026-10-01T23:59:00.000Z",
+            deadline_unclear: false,
+            from_domain: "hetzner.com",
+            amount_count: 2,
+            language: "en",
+          },
+        },
+      }),
+    );
+    const friday = "2026-10-02T00:00:00.000Z";
+    expect(
+      await driver.query(
+        `select s.thread_id from thread_signals s join thread_facts f on f.thread_id = s.thread_id
+         where s.signal_id = 'money_involved' and s.noul >= 0.7 and f.deadline_at < ?`,
+        [friday],
+      ),
+    ).toEqual([{ thread_id: "t1" }]);
+    expect(await driver.query("select from_domain, amount_count from thread_facts")).toEqual([
+      { from_domain: "hetzner.com", amount_count: 2 },
+    ]);
     // A removed answer goes; a deleted Thread's answers all go.
     await driver.batch(
       changeStatements({

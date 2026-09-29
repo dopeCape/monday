@@ -72,6 +72,7 @@ describe("migrations", () => {
       "sync_messages",
       "sync_state",
       "tags",
+      "thread_facts",
       "thread_labels",
       "thread_routes",
       "thread_tags",

@@ -19,6 +19,7 @@ import type {
 } from "@monday/shared";
 import {
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -93,6 +94,40 @@ export const signalBackfills = pgTable("signal_backfills", {
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
   finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
 });
+
+/** Raw bytes, as schema.ts declares them. */
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+  toDriver: (value) => value,
+  fromDriver: (value) => new Uint8Array(value),
+});
+
+/**
+ * A Thread's Facts (CONTEXT.md "Fact"; slice 32), computed by code for the
+ * Thread version a Signal request asked: counts, headers, flags and the
+ * deadline's date in the clear (`facts`, mirrored to the Cache), and what
+ * code drew from the text (amounts, addresses, links, tracking numbers, the
+ * picked amount) sealed under the Workspace key.
+ */
+export const threadFacts = pgTable(
+  "thread_facts",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    messageCount: integer("message_count").notNull().default(0),
+    latestMessageId: text("latest_message_id").notNull().default(""),
+    facts: jsonb("facts").$type<Record<string, unknown>>().notNull().default({}),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true, mode: "date" }),
+    contentEnc: bytea("content_enc"),
+    contentKey: bytea("content_key"),
+    computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
+  },
+  (t) => [index("thread_facts_deadline_idx").on(t.workspaceId, t.deadlineAt)],
+);
 
 /** Every wording a Signal had, so an old answer can be explained. */
 export const signalVersions = pgTable(

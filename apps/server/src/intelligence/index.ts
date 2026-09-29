@@ -904,7 +904,16 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.onboarding = onboarding;
   const organize = createOrganize({ db, mailstore, runtime, routing, signals, now, log });
   extensions.organize = organize;
-  extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
+  extensions.tune = createTune({
+    db,
+    mailstore,
+    runtime,
+    routing,
+    judgments,
+    organize,
+    signals,
+    now,
+  });
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
