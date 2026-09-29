@@ -9920,6 +9920,11 @@ button.prov {
   margin-left: auto;
   flex: none;
 }
+/* The name gives way to the status pill: it shrinks and ends in an ellipsis. */
+.wfx-row-name b {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 .wfx-row-main b,
 .wfx-row-trig {
   overflow: hidden;
@@ -9937,12 +9942,19 @@ button.prov {
 }
 .wfx-row-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
+  min-width: 0;
   white-space: nowrap;
   margin-top: 4px;
   font-size: var(--fs-xs);
   color: var(--fg-faint);
+}
+/* The run dots sit at the end of the line, or wrap under it when the row is narrow. */
+.wfx-row-foot .wf-dots {
+  margin-left: auto;
+  flex: none;
 }
 .wfx-new {
   color: var(--fg-muted);
