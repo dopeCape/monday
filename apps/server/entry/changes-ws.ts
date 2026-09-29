@@ -11,6 +11,7 @@ import type { Auth } from "../src/auth/index.ts";
 import { isLoopbackAddress } from "../src/auth/middleware.ts";
 import type { ChangeBus } from "../src/changes/bus.ts";
 import type { Mailstore } from "../src/mailstore/index.ts";
+import type { Presence } from "../src/presence.ts";
 
 export const CHANGES_WS_PATH = "/changes/ws";
 
@@ -23,6 +24,8 @@ export interface ChangesSocketOptions {
   auth: Auth;
   bus: ChangeBus;
   mailstore: Mailstore;
+  /** Told of every socket that opens and closes: an open one is a client here (ADR 0013). */
+  presence?: Presence;
 }
 
 export interface ChangesSocket {
@@ -32,7 +35,7 @@ export interface ChangesSocket {
 }
 
 export function createChangesSocket(options: ChangesSocketOptions): ChangesSocket {
-  const { auth, bus, mailstore } = options;
+  const { auth, bus, mailstore, presence } = options;
 
   const send = (ws: ServerWebSocket<SocketData>, seq: number) => {
     try {
@@ -66,6 +69,7 @@ export function createChangesSocket(options: ChangesSocketOptions): ChangesSocke
 
     websocket: {
       async open(ws) {
+        presence?.open();
         ws.data.unsubscribe = bus.subscribe(ws.data.workspaceId, (notice) => send(ws, notice.seq));
         send(ws, await mailstore.latestSeq(ws.data.workspaceId));
       },
@@ -73,6 +77,7 @@ export function createChangesSocket(options: ChangesSocketOptions): ChangesSocke
         // The client never speaks; the feed is read over HTTP.
       },
       close(ws) {
+        presence?.close();
         ws.data.unsubscribe?.();
         ws.data.unsubscribe = undefined;
       },

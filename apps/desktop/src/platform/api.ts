@@ -66,6 +66,7 @@ import type {
   RunView,
   ScheduledSend,
   ScheduleResult,
+  ServiceStatus,
   SessionSummary,
   ThreadRoute,
   TurnContext,
@@ -539,6 +540,10 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         raw(`/external/consents/${encodeURIComponent(id)}/deny`, { method: "POST" }).then(
           () => undefined,
         ),
+    },
+    /** The Sidecar's background service (ADR 0013): pid, build, memory, what it told while monday was closed. */
+    service: {
+      status: () => request<ServiceStatus>("/service"),
     },
     upgrade: {
       status: () => request<UpgradeStatus>("/upgrade"),

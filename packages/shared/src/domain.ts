@@ -570,6 +570,37 @@ export interface Capabilities {
   servers: Array<{ id: string; mode: DeploymentMode; lastSeen: IsoDate }>;
 }
 
+/** What started the Sidecar's background service and keeps it running (ADR 0013). */
+export type ServiceManager = "systemd" | "launchd" | "process";
+
+/**
+ * GET /service on a Sidecar (ADR 0013): the background service that keeps
+ * running with the window closed. What Settings › Sync server shows, and what
+ * the app compares with its bundled build before reusing it.
+ */
+export interface ServiceStatus {
+  pid: number;
+  port: number;
+  /** The build of the running server; the app replaces it when its own bundled build differs. */
+  build: string;
+  startedAt: IsoDate;
+  managedBy: ServiceManager;
+  /** Resident memory of the server process, bytes. */
+  rssBytes: number;
+  /** Resident memory of its embedded Postgres, bytes; null where it cannot be read. */
+  postgresRssBytes: number | null;
+  /** Whether the root key is in memory; a login start runs locked until monday opens. */
+  unlocked: boolean;
+  /** Whether a client (a Device) is connected; while none is, the Sidecar posts notifications itself. */
+  clientPresent: boolean;
+  /**
+   * What the Sidecar already told as desktop notifications while no client was
+   * connected, so the app does not tell it again: mail dated at or before
+   * `mailThrough`, and the waiting Workflow Steps by key (`<run>:<activity or step>`).
+   */
+  notified: { mailThrough: IsoDate | null; approvals: string[] };
+}
+
 export type NavKnob = "full" | "rail" | "hidden";
 export type AgentKnob = "bottom" | "left" | "right";
 export type ListKnob = "stream" | "split";

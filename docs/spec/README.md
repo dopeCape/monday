@@ -7,7 +7,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 ## Read in this order
 
 1. [`CONTEXT.md`](../../CONTEXT.md), the glossary. Every term in every document below is defined there.
-2. The eleven ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
+2. The ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
 3. [`architecture.md`](./architecture.md), how the modules, deployments and data fit together, with the data model and API shape.
 4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md).
 5. [`slices.md`](./slices.md), the ordered implementation plan.
@@ -26,6 +26,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Client protocol, device pairing, TLS, versioning | ADR 0006 |
 | Hosted runtimes, model roles, meter, keys | ADR 0007 |
 | Install, cloud upgrade, channels, CI | ADR 0008 |
+| The Sidecar as a background service: lifecycle, token, login start, notifications with the window closed | ADR 0013, `docs/dev/sidecar.md` |
 | Repo, modules, store, tests, UI stack | ADR 0009 |
 | Drafts, send, voice, attachments | ADR 0010 |
 | Search and command palette | ADR 0011 |
@@ -53,6 +54,7 @@ Mobile clients, multi-user servers, PGP, a unified inbox across accounts, shared
 - Plain-language schedule to cron: supported phrases and how ambiguity is confirmed.
 - Attachment preview in the reader and Server storage limits.
 - Desktop notification policy beyond calendar and workflow failures.
+- A background service started at login runs locked until monday opens (ADR 0013); a keychain reader in the server would let it unlock itself.
 - Agent memory across Sessions beyond the Voice profile.
 - Backup, export and account deletion.
 - Spam handling.

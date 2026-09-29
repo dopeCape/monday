@@ -342,6 +342,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
         }),
       );
       keep(p.onSidecarFailed(setSidecarError));
+      // Stopped on purpose from Settings: known, not running, until a restart says ready.
+      keep(p.onSidecarStopped(() => setSidecar((s) => (s ? { ...s, running: false } : s))));
     });
     return () => {
       alive = false;
@@ -399,6 +401,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const [pendingCount, setPendingCount] = useState(0);
   const notePending = useCallback(() => setPendingCount(pendingWrites.current.size), []);
 
+  // Whether the Server's Settings arrived at least once, so a host-side effect
+  // (the login start) follows the saved value and not the default first.
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const refresh = useCallback(async () => {
     try {
       const { global, device } = await api.settings.all();
@@ -406,6 +411,7 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
         ...mergeStored(global, device),
         ...Object.fromEntries(pendingWrites.current),
       } as PartialSettings);
+      setSettingsLoaded(true);
     } catch {
       // No Server yet, or offline: the Settings in hand stay.
     }
@@ -457,6 +463,17 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const refreshServers = useCallback(async () => {
     await probe();
   }, [probe]);
+
+  // server.sidecar.start_at_login, applied on this computer (ADR 0013): the
+  // host installs or removes the background service's login start.
+  const loginStart = settings["server.sidecar.start_at_login"];
+  const sidecarRunning = sidecar?.running ?? false;
+  useEffect(() => {
+    if (!settingsLoaded || !sidecarRunning) return;
+    void platformOf()
+      .then((p) => (p.isTauri ? p.sidecarLoginStart(loginStart) : false))
+      .catch((e) => console.warn(`[monday] login start: ${e}`));
+  }, [settingsLoaded, sidecarRunning, loginStart, platformOf]);
   const nav = settings["layout.nav"];
   const agent = settings["layout.agent"];
   const list = settings["layout.list"];

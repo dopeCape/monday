@@ -213,7 +213,7 @@ _Avoid_: backend, API
 A Server deployed remotely: Vercel, Netlify or a container.
 
 **Sidecar**:
-The copy of the Server bundled with and started by the client. When both run they share one database; alone, it runs an embedded Postgres and does everything.
+The copy of the Server bundled with the client and started by it as a background service that keeps running when the window closes (ADR 0013). When both run they share one database; alone, it runs an embedded Postgres and does everything.
 _Avoid_: local server, embedded server
 
 **Job**:

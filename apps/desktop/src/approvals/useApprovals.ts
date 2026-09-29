@@ -30,6 +30,12 @@ export interface ApprovalsOptions {
   external: readonly ExternalPending[];
   /** Tells one notice: a desktop notification or a note in the window. */
   tell?: ((notice: ApprovalNotice) => void) | undefined;
+  /**
+   * The waiting Steps the Sidecar already told while monday was closed (ADR
+   * 0013), never told again; null while that is still being asked, which holds
+   * the notices back. Absent: nothing was told.
+   */
+  toldBySidecar?: ReadonlySet<string> | null | undefined;
   now?: (() => Date) | undefined;
 }
 
@@ -100,17 +106,18 @@ export function useApprovals(options: ApprovalsOptions): Approvals {
   settingsRef.current = settings;
   const nowRef = useRef(options.now);
   nowRef.current = options.now;
+  const bySidecar = options.toldBySidecar;
   useEffect(() => {
-    if (!live.loaded) return;
+    if (!live.loaded || bySidecar === null) return;
     const due = approvalNotices({
       live,
-      told: told.current,
+      told: bySidecar ? new Set([...told.current, ...bySidecar]) : told.current,
       settings: settingsRef.current,
       now: nowRef.current?.() ?? new Date(),
     });
     told.current = due.told;
     for (const n of due.notices) tellRef.current?.(n);
-  }, [live]);
+  }, [live, bySidecar]);
 
   const strings = settings;
   const items = useMemo(

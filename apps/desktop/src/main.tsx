@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import type { DraftMemory, DraftStatus } from "./calendar/drafts.ts";
 import { newMailNotice } from "./notifications/new-mail.ts";
+import { sidecarToldOnce } from "./notifications/sidecar-told.ts";
 import type { AccountView } from "./platform/api.ts";
 import { platform, platformNotifier } from "./platform/tauri.ts";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
@@ -365,6 +366,10 @@ function Gate(): ReactNode {
   currentRef.current = picked?.workspaceId;
   const settingsRef = useRef(shell.settings);
   settingsRef.current = shell.settings;
+  // What the Sidecar told while monday was closed is not told again (ADR 0013).
+  const toldApi = server?.kind === "sidecar" ? shell.api : null;
+  const toldApiRef = useRef(toldApi);
+  toldApiRef.current = toldApi;
   useEffect(() => {
     if (!pool) return;
     return pool.onNewMessages((workspaceId, messages) => {
@@ -373,14 +378,18 @@ function Gate(): ReactNode {
       if (!store || address === undefined) return;
       // The window in front, on this account: the list shows it, nothing pops up.
       if (windowInFront() && currentRef.current === workspaceId) return;
-      void newMailNotice({
-        workspaceId,
-        address,
-        messages,
-        store,
-        settings: settingsRef.current,
-        now: new Date(),
-      })
+      void sidecarToldOnce(toldApiRef.current)
+        .then((told) =>
+          newMailNotice({
+            workspaceId,
+            address,
+            messages,
+            store,
+            settings: settingsRef.current,
+            now: new Date(),
+            told,
+          }),
+        )
         .then((notice) => {
           if (notice) void platformNotifier.notify(notice.title, notice.body).catch(() => {});
         })

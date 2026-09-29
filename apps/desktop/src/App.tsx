@@ -56,6 +56,7 @@ import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calenda
 import { useEventReminders } from "./calendar/reminders.ts";
 import { chordLabel } from "./keyboard/keymaps.ts";
 import { useActiveKeymap, useKeymap } from "./keyboard/useKeymap.ts";
+import { sidecarToldOnce } from "./notifications/sidecar-told.ts";
 import type { AccountView } from "./platform/api.ts";
 import {
   type DeviceProviderKeys,
@@ -419,6 +420,19 @@ export function App({
     if (activePaneRef.current && windowInFront()) setApprovalNote(notice);
     else void platformNotifier.notify(notice.title, notice.body).catch(() => {});
   }, []);
+  // Steps the Sidecar told while monday was closed are not told again (ADR 0013).
+  const toldApi = shell.server?.kind === "sidecar" ? shell.api : null;
+  const [sidecarTold, setSidecarTold] = useState<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSidecarTold(null);
+    void sidecarToldOnce(toldApi).then((t) => {
+      if (live) setSidecarTold(t.approvals);
+    });
+    return () => {
+      live = false;
+    };
+  }, [toldApi]);
   const approvals = useApprovals({
     api: workflowsClient,
     workspaceId: ws.id,
@@ -427,6 +441,7 @@ export function App({
     session: agent.waiting,
     external: externalPending,
     tell: tellApproval,
+    toldBySidecar: sidecarTold,
   });
   const [approvalsOpen, setApprovalsOpen] = useState(
     () => new URLSearchParams(location.search).get("overlay") === "approvals",

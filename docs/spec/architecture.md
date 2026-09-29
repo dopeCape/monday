@@ -5,7 +5,7 @@ How the pieces fit. Vocabulary from `CONTEXT.md`; decisions cited by ADR.
 ## Shape
 
 ```
-apps/desktop            Tauri 2 app. React 19 over packages/ui. Rust: sidecar spawn, keychain, config watcher, SQLite commands.
+apps/desktop            Tauri 2 app. React 19 over packages/ui. Rust: the Sidecar's background service (find, start, replace, stop, login start), keychain, config watcher, SQLite commands.
   Store                 SQLite Cache, Outbox, Changes feed subscription, live queries (ADR 0009)
   Shell                 layout knobs, views, panels, theming (ADR 0001, design/)
   screens               inbox, reader, compose, calendar, workflows, routing, settings, onboarding
@@ -27,13 +27,13 @@ packages/ui             tokens.css, app.css, components, palettes
 
 | Mode | Process | Database | Kicker | Realtime | Holds IMAP IDLE |
 |---|---|---|---|---|---|
-| Sidecar only | spawned by Tauri, loopback, per-launch token | embedded Postgres | in-process loop | WebSocket | Sidecar |
+| Sidecar only | a background service the app starts and reuses (systemd user unit, LaunchAgent or detached process), loopback, stable token (ADR 0013) | embedded Postgres | in-process loop | WebSocket | Sidecar |
 | Container | `bun run entry/bun.ts` | user's Postgres | in-process loop | WebSocket | container |
 | Vercel | framework preset, Node (Bun beta) | pooled Neon or similar | Queues plus Cron | SSE, polling fallback | nobody |
 | Netlify | Node function | pooled Netlify DB or similar | Async Workloads plus Scheduled Functions | polling | nobody |
 | Both | Sidecar plus any cloud mode | the cloud's Postgres | both | WebSocket to Sidecar | Sidecar |
 
-Servers never talk to each other. All coordination is the jobs table with leases and need tags; heartbeats decide failover; the Sidecar does everything when no Cloud is alive (ADR 0005). A step that outlives its lease renews it (`StepContext.extend`; the agentic Step does so around every model and tool call), so the sweeper never hands a working Job to a second Server. Three need tags exist: `needs-public-url` (push webhooks, a Cloud), `needs-process` (IMAP IDLE, JMAP EventSource, Local runtime steps), and `needs-always-on` (time-critical work such as a scheduled send, claimed by a live Cloud so it happens while every laptop is closed). In "both" mode the Sidecar opens the Cloud's Postgres from a connection string recorded in its data directory by the upgrade; the deployment guide is `apps/server/deploy/README.md`.
+The Sidecar outlives the window (ADR 0013): closing the app leaves it and its Postgres running, the next launch reuses it when it runs the bundled build and replaces it gracefully when not, and it runs from its own copy under `<data dir>/sidecar/<build>/`. With no client connected it posts new-mail and Workflow-approval notifications itself. Servers never talk to each other. All coordination is the jobs table with leases and need tags; heartbeats decide failover; the Sidecar does everything when no Cloud is alive (ADR 0005). A step that outlives its lease renews it (`StepContext.extend`; the agentic Step does so around every model and tool call), so the sweeper never hands a working Job to a second Server. Three need tags exist: `needs-public-url` (push webhooks, a Cloud), `needs-process` (IMAP IDLE, JMAP EventSource, Local runtime steps), and `needs-always-on` (time-critical work such as a scheduled send, claimed by a live Cloud so it happens while every laptop is closed). In "both" mode the Sidecar opens the Cloud's Postgres from a connection string recorded in its data directory by the upgrade; the deployment guide is `apps/server/deploy/README.md`.
 
 ## Data model (Postgres, source of truth)
 
@@ -91,8 +91,9 @@ One HTTP JSON API on the Server, typed routes, a generated client in `packages/s
 - `/integrations` (which Workflow integrations are set up; works locked), `PUT /integrations/:name` (seals a token or webhook URL; 423 locked), `DELETE /integrations/:name`.
 - `/mcp`: the external MCP transport (streamable HTTP).
 - `/health`, `/capabilities` (protocol version, mode, features).
+- On the Sidecar only (ADR 0013): `GET /service` (pid, port, build, since when, memory, locked or not, whether a client is connected, and what it told as notifications while none was) and `POST /service/stop` (graceful: leases, then Postgres; the Sidecar principal only, a paired Device gets 403). `monday-server stop` and `monday-server status` do the same from a shell through `sidecar.json`.
 
-The Sidecar serves the same API on loopback with the per-launch token, plus the pairing UI when a Cloud is configured.
+The Sidecar serves the same API on loopback with its loopback token, plus the pairing UI when a Cloud is configured. The token is stable across launches: kept in the OS keychain (`sidecar-token`) and copied to `<data dir>/sidecar.token` (0600) for the service to read at start (ADR 0013).
 
 ## Settings screens
 
@@ -117,6 +118,7 @@ The Sidecar serves the same API on loopback with the per-launch token, plus the 
 
 - Root key held by the user as a recovery file; resident only in Server processes that must decrypt (Sidecar always; Cloud only if the user shares it for offline Briefs and Workflows). Threat model excludes root on the running host and the AI provider.
 - Device tokens in the OS keychain; pairing, not passwords. HTTPS off loopback.
+- The Sidecar's loopback token in the keychain and a 0600 copy in the data directory; the root key reaches the background service only over loopback (`POST /unlock` from the app), never through a file, its environment or its unit file (ADR 0013). A service started at login runs locked until monday opens.
 - External MCP credentials (Keys, OAuth tokens) are a second credential type stored hashed, scoped read or act, bound to Workspaces, always expiring, revocable with last use shown; they never open the Device routes, and Device tokens never open `/mcp`. Anything an external caller asks that leaves the mailbox or destroys data still asks the owner, with the caller named on the card.
 - Hosted keys per device unless explicitly shared with the Server, then stored under the envelope. Workflow integration secrets, Session transcripts, LangGraph checkpoints and the Voice profile are under the envelope too; the plaintext settings table holds nothing that opens a third party.
 - A Gmail push delivery is verified twice: the Pub/Sub OIDC token in its Authorization header (Google's signature against the published keys, issuer accounts.google.com, the audience the registration named, the service account it signs as: `sync.gmail_push_service_account`) and then the per-Account secret in the URL, in constant time. With no signing account configured no push subscription is registered and Gmail is polled on the reconcile interval.

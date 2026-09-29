@@ -66,15 +66,38 @@ function processAlive(pid: number): boolean {
   }
 }
 
-/** A cluster left running by a previous launch (the Tauri parent crashed) is reused. */
-async function runningClusterPort(dbDir: string): Promise<number | null> {
+/** A cluster left running by a previous run (a crash, a kill) is reused. */
+async function runningCluster(dbDir: string): Promise<{ pid: number; port: number } | null> {
   const pidFile = join(dbDir, "postmaster.pid");
   if (!existsSync(pidFile)) return null;
   const lines = (await readFile(pidFile, "utf8")).split(/\r?\n/);
   const pid = Number(lines[0]);
   const port = Number(lines[3]);
   if (!Number.isInteger(pid) || !Number.isInteger(port) || port <= 0) return null;
-  return processAlive(pid) ? port : null;
+  return processAlive(pid) ? { pid, port } : null;
+}
+
+/**
+ * Stops a reused cluster the way a started one is stopped: a fast shutdown
+ * (SIGINT), then SIGKILL after ten seconds. A background service that stops
+ * on purpose leaves no Postgres behind, whoever started it (ADR 0013).
+ */
+async function stopPid(pid: number): Promise<void> {
+  try {
+    process.kill(pid, "SIGINT");
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + 10_000;
+  while (processAlive(pid)) {
+    if (Date.now() > deadline) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<EmbeddedHandle> {
@@ -86,7 +109,8 @@ export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<E
   await mkdir(options.dataDir, { recursive: true });
   const password = await readOrCreatePassword(join(options.dataDir, "postgres.password"));
 
-  const reusePort = await runningClusterPort(dbDir);
+  const reused = await runningCluster(dbDir);
+  const reusePort = reused?.port ?? null;
   const port = reusePort ?? (await freePort());
   const bin = await postgresBinaries();
   let child: ChildProcess | null = null;
@@ -116,13 +140,14 @@ export async function startEmbeddedPostgres(options: EmbeddedOptions): Promise<E
     port,
     startupMs,
     stop: async () => {
-      if (!child) return;
-      await stopPostgres(child);
+      if (child) await stopPostgres(child);
+      else if (reused) await stopPid(reused.pid);
     },
     killSync: () => {
-      if (child?.pid) {
+      const pid = child?.pid ?? reused?.pid;
+      if (pid) {
         try {
-          process.kill(child.pid, "SIGINT");
+          process.kill(pid, "SIGINT");
         } catch {}
       }
     },

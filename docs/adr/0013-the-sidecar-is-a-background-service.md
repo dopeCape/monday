@@ -1,0 +1,33 @@
+---
+status: accepted
+---
+
+# The Sidecar is a background service that outlives the window
+
+ADR 0008 made the Sidecar the whole install, and until now it lived and died with the window: Tauri spawned it with a per-launch token, the server watched its parent pid, and closing the window stopped it and its Postgres. That broke the product's core promise, that sync, routing, the Backlog sort, Workflows, scheduled sends and reminders keep going while the user is not looking. We decided that the Sidecar is a background service. Closing the window quits the app and nothing else; the Sidecar and its embedded Postgres keep running until the user stops them on purpose, and the next app launch finds and reuses the one that is running. Keeping it running after the window closes is the product's promise, not a preference, so it is not a Setting; starting it at login is (`server.sidecar.start_at_login`, on by default).
+
+## Considered options
+
+- A Setting for "keep running after close", off by default. Rejected: the reason the Sidecar exists is to do the work; a closed window that stops mail is the bug this fixes.
+- Keep the process a child of the app and hide the window instead of closing it (a tray app). Rejected: the app process holds a webview and its memory for nothing, a crash or a logout of the app still stops mail, and the tray is not dependable on every Linux desktop.
+- The server reads the root key from the OS keychain itself. Rejected for now: Bun has no keychain API that works across the three platforms (libsecret is often absent on NixOS and bare window managers), and a login start runs before the desktop keyring is unlocked anyway.
+- Write the root key to a 0600 file for the service. Rejected: it would sit on disk next to the ciphertext it opens, undoing the envelope encryption's protection at rest.
+
+## Decision
+
+- **Lifecycle.** At launch the app reads `<data dir>/sidecar.json` (pid, port, build, start time, state, which manager runs it; written atomically by the server, never holding the token), checks the pid is alive and is the Sidecar, and asks `GET /service` with its token. Same build: reuse it, start nothing. Another build (the app was updated, or rebuilt in development): `POST /service/stop`, wait for it to finish its leases and stop Postgres, then start the new one. A dead pid or no answer: clean up and start fresh; a stuck one is stopped by its service manager, then by signals. A second copy started by a race sees the live one in the runtime file and exits. The decision is a pure function in `apps/desktop/src-tauri/src/service/decide.rs`.
+- **How it runs.** The service runs its own copy of the server, `<data dir>/sidecar/<build>/` with Postgres and the migrations, never the executable inside the bundle: an AppImage's mount disappears when the app exits, an update replaces the bundle under a running process, and a rebuild in development would hit "Text file busy". Linux with a systemd user manager: the `monday-sidecar.service` user unit (restart on a crash, not after a stop on purpose; SIGTERM to the server first so it stops Postgres). Linux without systemd and Windows: a detached process in its own session (a double fork on Unix; no console on Windows), stdout and stderr appended to `<data dir>/sidecar.log`, which the server rotates by size (`server.sidecar.log_max_mb`). macOS: a LaunchAgent in the GUI domain.
+- **Login start.** systemd: `systemctl --user enable`. macOS: the plist lives in `~/Library/LaunchAgents` (on) or the data directory (off). Linux without systemd: an XDG autostart entry. Windows: the `monday-sidecar` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The app applies the Setting on every launch and after a change.
+- **The token.** The loopback token is stable: generated once, kept in the OS keychain beside the root key (`sidecar-token`), and copied to `<data dir>/sidecar.token` (0600), which the server reads at start. It opens the Sidecar only on loopback; whoever can read the user's 0600 files already runs as the user and can read the keychain too. Without a keychain the file alone holds it. Loopback-only and bearer checks are unchanged (ADR 0006).
+- **The root key.** Never on disk and never in the service's environment or unit file. The app hands it over `POST /unlock` whenever it finds the service locked. A freshly started service waits `server.sidecar.unlock_wait_seconds` for that before it starts its Jobs, so the common start (the app starting it) is unlocked before any work runs.
+- **Notifications with the window closed.** While no client is connected (no Changes feed socket and no request for `notifications.sidecar.absent_seconds`), the Sidecar posts new-mail and Workflow-approval notifications itself: `notify-send` on Linux, `osascript` on macOS, a PowerShell balloon on Windows as a best effort. The same `notifications.*` Settings of the client on this computer gate them, with the app's rules. What it told is on `GET /service` (`notified`); the app, opened afterwards, does not tell it again.
+- **Stopping on purpose.** Settings › Sync server › Background service shows when it started, its PID and memory, with Restart and Stop (Stop asks first: mail does not sync until monday opens again). Scripts use `POST /service/stop` with the token, `monday-server stop`, or `systemctl --user stop monday-sidecar`. `POST /service/stop` is the Sidecar principal's alone; a paired Device may read `GET /service` but not stop it.
+
+## Consequences
+
+- The app no longer spawns the server as a child or reads its stdout; `sidecar.json` and `GET /service` are the contract. The server's parent-pid watch stays only for a plain start (`MONDAY_PARENT_PID`), never for `monday-server service`.
+- After a restart of the computer with login start on, the service runs locked until monday is opened once: headers sync; mail content, Briefs and Workflows wait. The Settings card says so. A dependable keychain reader in the server, or an OS credential store for services, would lift this; it is an open item.
+- The Local runtime still needs the app (CONTEXT.md): background work for it waits until the app is open, as before, and the Background service card says so.
+- Each build takes one copy of the server and Postgres in the data directory (about 170 MB); older copies are removed once a newer service is up.
+- A few bootstrap timings live in Rust, not in Settings, because they run before the server can be asked: how long a start may take, how long a stop request is waited for.
+- Development: closing `tauri dev` no longer stops the Sidecar. A rebuild never touches the running copy; the next launch replaces an older build by itself. `docs/dev/sidecar.md` has the commands.

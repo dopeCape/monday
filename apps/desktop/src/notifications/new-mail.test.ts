@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { defaultSettings } from "@monday/shared";
 import type { NewMessage } from "../store/store.ts";
 import { newMailNotice } from "./new-mail.ts";
+import { loadSidecarTold, NOTHING_TOLD, sidecarToldOnce, toldBySidecar } from "./sidecar-told.ts";
 
 const NOW = new Date("2026-09-24T10:00:00Z");
 const threads: Record<string, Record<string, unknown>> = {
@@ -97,5 +98,62 @@ describe("new mail notifications", () => {
       body: "me@x.test",
     });
     expect(await run([msg("m1", "t1", 1)], { "notifications.new_mail": false })).toBeNull();
+  });
+
+  test("mail the Sidecar told while monday was closed is not told again; newer mail is", async () => {
+    const told = {
+      mailThrough: NOW.getTime() - 2 * 60_000,
+      approvals: new Set<string>(),
+    };
+    const withTold = (messages: NewMessage[]) =>
+      newMailNotice({
+        workspaceId: "ws",
+        address: "me@x.test",
+        messages,
+        store,
+        settings: defaultSettings() as never,
+        now: NOW,
+        told,
+      });
+    expect(await withTold([msg("m1", "t1", 3)])).toBeNull();
+    expect(await withTold([msg("m1", "t1", 2)])).toBeNull();
+    expect(await withTold([msg("m1", "t1", 3), msg("m5", "t4", 1)])).toEqual({
+      workspaceId: "ws",
+      title: "Aoife",
+      body: "Invoice",
+    });
+  });
+});
+
+describe("what the Sidecar told", () => {
+  test("read once per connection; a Server that does not answer told nothing", async () => {
+    let asked = 0;
+    const api = {
+      service: {
+        status: async () => {
+          asked++;
+          return {
+            notified: { mailThrough: "2026-09-24T09:58:00.000Z", approvals: ["r1:a1"] },
+          };
+        },
+      },
+    };
+    const first = await sidecarToldOnce(api);
+    const second = await sidecarToldOnce(api);
+    expect(asked).toBe(1);
+    expect(first).toBe(second);
+    expect(first.mailThrough).toBe(Date.parse("2026-09-24T09:58:00.000Z"));
+    expect([...first.approvals]).toEqual(["r1:a1"]);
+    expect(toldBySidecar(first, "2026-09-24T09:57:00.000Z")).toBe(true);
+    expect(toldBySidecar(first, "2026-09-24T09:59:00.000Z")).toBe(false);
+
+    expect(await sidecarToldOnce(null)).toBe(NOTHING_TOLD);
+    const broken = await loadSidecarTold(async () => {
+      throw new Error("404");
+    });
+    expect(broken).toBe(NOTHING_TOLD);
+    const silent = await loadSidecarTold(() => new Promise(() => {}), 20);
+    expect(silent).toBe(NOTHING_TOLD);
+    expect(toldBySidecar(NOTHING_TOLD, "2026-09-24T09:57:00.000Z")).toBe(false);
   });
 });

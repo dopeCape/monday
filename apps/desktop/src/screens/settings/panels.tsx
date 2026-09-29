@@ -40,6 +40,7 @@ import {
   useSettingsScreen,
 } from "./render.tsx";
 import { Server } from "./Server.tsx";
+import { ServiceCard } from "./Service.tsx";
 import { fill } from "./wizard.ts";
 
 type Strings = ReturnType<typeof useShell>["settings"];
@@ -637,6 +638,27 @@ registerPanel("server", "Server", ServerPanel, {
   title: "strings.server.talking_to",
   description: "strings.settings.intro.server",
   searchTerms: ["server", "sidecar", "cloud", "health", "mode", "endpoint", "latency"],
+});
+
+/** The Sidecar as a background service (ADR 0013): running since, PID, memory, Restart and Stop. */
+export function BackgroundServicePanel(_: PanelProps) {
+  return <ServiceCard />;
+}
+registerPanel("server", "Background service", BackgroundServicePanel, {
+  title: "strings.server.service.title",
+  description: "strings.server.service.help",
+  searchTerms: [
+    "background",
+    "service",
+    "sidecar",
+    "stop",
+    "restart",
+    "login",
+    "startup",
+    "systemd",
+    "launchd",
+    "closed",
+  ],
 });
 
 /** The three upgrade cards while Sidecar only, the database move and the Cloud connection (slice 21). */

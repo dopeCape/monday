@@ -5,9 +5,11 @@
 // deleted), not the Account's own sends, and not bulk mail unless the Setting
 // says so. Several at once are one notice. While the window is in front and
 // showing that Workspace the list itself shows the mail, so nothing pops up.
+// Mail the Sidecar already told while monday was closed is not told again.
 
 import type { Settings } from "@monday/shared";
 import type { NewMessage, Store } from "../store/store.ts";
+import { type SidecarTold, toldBySidecar } from "./sidecar-told.ts";
 
 export type NewMailSettings = Pick<
   Settings,
@@ -43,13 +45,19 @@ export async function newMailNotice(input: {
   store: Pick<Store, "query">;
   settings: NewMailSettings;
   now: Date;
+  /** What the Sidecar already told while monday was closed (ADR 0013); none by default. */
+  told?: SidecarTold | undefined;
 }): Promise<NewMailNotice | null> {
   const { settings: s } = input;
   if (!s["notifications.enabled"] || !s["notifications.new_mail"]) return null;
   const since = input.now.getTime() - s["notifications.new_mail_recent_minutes"] * 60_000;
   const own = input.address.toLowerCase();
+  const bySidecar = input.told;
   const recent = input.messages.filter(
-    (m) => Date.parse(m.date) >= since && m.from.email.toLowerCase() !== own,
+    (m) =>
+      Date.parse(m.date) >= since &&
+      m.from.email.toLowerCase() !== own &&
+      !(bySidecar && toldBySidecar(bySidecar, m.date)),
   );
   if (recent.length === 0) return null;
   const ids = [...new Set(recent.map((m) => m.threadId))];
