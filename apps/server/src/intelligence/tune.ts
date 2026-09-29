@@ -35,6 +35,8 @@ import type {
   SectionWhen,
   SettingKey,
   Settings,
+  SignalsExplain,
+  SignalsPage,
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
@@ -59,8 +61,6 @@ import {
   messages,
   meter,
   routingDecisions,
-  sectionJudgments,
-  threadJudgments,
   threadRoutes,
   threads as threadsTable,
 } from "../db/schema.ts";
@@ -82,6 +82,7 @@ import {
 import { judgedPolicy } from "./policy.ts";
 import type { Routing, RoutingOverride, Scored } from "./routing/index.ts";
 import { AiOffError, type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
+import type { Signals } from "./signals/index.ts";
 
 /* ------------------------------ The registry ------------------------------ */
 
@@ -491,6 +492,10 @@ export interface TuneSeam {
   plan(workspaceId: Id, proposal: JudgmentProposal): Promise<ProposalPlan>;
   explain(workspaceId: Id, threadId: Id): Promise<PlacementExplanation>;
   list(workspaceId: Id): Promise<JudgmentListing>;
+  /** Every active Signal with its reach and base rate (slice 32); absent without the Signal store. */
+  signals?(workspaceId: Id): Promise<SignalsPage>;
+  /** A Thread's Signals with their numbers and versions, and its Facts (slice 32). */
+  threadSignals?(threadId: Id): Promise<SignalsExplain | null>;
   /** Re-runs a judgment beside the proposal. Throws TuneRefusal (no judge, untestable, invalid). */
   test(workspaceId: Id, proposal: JudgmentProposal, sample?: number): Promise<JudgmentTest>;
   /** The last test of this proposal in a Session, for the update card. */
@@ -522,6 +527,8 @@ export interface TuneOptions {
   routing: Routing;
   judgments: Judgments;
   organize: OrganizeSeam;
+  /** The Signal store, for the Signals the tools list and explain (slice 32). */
+  signals?: Pick<Signals, "page" | "explain"> | undefined;
   now?: () => Date;
 }
 
@@ -1069,12 +1076,7 @@ export function createTune(options: TuneOptions): TuneSeam {
     };
 
     // Arrival: the stored answers over the window.
-    const arrivalRows = await db
-      .select()
-      .from(threadJudgments)
-      .where(
-        and(eq(threadJudgments.workspaceId, workspaceId), gte(threadJudgments.judgedAt, since)),
-      );
+    const arrivalRows = await judgments.list(workspaceId, { since });
     const s = await readGlobalSettings(db, ["chips.threshold", ...POLICY_KEYS]);
     const arrivalBehavior = (field: string, type: "noul" | "score"): JudgmentBehavior => {
       const distribution: Record<string, number> = {};
@@ -1114,27 +1116,11 @@ export function createTune(options: TuneOptions): TuneSeam {
     // Sections: the cached answers per rule, and the Examples.
     const ctxRules = await organize.sectionRules();
     const sectionSettings = await organize.settings();
-    const sectionRows = await db
-      .select({
-        ruleId: sectionJudgments.ruleId,
-        statement: sectionJudgments.statement,
-        probability: sectionJudgments.probability,
-        threadId: sectionJudgments.threadId,
-      })
-      .from(sectionJudgments)
-      .where(
-        and(eq(sectionJudgments.workspaceId, workspaceId), gte(sectionJudgments.judgedAt, since)),
-      );
+    const sectionRows = await organize.answers(workspaceId, since);
     const sectionExamples = await current("sections.examples");
-    const examplesMax = (await current("routing.examples_in_prompt")) as number;
     const sectionBehavior = (rule: SectionRuleSetting): JudgmentBehavior => {
-      const key = sectionQuestion(
-        rule.judge?.trim() ?? "",
-        sectionExamples[rule.id],
-        examplesMax,
-      ).key;
       const rows = sectionRows.filter((r) => r.ruleId === rule.id);
-      const currentRows = rows.filter((r) => r.statement === key);
+      const currentRows = rows.filter((r) => r.current);
       const distribution: Record<string, number> = {};
       let unsure = 0;
       for (const r of currentRows) {
@@ -1618,9 +1604,7 @@ export function createTune(options: TuneOptions): TuneSeam {
     const c: Collected = { considered: 0, skipped: 0, requests: 0, costMicros: 0, rows: [] };
     const ctx = await organize.sectionContext(workspaceId, sample);
     const ids = ctx.threads.map((t) => t.id);
-    const stored = ids.length
-      ? await db.select().from(threadJudgments).where(inArray(threadJudgments.threadId, ids))
-      : [];
+    const stored = ids.length ? await judgments.list(workspaceId, { threadIds: ids }) : [];
     const byId = new Map(stored.map((r) => [r.threadId, r]));
     const proposedValue = (key: string, fallback: number) =>
       (p.writes.find((w) => w.key === key)?.value as number | undefined) ?? fallback;
@@ -1724,6 +1708,14 @@ export function createTune(options: TuneOptions): TuneSeam {
     ]);
 
   return {
+    ...(options.signals
+      ? {
+          signals: (workspaceId: Id) =>
+            (options.signals as Pick<Signals, "page">).page(workspaceId),
+          threadSignals: (threadId: Id) =>
+            (options.signals as Pick<Signals, "explain">).explain(threadId),
+        }
+      : {}),
     settings: tuneSettings,
     judgeAvailable,
     entries,

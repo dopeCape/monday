@@ -6,11 +6,12 @@
 // deterministic conditions run on the client over the Cache. A Section that
 // also carries a judge statement needs one Noul per Thread, and that is what
 // this module answers: it asks the Judge under `judge.section` for the
-// Threads that lack an answer, keeps every answer in `section_judgments`
-// keyed by the rule id and the statement it was asked with (a reworded
-// statement is asked again), and hands the client the numbers through
-// POST /sections/judgments so the stream never waits on a model for the
-// Threads it already knows. The same table holds judged custom actions.
+// Threads that lack an answer, keeps every answer in the Signal store as the
+// Section's own Signal (`section:<id>`, ADR 0014; a reworded statement is a
+// new Question version, asked again while the old answer still shows), and
+// hands the client the numbers through POST /sections/judgments so the
+// stream never waits on a model for the Threads it already knows. Judged
+// custom actions are Signals the same way (`action:<id>`).
 //
 // Counting what a new Section would hold, for the card that names how many
 // Threads move, walks the newest Threads with the same evaluator the client
@@ -23,6 +24,7 @@ import type {
   GroupView,
   Id,
   JsonValue,
+  JudgeAnswer,
   NoulQuestion,
   ProposedMove,
   RoutingApplied,
@@ -31,30 +33,28 @@ import type {
   SectionJudged,
   SectionJudgments,
   SectionRuleSetting,
+  SignalReadings,
   Thread,
 } from "@monday/shared";
 import {
+  actionSignalId,
+  judgmentsFromSignals,
   orderedSectionRules,
   sectionMatches,
   sectionRuleHolds,
+  sectionSignalId,
   sectionsToJudge,
 } from "@monday/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db } from "../db/client.ts";
-import {
-  accounts,
-  groups,
-  messages,
-  sectionJudgments,
-  threadJudgments,
-  workspaces,
-} from "../db/schema.ts";
+import { accounts, groups, messages, workspaces } from "../db/schema.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import { readGlobalSettings } from "../settings/read.ts";
 import type { CandidateGroup, Routing } from "./routing/index.ts";
 import type { HostedRuntime } from "./runtime/index.ts";
 import { AiOffError, NoJudgeError } from "./runtime/index.ts";
+import type { Signals } from "./signals/index.ts";
 
 /** One Thread's judged answers as POST /sections/judgments returns them. */
 export interface SectionJudgmentView {
@@ -114,6 +114,14 @@ export interface OrganizeSeam {
   countSection(workspaceId: Id, rule: SectionRuleSetting, recent?: number): Promise<SectionCount>;
   /** Drops every cached answer for a rule (Undo of an organize pass, or a deleted rule). */
   forget(workspaceId: Id, ruleId: string): Promise<number>;
+  /**
+   * The stored answers to the judged Sections over a window, by rule id, and
+   * whether each was asked with the current wording. For list_judgments.
+   */
+  answers(
+    workspaceId: Id,
+    since: Date,
+  ): Promise<Array<{ ruleId: string; threadId: Id; probability: number; current: boolean }>>;
   /**
    * Everything sectionOf reads for these Threads under the current rules,
    * with the cached answers to each judge statement as they would decide
@@ -225,6 +233,8 @@ export interface OrganizeOptions {
   mailstore: Mailstore;
   runtime: HostedRuntime;
   routing: Routing;
+  /** The Signal store the answers live in (slice 30). */
+  signals: Signals;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -248,19 +258,21 @@ const SETTING_KEYS = [
  */
 interface JudgedRule {
   id: string;
+  /** The Signal the answers live under: `section:<id>` or `action:<id>`. */
+  signalId: string;
   statement: string;
   question: NoulQuestion;
 }
 
 const plainRule = (id: string, statement: string): JudgedRule => ({
   id,
+  signalId: actionSignalId(id),
   statement,
   question: { type: "noul", instructions: statement },
 });
 
 export function createOrganize(options: OrganizeOptions): OrganizeSeam {
-  const { db, mailstore, runtime, routing } = options;
-  const now = options.now ?? (() => new Date());
+  const { db, mailstore, runtime, routing, signals } = options;
   const log = options.log ?? (() => {});
 
   const readSettings = () => readGlobalSettings(db, SETTING_KEYS);
@@ -298,52 +310,58 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
   };
 
   /**
-   * The arrival Judgments (slice 25, thread_judgments) for these Threads, so
-   * the judged bounds in a rule's `when` decide here exactly as on the client
-   * and a Thread they settle is never asked the rule's judge statement.
+   * The Signal answers for these Threads (slice 30): the shipped ones as the
+   * arrival Judgments, so the judged bounds in a rule's `when` decide here
+   * exactly as on the client and a Thread they settle is never asked the
+   * rule's judge statement, and every answer as the readings `when.signals`
+   * reads.
    */
-  const arrivalJudgments = async (threadIds: readonly Id[]): Promise<Map<Id, SectionJudgments>> => {
-    const out = new Map<Id, SectionJudgments>();
-    if (threadIds.length === 0) return out;
-    const rows = await db
-      .select({
-        threadId: threadJudgments.threadId,
-        needsReply: threadJudgments.needsReply,
-        waitingOnOthers: threadJudgments.waitingOnOthers,
-        newsletter: threadJudgments.newsletter,
-        automated: threadJudgments.automated,
-        urgency: threadJudgments.urgency,
-      })
-      .from(threadJudgments)
-      .where(inArray(threadJudgments.threadId, [...threadIds]));
-    for (const { threadId, ...judgments } of rows) out.set(threadId, judgments);
-    return out;
+  const signalFacts = async (
+    threadIds: readonly Id[],
+  ): Promise<{ judgments: Map<Id, SectionJudgments>; readings: Map<Id, SignalReadings> }> => {
+    const judgments = new Map<Id, SectionJudgments>();
+    const readings = new Map<Id, SignalReadings>();
+    if (threadIds.length === 0) return { judgments, readings };
+    const all = await signals.readings(threadIds);
+    const { rules } = await signals.settings();
+    for (const [threadId, answers] of all) {
+      const shown = Object.fromEntries(
+        Object.entries(answers).filter(([, a]) => !(a.stale && rules.staleAnswers === "hide")),
+      );
+      readings.set(threadId, shown);
+      const j = judgmentsFromSignals(threadId, shown);
+      if (j) judgments.set(threadId, j);
+    }
+    return { judgments, readings };
   };
 
-  /** The cached answers for these Threads whose statement still matches the rule's. */
+  /**
+   * The stored answers for these Threads, by rule id: stale ones too while
+   * signals.stale_answers shows them (a reworded statement does not empty the
+   * Section), with the stale ones listed so they are asked again.
+   */
   const cached = async (
-    workspaceId: Id,
+    _workspaceId: Id,
     threadIds: readonly Id[],
     rules: readonly JudgedRule[],
+    stale?: Set<string>,
   ): Promise<Map<Id, Record<string, number>>> => {
     const out = new Map<Id, Record<string, number>>();
     if (threadIds.length === 0 || rules.length === 0) return out;
-    const wanted = new Map(rules.map((r) => [r.id, r.statement]));
-    const rows = await db
-      .select()
-      .from(sectionJudgments)
-      .where(
-        and(
-          eq(sectionJudgments.workspaceId, workspaceId),
-          inArray(sectionJudgments.threadId, [...threadIds]),
-          inArray(sectionJudgments.ruleId, [...wanted.keys()]),
-        ),
-      );
-    for (const r of rows) {
-      if (wanted.get(r.ruleId) !== r.statement) continue;
-      const entry = out.get(r.threadId) ?? {};
-      entry[r.ruleId] = r.probability;
-      out.set(r.threadId, entry);
+    const all = await signals.readings(threadIds);
+    const { rules: reading } = await signals.settings();
+    for (const [threadId, answers] of all) {
+      for (const r of rules) {
+        const a = answers[r.signalId];
+        if (!a || typeof a.noul !== "number") continue;
+        if (a.stale) {
+          stale?.add(`${threadId}\u0000${r.id}`);
+          if (reading.staleAnswers === "hide") continue;
+        }
+        const entry = out.get(threadId) ?? {};
+        entry[r.id] = a.noul;
+        out.set(threadId, entry);
+      }
     }
     return out;
   };
@@ -373,7 +391,14 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
         s["sections.examples"][r.id],
         s["routing.examples_in_prompt"],
       );
-      return [{ id: r.id, statement: asked.key, question: asked.question }];
+      return [
+        {
+          id: r.id,
+          signalId: sectionSignalId(r.id),
+          statement: asked.key,
+          question: asked.question,
+        },
+      ];
     });
 
   /** Asks the Judge for `rules` over these Threads and stores every answer. Returns what it learned. */
@@ -394,31 +419,14 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       const state = await stateOf(thread, senders.get(thread.id) ?? null, groupNames);
       const result = await runtime.judge("judge.section", state, questions, { workspaceId });
       const learned: Record<string, number> = {};
+      const stored: Record<string, JudgeAnswer> = {};
       for (const r of rules) {
         const answer = result.answers[r.id];
         if (answer?.type !== "noul") continue;
         learned[r.id] = answer.noul;
-        await db
-          .insert(sectionJudgments)
-          .values({
-            workspaceId,
-            threadId: thread.id,
-            ruleId: r.id,
-            statement: r.statement,
-            probability: answer.noul,
-            model: result.model,
-            judgedAt: now(),
-          })
-          .onConflictDoUpdate({
-            target: [sectionJudgments.threadId, sectionJudgments.ruleId],
-            set: {
-              statement: r.statement,
-              probability: answer.noul,
-              model: result.model,
-              judgedAt: now(),
-            },
-          });
+        stored[r.signalId] = answer;
       }
+      await signals.store(workspaceId, thread.id, stored, { model: result.model });
       out.set(thread.id, learned);
     }
     return out;
@@ -455,12 +463,16 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
     groupNames: Record<string, string>,
     judged: SectionJudged | undefined,
     threshold: number,
-    arrival?: ReadonlyMap<Id, SectionJudgments>,
+    arrival?: {
+      judgments: ReadonlyMap<Id, SectionJudgments>;
+      readings: ReadonlyMap<Id, SignalReadings>;
+    },
   ): SectionFacts => ({
     lastSender: senders.get(thread.id) ?? null,
     owner,
     groupNames,
-    judgments: arrival?.get(thread.id) ?? null,
+    judgments: arrival?.judgments.get(thread.id) ?? null,
+    signals: arrival?.readings.get(thread.id) ?? {},
     judged,
     judgeThreshold: threshold,
   });
@@ -508,29 +520,45 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       if (all.length === 0) return [];
       const ids = threadIds.slice(0, s["sections.judge_batch"]);
       const threads = await threadsById(workspaceId, ids);
+      const stale = new Set<string>();
       const known = await cached(
         workspaceId,
         threads.map((t) => t.id),
         all,
+        stale,
       );
       const [senders, owner, groupNames, arrival] = await Promise.all([
         lastSenders(threads.map((t) => t.id)),
         ownerOf(workspaceId),
         groupNamesOf(workspaceId),
-        arrivalJudgments(threads.map((t) => t.id)),
+        signalFacts(threads.map((t) => t.id)),
       ]);
       // What each Thread still needs: the judged Sections its conditions let
-      // through and no answer decided, plus every judged action.
+      // through and no answer decided, every judged action without one, and
+      // any answer asked with an earlier wording.
       const need = new Map<Id, JudgedRule[]>();
       const byId = new Map(judgedSections.map((r) => [r.id, r]));
+      const isStale = (threadId: Id, ruleId: string) => stale.has(`${threadId}\u0000${ruleId}`);
       for (const t of threads) {
         const have = known.get(t.id);
-        const facts = factsFor(t, senders, owner, groupNames, have, threshold, arrival);
+        const fresh = have
+          ? Object.fromEntries(Object.entries(have).filter(([id]) => !isStale(t.id, id)))
+          : undefined;
+        const base = factsFor(t, senders, owner, groupNames, fresh, threshold, arrival);
+        // An answer asked with an earlier wording shows in lists but never settles what to ask.
+        const readings = Object.fromEntries(
+          Object.entries(base.signals ?? {}).filter(
+            ([id]) => !(id.startsWith("section:") && isStale(t.id, id.slice("section:".length))),
+          ),
+        );
+        const facts = { ...base, signals: readings };
         const wanted = sectionsToJudge(t, facts, rules, order).flatMap((id) => {
           const r = byId.get(id);
           return r ? [r] : [];
         });
-        for (const a of judgedActions) if (have?.[a.id] === undefined) wanted.push(a);
+        for (const a of judgedActions) {
+          if (have?.[a.id] === undefined || isStale(t.id, a.id)) wanted.push(a);
+        }
         if (wanted.length) need.set(t.id, wanted);
       }
       if (need.size > 0 && (await judgeAvailable())) {
@@ -563,7 +591,7 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
         lastSenders(threads.map((t) => t.id)),
         ownerOf(workspaceId),
         groupNamesOf(workspaceId),
-        arrivalJudgments(threads.map((t) => t.id)),
+        signalFacts(threads.map((t) => t.id)),
       ]);
       const statement = rule.judge?.trim() ?? "";
       const judgedRule: JudgedRule[] = [];
@@ -573,7 +601,12 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
           s["sections.examples"][rule.id],
           s["routing.examples_in_prompt"],
         );
-        judgedRule.push({ id: rule.id, statement: asked.key, question: asked.question });
+        judgedRule.push({
+          id: rule.id,
+          signalId: sectionSignalId(rule.id),
+          statement: asked.key,
+          question: asked.question,
+        });
       }
       const known = await cached(
         workspaceId,
@@ -616,13 +649,35 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
     },
 
     async forget(workspaceId, ruleId) {
-      const rows = await db
-        .delete(sectionJudgments)
-        .where(
-          and(eq(sectionJudgments.workspaceId, workspaceId), eq(sectionJudgments.ruleId, ruleId)),
-        )
-        .returning({ threadId: sectionJudgments.threadId });
-      return rows.length;
+      return (
+        (await signals.forget(workspaceId, sectionSignalId(ruleId))) +
+        (await signals.forget(workspaceId, actionSignalId(ruleId)))
+      );
+    },
+
+    async answers(workspaceId, since) {
+      const s = await readSettings();
+      const defs = await signals.defs(workspaceId);
+      const ids = judgedSectionsOf(s).map((r) => r.id);
+      if (ids.length === 0) return [];
+      const current = new Map(defs.map((d) => [d.id, d.version]));
+      const all = await signals.answeredSince(workspaceId, ids.map(sectionSignalId), since);
+      const out: Array<{ ruleId: string; threadId: Id; probability: number; current: boolean }> =
+        [];
+      for (const [threadId, answers] of all) {
+        for (const ruleId of ids) {
+          const a = answers[sectionSignalId(ruleId)];
+          if (!a || typeof a.noul !== "number" || Date.parse(a.judgedAt) < since.getTime())
+            continue;
+          out.push({
+            ruleId,
+            threadId,
+            probability: a.noul,
+            current: a.version === current.get(sectionSignalId(ruleId)),
+          });
+        }
+      }
+      return out;
     },
 
     async sectionContext(workspaceId, threadIds) {
@@ -638,7 +693,7 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
         lastSenders(ids),
         ownerOf(workspaceId),
         groupNamesOf(workspaceId),
-        arrivalJudgments(ids),
+        signalFacts(ids),
         cached(workspaceId, ids, judged),
       ]);
       const facts = new Map<Id, SectionFacts>();
@@ -666,24 +721,12 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       const rule = s["sections.rules"].find((r) => r.id === ruleId);
       const statement = rule?.judge?.trim();
       if (!statement) return;
-      const { key } = sectionQuestion(
-        statement,
-        s["sections.examples"][ruleId],
-        s["routing.examples_in_prompt"],
+      await signals.store(
+        workspaceId,
+        threadId,
+        { [sectionSignalId(ruleId)]: { type: "noul", noul: holds ? 1 : 0 } },
+        { model: "owner" },
       );
-      const values = {
-        statement: key,
-        probability: holds ? 1 : 0,
-        model: "owner",
-        judgedAt: now(),
-      };
-      await db
-        .insert(sectionJudgments)
-        .values({ workspaceId, threadId, ruleId, ...values })
-        .onConflictDoUpdate({
-          target: [sectionJudgments.threadId, sectionJudgments.ruleId],
-          set: values,
-        });
     },
   };
   return seam;

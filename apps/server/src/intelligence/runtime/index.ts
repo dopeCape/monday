@@ -28,6 +28,7 @@ import {
   resolveTaskModel,
 } from "@monday/shared";
 
+import type { JudgeLimiter, JudgePriority } from "../signals/limiter.ts";
 import {
   converseAsCall,
   LOCAL_CLI_LABEL,
@@ -116,6 +117,8 @@ export interface RunOptions {
   jobId?: string | null;
   /** Overrides the Setting's provider, for a client with a key for another one. */
   provider?: HostedProvider;
+  /** For judge(): background work waits behind arrival at the limiter (slice 31). Default arrival. */
+  priority?: JudgePriority;
 }
 
 /** Who answered a run() or converse(): a Hosted provider, or a Device's Local runtime (runtime/local.ts). */
@@ -212,6 +215,8 @@ export interface HostedRuntimeOptions {
   converse?: ConverseModel;
   /** Absent means judge() throws NoJudgeError("no_model"); the Server wires TypeSafe, tests a script. */
   judge?: JudgeModel;
+  /** Every judge request passes it: the rate, arrival first, background concurrency, 429 cooldown. */
+  limiter?: JudgeLimiter;
   keys: KeysResolver;
   settings: () => Promise<HostedSettings>;
   meter: { record(entry: MeterInput): Promise<MeterEntry> };
@@ -328,13 +333,17 @@ export function createHostedRuntime(options: HostedRuntimeOptions): HostedRuntim
       const key = await options.keys("typesafe");
       if (!key) throw new NoJudgeError("no_key");
       const started = now();
-      const response = await judge({
-        model: settings["ai.judge.model"],
-        key,
-        state,
-        questions,
-        baseUrl: settings["ai.endpoint.typesafe"],
-      });
+      const call = () =>
+        judge({
+          model: settings["ai.judge.model"],
+          key,
+          state,
+          questions,
+          baseUrl: settings["ai.endpoint.typesafe"],
+        });
+      const response = options.limiter
+        ? await options.limiter.run(opts.priority ?? "arrival", call)
+        : await call();
       const durationMs = Math.max(0, now() - started);
       const usage: Usage = {
         inputTokens: Math.max(0, Math.round(response.usage.inputTokens)),

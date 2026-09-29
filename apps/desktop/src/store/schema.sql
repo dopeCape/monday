@@ -177,22 +177,7 @@ create table if not exists decisions (
   at text not null default ''
 );
 
--- Judgments (slice 25, ADR 0012): the arrival request's answers per Thread,
--- probabilities only, straight from the feed. The Section rules read them
--- when a rule bounds a Judgment; the reader shows chips from them before a
--- Brief exists. A feed row marked deleted removes the entry.
-create table if not exists thread_judgments (
-  thread_id text primary key,
-  needs_reply real not null default 0,
-  waiting_on_others real not null default 0,
-  newsletter real not null default 0,
-  automated real not null default 0,
-  brief_worth real not null default 0,
-  urgency real not null default 0,
-  chips text not null default '{}',
-  model text not null default '',
-  judged_at text not null default ''
-);
+-- Judgments (slice 25) live in thread_signals since slice 30 (store/signals.ts).
 
 -- A Thread's meeting chip as the Server planned it (docs/spec/meetings.md),
 -- so a list row can show it on hover; the reader asks for fresh options on

@@ -239,7 +239,9 @@ export type ContentKind =
   /** A meeting reading: the times and zones a Message proposes, read from its text (docs/spec/meetings.md). */
   | "meeting"
   /** A Template's name, fits-when, subject, body and Placeholders (docs/spec/templates.md). */
-  | "template";
+  | "template"
+  /** A Thread's Facts drawn from its text (amounts, addresses, links) and the picked amount (slice 32). */
+  | "facts";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read

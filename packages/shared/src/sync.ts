@@ -24,6 +24,7 @@ import type { ThreadJudgments } from "./judge.ts";
 import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
 import type { TemplateChange } from "./templates/types.ts";
+import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -229,6 +230,9 @@ export type ChangeKind =
   | "decision"
   | "judgments"
   | "meeting"
+  | "signals"
+  | "signal_def"
+  | "facts"
   | "calendar"
   | "event"
   | "invite"
@@ -448,6 +452,9 @@ export type ChangePayload =
   | { kind: "decision"; payload: DecisionChange }
   | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "meeting"; payload: MeetingChange }
+  | { kind: "signals"; payload: SignalsChange }
+  | { kind: "signal_def"; payload: SignalDefChange }
+  | { kind: "facts"; payload: FactsChange }
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange }

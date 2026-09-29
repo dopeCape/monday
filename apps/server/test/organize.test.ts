@@ -11,7 +11,7 @@ import { defaultSettings } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys, type Keys } from "../src/crypto/keys.ts";
-import { sectionJudgments, threads as threadsTable } from "../src/db/schema.ts";
+import { signalAnswers, threads as threadsTable } from "../src/db/schema.ts";
 import { createIntelligence, type Intelligence } from "../src/intelligence/index.ts";
 import { createFakeChat, createFakeJudge } from "../src/intelligence/runtime/fake/index.ts";
 import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
@@ -163,7 +163,7 @@ describe("organizing mail by talking", () => {
     // Metered under judge.section.
     const month = await intelligence.meter.month(workspaceId, NOW.toISOString().slice(0, 7));
     expect(month.lines.some((l) => l.task === "judge.section")).toBe(true);
-    // A reworded statement is asked again; the old answer never decides.
+    // A reworded statement is a new Question version: asked again, the old answer only shown meanwhile.
     await putSetting("sections.rules", [
       { ...owe, judge: "The thread is a bill the owner has not paid yet." },
       ...defaultSettings()["sections.rules"],
@@ -172,12 +172,15 @@ describe("organizing mail by talking", () => {
     expect(judge.calls.length - before).toBe(ids.length + 2);
     const rows = await db.handle.db
       .select()
-      .from(sectionJudgments)
-      .where(eq(sectionJudgments.ruleId, "owe"));
+      .from(signalAnswers)
+      .where(eq(signalAnswers.signalId, "section:owe"));
     expect(rows.length).toBe(ids.length);
     expect(await intelligence.organize.forget(workspaceId, "owe")).toBe(ids.length);
     expect(
-      await db.handle.db.select().from(sectionJudgments).where(eq(sectionJudgments.ruleId, "owe")),
+      await db.handle.db
+        .select()
+        .from(signalAnswers)
+        .where(eq(signalAnswers.signalId, "section:owe")),
     ).toHaveLength(0);
   });
 
@@ -295,7 +298,10 @@ describe("organizing mail by talking", () => {
     expect(pass.outcome.isError).toBe(false);
     expect(pass.outcome.text).toMatch(/\d+ threads? of 5 are in "Invoices I still owe"/);
     expect(
-      await db.handle.db.select().from(sectionJudgments).where(eq(sectionJudgments.ruleId, "owe")),
+      await db.handle.db
+        .select()
+        .from(signalAnswers)
+        .where(eq(signalAnswers.signalId, "section:owe")),
     ).toHaveLength(5);
     const undone = await intelligence.agent.undo(pass.outcome.activity.id, null);
     expect(undone.result).toContain("5 judgments forgotten");

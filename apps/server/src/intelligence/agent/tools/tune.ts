@@ -110,7 +110,21 @@ const explainPlacement: ToolDefinition<{ thread_id: string }> = {
     const [found] = await ctx.host.threadsById([input.thread_id]);
     if (!found) return { kind: "refused", text: `Thread ${input.thread_id} not found.` };
     const explanation = await seam.explain(ctx.host.workspaceId, input.thread_id);
-    return { kind: "result", text: explanationText(explanation), data: explanation };
+    // Its Signals too (slice 32): each with its number, version and whether it is stale.
+    const signals = (await seam.threadSignals?.(input.thread_id)) ?? null;
+    const text = signals
+      ? `${explanationText(explanation)}\nSignals: ${JSON.stringify(
+          signals.signals.map((s) => ({
+            id: s.id,
+            value: s.noul ?? s.score ?? s.choice,
+            confidence: s.confidence,
+            version: s.version,
+            stale: s.stale,
+            lowTrust: s.lowTrust,
+          })),
+        )}\nFacts: ${JSON.stringify(signals.facts)}`
+      : explanationText(explanation);
+    return { kind: "result", text, data: { ...explanation, signals } };
   },
 };
 
@@ -206,7 +220,21 @@ const listJudgments: ToolDefinition<{ family?: (typeof FAMILIES)[number] | undef
       families.push({ ...f, judgments });
     }
     const data: PinnedListing = { ...listing, families };
-    return { kind: "result", text: listingText(data), data };
+    // The Signals (slice 32): every standing question with its reach and how often it holds.
+    const signals = input.family ? null : ((await seam.signals?.(ctx.host.workspaceId)) ?? null);
+    const signalsText = signals
+      ? `\nSignals (${signals.total} threads in scope):\n${signals.signals
+          .map(
+            (s) =>
+              `- ${s.id} (${s.kind}, version ${s.version}, ${s.setting ?? s.owner.kind}): ${clip(s.label)}; ${s.read} read, ${s.stale} stale, holds on ${s.holds === null ? "no answers yet" : `${Math.round(s.holds * 100)}%`}${s.flag ? ` [${s.flag}]` : ""}`,
+          )
+          .join("\n")}`
+      : "";
+    return {
+      kind: "result",
+      text: `${listingText(data)}${signalsText}`,
+      data: { ...data, signals },
+    };
   },
 };
 

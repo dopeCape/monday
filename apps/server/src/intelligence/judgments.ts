@@ -1,21 +1,14 @@
-// Judgments on arrival (CONTEXT.md "Judgment", "Judge"; ADR 0012; slice 25).
-// One request to the judge per Thread version answers everything the stream,
-// the brief policy and the reader want before a Brief exists: whether a
-// reply is needed, whether the owner is waiting, whether it is a newsletter
-// or automated mail (Nouls), how much a Brief would help and how urgent it
-// is (Scores), and one Noul per action chip. The answers are probabilities,
-// stored in thread_judgments keyed by Thread with the version they were
-// asked for, and carried on the Changes feed as `judgments` so the client's
-// Section rules and chips read them from the Cache.
+// Judgments on arrival (CONTEXT.md "Judgment", "Signal"; ADR 0012, ADR 0014;
+// slices 25 and 30). The arrival request is the Signal request: one request
+// per Thread version asks every shipped Signal (needs a reply, waiting on
+// you, waiting on others, newsletter, automated, Brief worth, urgency, the
+// chips) and the Signal store keeps the answers (signals/index.ts). This
+// module is what the brief policy, the chips and tune read them through, as
+// the slice 25 Judgments, and it owns the `judge` Job the sync engine's
+// thread observer enqueues (never inline), at level `automate` only.
 //
-// The sync engine's thread observer enqueues a `judge` Job (never inline);
-// the Job asks only when the judge is available (a TypeSafe key and the
-// Setting), and only at level `automate`; at `assist` the brief Job asks on
-// open, like Briefs. Without a judge nothing is stored and the header rules
-// stay in charge. Every question's text is a Setting (judgments.questions.*).
-//
-// The state is headers, counts, list headers and the newest snippet: bodies
-// are not sent for these questions (docs/research/typesafe-system-one.md).
+// The pure builders below (judgmentQuestions, judgmentState, readJudgments)
+// are the slice 25 request, kept for test_judgment's before and after.
 
 import type {
   AiLevel,
@@ -23,19 +16,19 @@ import type {
   Id,
   JsonValue,
   JudgeAnswers,
-  JudgmentsChange,
   NoulQuestion,
   Person,
   ScoreQuestion,
   ThreadJudgments,
 } from "@monday/shared";
 import { CHIP_NAMES } from "@monday/shared";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
-import { accounts, messages, threadJudgments, threads, workspaces } from "../db/schema.ts";
+import { accounts, threads, workspaces } from "../db/schema.ts";
 import type { Job, Jobs } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
-import { type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
+import { AiOffError, type HostedRuntime, NoJudgeError } from "./runtime/index.ts";
+import type { Signals } from "./signals/index.ts";
 
 export const JUDGE_STEP = "judge";
 
@@ -92,6 +85,16 @@ export interface JudgmentsOptions {
   db: Db;
   mailstore: Mailstore;
   runtime: HostedRuntime;
+  /** The Signal store the answers live in (slice 30). */
+  signals: Signals;
+  /** Whether a language model can answer Signals without TypeSafe (signals.llm_fallback); absent means no. */
+  llmAvailable?: () => Promise<boolean>;
+  /**
+   * The arrival request with routing riding in it (slice 33): what the judge
+   * Job and an on-open ask go through when TypeSafe answers, so one request
+   * covers routing, Sections, the brief policy and custom actions.
+   */
+  arrivalAsk?: (workspaceId: Id, threadId: Id, jobId: string | null) => Promise<void>;
   settings: () => Promise<JudgmentSettings>;
   /** The AI level (CONTEXT.md): judging on arrival only at `automate`. Absent means `automate`. */
   level?: () => Promise<AiLevel>;
@@ -123,6 +126,11 @@ export interface Judgments {
   threadReady(workspaceId: Id, threadId: Id): Promise<void>;
   /** Removes a Thread's Judgments and tells the feed; false when there were none. */
   remove(threadId: Id): Promise<boolean>;
+  /** The Judgments of many Threads, optionally only those asked since a moment or only these Threads. */
+  list(
+    workspaceId: Id,
+    options: { since?: Date; threadIds?: readonly Id[] },
+  ): Promise<ThreadJudgments[]>;
   /**
    * What the arrival request reads about a Thread, exactly as judgeThread
    * builds it, so a test of a reworded question asks with the same state.
@@ -232,47 +240,35 @@ export function readJudgments(
 }
 
 /** The Job id for one Thread version, so the same version is queued once. */
-export function judgeJobId(threadId: Id, version: JudgedVersion): string {
-  return `${JUDGE_STEP}:${threadId}:${version.messageCount}:${version.latestMessageId}`;
+export function judgeJobId(threadId: Id, version: JudgedVersion, questions?: string): string {
+  const base = `${JUDGE_STEP}:${threadId}:${version.messageCount}:${version.latestMessageId}`;
+  return questions ? `${base}:${questions}` : base;
+}
+
+/** A short fingerprint of the Question versions a request asks, so a new wording is a new Job. */
+function questionsKey(parts: readonly string[]): string {
+  const text = [...parts].sort().join("|");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
 }
 
 /* ------------------------------ Module ------------------------------ */
 
-type JudgmentRow = typeof threadJudgments.$inferSelect;
-
-function rowToJudgments(row: JudgmentRow): ThreadJudgments {
-  return {
-    threadId: row.threadId,
-    needsReply: row.needsReply,
-    waitingOnOthers: row.waitingOnOthers,
-    newsletter: row.newsletter,
-    automated: row.automated,
-    briefWorth: row.briefWorth,
-    urgency: row.urgency,
-    chips: row.chips,
-    model: row.model,
-    judgedAt: row.judgedAt.toISOString(),
-  };
-}
-
+/**
+ * Since slice 30 the arrival request is the Signal request (ADR 0014): the
+ * answers live in the Signal store and this module reads the shipped Signals
+ * back as the slice 25 Judgments for the brief policy, the chips and tune,
+ * and keeps the judge Job and its one-per-Thread-version rule.
+ */
 export function createJudgments(options: JudgmentsOptions): Judgments {
-  const { db, mailstore, runtime } = options;
-  const now = options.now ?? (() => new Date());
+  const { db, mailstore, signals } = options;
   const log = options.log ?? (() => {});
   const level = options.level ?? (async (): Promise<AiLevel> => "automate");
   let jobs: Jobs | null = null;
-
-  const versionOf = async (threadId: Id): Promise<JudgedVersion> => {
-    const rows = await db
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.threadId, threadId))
-      .orderBy(desc(messages.date), desc(messages.id));
-    return { messageCount: rows.length, latestMessageId: rows[0]?.id ?? "" };
-  };
-
-  const sameVersion = (row: JudgedVersion, version: JudgedVersion) =>
-    row.messageCount === version.messageCount && row.latestMessageId === version.latestMessageId;
 
   const ownerOf = async (workspaceId: Id): Promise<string> => {
     const [row] = await db
@@ -284,7 +280,7 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
   };
 
   /** Headers plus the newest snippet. Decrypts the subject and snippet, so it needs the root key. */
-  const readFacts = async (threadId: Id): Promise<{ facts: JudgmentFacts; workspaceId: Id }> => {
+  const readFacts = async (threadId: Id): Promise<JudgmentFacts> => {
     const row = await db.query.threads.findFirst({ where: eq(threads.id, threadId) });
     if (!row) throw new NotFoundError("thread", threadId);
     const owner = await ownerOf(row.workspaceId);
@@ -294,95 +290,45 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
     const snippet = newest ? (await mailstore.readMessageBody(newest.id)).snippet : "";
     const from = newest?.from ?? row.participants[0] ?? null;
     return {
-      workspaceId: row.workspaceId,
-      facts: {
-        owner,
-        subject,
-        from,
-        to: newest?.to ?? [],
-        participants: row.participants,
-        headers: newest?.headers ?? {},
-        snippet,
-        hasAttachments: row.hasAttachments,
-        attachmentNames: headers.flatMap((h) => h.attachments.map((a) => a.name)).slice(0, 10),
-        messageCount: headers.length,
-        ownerWroteLast: from !== null && owner !== "" && from.email.toLowerCase() === owner,
-      },
+      owner,
+      subject,
+      from,
+      to: newest?.to ?? [],
+      participants: row.participants,
+      headers: newest?.headers ?? {},
+      snippet,
+      hasAttachments: row.hasAttachments,
+      attachmentNames: headers.flatMap((h) => h.attachments.map((a) => a.name)).slice(0, 10),
+      messageCount: headers.length,
+      ownerWroteLast: from !== null && owner !== "" && from.email.toLowerCase() === owner,
     };
   };
 
-  const recordJudgments = (workspaceId: Id, payload: JudgmentsChange) =>
-    mailstore.recordChange(db, {
-      workspaceId,
-      kind: "judgments",
-      entityId: payload.threadId,
-      payload,
-    });
-
   const api: Judgments = {
     async judgeThread(workspaceId, threadId, opts = {}) {
-      const version = await versionOf(threadId);
-      const existing = await db.query.threadJudgments.findFirst({
-        where: eq(threadJudgments.threadId, threadId),
-      });
-      if (existing && !opts.force && sameVersion(existing, version)) {
-        return rowToJudgments(existing);
+      if (!opts.force) {
+        const fresh = await signals.judgments(threadId, { fresh: true });
+        if (fresh && (await signals.missing(workspaceId, threadId)).length === 0) return fresh;
       }
-      const settings = await options.settings();
-      const read = await readFacts(threadId);
-      const questions = judgmentQuestions(settings.questions);
-      const result = await runtime.judge(
-        "judge.section",
-        judgmentState(read.facts, settings.snippetChars),
-        questions,
-        { workspaceId, jobId: opts.jobId ?? null },
-      );
-      const judgedAt = now();
-      const judged = readJudgments(result.answers, {
-        threadId,
-        model: result.model,
-        judgedAt: judgedAt.toISOString(),
-        levels: {
-          briefWorth: settings.questions.briefWorthLevels.length,
-          urgency: settings.questions.urgencyLevels.length,
-        },
-      });
-      const values = {
-        workspaceId: read.workspaceId,
-        needsReply: judged.needsReply,
-        waitingOnOthers: judged.waitingOnOthers,
-        newsletter: judged.newsletter,
-        automated: judged.automated,
-        briefWorth: judged.briefWorth,
-        urgency: judged.urgency,
-        chips: judged.chips,
-        model: judged.model,
-        judgedAt,
-        messageCount: version.messageCount,
-        latestMessageId: version.latestMessageId,
-      };
-      await db
-        .insert(threadJudgments)
-        .values({ threadId, ...values })
-        .onConflictDoUpdate({ target: threadJudgments.threadId, set: values });
-      await recordJudgments(read.workspaceId, judged);
+      // Asked on open for the brief policy: TypeSafe only, the language model is not asked here.
+      if (options.arrivalAsk && !opts.force && (await options.runtime.judgeAvailable())) {
+        await options.arrivalAsk(workspaceId, threadId, opts.jobId ?? null);
+      } else {
+        await signals.ask(workspaceId, threadId, {
+          reason: "arrival",
+          force: opts.force,
+          jobId: opts.jobId ?? null,
+          llm: false,
+        });
+      }
+      const judged = await signals.judgments(threadId);
+      if (!judged) throw new NoJudgeError("no_key");
       return judged;
     },
 
-    async get(threadId) {
-      const row = await db.query.threadJudgments.findFirst({
-        where: eq(threadJudgments.threadId, threadId),
-      });
-      return row ? rowToJudgments(row) : null;
-    },
+    get: (threadId) => signals.judgments(threadId),
 
-    async fresh(threadId) {
-      const row = await db.query.threadJudgments.findFirst({
-        where: eq(threadJudgments.threadId, threadId),
-      });
-      if (!row) return null;
-      return sameVersion(row, await versionOf(threadId)) ? rowToJudgments(row) : null;
-    },
+    fresh: (threadId) => signals.judgments(threadId, { fresh: true }),
 
     async threadReady(workspaceId, threadId) {
       try {
@@ -390,47 +336,55 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
         if ((await level()) !== "automate") return;
         if (!jobs) return;
         if (!(await options.settings()).onArrival) return;
-        if (!(await runtime.judgeAvailable())) return;
-        const version = await versionOf(threadId);
+        // TypeSafe answers, or the language model does for what signals.llm_fallback allows.
+        if (!(await options.runtime.judgeAvailable())) {
+          const fallback = (await signals.settings()).llmFallback;
+          if (
+            fallback === "none" ||
+            !(await (options.llmAvailable?.() ?? Promise.resolve(false)))
+          ) {
+            return;
+          }
+        }
+        const version = await signals.version(threadId);
         if (version.messageCount === 0) return;
-        const existing = await db.query.threadJudgments.findFirst({
-          where: eq(threadJudgments.threadId, threadId),
-          columns: { messageCount: true, latestMessageId: true },
-        });
-        if (existing && sameVersion(existing, version)) return;
+        const missing = await signals.missing(workspaceId, threadId);
+        if (missing.length === 0) return;
+        // One Job per Thread version and set of Question versions: a reworded Signal asks again.
+        const versions = new Map((await signals.defs(workspaceId)).map((d) => [d.id, d.version]));
+        const key = questionsKey(missing.map((id) => `${id}@${versions.get(id) ?? 0}`));
         const payload: JudgeJobPayload = { workspaceId, threadId };
-        await jobs.enqueue(JUDGE_STEP, payload, { id: judgeJobId(threadId, version) });
+        await jobs.enqueue(JUDGE_STEP, payload, { id: judgeJobId(threadId, version, key) });
       } catch (error) {
         log(`judge hook ${threadId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
 
-    async facts(threadId) {
-      return (await readFacts(threadId)).facts;
-    },
+    facts: (threadId) => readFacts(threadId),
 
     settings: () => options.settings(),
 
-    async remove(threadId) {
-      const removed = await db
-        .delete(threadJudgments)
-        .where(eq(threadJudgments.threadId, threadId))
-        .returning();
-      const row = removed[0];
-      if (!row) return false;
-      await recordJudgments(row.workspaceId, { ...rowToJudgments(row), deleted: true });
-      return true;
-    },
+    remove: (threadId) => signals.remove(threadId),
+
+    list: (workspaceId, opts) => signals.listJudgments(workspaceId, opts),
 
     registerSteps(target) {
       jobs = target;
       target.registerStep<JudgeJobPayload>(JUDGE_STEP, async (job: Job<JudgeJobPayload>) => {
         const { workspaceId, threadId } = job.payload;
         try {
-          await api.judgeThread(workspaceId, threadId, { jobId: job.id });
+          if (options.arrivalAsk && (await options.runtime.judgeAvailable())) {
+            await options.arrivalAsk(workspaceId, threadId, job.id);
+          } else {
+            await signals.ask(workspaceId, threadId, { reason: "arrival", jobId: job.id });
+          }
         } catch (error) {
-          // A Thread that vanished, or a judge that went away, is done, not failed: the header rules decide.
-          if (error instanceof NotFoundError || error instanceof NoJudgeError) {
+          // A Thread that vanished, or nothing that can answer, is done, not failed: the header rules decide.
+          if (
+            error instanceof NotFoundError ||
+            error instanceof NoJudgeError ||
+            error instanceof AiOffError
+          ) {
             log(`judge ${threadId}: ${error.message}`);
             return "done";
           }

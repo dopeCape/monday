@@ -30,7 +30,6 @@ import type {
   InviteIntent,
   InviteIntentArgs,
   IsoDate,
-  JudgmentsChange,
   MeetingChange,
   Message,
   MessageBodyRow,
@@ -50,6 +49,17 @@ import {
   PEOPLE_SCHEMA_SQL,
 } from "./people.ts";
 import schemaSql from "./schema.sql?raw";
+import {
+  factsStatements,
+  legacyJudgmentsStatements,
+  SIGNALS_DROP_SQL,
+  SIGNALS_FILL_SQL,
+  SIGNALS_FORMAT,
+  SIGNALS_FORMAT_KEY,
+  SIGNALS_SCHEMA_SQL,
+  signalDefStatements,
+  signalsStatements,
+} from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
@@ -76,6 +86,8 @@ const THREAD_SCOPED_TABLES = new Set([
   "thread_labels",
   "thread_judgments",
   "thread_meetings",
+  "thread_signals",
+  "thread_facts",
   "briefs",
 ]);
 
@@ -89,6 +101,8 @@ function threadOfChange(c: Change): Id | undefined {
     case "thread_labels":
     case "judgments":
     case "meeting":
+    case "signals":
+    case "facts":
     case "brief":
       return c.payload.threadId;
     default:
@@ -330,9 +344,27 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
   if (existing.length > 0 && version < SCHEMA_VERSION) {
     await driver.exec(REBUILD_SQL);
     await driver.exec(PEOPLE_DROP_SQL);
+    await driver.exec(SIGNALS_DROP_SQL);
   }
   await driver.exec(schemaSql);
   await driver.exec(PEOPLE_SCHEMA_SQL);
+  await driver.exec(SIGNALS_SCHEMA_SQL);
+  const signalsRows = await driver.query("select value from meta where key = ?", [
+    SIGNALS_FORMAT_KEY,
+  ]);
+  if (Number(signalsRows[0]?.value ?? 0) < SIGNALS_FORMAT) {
+    // A Cache from before the Signal store (slice 30): its Judgments move over once, then the table goes.
+    const old = await driver.query(
+      "select name from sqlite_master where type = 'table' and name = 'thread_judgments'",
+    );
+    await driver.batch([
+      ...(old.length > 0 ? SIGNALS_FILL_SQL.map((sql) => ({ sql })) : []),
+      {
+        sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+        params: [SIGNALS_FORMAT_KEY, String(SIGNALS_FORMAT)],
+      },
+    ]);
+  }
   await addColumns(driver);
   await driver.exec(
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
@@ -681,9 +713,16 @@ export function changeStatements(change: Change): Statement[] {
     case "decision":
       return [decisionUpsert(change.payload)];
     case "judgments":
-      return [judgmentsUpsert(change.payload)];
+      // A feed from before the Signal store: the same answers as shipped Signals.
+      return legacyJudgmentsStatements(change.payload);
     case "meeting":
       return [meetingUpsert(change.payload)];
+    case "signals":
+      return signalsStatements(change.payload);
+    case "signal_def":
+      return signalDefStatements(change.payload);
+    case "facts":
+      return factsStatements(change.payload);
     case "calendar":
       return [calendarUpsert(change.payload)];
     case "event":
@@ -869,34 +908,6 @@ function meetingUpsert(m: MeetingChange): Statement {
           on conflict (thread_id) do update set
             message_id = excluded.message_id, chip = excluded.chip, judged_at = excluded.judged_at`,
     params: [m.threadId, m.messageId, m.chip ?? null, m.judgedAt],
-  };
-}
-
-/** A Thread's Judgments from the feed (slice 25): the whole row, replaced on every re-judge; removed when deleted. */
-function judgmentsUpsert(j: JudgmentsChange): Statement {
-  if (j.deleted) {
-    return { sql: "delete from thread_judgments where thread_id = ?", params: [j.threadId] };
-  }
-  return {
-    sql: `insert into thread_judgments (thread_id, needs_reply, waiting_on_others, newsletter, automated, brief_worth, urgency, chips, model, judged_at)
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          on conflict (thread_id) do update set
-            needs_reply = excluded.needs_reply, waiting_on_others = excluded.waiting_on_others,
-            newsletter = excluded.newsletter, automated = excluded.automated,
-            brief_worth = excluded.brief_worth, urgency = excluded.urgency,
-            chips = excluded.chips, model = excluded.model, judged_at = excluded.judged_at`,
-    params: [
-      j.threadId,
-      j.needsReply,
-      j.waitingOnOthers,
-      j.newsletter,
-      j.automated,
-      j.briefWorth,
-      j.urgency,
-      j.chips,
-      j.model,
-      j.judgedAt,
-    ],
   };
 }
 
@@ -1226,6 +1237,8 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       statements.push(...own);
       const id = threadOfChange(c);
       if (id !== undefined) named.add(id);
+      // A Signal's new Question version makes every Thread's answer to it stale.
+      else if (c.kind === "signal_def") anyThread = true;
       else if (
         own.some((st) => [...tablesWritten(st.sql)].some((t) => THREAD_SCOPED_TABLES.has(t)))
       )

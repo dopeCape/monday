@@ -213,7 +213,7 @@ export interface RoutingBacklog {
    * coding agent), older mail is still arriving from the first sync, or the
    * AI level is below "sorts and acts for me".
    */
-  reason: "no_judge" | "sync" | "level" | null;
+  reason: "no_judge" | "sync" | "level" | "budget" | null;
   /** Who sorted the last batch: TypeSafe, or a language model (a coding agent is slow). */
   sorter: "typesafe" | "llm" | null;
   /** Whether the language model that sorts is a coding agent on this computer. */

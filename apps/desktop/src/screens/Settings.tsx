@@ -53,6 +53,7 @@ import { type SetResult, useShell } from "../shell/Shell.tsx";
 import "./settings/controls.tsx";
 import "./settings/panels.tsx";
 import "../templates/TemplatesPanel.tsx";
+import "./settings/SignalsPanel.tsx";
 import "./settings/Accounts.tsx";
 import "./settings/overview.tsx";
 import { DisclosureProvider, useSessionDisclosures } from "./settings/disclosure.tsx";

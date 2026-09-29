@@ -24,6 +24,8 @@ import {
   HOSTED_PROVIDERS,
   HOSTED_SETTING_KEYS,
   type HostedSettings,
+  priceFor,
+  pricingFor,
   resolveTaskModel,
   rolesFor,
   scopeWordsFrom,
@@ -65,6 +67,7 @@ import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
 import { createDbMeetingSource, createDbMeetingStore, recordMeeting } from "./meetings/db.ts";
 import { createMeetings, type Meetings } from "./meetings/index.ts";
 import { MEETING_SETTING_KEYS, meetingSettingsFrom } from "./meetings/settings.ts";
+import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
@@ -89,6 +92,10 @@ import {
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
 import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
+import { createSignalBackfills, type SignalBackfills } from "./signals/backfill.ts";
+import { backgroundBudget } from "./signals/budget.ts";
+import { createSignals, type Signals } from "./signals/index.ts";
+import { createJudgeLimiter, type JudgeLimiter, type LimiterSettings } from "./signals/limiter.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
@@ -244,6 +251,8 @@ export interface IntelligenceOptions {
   log?: (message: string) => void;
   /** The AI level; defaults to the Setting ai.level. Tests may pin it. */
   level?: () => Promise<AiLevel>;
+  /** The judge's limiter; defaults to one over the signals.rate Settings. Tests pass one with a fake clock. */
+  limiter?: JudgeLimiter;
   /**
    * Where a Device's Local runtime takes background work (runtime/local.ts):
    * the Sidecar makes one; a Server no client drives has none.
@@ -265,8 +274,14 @@ export interface Intelligence {
   meter: Meter;
   briefs: Briefs;
   policy: BriefPolicyRule;
-  /** The arrival request and its stored answers (slice 25). */
+  /** The arrival request and its stored answers (slice 25), read from the Signal store since slice 30. */
   judgments: Judgments;
+  /** The Signal store and the Signal request (ADR 0014, slice 30). */
+  signals: Signals;
+  /** The background read of new and reworded Signals (slice 31). */
+  signalBackfills: SignalBackfills;
+  /** The one limiter every judge request passes (slice 31). */
+  limiter: JudgeLimiter;
   routing: Routing;
   /** The Backlog sort: the mail already there, sorted in the background within a Sort scope. */
   backlog: Backlog;
@@ -291,6 +306,8 @@ export interface Intelligence {
   templates: TemplateIntelligence;
   /** The Brief verifier (slice 27). */
   verify: BriefVerifier;
+  /** The batching measurement (slice 28), Sidecar only; its route checks where it runs. */
+  batchingEval: BatchingEval;
   /** The palette's typed sentence as one Judgment (slice 27). Throws NoJudgeError without a judge. */
   intent(request: IntentRequest): Promise<IntentReading>;
   /** Meetings from mail (docs/spec/meetings.md): the meeting request, the chips' options and their replies. */
@@ -530,7 +547,32 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         async (): Promise<readonly Task[]> => readGlobalSetting(db, "ai.local.background.tasks"),
       )
     : undefined;
+  // Every judge request passes one limiter: its Settings are read at most every few seconds.
+  let limiterCache: { at: number; value: LimiterSettings } | null = null;
+  const limiter =
+    options.limiter ??
+    createJudgeLimiter({
+      settings: async () => {
+        const at = Date.now();
+        if (limiterCache && at - limiterCache.at < 5000) return limiterCache.value;
+        const s = await readGlobalSettings(db, [
+          "signals.rate.requests_per_minute",
+          "signals.rate.cooldown_seconds",
+          "signals.backfill.concurrency",
+        ] as const);
+        limiterCache = {
+          at,
+          value: {
+            requestsPerMinute: s["signals.rate.requests_per_minute"],
+            cooldownSeconds: s["signals.rate.cooldown_seconds"],
+            concurrency: s["signals.backfill.concurrency"],
+          },
+        };
+        return limiterCache.value;
+      },
+    });
   const runtime = createHostedRuntime({
+    limiter,
     ...(local ? { local } : {}),
     chat: demoChat(options.chat ?? lazyLangChainChat()),
     converse: demoConverse(options.converse ?? lazyLangChainConverse()),
@@ -561,10 +603,29 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       automatedSenders: s["briefs.automated_senders"],
     };
   };
+  const signals = createSignals({ db, mailstore, runtime, now, log, level });
+  /**
+   * One request for an arriving Thread (slice 33): the Signals it lacks and,
+   * when routing places it now, the Group Choice and the speculative
+   * Sub-group Choices, placed from the same answers.
+   */
+  const arrivalAsk = async (workspaceId: string, threadId: string, jobId: string | null) => {
+    const plan = await routing.arrivalPlan(threadId);
+    const questions = plan?.questions ?? {};
+    const asked = await signals.ask(workspaceId, threadId, {
+      reason: "arrival",
+      jobId,
+      ...(Object.keys(questions).length > 0 ? { extra: questions } : {}),
+    });
+    if (plan) await plan.apply(asked.extra);
+  };
   const judgments = createJudgments({
     db,
     mailstore,
     runtime,
+    signals,
+    arrivalAsk,
+    llmAvailable: async () => (await judgeStateNow()).provider === "llm",
     now,
     log,
     level,
@@ -719,11 +780,16 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       options.judge !== undefined,
       (await local?.takes("classify")) ?? null,
     );
+  const backgroundBudgetNow = async (workspaceId: string) => {
+    const s = await readGlobalSettings(db, ["signals.budget.background_monthly_usd"] as const);
+    return backgroundBudget(db, workspaceId, s["signals.budget.background_monthly_usd"], now());
+  };
   const backlog = createBacklog({
     db,
     routing,
     now,
     level,
+    budget: backgroundBudgetNow,
     ...(options.log ? { log: options.log } : {}),
     judgeAvailable: () => runtime.judgeAvailable(),
     sorterIsLocal: async () => (await judgeStateNow()).runtime === "local",
@@ -889,9 +955,18 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.workflows = workflows;
   const onboarding = createOnboarding({ db, routing, workflows, level });
   extensions.onboarding = onboarding;
-  const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
+  const organize = createOrganize({ db, mailstore, runtime, routing, signals, now, log });
   extensions.organize = organize;
-  extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
+  extensions.tune = createTune({
+    db,
+    mailstore,
+    runtime,
+    routing,
+    judgments,
+    organize,
+    signals,
+    now,
+  });
   const meetings = createMeetings({
     runtime,
     thread: createDbMeetingSource(db, mailstore),
@@ -924,7 +999,58 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     cancel: (workspaceId) => backlog.cancel(workspaceId),
   };
 
+  const batchingEval = createBatchingEval({ db, routing, runtime, now, log });
+
+  // The background read (slice 31): new and reworded Signals over the mail already there.
+  const signalBackfills = createSignalBackfills({
+    db,
+    signals,
+    now,
+    log,
+    level,
+    canAnswer: async () =>
+      (await runtime.judgeAvailable()) ||
+      ((await signals.settings()).llmFallback !== "none" &&
+        (await judgeStateNow()).provider === "llm"),
+    settings: async () => {
+      const s = await readGlobalSettings(db, [
+        "signals.backfill.scope",
+        "signals.backfill.concurrency",
+        "signals.backfill.confirm_above",
+        "signals.backfill.tokens_per_thread",
+        "signals.budget.background_monthly_usd",
+        "routing.wait_seconds",
+      ] as const);
+      const hosted = await hostedSettings();
+      return {
+        scope: s["signals.backfill.scope"],
+        concurrency: s["signals.backfill.concurrency"],
+        confirmAbove: s["signals.backfill.confirm_above"],
+        budgetUsd: s["signals.budget.background_monthly_usd"],
+        waitSeconds: s["routing.wait_seconds"],
+        tokensPerThread: s["signals.backfill.tokens_per_thread"],
+        usdPerMillion:
+          priceFor(pricingFor(hosted, "typesafe"), hosted["ai.judge.model"])?.input ?? 0,
+      };
+    },
+  });
+  signals.setDefsListener((workspaceId, ids) => signalBackfills.request(workspaceId, ids));
+  // The arrival request (slice 33): routing's Group and Sub-group Choices ride with every Signal.
+  routing.setArrivalAsk(arrivalAsk);
+  // A running Backlog sort carries the Signals a Thread lacks in its one request per Thread.
+  routing.setOneThreadAsk(async (req) => {
+    const r = await signals.ask(req.workspaceId, req.threadId, {
+      reason: "backlog",
+      extra: req.questions,
+      jobId: req.jobId,
+    });
+    return { answers: r.extra, calls: r.calls };
+  });
+
   return {
+    batchingEval,
+    signalBackfills,
+    limiter,
     attachCalendar(seam) {
       extensions.calendar = seam;
     },
@@ -935,6 +1061,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     briefs,
     policy,
     judgments,
+    signals,
     routing,
     backlog,
     agent,
@@ -998,6 +1125,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
       backlog.registerSteps(jobs);
+      signalBackfills.registerSteps(jobs);
       workflows.registerSteps(jobs);
     },
   };

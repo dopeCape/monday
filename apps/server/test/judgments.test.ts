@@ -830,7 +830,7 @@ describe("judgments over the fixture mailbox", () => {
     expect(ran[JUDGE_STEP]).toBe(24);
     expect(ran[BRIEF_STEP]).toBe(24);
     expect(ran[ROUTE_STEP]).toBeUndefined();
-    // Every Thread has its Judgments, asked once, in one judge.section request each.
+    // Every Thread has its Signals, asked once, in one judge.signals request each.
     const lines = (await judged.meter.month(workspaceId, "2026-09")).lines;
     // Routing, the arrival request, the one Brief, and its verification (slice 27), and the
     // meeting request for the Threads the meeting gate lets through (docs/spec/meetings.md).
@@ -842,7 +842,7 @@ describe("judgments over the fixture mailbox", () => {
     expect(lines).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ task: "judge.route", calls: 20 }),
-        expect.objectContaining({ task: "judge.section", provider: "typesafe", calls: 24 }),
+        expect.objectContaining({ task: "judge.signals", provider: "typesafe", calls: 24 }),
         expect.objectContaining({ task: "brief", provider: "anthropic", calls: 1 }),
         expect.objectContaining({ task: "judge.verify", provider: "typesafe", calls: 1 }),
       ]),
@@ -854,16 +854,23 @@ describe("judgments over the fixture mailbox", () => {
       newsletter: 0.07,
       briefWorth: 1.9,
       urgency: 1.8,
-      chips: { open_attachment: 0.74, review_link: 0.3, reply: 0.4 },
+      chips: { reply: 0.4 },
       model: "jev-1.13.0",
     });
+    // The review link and open attachment chips are no longer asked (docs/spec/actions.md).
+    expect(contract?.chips).not.toHaveProperty("open_attachment");
     const sectionCall = judge.calls.find(
       (c) =>
         c.questions.includes("brief_worth") && subjectOf(c.state) === "Draft contract for review",
     );
-    expect(sectionCall?.questions).toHaveLength(12);
+    // The shipped Signals in one request: the slice 25 set, waiting_on_me, and slice 32's.
+    expect(sectionCall?.questions).toEqual(
+      expect.arrayContaining(["needs_reply", "brief_worth", "chip_reply", "money_involved"]),
+    );
+    expect(sectionCall?.questions).toContain("waiting_on_me");
     expect(sectionCall?.state).toMatchObject({
-      thread: { message_count: 4, owner_wrote_last: true, has_attachments: true },
+      owner: { address: fixture.address },
+      thread: { message_count: 4, owner_wrote_last: true },
     });
     expect(JSON.stringify(sectionCall?.state)).not.toContain("--- Message");
     // A repeat for the same Thread version asks nothing.
@@ -875,21 +882,29 @@ describe("judgments over the fixture mailbox", () => {
     // so the headers alone would file it under For your information.
     expect(await sectionFor("Candidate: Elin Vos, backend")).toBe("needs-reply");
     expect(await sectionFor("Podcast recording slot")).toBe("needs-reply");
-    expect(await sectionFor("Draft contract for review")).toBe("waiting");
+    // The owner wrote last and waits on someone else: that is not Waiting on you (slice 30).
+    expect(await sectionFor("Draft contract for review")).toBe("fyi");
     expect(await sectionFor("Weekly digest")).toBe("newsletters");
     expect(await sectionFor("Invoice 2041 for August")).toBe("fyi");
     expect(await sectionFor("Q3 planning notes")).toBe("fyi");
 
-    // The feed carries every Judgment as probabilities, nothing else.
+    // The feed carries one `signals` change per Signal request: numbers, nothing else.
     const changes = await feed();
-    const judgments = changes.filter(
-      (c): c is Change & { kind: "judgments" } => c.kind === "judgments",
+    const signalChanges = changes.filter(
+      (c): c is Change & { kind: "signals" } => c.kind === "signals",
     );
-    expect(judgments).toHaveLength(24);
-    const digestChange = judgments.find(
+    expect(signalChanges).toHaveLength(24);
+    const digestChange = signalChanges.find(
       (c) => c.entityId === threadOf("Weekly digest").id,
     )?.payload;
-    expect(digestChange).toEqual({
+    const answer = (id: string) => digestChange?.answers.find((a) => a.signalId === id);
+    // Every shipped Signal, the gated ones answered by code as not stated.
+    expect(digestChange?.answers).toHaveLength(27);
+    expect(answer("newsletter")).toMatchObject({ version: 1, noul: 0.93, stale: false });
+    expect(answer("urgency")).toMatchObject({ score: 1, noul: null });
+    expect(answer("chip_snooze")?.noul).toBe(0.7);
+    expect(JSON.stringify(digestChange)).not.toContain("Weekly digest");
+    expect(await judged.judgments.get(threadOf("Weekly digest").id)).toEqual({
       threadId: threadOf("Weekly digest").id,
       needsReply: 0.07,
       waitingOnOthers: 0.02,
@@ -897,14 +912,7 @@ describe("judgments over the fixture mailbox", () => {
       automated: 0.6,
       briefWorth: 0,
       urgency: 1,
-      chips: {
-        reply: 0.5,
-        call: 0.5,
-        review_link: 0.5,
-        open_attachment: 0.5,
-        pay_or_file: 0.5,
-        snooze: 0.7,
-      },
+      chips: { reply: 0.5, call: 0.5, pay_or_file: 0.5, snooze: 0.7 },
       model: "jev-1.13.0",
       judgedAt: NOW.toISOString(),
     } satisfies ThreadJudgments);
@@ -1010,14 +1018,14 @@ describe("judgments over the fixture mailbox", () => {
     await judged.judgments.threadReady(workspaceId, threadId);
     expect(await runAll()).toEqual({ [JUDGE_STEP]: 1 });
     expect(await judged.judgments.fresh(threadId)).toMatchObject({ needsReply: 0.2 });
-    const rows = (await feed()).filter((c) => c.kind === "judgments" && c.entityId === threadId);
+    const rows = (await feed()).filter((c) => c.kind === "signals" && c.entityId === threadId);
     expect(rows).toHaveLength(2);
     // Removal tells the feed too.
     expect(await judged.judgments.remove(threadId)).toBe(true);
     expect(await judged.judgments.remove(threadId)).toBe(false);
-    const gone = (await feed()).filter((c) => c.kind === "judgments" && c.entityId === threadId);
+    const gone = (await feed()).filter((c) => c.kind === "signals" && c.entityId === threadId);
     expect(gone).toHaveLength(3);
-    expect(gone[2]?.payload).toMatchObject({ deleted: true, needsReply: 0.2 });
+    expect(gone[2]?.payload).toMatchObject({ deleted: true, answers: [] });
   });
 
   test("a re-run asked for NDJSON tells each Thread as it is scored, then the preview", async () => {

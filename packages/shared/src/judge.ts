@@ -27,7 +27,15 @@ export type JudgeTask =
   | "judge.condition"
   | "judge.meeting"
   /** Filling Placeholders, suggesting Templates, the duplicate check and a drafted Message's checks (docs/spec/templates.md). */
-  | "judge.template";
+  | "judge.template"
+  /** The batching measurement (slice 28), Sidecar only. */
+  | "judge.eval"
+  /** The Backlog sort's one-Thread requests (slice 29): background, under the monthly budget. */
+  | "judge.backlog"
+  /** The Signal request on arrival (slice 30): every active Signal for one Thread. */
+  | "judge.signals"
+  /** The Signal backfill (slice 31): background, under the monthly budget. */
+  | "judge.backfill";
 
 export type JsonValue =
   | string

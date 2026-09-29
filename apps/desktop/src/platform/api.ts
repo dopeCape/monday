@@ -74,6 +74,9 @@ import type {
   ScheduleResult,
   ServiceStatus,
   SessionSummary,
+  SignalBackfill,
+  SignalsExplain,
+  SignalsPage,
   ThreadRoute,
   TurnContext,
   VoiceProfile,
@@ -488,6 +491,25 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           headers: { "content-type": "application/json" },
         });
       },
+    },
+    signals: {
+      /** The Signals page (slice 32): every active Signal with its reach and base rate. */
+      page: (workspaceId: Id) =>
+        request<SignalsPage>(`/signals?${new URLSearchParams({ workspace: workspaceId })}`),
+      /** Explain on a Thread: its Signals, versions and Facts, the picked amount decrypted. */
+      explain: (threadId: Id) =>
+        request<SignalsExplain>(`/threads/${encodeURIComponent(threadId)}/signals`),
+      /** The background read of new and reworded Signals (slice 31), or null when none ran. */
+      backfill: (workspaceId: Id) =>
+        request<{ backfill: SignalBackfill | null }>(
+          `/signals/backfill?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.backfill),
+      /** The owner's yes to a large read, or pause, resume, stop. */
+      backfillAction: (workspaceId: Id, action: "confirm" | "pause" | "resume" | "cancel") =>
+        request<{ backfill: SignalBackfill }>(
+          `/signals/backfill/${action}`,
+          json("POST", { workspace: workspaceId }),
+        ).then((r) => r.backfill),
     },
     meter: {
       /** This month by Task and provider with cost; `month` is "YYYY-MM", default now. */

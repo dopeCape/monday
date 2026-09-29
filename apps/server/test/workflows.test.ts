@@ -184,7 +184,8 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
       WORKFLOW_SCHEDULE_STEP,
     ]);
     const classes: string[] = [];
-    for (let i = 0; i < 50; i++) {
+    // Every arrival also queues its judge, Brief and meeting Jobs: set those aside, however many.
+    for (let i = 0; i < 1000; i++) {
       const job = await jobs.claim("server-a", ["needs-process"], 30_000);
       if (!job) break;
       if (!wanted.has(job.class)) {

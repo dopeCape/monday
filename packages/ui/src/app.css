@@ -4449,6 +4449,21 @@ form.agent-bar {
   grid-template-columns: 1fr;
   font-weight: 500;
 }
+/* The Signals page (slice 32): one row per Signal, its reach and base rate. */
+.signals-table .mr {
+  grid-template-columns: 2.4fr 0.8fr 1fr 1fr;
+  gap: 12px;
+}
+.signals-table .mr .who {
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+.signals-table .mr .flag {
+  display: block;
+  color: var(--warn, var(--fg-muted));
+  font-size: var(--fs-xs);
+}
 .activity-row {
   display: grid;
   grid-template-columns: 1fr auto;

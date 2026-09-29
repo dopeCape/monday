@@ -15,6 +15,14 @@
 
 import type { GroupId, Section, Thread } from "../domain.ts";
 import type { ThreadJudgments } from "../judge.ts";
+import {
+  DEFAULT_SIGNAL_RULES,
+  type SignalCondition,
+  type SignalReadings,
+  type SignalRules,
+  sectionSignalId,
+  signalConditionHolds,
+} from "../signals.ts";
 
 /**
  * The judged conditions: a bound on one of the Thread's Judgments. Every
@@ -72,6 +80,14 @@ export interface SectionWhen extends JudgedWhen {
   notGroups?: string[] | undefined;
   /** The Thread has no Group at all. */
   ungrouped?: boolean | undefined;
+  /**
+   * Conditions on Signals by id (ADR 0014; slice 30), the general form of the
+   * judged bounds above: every one must hold. Unlike those bounds they never
+   * stand in for the header conditions, which still apply. A Signal not read
+   * yet, a Choice or Score under the confidence floor, or a stale answer
+   * while stale answers are hidden, holds nothing.
+   */
+  signals?: SignalCondition[] | undefined;
   /**
    * The Thread has its arrival Judgments (true) or has none yet (false).
    * With `true` the rule never holds on header guesses: a Thread not yet
@@ -141,6 +157,15 @@ export interface SectionFacts {
   judged?: SectionJudged | undefined;
   /** The probability at or above which a judge statement holds (the sections.judge_threshold Setting). */
   judgeThreshold?: number | undefined;
+  /** The Thread's Signal answers (slice 30), by Signal id; `when.signals` and the owned Signals read them. */
+  signals?: SignalReadings | undefined;
+  /** The Unsure band, staleness and hysteresis (signals.*); absent means the defaults. */
+  signalRules?: SignalRules | undefined;
+  /**
+   * The Section the Thread sat in before this evaluation, so its judged
+   * bounds relax by the hysteresis while it stays and it does not flicker.
+   */
+  previous?: Section | null | undefined;
 }
 
 /** The probability at or above which a shipped Section trusts an arrival Judgment; the `sections.rules` Setting carries it. */
@@ -181,10 +206,10 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
     id: "waiting",
     when: {
       lastFrom: "others",
-      minMessages: 2,
-      bulk: false,
-      waiting_at_least: DEFAULT_JUDGED_THRESHOLD,
-      automated_at_most: DEFAULT_AUTOMATED_CEILING,
+      signals: [
+        { signal: "waiting_on_me", at_least: 0.7 },
+        { signal: "automated", at_most: DEFAULT_AUTOMATED_CEILING },
+      ],
     },
     placement: "stream",
     createdBy: "shipped",
@@ -202,6 +227,38 @@ export const DEFAULT_SECTION_RULES: SectionRuleSetting[] = [
     createdBy: "shipped",
   },
 ];
+
+/**
+ * The shipped Waiting on you rule before slice 30: it paired "someone else
+ * wrote last" with the waiting Judgment, whose question says the owner wrote
+ * last, so once a Thread was judged the two could hardly both hold.
+ */
+const WAITING_BEFORE_SIGNALS: SectionWhen = {
+  lastFrom: "others",
+  minMessages: 2,
+  bulk: false,
+  waiting_at_least: DEFAULT_JUDGED_THRESHOLD,
+  automated_at_most: DEFAULT_AUTOMATED_CEILING,
+};
+
+const sameWhen = (a: SectionWhen, b: SectionWhen) => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof SectionWhen>;
+  return [...keys].every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+};
+
+/**
+ * A stored copy of the shipped rules (the Agent writes the whole list when it
+ * adds a Section) brought up to the shipped rules of today: the Waiting on
+ * you rule the user never edited reads waiting_on_me. Anything edited stays.
+ */
+export function upgradeShippedRules(rules: readonly SectionRuleSetting[]): SectionRuleSetting[] {
+  const waiting = DEFAULT_SECTION_RULES.find((r) => r.id === "waiting") as SectionRuleSetting;
+  return rules.map((r) =>
+    r.id === "waiting" && r.createdBy === "shipped" && sameWhen(r.when, WAITING_BEFORE_SIGNALS)
+      ? { ...r, when: structuredClone(waiting.when) }
+      : r,
+  );
+}
 
 /** The judge threshold when a caller passes none; the Setting sections.judge_threshold is the real default. */
 export const DEFAULT_SECTION_JUDGE_THRESHOLD = 0.7;
@@ -233,7 +290,8 @@ export function orderedSectionRules(
   rules: readonly SectionRuleSetting[],
   order: readonly Section[] = [],
 ): SectionRuleSetting[] {
-  const byId = new Map(rules.map((r) => [r.id, r]));
+  const upgraded = upgradeShippedRules(rules);
+  const byId = new Map(upgraded.map((r) => [r.id, r]));
   const seen = new Set<Section>();
   const out: SectionRuleSetting[] = [];
   for (const id of order) {
@@ -244,7 +302,7 @@ export function orderedSectionRules(
     }
   }
   const rank = (r: SectionRuleSetting) => r.order ?? Number.MAX_SAFE_INTEGER;
-  const rest = rules
+  const rest = upgraded
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => !seen.has(r.id))
     .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
@@ -287,10 +345,15 @@ export function hasJudgedWhen(when: SectionWhen): boolean {
   return JUDGED_WHEN_KEYS.some((k) => when[k] !== undefined);
 }
 
-/** Whether the judged conditions hold over a Thread's Judgments. A rule with no judged key always holds. */
-export function judgedMatches(when: JudgedWhen, judgments: SectionJudgments): boolean {
+/**
+ * Whether the judged conditions hold over a Thread's Judgments. A rule with no
+ * judged key always holds. `slack` relaxes every bound (the hysteresis while
+ * the Thread is in the Section already).
+ */
+export function judgedMatches(when: JudgedWhen, judgments: SectionJudgments, slack = 0): boolean {
   const within = (value: number, atLeast: number | undefined, atMost: number | undefined) =>
-    (atLeast === undefined || value >= atLeast) && (atMost === undefined || value <= atMost);
+    (atLeast === undefined || value >= atLeast - slack) &&
+    (atMost === undefined || value <= atMost + slack);
   return (
     within(judgments.needsReply, when.needs_reply_at_least, when.needs_reply_at_most) &&
     within(judgments.waitingOnOthers, when.waiting_at_least, when.waiting_at_most) &&
@@ -305,11 +368,18 @@ export function judgedMatches(when: JudgedWhen, judgments: SectionJudgments): bo
  * matches. A judged Thread under a rule with judged conditions skips the
  * header heuristics those stand in for (see SectionWhen).
  */
-export function sectionMatches(when: SectionWhen, thread: Thread, facts: SectionFacts): boolean {
+export function sectionMatches(
+  when: SectionWhen,
+  thread: Thread,
+  facts: SectionFacts,
+  ruleId?: Section,
+): boolean {
   if (when.judged !== undefined && Boolean(facts.judgments) !== when.judged) return false;
+  const rules = facts.signalRules ?? DEFAULT_SIGNAL_RULES;
+  const inside = ruleId !== undefined && facts.previous === ruleId;
   const judged = facts.judgments && hasJudgedWhen(when) ? facts.judgments : null;
   if (judged) {
-    if (!judgedMatches(when, judged)) return false;
+    if (!judgedMatches(when, judged, inside ? rules.hysteresis : 0)) return false;
   } else {
     if (when.unread !== undefined && thread.unread !== when.unread) return false;
     if (when.bulk !== undefined && (thread.bulk ?? false) !== when.bulk) return false;
@@ -327,7 +397,24 @@ export function sectionMatches(when: SectionWhen, thread: Thread, facts: Section
   if (when.groups?.length && !inGroups(thread, when.groups, facts)) return false;
   if (when.notGroups?.length && inGroups(thread, when.notGroups, facts)) return false;
   if (when.ungrouped !== undefined && (thread.group === null) !== when.ungrouped) return false;
+  for (const cond of when.signals ?? []) {
+    if (!signalConditionHolds(cond, facts.signals?.[cond.signal], rules, inside)) return false;
+  }
   return true;
+}
+
+/**
+ * The answer to a rule's own judge statement: its owned Signal
+ * (`section:<id>`, slice 33) when the Thread has one a list may read, else
+ * the slice 26 answers the caller holds. Undefined while not read.
+ */
+function judgeAnswer(rule: SectionRuleSetting, facts: SectionFacts): number | undefined {
+  const rules = facts.signalRules ?? DEFAULT_SIGNAL_RULES;
+  const reading = facts.signals?.[sectionSignalId(rule.id)];
+  if (reading && !(reading.stale && rules.staleAnswers === "hide")) {
+    if (typeof reading.noul === "number") return reading.noul;
+  }
+  return facts.judged?.[rule.id];
 }
 
 /**
@@ -344,11 +431,13 @@ export function sectionRuleHolds(
   thread: Thread,
   facts: SectionFacts,
 ): boolean {
-  if (!sectionMatches(rule.when, thread, facts)) return false;
+  if (!sectionMatches(rule.when, thread, facts, rule.id)) return false;
   if (!rule.judge?.trim()) return true;
-  const p = facts.judged?.[rule.id];
+  const p = judgeAnswer(rule, facts);
   if (p === undefined) return false;
-  return p >= (facts.judgeThreshold ?? DEFAULT_SECTION_JUDGE_THRESHOLD);
+  const inside = facts.previous === rule.id;
+  const slack = inside ? (facts.signalRules ?? DEFAULT_SIGNAL_RULES).hysteresis : 0;
+  return p >= (facts.judgeThreshold ?? DEFAULT_SECTION_JUDGE_THRESHOLD) - slack;
 }
 
 /**
@@ -384,9 +473,9 @@ export function sectionsToJudge(
   const out: Section[] = [];
   const threshold = facts.judgeThreshold ?? DEFAULT_SECTION_JUDGE_THRESHOLD;
   for (const r of orderedSectionRules(rules, order)) {
-    if (!sectionMatches(r.when, thread, facts)) continue;
+    if (!sectionMatches(r.when, thread, facts, r.id)) continue;
     if (!r.judge?.trim()) break;
-    const p = facts.judged?.[r.id];
+    const p = judgeAnswer(r, facts);
     if (p === undefined) out.push(r.id);
     else if (p >= threshold) break;
   }

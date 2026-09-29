@@ -178,6 +178,14 @@ function Root() {
           judgeThreshold: () => settingsRef.current["sections.judge_threshold"],
           judgeBatch: () => settingsRef.current["sections.judge_batch"],
           actions: () => settingsRef.current["actions.custom"],
+          // The Unsure band, stale answers and hysteresis over Signals (slice 30).
+          signalRules: () => ({
+            noulLow: settingsRef.current["signals.unsure.noul_low"],
+            noulHigh: settingsRef.current["signals.unsure.noul_high"],
+            confidenceBelow: settingsRef.current["signals.unsure.confidence_below"],
+            staleAnswers: settingsRef.current["signals.stale_answers"],
+            hysteresis: settingsRef.current["signals.hysteresis"],
+          }),
         },
         log: (m) => console.warn(`[reader] ${m}`),
       }),

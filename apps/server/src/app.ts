@@ -94,6 +94,7 @@ import { pairRoutes } from "./routes/pair.ts";
 import { peopleRoutes } from "./routes/people.ts";
 import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
+import { signalsRoutes } from "./routes/signals.ts";
 import { storageRoutes } from "./routes/storage.ts";
 import { templateRoutes } from "./routes/templates.ts";
 import { unlockRoutes } from "./routes/unlock.ts";
@@ -536,6 +537,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", peopleRoutes(db, options.now ? { now: options.now } : {}));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
+  app.route("/", signalsRoutes(intelligence, { mode, isLoopback }));
   app.route("/", localRuntimeRoutes(localBridge));
   app.route("/", integrationRoutes(intelligence.integrationSecrets));
   app.route(

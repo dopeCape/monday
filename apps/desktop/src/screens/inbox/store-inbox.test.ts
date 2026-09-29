@@ -397,8 +397,9 @@ describe("Section rules in the Store", () => {
     const section = (id: string) => inbox.thread(id)?.section;
     // Nothing is judged yet, so nothing lands in Needs your reply by guesswork.
     for (const id of ["e1", "e4", "e7", "e10"]) expect(section(id)).not.toBe("needs-reply");
-    // e4: read, five Messages, Mateus wrote last: an ongoing exchange, Waiting on you.
-    expect(section("e4")).toBe("waiting");
+    // e4: read, five Messages, Mateus wrote last. Waiting on you reads waiting_on_me (slice 30):
+    // For your information until that Signal is read.
+    expect(section("e4")).toBe("fyi");
     // e10: list mail.
     expect(section("e10")).toBe("newsletters");
     // e7: read, one Message, someone else wrote last: For your information until judged.
@@ -409,7 +410,97 @@ describe("Section rules in the Store", () => {
     inbox.close();
   });
 
-  test("a judgments row on the feed lands in the Cache, moves the Thread by the judged rule, and reaches the reader seam; a deleted row takes it back", async () => {
+  test("a signals change lands in thread_signals, moves the Thread by the rules, a reworded Signal still shows, and waiting_on_me makes Waiting on you", async () => {
+    const seed = fixtureSeed();
+    seed.threads = seed.threads.map((t) =>
+      t.id === "e4" ? { ...t, section: null, messageCount: 5 } : t,
+    );
+    const fake = await createFakeStore({ driver: bunDriver(), seed });
+    let hide = false;
+    const { inbox, server, store } = {
+      ...fake,
+      inbox: await createStoreInbox(fake.store, {
+        sections: {
+          rules,
+          order,
+          owner,
+          signalRules: () => ({
+            noulLow: 0.3,
+            noulHigh: 0.7,
+            confidenceBelow: 0.5,
+            staleAnswers: hide ? "hide" : "show",
+            hysteresis: 0.05,
+          }),
+        },
+      }),
+    };
+    expect(inbox.thread("e4")?.section).toBe("fyi");
+    const answer = (signalId: string, noul: number) => ({
+      signalId,
+      version: 1,
+      noul,
+      choice: null,
+      score: null,
+      confidence: null,
+      stale: false,
+      lowTrust: null,
+      judgedAt: "2026-09-16T10:00:00.000Z",
+    });
+    // A client asked the owner to sign; the owner has not answered.
+    server.record({
+      kind: "signals",
+      entityId: "e4",
+      payload: {
+        threadId: "e4",
+        answers: [
+          answer("waiting_on_me", 0.91),
+          answer("automated", 0.04),
+          answer("needs_reply", 0.4),
+        ],
+      },
+    });
+    await store.sync();
+    await settled(inbox, () => inbox.thread("e4")?.section === "waiting");
+    expect(
+      await store.query(
+        "select signal_id, noul from thread_signals where thread_id = 'e4' order by signal_id",
+      ),
+    ).toEqual([
+      { signal_id: "automated", noul: 0.04 },
+      { signal_id: "needs_reply", noul: 0.4 },
+      { signal_id: "waiting_on_me", noul: 0.91 },
+    ]);
+    // The Store answers a Signal query offline, from SQLite alone.
+    expect(
+      await store.query(
+        "select thread_id from thread_signals where signal_id = 'waiting_on_me' and noul >= 0.7",
+      ),
+    ).toEqual([{ thread_id: "e4" }]);
+    // waiting_on_me is reworded: version 2. The old answer is stale but lists keep showing it.
+    server.record({
+      kind: "signal_def",
+      entityId: "waiting_on_me",
+      payload: {
+        id: "waiting_on_me",
+        kind: "noul",
+        version: 2,
+        ownerKind: "shipped",
+        ownerId: null,
+        active: true,
+        label: "Someone is waiting on the owner.",
+      },
+    });
+    await store.sync();
+    await inbox.resection();
+    expect(inbox.thread("e4")?.section).toBe("waiting");
+    // Hidden, the stale answer is not read: the Thread falls back until it is read again.
+    hide = true;
+    await inbox.resection();
+    await settled(inbox, () => inbox.thread("e4")?.section === "fyi");
+    inbox.close();
+  });
+
+  test("an old judgments row on the feed lands as shipped Signals, moves the Thread by the judged rule, and reaches the reader seam; a deleted row takes it back", async () => {
     const seed = fixtureSeed();
     // e7 as list mail: Newsletters by the headers, until the judge says otherwise.
     seed.threads = seed.threads.map((t) =>
@@ -444,10 +535,17 @@ describe("Section rules in the Store", () => {
     server.record({ kind: "judgments", entityId: "e7", payload: judged });
     await store.sync();
     await settled(inbox, () => inbox.thread("e7")?.section === "needs-reply");
-    expect(inbox.judgments?.("e7")).toEqual(judged);
-    expect(await store.query("select thread_id, needs_reply from thread_judgments")).toEqual([
-      { thread_id: "e7", needs_reply: 0.82 },
-    ]);
+    // The review link and open attachment chips are dropped; the rest arrive as shipped Signals.
+    expect(inbox.judgments?.("e7")).toMatchObject({
+      ...judged,
+      model: "",
+      chips: { reply: 0.9, call: 0.2, pay_or_file: 0.05, snooze: 0.3 },
+    });
+    expect(
+      await store.query(
+        "select thread_id, noul from thread_signals where signal_id = 'needs_reply'",
+      ),
+    ).toEqual([{ thread_id: "e7", noul: 0.82 }]);
     // A re-judge replaces the row; a removal takes the Thread back to the header rules.
     server.record({
       kind: "judgments",
@@ -460,7 +558,7 @@ describe("Section rules in the Store", () => {
     server.record({ kind: "judgments", entityId: "e7", payload: { ...judged, deleted: true } });
     await store.sync();
     await settled(inbox, () => inbox.judgments?.("e7") === undefined);
-    expect(await store.query("select thread_id from thread_judgments")).toEqual([]);
+    expect(await store.query("select thread_id from thread_signals")).toEqual([]);
     inbox.close();
   });
 
