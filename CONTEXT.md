@@ -59,7 +59,7 @@ A button the user defined for the Threads of a Group or Section ("forward invoic
 _Avoid_: macro, shortcut
 
 **Section rule**:
-The rule, in the same shape as a Routing rule, that decides which Threads a Section holds. Deterministic signals first, a Judgment for the rest. A user-defined Section carries its own sentence and where it shows: as a heading in the stream, as an entry in the nav, or both.
+The rule, in the same shape as a Routing rule, that decides which Threads a Section holds. Predicates and Facts first, a Signal for the rest. A user-defined Section carries its own sentence and where it shows: as a heading in the stream, as an entry in the nav, or both.
 
 **Predicate**:
 The structured, model-free part of a rule (senders, domains, subject patterns, list ids, headers) that runs on every Thread at no cost.
@@ -93,12 +93,62 @@ How much of the mail already there a re-run or a Backlog sort covers: the newest
 _Avoid_: range, window, lookback
 
 **Backlog sort**:
-The background Job that routes the mail already there inside a Sort scope, newest first, in batches, one per Workspace, after its newest sample was moved on approval. New mail is routing on arrival, not the Backlog sort.
+The background Job that routes the mail already there inside a Sort scope, newest first, one per Workspace, after its newest sample was moved on approval. New mail is routing on arrival, not the Backlog sort.
 _Avoid_: backfill (in user-facing words), bulk sort, migration
 
 **Brief**:
-The Agent's short summary of a Thread with suggested actions, shown at the top of the reader.
+The Agent's short summary of a Thread, shown at the top of the reader above its Recommended actions.
 _Avoid_: summary, TL;DR, AI summary
+
+### Signals and what they power
+
+**Signal**:
+A standing Judgment monday keeps answered on every Thread in its scope, such as "needs a reply", "money is involved" or "the sender is frustrated". Its answer (probability, confidence, the question version and when it was asked) is stored per Thread so lists, Boards and actions read numbers instead of asking again. Shipped with monday, or added by a Section, a Custom action, a Board or the Interruption policy.
+_Avoid_: tag (a Tag is a marker), label, feature, attribute, flag
+
+**Fact**:
+A value code computes about a Thread without any model: when it arrived, who sent it, how many Messages it has, whether the owner wrote last, the amounts, dates and addresses found in its text. Facts filter; Signals judge.
+_Avoid_: signal (a Signal is judged), metadata, attribute
+
+**Question version**:
+The number a Signal's wording carries; it goes up whenever its instructions, options or levels change. An answer asked under an older version is stale.
+_Avoid_: revision, prompt version
+
+**Unsure**:
+The state of a Signal answer that neither clearly holds nor clearly fails: a Noul between its two thresholds, or a Choice or Score below its confidence floor. Never treated as yes or as no.
+_Avoid_: low confidence, maybe, unknown (unknown means not asked yet)
+
+**Recommended action**:
+An action monday proposes for a Thread from a fixed catalog (reply, archive, snooze, forward, RSVP, add to calendar, pay or file, unsubscribe, track a package, run a Workflow, hand to someone) because a Signal says it fits, with its arguments already chosen. Rendered as a chip; always an ordinary Tool call with its Tier.
+_Avoid_: suggestion, smart action, quick action, chip (a chip is how it is drawn)
+
+**Template**:
+A reusable Message body with Placeholders, built in or written by the user, used to start a Message or answer one.
+_Avoid_: canned response, snippet, macro, saved reply
+
+**Placeholder**:
+A named, typed gap in a Template (`{name}`, `{amount}`) that the user fills or that monday fills by picking a span from the Thread, never by inventing a value.
+_Avoid_: variable, merge field, token
+
+**Board**:
+A pinned, generated view the user asked for in a sentence ("today's support requests as red, yellow and green"): a scope of Threads, Lanes decided by Facts and Signals, and a layout from a fixed catalog. Lives in the nav beside Groups.
+_Avoid_: dashboard, view (a View is a saved Layout), smart folder, report
+
+**Lane**:
+One group of Threads on a Board with its condition, such as Red or Waiting on legal. Every Board ends with an Unsure Lane for Threads its Signals could not decide.
+_Avoid_: column, bucket, placement (Placement is where a Workflow runs)
+
+**Interruption policy**:
+The user's own sentence saying when monday may interrupt them with a notification, split into the part about the mail (judged) and the part about time and calendar (computed).
+_Avoid_: notification rules, focus mode, do not disturb
+
+**Interest**:
+A short phrase for something the user likes to read about, learned from what they open in newsletters and editable by them. Digests rank paragraphs against Interests.
+_Avoid_: topic, preference, profile
+
+**Digest**:
+A short reading monday writes from the newsletter paragraphs that best match the user's Interests over a period, each item linked to its source.
+_Avoid_: newsletter summary, roundup, brief (a Brief is one Thread's summary)
 
 ### Calendar
 
