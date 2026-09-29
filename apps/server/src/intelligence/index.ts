@@ -62,6 +62,9 @@ import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts"
 import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
+import { createDbMeetingSource, createDbMeetingStore, recordMeeting } from "./meetings/db.ts";
+import { createMeetings, type Meetings } from "./meetings/index.ts";
+import { MEETING_SETTING_KEYS, meetingSettingsFrom } from "./meetings/settings.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
@@ -131,6 +134,21 @@ export {
 } from "./judgments.ts";
 export type { ProviderKeyStore } from "./keys.ts";
 export { createProviderKeyStore } from "./keys.ts";
+export type {
+  MeetingJobPayload,
+  MeetingSettings,
+  MeetingStore,
+  Meetings,
+  MeetingThread,
+  MeetingThreadSource,
+} from "./meetings/index.ts";
+export {
+  createMeetings,
+  MEETING_STEP,
+  MeetingThreadNotFoundError,
+  meetingJobId,
+} from "./meetings/index.ts";
+export { MEETING_SETTING_KEYS, meetingSettingsFrom } from "./meetings/settings.ts";
 export type { Meter } from "./meter.ts";
 export { createMeter, isMonth, monthOf } from "./meter.ts";
 export type { OnboardingSeam, TopSender } from "./onboarding.ts";
@@ -272,6 +290,8 @@ export interface Intelligence {
   verify: BriefVerifier;
   /** The palette's typed sentence as one Judgment (slice 27). Throws NoJudgeError without a judge. */
   intent(request: IntentRequest): Promise<IntentReading>;
+  /** Meetings from mail (docs/spec/meetings.md): the meeting request, the chips' options and their replies. */
+  meetings: Meetings;
   /**
    * Seals what earlier versions wrote in the clear (transcripts, Voice
    * profiles, integration secrets in the Setting). Needs the root key; the
@@ -855,6 +875,22 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
   extensions.organize = organize;
   extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
+  const meetings = createMeetings({
+    runtime,
+    thread: createDbMeetingSource(db, mailstore),
+    store: createDbMeetingStore(db, mailstore),
+    calendar: () => extensions.calendar ?? null,
+    voice: async (workspaceId) => {
+      const voice = await drafts.getVoice(workspaceId);
+      return voice.enabled && voice.description.trim() !== "" ? voice : null;
+    },
+    settings: async () => meetingSettingsFrom(await readGlobalSettings(db, MEETING_SETTING_KEYS)),
+    level,
+    record: recordMeeting(db, mailstore),
+    now,
+    log,
+  });
+  extensions.meetings = meetings;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
@@ -895,6 +931,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     guard,
     verify,
     intent: async (request) => judgeIntent(runtime, request, await intentSettings()),
+    meetings,
     level,
     async sealLegacy() {
       let transcripts = 0;
@@ -938,6 +975,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     validateKey,
     registerSteps(jobs) {
       judgments.registerSteps(jobs);
+      meetings.registerSteps(jobs);
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
       backlog.registerSteps(jobs);

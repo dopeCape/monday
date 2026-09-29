@@ -245,6 +245,17 @@ describe("MessageRow", () => {
     if (!e6) throw new Error("e6 missing");
     expect(render(<MessageRow thread={e6} now={fx.NOW} />)).toContain('class="time">Mon<');
   });
+
+  test("one suggested action sits beside archive and snooze, kept visible when asked", () => {
+    const run = { label: "Schedule Thu 15:00", title: "Asks first", onRun: () => {} };
+    const hover = render(<MessageRow thread={e4} now={fx.NOW} action={run} />);
+    expect(hover).toContain('class="btn sm row-chip"');
+    expect(hover).toContain("Schedule Thu 15:00");
+    expect(hover).toContain('class="actions"');
+    const kept = render(<MessageRow thread={e4} now={fx.NOW} action={{ ...run, always: true }} />);
+    expect(kept).toContain('class="actions keep"');
+    expect(render(<MessageRow thread={e4} now={fx.NOW} />)).not.toContain("row-chip");
+  });
 });
 
 describe("reader", () => {

@@ -318,6 +318,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   // the brief policy (slice 13, a brief Job), both through the Jobs table.
   options.sync?.setThreadObserver(async (workspaceId, threadId) => {
     await intelligence.judgments.threadReady(workspaceId, threadId);
+    await intelligence.meetings.threadReady(workspaceId, threadId);
     await intelligence.briefs.threadReady(workspaceId, threadId);
   });
   // New Threads are routed on arrival, as route Jobs (slice 12), and start

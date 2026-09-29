@@ -33,6 +33,7 @@ import type { TuneSeam } from "../../tune.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
+import { MEETING_TOOLS, type MeetingsSeam } from "./meetings.ts";
 
 export type { CalendarSeam } from "./calendar.ts";
 
@@ -113,6 +114,8 @@ export interface ToolExtensions {
   tune?: TuneSeam | undefined;
   /** The Backlog sort: a Sort scope's sample previewed, then the rest sorted in the background. */
   backlog?: BacklogSeam | undefined;
+  /** Meetings from mail (docs/spec/meetings.md): what meeting_options reads. */
+  meetings?: MeetingsSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });
@@ -865,6 +868,7 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   createExternalKey,
   buildVoiceProfile,
   ...CALENDAR_TOOLS,
+  ...MEETING_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 /** The tool an integration Step of a Workflow maps to. */

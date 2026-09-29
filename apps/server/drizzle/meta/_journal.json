@@ -155,6 +155,13 @@
       "when": 1790676134528,
       "tag": "0022_people",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790680527750,
+      "tag": "0023_thread_meetings",
+      "breakpoints": true
     }
   ]
 }

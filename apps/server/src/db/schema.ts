@@ -26,6 +26,8 @@ import type {
   InviteMethod,
   KeyProvider,
   McpCatalogEntry,
+  MeetingChip,
+  MeetingJudgedBy,
   MeterProvider,
   MeterTask,
   Person,
@@ -958,6 +960,34 @@ export const threadJudgments = pgTable(
     latestMessageId: text("latest_message_id").notNull().default(""),
   },
   (t) => [index("thread_judgments_workspace_idx").on(t.workspaceId, t.judgedAt)],
+);
+
+/**
+ * Meetings from mail (docs/spec/meetings.md): the meeting request's reading
+ * of a Thread version, keyed by Thread with the Message it read, so a new
+ * Message re-judges. The reading holds spans from the text (clock times,
+ * zones, the date parts), so it is sealed like a Brief; the chip the plan
+ * made when it was judged (times only) is in the clear for the feed.
+ */
+export const threadMeetings = pgTable(
+  "thread_meetings",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    messageId: text("message_id").notNull(),
+    messageCount: integer("message_count").notNull().default(0),
+    readingEnc: bytea("reading_enc").notNull(),
+    readingKey: bytea("reading_key").notNull(),
+    judgedBy: text("judged_by").$type<MeetingJudgedBy>().notNull(),
+    model: text("model").notNull().default(""),
+    chip: jsonb("chip").$type<MeetingChip | null>(),
+    judgedAt: timestamp("judged_at", { withTimezone: true, mode: "date" }).notNull(),
+  },
+  (t) => [index("thread_meetings_workspace_idx").on(t.workspaceId, t.judgedAt)],
 );
 
 /** Needs a decision (CONTEXT.md): a Thread whose best rule was not sure enough, with its candidates. */

@@ -113,7 +113,18 @@ export interface CalendarProps {
   now?: Date | undefined;
   initialView?: CalendarView | undefined;
   /** A day to open on ("2026-10-03"), bumped by `n` each time it is asked for; with a view to show it in. */
-  jumpTo?: { day: string; n: number; view?: CalendarView | undefined } | undefined;
+  jumpTo?:
+    | {
+        day: string;
+        n: number;
+        view?: CalendarView | undefined;
+        /**
+         * An Event to start in the editor, prefilled (a meeting's Pick a time,
+         * docs/spec/meetings.md); the editor's own Save and guest ask-first apply.
+         */
+        create?: { start: string; end: string; title: string; attendees: Person[] } | undefined;
+      }
+    | undefined;
   /** The people in the mail, most recent first, for the guest suggestions. */
   people?: readonly Person[] | undefined;
   /** The people index (the composer's): guests are suggested from it, the directory folded in. */
@@ -478,6 +489,25 @@ export function Calendar({
         ?.id ?? null
     );
   };
+
+  // An Event another screen asked to start (a meeting's Pick a time): the editor, prefilled, once per ask.
+  const created = useRef(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per ask; the calendars are read as they are then
+  useEffect(() => {
+    const ask = jumpTo?.create;
+    if (!jumpTo || !ask || jumpTo.n === created.current) return;
+    created.current = jumpTo.n;
+    const start = new Date(ask.start);
+    const end = new Date(ask.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    const draft: Draft = {
+      ...draftForSlot({ start, end, allDay: false }, defaultCalendar()),
+      title: ask.title,
+      attendees: ask.attendees,
+    };
+    setFormError(null);
+    setEditor({ draft, original: null, occ: null });
+  }, [jumpTo]);
 
   const startCreate = (slot: Slot, rect: AnchorRect) => {
     setFormError(null);

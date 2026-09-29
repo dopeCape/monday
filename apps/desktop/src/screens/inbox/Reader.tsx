@@ -31,6 +31,7 @@ import {
 } from "@monday/ui";
 import {
   ArchiveIcon,
+  CalendarPlusIcon,
   ClockIcon,
   DotsThreeIcon,
   EnvelopeSimpleIcon,
@@ -74,6 +75,13 @@ export interface ReaderStrings {
   asksFirst: string;
 }
 
+/** A meeting chip as the reader shows it (docs/spec/meetings.md): its words and what kind it is. */
+export interface ReaderMeetingChip {
+  kind: string;
+  label: string;
+  title: string;
+}
+
 /** A custom action as the reader shows it: its label and the Tier it renders with. */
 export interface ReaderAction {
   id: string;
@@ -112,6 +120,10 @@ export interface ReaderProps {
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
   /** A Brief action chip was clicked; the screen runs it as a tool call (docs/spec/inbox.md, Briefs). */
   onBriefAction?: ((action: BriefAction) => void) | undefined;
+  /** The meeting chips (docs/spec/meetings.md), before the custom actions in the chip row. */
+  meetingChips?: readonly ReaderMeetingChip[] | undefined;
+  /** A meeting chip was clicked, by its index; the screen runs it as its tool call. */
+  onMeetingChip?: ((index: number) => void) | undefined;
   /** The custom actions that apply to this Thread, in the toolbar after the built-in buttons and as chips. */
   actions?: readonly ReaderAction[] | undefined;
   /** A custom action was clicked; the screen runs it with its Tier. */
@@ -150,6 +162,8 @@ export function Reader({
   onToggleRead,
   onReply,
   onBriefAction,
+  meetingChips,
+  onMeetingChip,
   actions,
   onAction,
   onOpenAttachment,
@@ -182,8 +196,22 @@ export function Reader({
   const title = (label: string, key: string) => `${label} (${key})`;
   const recipient = personName(last?.from ?? thread.participants[0]);
 
+  // The meeting chips first, then the custom actions, after the model's in the same row.
+  const meetingNodes = meetingChips?.length
+    ? meetingChips.map((m, i) => (
+        <Chip
+          key={`meeting-${m.kind}-${m.label}`}
+          className="meeting-chip"
+          data-meeting={m.kind}
+          title={m.title}
+          onClick={() => onMeetingChip?.(i)}
+        >
+          <CalendarPlusIcon /> {m.label}
+        </Chip>
+      ))
+    : null;
   // The custom actions as chips, after the model's in the same row, each with its Tier.
-  const customChips = actions?.length
+  const actionChips = actions?.length
     ? actions.map((a) => (
         <Chip
           key={a.id}
@@ -197,6 +225,13 @@ export function Reader({
         </Chip>
       ))
     : null;
+  const customChips =
+    meetingNodes || actionChips ? (
+      <>
+        {meetingNodes}
+        {actionChips}
+      </>
+    ) : null;
 
   return (
     <section

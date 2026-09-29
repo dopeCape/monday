@@ -9,6 +9,7 @@ import type {
   Draft,
   DraftAttachment,
   Group,
+  MeetingChip,
   Message,
   Person,
   Predicate,
@@ -48,7 +49,8 @@ export const INBOX_THREADS_SQL = `
  * the order they were applied, the newest Message's sender for the Section
  * rules ("lastFrom"), every sender's address (space-separated, for the
  * Filter menu's Person and Domain) and the Thread's Judgments (slice 25) as
- * `j_*` columns. Read over `threads t left join thread_judgments j`.
+ * `j_*` columns, and its meeting chip as `mt_chip`. Read over `threads t left
+ * join thread_judgments j left join thread_meetings mt`.
  */
 const THREAD_LIST_COLUMNS = `t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
@@ -57,7 +59,8 @@ const THREAD_LIST_COLUMNS = `t.*,
     (select group_concat(email, ' ') from thread_senders where thread_id = t.id) as sender_emails,
     j.needs_reply as j_needs_reply, j.waiting_on_others as j_waiting_on_others, j.newsletter as j_newsletter,
     j.automated as j_automated, j.brief_worth as j_brief_worth, j.urgency as j_urgency,
-    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at`;
+    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at,
+    mt.chip as mt_chip`;
 
 /**
  * Every Thread the Cache holds, trash included, newest first, with the
@@ -69,6 +72,7 @@ export const ALL_THREADS_SQL = `
   select ${THREAD_LIST_COLUMNS}
   from threads t
   left join thread_judgments j on j.thread_id = t.id
+  left join thread_meetings mt on mt.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
 
 /** ALL_THREADS_SQL for some Threads only: the rows a write named, or Threads asked for by id. */
@@ -138,6 +142,7 @@ export function threadPageSql(
   select ${THREAD_LIST_COLUMNS}
   from threads t
   left join thread_judgments j on j.thread_id = t.id
+  left join thread_meetings mt on mt.thread_id = t.id
   where t.rid in (select t.rid from threads t where (${list.where})${keyset} order by ${orderBy} limit ?)
   order by ${orderBy}`;
   return { sql, params: [...list.params, ...keyParams, limit] };
@@ -175,6 +180,12 @@ export function rowToJudgments(r: Row): ThreadJudgments | null {
     model: text(r.j_model),
     judgedAt: r.j_judged_at,
   };
+}
+
+/** The meeting chip joined onto a Thread row as `mt_chip`, or null when there is none. */
+export function rowToMeetingChip(r: Row): MeetingChip | null {
+  const chip = json<MeetingChip | null>(r.mt_chip, null);
+  return chip && typeof chip === "object" && typeof chip.kind === "string" ? chip : null;
 }
 
 export const THREAD_BY_ID_SQL = `
@@ -215,12 +226,14 @@ export function rowToCachedThread(
   deleted: boolean;
   lastSender: string | null;
   judgments: ThreadJudgments | null;
+  meeting: MeetingChip | null;
 } {
   return {
     thread: rowToThread(r, workspaceId),
     deleted: bool(r.deleted),
     lastSender: nullable(r.last_sender),
     judgments: rowToJudgments(r),
+    meeting: rowToMeetingChip(r),
   };
 }
 

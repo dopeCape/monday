@@ -9,6 +9,8 @@ import type {
   CustomActionSetting,
   EventPreview,
   ExternalPending,
+  MeetingChip,
+  MeetingOptions,
   Settings,
   Tag,
   Thread,
@@ -106,6 +108,14 @@ import {
   resolveFilter,
   withoutFacet,
 } from "./inbox/list-filter.ts";
+import {
+  calendarNewTarget,
+  listMeetingChip,
+  type MeetingsSeam,
+  meetingsOn,
+  readerMeetingChips,
+  runMeetingChip,
+} from "./inbox/meetings.ts";
 import { Picker } from "./inbox/Picker.tsx";
 import { Reader, type ReaderAction } from "./inbox/Reader.tsx";
 import { SelectionBar } from "./inbox/SelectionBar.tsx";
@@ -222,6 +232,11 @@ export interface InboxProps {
    * Absent, or answering null, the palette behaves as before.
    */
   judge?: IntentJudge | null | undefined;
+  /**
+   * Meetings from mail (docs/spec/meetings.md): the options on open and the
+   * reply text for a chip. Absent, no meeting chips.
+   */
+  meetings?: MeetingsSeam | null | undefined;
 }
 
 /** An action that takes Threads out of the list shown ("unarchive" out of Archive). */
@@ -289,7 +304,10 @@ type Batch = {
 /** The scheduling card a typed sentence opened in the composer, without a Session (slice 27). */
 type IntentCard = {
   id: string;
-  intent: TypedIntent;
+  /** What the Agent is asked instead when this Device has no calendar seam. */
+  fallback: string;
+  /** Set when a meeting's Schedule chip opened the card (docs/spec/meetings.md). */
+  meeting?: { threadId: string } | undefined;
   preview: EventPreview;
   status: "waiting" | "running" | "done" | "failed";
   result?: string | undefined;
@@ -440,6 +458,7 @@ function InboxBody({
   sectionsOn = true,
   folder,
   judge,
+  meetings,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -840,6 +859,13 @@ function InboxBody({
   const [pickerIds, setPickerIds] = useState<string[]>([]);
   const [batch, setBatch] = useState<Batch | null>(null);
   const [intentCard, setIntentCard] = useState<IntentCard | null>(null);
+  /** The open Thread's meeting options, as the Server worked them out for its newest Message. */
+  const [meetingOptions, setMeetingOptions] = useState<{
+    key: string;
+    options: MeetingOptions | null;
+  } | null>(null);
+  /** Threads whose Schedule chip was approved: the chip goes, the reply chip stays. */
+  const [meetingDone, setMeetingDone] = useState<Readonly<Record<string, true>>>({});
   const [toast, setToast] = useState<ToastState | null>(null);
   const lastToken = useRef<UndoToken | null>(null);
   /** A token that stands for several (a custom action run on each selected Thread). */
@@ -1365,6 +1391,125 @@ function InboxBody({
       snoozeUntil: snoozeAt ? snoozeAt.toISOString() : null,
     });
   }, [judgments, messages, now, s, chipThreshold, chipsMax, chipLabels]);
+
+  /* ------------------------------ Meetings (docs/spec/meetings.md) ------------------------------ */
+
+  const meetingsLive = meetings && meetingsOn(s) ? meetings : null;
+  const deviceZone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return null;
+    }
+  }, []);
+  // The open Thread's options, asked on open and again when a newer Message lands.
+  const newestMessageId = messages[messages.length - 1]?.id ?? "";
+  const meetingKey = shownThreadId ? `${shownThreadId}:${newestMessageId}` : null;
+  useEffect(() => {
+    if (!meetingsLive || !meetingKey || !shownThreadId) return;
+    let live = true;
+    meetingsLive
+      .options(workspaceId, shownThreadId, deviceZone ?? undefined)
+      .then((options) => {
+        if (live) setMeetingOptions({ key: meetingKey, options });
+      })
+      .catch(() => {
+        if (live) setMeetingOptions({ key: meetingKey, options: null });
+      });
+    return () => {
+      live = false;
+    };
+  }, [meetingsLive, meetingKey, shownThreadId, workspaceId, deviceZone]);
+  const shownMeeting =
+    meetingsLive && meetingOptions && meetingOptions.key === meetingKey
+      ? meetingOptions.options
+      : null;
+  const meetingChipViews = useMemo(
+    () =>
+      readerMeetingChips(
+        shownMeeting,
+        s,
+        now,
+        shownThreadId && meetingDone[shownThreadId] ? new Set(["schedule"] as const) : undefined,
+      ),
+    [shownMeeting, s, now, shownThreadId, meetingDone],
+  );
+  // A meeting chip replaces the judged "call" chip: the same intent, done better.
+  const readerChips = useMemo(
+    () =>
+      meetingChipViews.length > 0
+        ? judgedChipList.filter((c) => c.kind !== "call")
+        : judgedChipList,
+    [meetingChipViews, judgedChipList],
+  );
+  /** Runs a meeting chip as its tool call; `options` null means it came from a list row and is re-checked. */
+  const runMeeting = useCallback(
+    async (threadId: string, chip: MeetingChip, options: MeetingOptions | null) => {
+      if (!meetingsLive) return;
+      const target = inbox.thread(threadId);
+      await runMeetingChip(chip, options, {
+        settings: s,
+        now,
+        zone: deviceZone,
+        refresh: () => meetingsLive.options(workspaceId, threadId, deviceZone ?? undefined),
+        draft: (kind, slots) =>
+          meetingsLive.draft(threadId, {
+            workspace: workspaceId,
+            kind,
+            slots,
+            ...(deviceZone ? { zone: deviceZone } : {}),
+          }),
+        // The reply opens on the Thread with the text; the user still sends (ADR 0002).
+        reply: (text) => {
+          if (!target) return;
+          setFocus(threadId);
+          setReaderOpen(true);
+          compose.startReply(target, inbox.messages(threadId), "reply", false, { opening: text });
+        },
+        schedule: (preview, fresh) => {
+          // The card lives in the bottom composer; in a column Layout the editor asks instead.
+          if (shell.layout.agent !== "bottom") {
+            onNavigate?.(
+              calendarNewTarget({
+                start: preview.start,
+                end: preview.end,
+                title: fresh.title,
+                attendees: fresh.attendees,
+              }),
+            );
+            return;
+          }
+          setIntentCard({
+            id: `meeting-${Date.now()}`,
+            fallback: t("strings.chips.call_prompt"),
+            meeting: { threadId },
+            preview,
+            status: "waiting",
+          });
+          setAgentOpen(true);
+        },
+        pick: (where) => {
+          if (onNavigate) onNavigate(calendarNewTarget(where));
+          else showToast(t("strings.reader.brief_action.unavailable"), null);
+        },
+        toast: (text) => showToast(text, null),
+      });
+    },
+    [
+      meetingsLive,
+      inbox,
+      s,
+      t,
+      now,
+      deviceZone,
+      workspaceId,
+      compose,
+      shell.layout.agent,
+      onNavigate,
+      showToast,
+    ],
+  );
+
   const runBriefAction = useCallback(
     async (action: BriefAction) => {
       if (!thread) return;
@@ -1708,7 +1853,7 @@ function InboxBody({
       }
       setIntentCard({
         id: `intent-${Date.now()}`,
-        intent,
+        fallback: intent.text,
         preview: eventPreviewOf(intent, s, now),
         status: "waiting",
       });
@@ -1723,12 +1868,13 @@ function InboxBody({
     if (!calendar) {
       // No calendar seam on this Device: the Agent has the tool and asks the same way.
       setIntentCard(null);
-      askAgent(card.intent.text);
+      askAgent(card.fallback);
       return;
     }
     setIntentCard({ ...card, status: "running" });
     try {
-      const link = s["calendar.meeting_link"];
+      // A meeting's card leaves the link off when meetings.add_link says so.
+      const link = card.meeting && !s["meetings.add_link"] ? "none" : s["calendar.meeting_link"];
       await calendar.create({
         title: card.preview.title,
         start: card.preview.start,
@@ -1738,10 +1884,17 @@ function InboxBody({
         ...(link === "provider" ? {} : { meetingLink: link }),
       });
       setIntentCard({ ...card, status: "done", result: t("strings.agent.applied") });
-      showToast(
-        fill(t("strings.reader.brief_action.calendar_added"), { title: card.preview.title }),
-        null,
-      );
+      if (card.meeting) {
+        // Scheduled: the Schedule chip goes, the "works for me" reply chip stays.
+        const threadId = card.meeting.threadId;
+        setMeetingDone((d) => ({ ...d, [threadId]: true }));
+        showToast(fill(t("strings.meetings.scheduled"), { title: card.preview.title }), null);
+      } else {
+        showToast(
+          fill(t("strings.reader.brief_action.calendar_added"), { title: card.preview.title }),
+          null,
+        );
+      }
     } catch (error) {
       setIntentCard({
         ...card,
@@ -1929,6 +2082,8 @@ function InboxBody({
   const renderItem = (item: ListItem) => {
     const { thread: th, leaving } = item.row;
     const checked = allMode || selection.includes(th.id);
+    // At most one suggested action on a row (docs/spec/actions.md): the Cache's meeting chip.
+    const meetingChip = meetingsLive ? listMeetingChip(inbox.meeting?.(th.id), s, now) : null;
     return (
       <MessageRow
         key={th.id}
@@ -1944,6 +2099,16 @@ function InboxBody({
         now={now}
         titles={rowTitles}
         highlight={highlight}
+        action={
+          meetingChip
+            ? {
+                label: meetingChip.label,
+                title: meetingChip.title,
+                always: meetingChip.always,
+                onRun: () => void runMeeting(th.id, meetingChip.chip, null),
+              }
+            : undefined
+        }
         onOpen={(id) => {
           if (searching && search) void search.remember(searchText);
           // A full search hit may be a Thread the list does not hold: read it
@@ -2385,7 +2550,12 @@ function InboxBody({
           thread={shownThread}
           messages={messages}
           brief={brief}
-          chips={judgedChipList}
+          chips={readerChips}
+          meetingChips={meetingChipViews}
+          onMeetingChip={(i) => {
+            const view = meetingChipViews[i];
+            if (view && shownMeeting) void runMeeting(shownThread.id, view.chip, shownMeeting);
+          }}
           tags={tagsOf(shownThread)}
           sheet={stream}
           leaving={readerExit.leaving}

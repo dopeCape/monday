@@ -464,6 +464,39 @@ describe("Section rules in the Store", () => {
     inbox.close();
   });
 
+  test("a meeting chip from the feed lands in the Cache and reaches the row; deleted removes it", async () => {
+    const { inbox, server, store } = await open();
+    expect(inbox.meeting?.("e3")).toBeUndefined();
+    const chip = {
+      kind: "schedule" as const,
+      start: "2026-10-01T14:00:00.000Z",
+      end: "2026-10-01T14:30:00.000Z",
+      flags: [],
+    };
+    const change = {
+      threadId: "e3",
+      messageId: "m-e3",
+      chip,
+      judgedAt: "2026-09-29T09:00:00.000Z",
+    };
+    server.record({ kind: "meeting", entityId: "e3", payload: change });
+    await store.sync();
+    await settled(inbox, () => inbox.meeting?.("e3") !== undefined);
+    expect(inbox.meeting?.("e3")).toEqual(chip);
+    expect(await store.query("select thread_id, message_id from thread_meetings")).toEqual([
+      { thread_id: "e3", message_id: "m-e3" },
+    ]);
+    // No chip for the new Message: the row loses it, the Cache keeps the reading's row.
+    server.record({ kind: "meeting", entityId: "e3", payload: { ...change, chip: null } });
+    await store.sync();
+    await settled(inbox, () => inbox.meeting?.("e3") === undefined);
+    server.record({ kind: "meeting", entityId: "e3", payload: { ...change, deleted: true } });
+    await store.sync();
+    await tick(20);
+    expect(await store.query("select thread_id from thread_meetings")).toEqual([]);
+    inbox.close();
+  });
+
   test("resection applies changed rules without waiting for the Cache", async () => {
     const seed = fixtureSeed();
     seed.threads = seed.threads.map((t) => (t.id === "e1" ? { ...t, section: null } : t));

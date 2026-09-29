@@ -31,6 +31,7 @@ import type {
   Brief,
   CustomActionSetting,
   Group,
+  MeetingChip,
   Message,
   SectionJudged,
   SectionRuleSetting,
@@ -430,13 +431,21 @@ export async function createStoreInbox(
   type RawRow = Record<string, unknown>;
   const projectedById = new Map<
     string,
-    { row: RawRow; generation: number; thread: Thread; judgments: ThreadJudgments | null }
+    {
+      row: RawRow;
+      generation: number;
+      thread: Thread;
+      judgments: ThreadJudgments | null;
+      meeting: MeetingChip | null;
+    }
   >();
   let generation = 0;
   /** The Threads in the trash, which the domain type does not carry. */
   const deletedIds = new Set<string>();
   /** The Judgments per Thread held, as the Cache holds them. */
   const judgmentsById = new Map<string, ThreadJudgments>();
+  /** The meeting chip per Thread held, as the Cache holds it (docs/spec/meetings.md). */
+  const meetingsById = new Map<string, MeetingChip>();
   const owner = options.owner ?? options.sections?.owner ?? "";
 
   /**
@@ -514,6 +523,7 @@ export async function createStoreInbox(
     byId.clear();
     deletedIds.clear();
     judgmentsById.clear();
+    meetingsById.clear();
     const live = new Set<string>();
     const one = (r: RawRow): Thread => {
       const id = String(r.id);
@@ -521,18 +531,22 @@ export async function createStoreInbox(
       const held = projectedById.get(id);
       let thread: Thread;
       let judgments: ThreadJudgments | null;
+      let meeting: MeetingChip | null;
       if (held && held.row === r && held.generation === generation) {
         thread = held.thread;
         judgments = held.judgments;
+        meeting = held.meeting;
       } else {
         const entry = rowToCachedThread(r, store.workspaceId);
         thread = sectioned(entry);
         judgments = entry.judgments;
-        projectedById.set(id, { row: r, generation, thread, judgments });
+        meeting = entry.meeting;
+        projectedById.set(id, { row: r, generation, thread, judgments, meeting });
       }
       byId.set(id, thread);
       if (r.deleted === 1 || r.deleted === true) deletedIds.add(id);
       if (judgments) judgmentsById.set(id, judgments);
+      if (meeting) meetingsById.set(id, meeting);
       return thread;
     };
     for (const h of lists.values()) {
@@ -1170,6 +1184,7 @@ export async function createStoreInbox(
     },
     brief: (threadId) => watch(threadId).brief,
     judgments: (threadId) => judgmentsById.get(threadId),
+    meeting: (threadId) => meetingsById.get(threadId),
     unavailable: (threadId) => watch(threadId).unavailable,
     prefetch(threadIds) {
       const keep = new Set(threadIds);

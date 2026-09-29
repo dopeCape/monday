@@ -67,6 +67,7 @@ describe("migrations", () => {
       "tags",
       "thread_judgments",
       "thread_labels",
+      "thread_meetings",
       "thread_routes",
       "thread_tags",
       "threads",

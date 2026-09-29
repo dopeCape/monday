@@ -33,6 +33,8 @@ export const SUMMARY_HEADERS: readonly string[] = [
   "x-mailer",
   "x-github-reason",
   "feedback-id",
+  // The sender's UTC offset: meetings read a proposed time's zone from it (docs/spec/meetings.md).
+  "date",
 ];
 
 export async function parseMime(bytes: Uint8Array | string): Promise<Email> {

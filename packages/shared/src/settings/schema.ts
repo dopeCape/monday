@@ -25,6 +25,7 @@ import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
+import { MEETING_SETTINGS } from "./meetings.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -1688,6 +1689,8 @@ export const settingsSchema = {
     label: "Suggested action confidence",
     help: "A suggested action shows in the reader, before any Brief, when TypeSafe is at least this sure of it. The Brief's own actions replace them once it arrives.",
   }),
+  // Meetings from mail (docs/spec/meetings.md): behavior, thresholds, questions and words.
+  ...MEETING_SETTINGS,
   "routing.judge.instructions": setting({
     type: z.string().min(1),
     default:
@@ -9261,7 +9264,16 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Config file",
     "Settings page",
   ],
-  routing: ["Sorting", "Groups", "Sections", "Custom actions", "Briefs", "Confidence", "Reading"],
+  routing: [
+    "Sorting",
+    "Groups",
+    "Sections",
+    "Custom actions",
+    "Briefs",
+    "Meetings",
+    "Confidence",
+    "Reading",
+  ],
   ai: [
     "Level",
     "Runtime",

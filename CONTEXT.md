@@ -159,6 +159,10 @@ One entry on a calendar, read from the Provider or from the Local calendar.
 A `text/calendar` request inside a Message. Rendered as an invite bar in the reader; answered through the calendar API where one exists, by reply mail otherwise.
 _Avoid_: invitation email, ICS attachment
 
+**Free slot**:
+A span on the owner's own calendars inside the working hours and days, clear of every Event that blocks time (not declined, cancelled or all-day), found by code. What Offer times and Suggest another time write into a reply, and what `find_free_time` returns.
+_Avoid_: availability, opening, free time (as a noun for one span)
+
 **Local calendar**:
 The calendar monday keeps in its own database for a Workspace whose Account has no calendar API and no linked CalDAV calendar.
 _Avoid_: fallback calendar, offline calendar

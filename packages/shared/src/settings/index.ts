@@ -10,6 +10,7 @@ export {
   resolveTaskModel,
   rolesFor,
 } from "./hosted.ts";
+export type { MeetingNoulWords } from "./meetings.ts";
 export type {
   CustomActionValue,
   Effort,

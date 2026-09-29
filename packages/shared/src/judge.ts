@@ -24,7 +24,8 @@ export type JudgeTask =
   | "judge.guard"
   | "judge.verify"
   | "judge.rerank"
-  | "judge.condition";
+  | "judge.condition"
+  | "judge.meeting";
 
 export type JsonValue =
   | string

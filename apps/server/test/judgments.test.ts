@@ -832,8 +832,13 @@ describe("judgments over the fixture mailbox", () => {
     expect(ran[ROUTE_STEP]).toBeUndefined();
     // Every Thread has its Judgments, asked once, in one judge.section request each.
     const lines = (await judged.meter.month(workspaceId, "2026-09")).lines;
-    // Routing, the arrival request, the one Brief, and its verification (slice 27).
-    expect(lines).toHaveLength(4);
+    // Routing, the arrival request, the one Brief, and its verification (slice 27), and the
+    // meeting request for the Threads the meeting gate lets through (docs/spec/meetings.md).
+    expect(lines).toHaveLength(5);
+    const meetingLine = lines.find((l) => l.task === "judge.meeting");
+    expect(meetingLine?.provider).toBe("typesafe");
+    expect(meetingLine?.calls).toBeGreaterThan(0);
+    expect(meetingLine?.calls).toBeLessThan(24);
     expect(lines).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ task: "judge.route", calls: 20 }),

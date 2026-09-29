@@ -18,6 +18,14 @@
 //                                          200 IntentReading   one Judgment over the sentence; the Device assembles it
 //                                          409 no_judge        no judge answers (no TypeSafe key, or Settings say the LLM)
 //                                          409 ai_off
+//   GET    /meetings/:threadId?workspace=&zone=   meetings from mail (docs/spec/meetings.md):
+//                                          200 MeetingOptions   the case, proposals, slots and chips now;
+//                                                               judges the newest Message first when it was not read
+//                                          404 not_found | 409 ai_off
+//   POST   /meetings/:threadId/draft     {workspace, kind, slots, zone?}
+//                                          200 MeetingDraftResult   the reply text (never sent); slots re-checked,
+//                                                                   empty when none is still free
+//                                          404 not_found | 409 ai_off
 
 import { KEY_PROVIDERS } from "@monday/shared";
 import { Hono } from "hono";
@@ -25,6 +33,7 @@ import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
 import { AssistDisabledError } from "../intelligence/compose-assist.ts";
 import type { Intelligence } from "../intelligence/index.ts";
+import { MeetingThreadNotFoundError } from "../intelligence/meetings/index.ts";
 import { isMonth, monthOf } from "../intelligence/meter.ts";
 import { AiOffError, NoJudgeError, NoProviderKeyError } from "../intelligence/runtime/index.ts";
 import { parseBody } from "./validate.ts";
@@ -76,6 +85,18 @@ const intentBody = z.object({
     .array(z.object({ id: z.string().min(1), name: z.string().min(1).max(120) }))
     .max(100)
     .default([]),
+});
+
+const meetingDraftBody = z.object({
+  workspace: z.string().min(1),
+  kind: z.enum(["offer", "suggest", "accept"]),
+  slots: z
+    .array(
+      z.object({ start: z.iso.datetime({ offset: true }), end: z.iso.datetime({ offset: true }) }),
+    )
+    .min(1)
+    .max(10),
+  zone: z.string().max(64).optional(),
 });
 
 export interface IntelligenceRoutesOptions {
@@ -182,6 +203,40 @@ export function intelligenceRoutes(
       if (error instanceof NoJudgeError)
         return c.json({ error: "no_judge", reason: error.reason }, 409);
       if (error instanceof AiOffError) return c.json({ error: "ai_off" }, 409);
+      throw error;
+    }
+  });
+
+  app.get("/meetings/:threadId", async (c) => {
+    const workspace = c.req.query("workspace");
+    if (!workspace) return c.json({ error: "workspace_required" }, 400);
+    try {
+      return c.json(
+        await intelligence.meetings.options(workspace, c.req.param("threadId"), {
+          zone: c.req.query("zone") || undefined,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof AiOffError) return c.json({ error: "ai_off" }, 409);
+      if (error instanceof MeetingThreadNotFoundError) return c.json({ error: "not_found" }, 404);
+      throw error;
+    }
+  });
+
+  app.post("/meetings/:threadId/draft", async (c) => {
+    const body = await parseBody(c, meetingDraftBody);
+    if (!body.ok) return body.response;
+    try {
+      return c.json(
+        await intelligence.meetings.draft(body.data.workspace, c.req.param("threadId"), {
+          kind: body.data.kind,
+          slots: body.data.slots,
+          zone: body.data.zone,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof AiOffError) return c.json({ error: "ai_off" }, 409);
+      if (error instanceof MeetingThreadNotFoundError) return c.json({ error: "not_found" }, 404);
       throw error;
     }
   });
