@@ -1022,8 +1022,8 @@ describe("Settings › AI and agent", () => {
     });
     await mountOpen({ initialSection: "ai" }, { api: scripted.api }, HOSTED);
 
-    // Every Task has a row (ten with the template Task); promoting draft_message to always-ask writes the Setting.
-    expect(qa('[data-setting^="ai.task."]')).toHaveLength(10);
+    // Every Task has a row (eleven with the template and board Tasks); promoting draft_message to always-ask writes the Setting.
+    expect(qa('[data-setting^="ai.task."]')).toHaveLength(11);
     await clickText("Fast", q('[data-setting="ai.task.composer"]') ?? document);
     expect(captured?.settings["ai.task.composer"].role).toBe("fast");
     await click(q('[data-tool="draft_message"] .switch'));

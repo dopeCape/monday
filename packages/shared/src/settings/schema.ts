@@ -25,9 +25,10 @@ import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
+import { BOARD_SETTINGS } from "./boards.ts";
 import { MEETING_SETTINGS } from "./meetings.ts";
-import { TEMPLATE_SETTINGS } from "./templates.ts";
 import { signalsSettings } from "./signals.ts";
+import { TEMPLATE_SETTINGS } from "./templates.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -249,6 +250,7 @@ export const TASKS: readonly Task[] = [
   "draft-in-voice",
   "summarize",
   "template",
+  "board",
 ];
 
 const reevaluatePolicy = z.enum(["manual", "on-rule-change", "on-correction", "always"]);
@@ -384,6 +386,7 @@ const TASK_LABEL: Record<Task, string> = {
   "draft-in-voice": "Drafts in your voice",
   summarize: "Summaries",
   template: "Templates from examples",
+  board: "Boards from a sentence",
 };
 
 function aiTask(task: Task, r: Role, e: Effort) {
@@ -2800,6 +2803,7 @@ export const settingsSchema = {
   "ai.task.draft-in-voice": aiTask("draft-in-voice", "main", "medium"),
   "ai.task.summarize": aiTask("summarize", "fast", "low"),
   "ai.task.template": aiTask("template", "fast", "low"),
+  "ai.task.board": aiTask("board", "main", "medium"),
   "ai.judge.provider": setting({
     type: z.enum(["auto", "typesafe", "llm"]),
     default: "auto",
@@ -9203,6 +9207,8 @@ export const settingsSchema = {
   ...TEMPLATE_SETTINGS,
   /* Signals (ADR 0014, slices 28 to 33): their own file. */
   ...signalsSettings,
+  /* Boards (docs/spec/boards.md, slices 39 and 40): their own file. */
+  ...BOARD_SETTINGS,
 } satisfies Record<string, SettingEntry>;
 
 /* ------------------------------ Derived types and helpers ------------------------------ */
@@ -9301,6 +9307,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Custom actions",
     "Briefs",
     "Meetings",
+    "Boards",
     "Confidence",
     "Reading",
   ],

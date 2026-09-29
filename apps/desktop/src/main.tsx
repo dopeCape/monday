@@ -1,5 +1,6 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
+import "@monday/ui/boards.css";
 import { Btn, Toast } from "@monday/ui";
 import { type ReactNode, StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";

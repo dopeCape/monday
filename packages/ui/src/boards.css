@@ -1,0 +1,423 @@
+/* ------------------------------ Boards (docs/spec/boards.md) ------------------------------ */
+/* A Board in the list area: its component (lanes, list, counts, table,
+   timeline) over the Inbox's own rows; the Board card in the Agent; the
+   board Panel above the stream. Lane tones are the palette's semantic
+   colours only. Kept in their own file so the Boards slices touch app.css
+   nowhere. */
+
+[data-tone="danger"] {
+  --tone: var(--danger);
+}
+[data-tone="warning"] {
+  --tone: var(--warning);
+}
+[data-tone="ok"] {
+  --tone: var(--success);
+}
+[data-tone="info"] {
+  --tone: var(--info);
+}
+[data-tone="muted"] {
+  --tone: var(--fg-faint);
+}
+
+.board-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.board-menu-btn {
+  margin-left: 4px;
+}
+
+/* the bars above the rows: rename, the first-placements check, the tighten offer, errors */
+.board-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px var(--pad);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  animation: fade-in var(--t-med) var(--ease);
+}
+.board-bar > span {
+  flex: 1;
+  min-width: 0;
+}
+.board-bar.err {
+  color: var(--danger);
+}
+.board-rename input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--sunken);
+  color: var(--fg);
+  font: inherit;
+}
+
+/* a Lane's heading: the tone as a dot, the label, the count */
+.board-lane-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--pad) 6px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.board-lane-h b {
+  font-weight: 600;
+  color: var(--fg);
+}
+.board-lane-h .n {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+}
+.board-lane-h .dot,
+.board-count .dot,
+.board-tr .dot,
+.board-card .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tone, var(--fg-faint));
+}
+.board-sub {
+  padding: 8px var(--pad) 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.board-empty {
+  padding: 10px var(--pad) 14px;
+  font-size: var(--fs-sm);
+  color: var(--fg-faint);
+}
+
+/* lanes: columns side by side, Unsure last */
+.board-lanes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 1fr);
+  min-height: 100%;
+  overflow-x: auto;
+}
+.board-lane {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease);
+}
+.board-lane:last-child {
+  border-right: 0;
+}
+.board-lane.folded {
+  grid-column: span 1;
+  opacity: 0.7;
+}
+.board-lane[data-drop="true"],
+.board-group[data-drop="true"] {
+  background: var(--accent-soft);
+}
+.board-lane .board-lane-h {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 2px solid var(--tone, var(--border));
+}
+
+/* list: one list with a heading per Lane */
+.board-group + .board-group {
+  border-top: 1px solid var(--border);
+}
+
+/* a row keeps the Inbox's look; Move to shows on hover or focus */
+.board-row {
+  position: relative;
+}
+.board-row.by-user::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--tone, var(--accent));
+}
+.board-move {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  color: var(--fg-muted);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.board-row:hover .board-move,
+.board-move:focus-visible {
+  opacity: 1;
+}
+.board-move:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.board-move-pop {
+  top: 36px;
+  right: 8px;
+}
+
+/* counts: one line of Lane counts, each a button that filters */
+.board-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px var(--pad);
+}
+.board-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  background: var(--panel);
+}
+.board-count b {
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.board-count:hover {
+  background: var(--hover);
+}
+.board-count.on {
+  border-color: var(--tone, var(--border-strong));
+  color: var(--fg);
+}
+
+/* table and timeline rows */
+.board-table {
+  display: flex;
+  flex-direction: column;
+}
+.board-tr {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(90px, 1fr);
+  grid-template-columns: minmax(220px, 3fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px var(--pad);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.board-tr.head {
+  min-height: 32px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+button.board-tr:hover {
+  background: var(--hover);
+}
+.board-tr.focus {
+  background: var(--active);
+}
+.board-tr .t {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.board-tr .t b {
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-tr .who {
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-day-h {
+  padding: 12px var(--pad) 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.board-tr .lane {
+  justify-self: end;
+  color: var(--tone, var(--fg-faint));
+}
+
+/* Show the source: the document, read-only */
+.board-source {
+  margin: 10px var(--pad);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  animation: rise var(--t-fast) var(--ease);
+}
+.board-source-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.board-source pre {
+  margin: 0;
+  padding: 12px;
+  max-height: 360px;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+/* the board Panel above the stream */
+.board-panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px calc(var(--pad) - 10px) 6px;
+  border-bottom: 1px solid var(--border);
+}
+.board-panel .board-counts {
+  padding: 4px 0;
+}
+.board-panel-h {
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* Settings › Sorting › Boards */
+.boards-table .mr {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.boards-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* the Board card in the Agent (slice 40) */
+.board-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.board-card .bc-line {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.board-card .bc-line.warn {
+  color: var(--warning);
+}
+.board-card .bc-lanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.board-card .bc-lane {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.board-card .bc-lane b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.board-card .bc-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.board-card .bc-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  position: relative;
+}
+.board-card .bc-row:last-child {
+  border-bottom: 0;
+}
+.board-card .bc-row .dot {
+  margin-top: 5px;
+}
+.board-card .bc-row .who {
+  color: var(--fg-muted);
+}
+.board-card .bc-row .subj {
+  display: block;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-card .bc-row .why {
+  display: block;
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.board-card .bc-row .fix {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.board-card .bc-row.corrected {
+  background: var(--accent-soft);
+}
+.board-card .bc-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.board-card .bc-actions .sp {
+  flex: 1;
+}
+.board-card .pop {
+  top: 34px;
+  right: 10px;
+}

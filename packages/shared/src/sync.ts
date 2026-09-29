@@ -2,6 +2,7 @@
 // the Changes feed the client reads from a cursor, and the last-writer-wins rule
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
+import type { BoardChange } from "./board/types.ts";
 import type {
   Attendee,
   CalendarAccess,
@@ -23,8 +24,8 @@ import type {
 import type { ThreadJudgments } from "./judge.ts";
 import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
-import type { TemplateChange } from "./templates/types.ts";
 import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
+import type { TemplateChange } from "./templates/types.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -238,7 +239,9 @@ export type ChangeKind =
   | "invite"
   | "settings"
   | "run"
-  | "template";
+  | "template"
+  /** A Board saved, pinned, moved or deleted (docs/spec/boards.md): headers only. */
+  | "board";
 
 /**
  * A Workflow Run moved: it started, reached a Step, paused for an approval or
@@ -460,7 +463,8 @@ export type ChangePayload =
   | { kind: "invite"; payload: InviteChange }
   | { kind: "settings"; payload: SettingsChange }
   | { kind: "run"; payload: RunChange }
-  | { kind: "template"; payload: TemplateChange };
+  | { kind: "template"; payload: TemplateChange }
+  | { kind: "board"; payload: BoardChange };
 
 export type Change = ChangePayload & {
   seq: number;
