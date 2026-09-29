@@ -30,7 +30,7 @@ import {
 } from "../screens/workflows/workflow-data.ts";
 import { StaticShell } from "../shell/Shell.tsx";
 import { createLiveRuns, type LiveRunsSnapshot, type LiveRunsTimers } from "./live-runs.ts";
-import { approvalNotices } from "./notices.ts";
+import { approvalNotices, waitingKey } from "./notices.ts";
 import { approvalItems } from "./queue.ts";
 import { type RunFeed, useApprovals } from "./useApprovals.ts";
 
@@ -634,6 +634,46 @@ describe("the notice as a Run starts waiting", () => {
     await act(async () => feed.tell());
     await act(async () => Bun.sleep(250));
     expect(told).toHaveLength(1);
+  });
+
+  test("a Step the Sidecar told while monday was closed is not told again; notices wait for that answer", async () => {
+    const api = liveApi([]);
+    const feed = handFeed();
+    const told: string[] = [];
+    let sidecarTold: ReadonlySet<string> | null = null;
+    function Harness({ bySidecar }: { bySidecar: ReadonlySet<string> | null }) {
+      useApprovals({
+        api,
+        workspaceId: "ws",
+        feed,
+        settings: { ...defaultSettings(), "workflows.live.poll_seconds": 0 },
+        session: [],
+        external: [],
+        tell: (n) => told.push(n.key),
+        now: () => NOW,
+        toldBySidecar: bySidecar,
+      });
+      return null;
+    }
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const r = root;
+    await act(async () => r.render(<Harness bySidecar={sidecarTold} />));
+    await tick();
+    const run = pausedRun();
+    api.live.push(run);
+    await act(async () => feed.tell());
+    await act(async () => Bun.sleep(250));
+    // Still asking the Sidecar: nothing yet.
+    expect(told).toEqual([]);
+    sidecarTold = new Set([waitingKey(run)]);
+    await act(async () => r.render(<Harness bySidecar={sidecarTold} />));
+    await act(async () => Bun.sleep(50));
+    expect(told).toEqual([]);
+    await act(async () => feed.tell());
+    await act(async () => Bun.sleep(250));
+    expect(told).toEqual([]);
   });
 });
 

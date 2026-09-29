@@ -31,30 +31,69 @@
 // `monday-server mcp ...` runs the stdio MCP launcher instead (entry/mcp.ts):
 // monday's tools for a Local runtime that only speaks stdio, proxied to the
 // Sidecar's loopback endpoint.
+//
+// The background service (ADR 0013), how the desktop app runs the Sidecar:
+//   monday-server service --data-dir <dir> --build <id> --managed-by <systemd|launchd|process>
+// is the Sidecar with no parent to watch: it keeps running when the window
+// closes, reads its loopback token from <dir>/sidecar.token (the app keeps it
+// in the OS keychain and writes this 0600 copy), writes <dir>/sidecar.json
+// (pid, port, build) for the next app launch, waits
+// server.sidecar.unlock_wait_seconds for the app to POST /unlock before it
+// starts work locked, rotates <dir>/sidecar.log, and posts desktop
+// notifications itself while no client is connected. It stops on SIGTERM or
+// POST /service/stop, finishing leases and closing Postgres.
+//   monday-server stop [--data-dir <dir>]    SIGTERM to the running service, and wait
+//   monday-server status [--data-dir <dir>]  the runtime file, or "not running"
 
+import { homedir } from "node:os";
 import { join } from "node:path";
-import type { DeploymentMode } from "@monday/shared";
+import type { DeploymentMode, ServiceManager, ServiceStatus } from "@monday/shared";
 import { createApp } from "../src/app.ts";
+import { SIDECAR_DEVICE_ID } from "../src/auth/index.ts";
 import { claimableNeeds, isDeploymentMode } from "../src/capabilities.ts";
 import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
 import { createDb, dbOptionsFor } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
 import { backfillDraftMirrors } from "../src/drafts/index.ts";
-import { createLineNotifier, createMemoryNotifier } from "../src/external/index.ts";
+import { createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
+import { createPresence } from "../src/presence.ts";
 import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
 import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
+import { serviceRoutes } from "../src/routes/service.ts";
 import { upgradeRoutes } from "../src/routes/upgrade.ts";
-import { readGlobalSetting } from "../src/settings/read.ts";
+import {
+  createDbNoticeSource,
+  createSidecarNotices,
+  SIDECAR_NOTICE_KEYS,
+} from "../src/service/notices.ts";
+import { readDeviceSettings, readGlobalSetting } from "../src/settings/read.ts";
 import { createUpgrade } from "../src/upgrade/index.ts";
 import { fileAttachStore, readAttachedUrl } from "./attach.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { createCheckpointer } from "./checkpointer.ts";
+import { createDesktopNotifier } from "./desktop-notify.ts";
 import { rememberBuffersMb, startEmbeddedPostgres } from "./embedded-postgres.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
 import { findPgDump, pgDump } from "./pg-dump.ts";
 import { migrationsFolder } from "./resources.ts";
+import {
+  defaultDataDir,
+  LOG_FILE,
+  otherService,
+  parseServiceArgs,
+  postgresRss,
+  readRuntimeFile,
+  readTokenFile,
+  removeRuntimeFile,
+  removeRuntimeFileSync,
+  rotateLog,
+  type ServiceArgs,
+  stopService,
+  TOKEN_FILE,
+  writeRuntimeFile,
+} from "./service.ts";
 import { createServices, publicUrlReader } from "./services.ts";
 
 const log = (message: string) => console.error(`[monday] ${message}`);
@@ -70,10 +109,57 @@ function resolveMode(): DeploymentMode {
   return raw;
 }
 
-async function main() {
+/** The background service's settings from its arguments, or null for a plain start. */
+function serviceOf(argv: readonly string[]): (ServiceArgs & { dataDir: string }) | null {
+  if (argv[2] !== "service") return null;
+  const args = parseServiceArgs(argv.slice(3));
+  return {
+    ...args,
+    dataDir:
+      args.dataDir ||
+      process.env.MONDAY_DATA_DIR ||
+      defaultDataDir(process.platform, process.env, homedir()),
+  };
+}
+
+async function main(service: (ServiceArgs & { dataDir: string }) | null) {
+  if (service) {
+    // The service is always the Sidecar, on loopback, on a port of its choosing.
+    process.env.MONDAY_MODE = "sidecar";
+    process.env.MONDAY_DATA_DIR = service.dataDir;
+    const tokenFile = service.tokenFile ?? join(service.dataDir, TOKEN_FILE);
+    const token = process.env.MONDAY_SIDECAR_TOKEN || (await readTokenFile(tokenFile));
+    if (!token) {
+      log(`no loopback token in ${tokenFile}; open monday once to create it`);
+      process.exit(2);
+    }
+    process.env.MONDAY_SIDECAR_TOKEN = token;
+  }
   const mode = resolveMode();
   const serverId = process.env.MONDAY_SERVER_ID || `${mode}-${crypto.randomUUID().slice(0, 8)}`;
   const dataDir = process.env.MONDAY_DATA_DIR || "./data";
+  const startedAt = new Date();
+  const build = service?.build ?? "dev";
+  const managedBy: ServiceManager = service?.managedBy ?? "process";
+
+  if (service) {
+    // Two services on one data directory would share one Postgres cluster and
+    // double every Job: a second copy (two app launches at once) steps aside.
+    const other = await otherService(dataDir, process.pid);
+    if (other) {
+      log(`the background service already runs as pid ${other.pid}; exiting`);
+      process.exit(4);
+    }
+    await writeRuntimeFile(dataDir, {
+      pid: process.pid,
+      port: null,
+      build,
+      startedAt: startedAt.toISOString(),
+      state: "starting",
+      managedBy,
+    });
+    process.on("exit", () => removeRuntimeFileSync(dataDir, process.pid));
+  }
 
   let databaseUrl = process.env.DATABASE_URL || null;
   let unpooledUrl = process.env.DATABASE_URL_UNPOOLED || databaseUrl;
@@ -136,7 +222,11 @@ async function main() {
     debug,
   });
   const { auth, keys, jobs, mailstore, sync, push, accounts, calendar, judge, demo } = services;
-  await services.startAccounts();
+  // A background service started without its key (a login start, or systemd
+  // starting it for the app) gives the app a moment to unlock it first, so its
+  // Jobs do not start locked when a key is on its way (ADR 0013).
+  const waitForKey = service !== null && !keys.isUnlocked();
+  if (!waitForKey) await services.startAccounts();
   // Drafts saved before their Provider could hold them reach its Drafts folder now.
   await backfillDraftMirrors(handle.db, jobs)
     .then((n) => n > 0 && debug(`draft mirrors queued at boot: ${n}`))
@@ -169,7 +259,13 @@ async function main() {
   const changeListener = unpooledUrl
     ? await listenForChanges(unpooledUrl, changeBus, { onError: (e) => log(String(e)) })
     : null;
-  const changesSocket = createChangesSocket({ auth, bus: changeBus, mailstore });
+  // Whether a client is here: its Changes feed socket and its requests (ADR 0013).
+  const presence = createPresence();
+  const changesSocket = createChangesSocket({ auth, bus: changeBus, mailstore, presence });
+  const desktopNotify = createDesktopNotifier();
+  const localSettings = <K extends Parameters<typeof readDeviceSettings>[2][number]>(
+    keys: readonly K[],
+  ) => readDeviceSettings(handle.db, SIDECAR_DEVICE_ID, keys);
 
   // The upgrade path (ADR 0008) is the Sidecar's: export, copy and attach.
   const pgDumpBinary = mode === "sidecar" ? await findPgDump() : null;
@@ -227,13 +323,27 @@ async function main() {
     },
     push,
     calendar,
-    mounts: mode === "sidecar" ? [upgradeRoutes(upgrade)] : [],
-    // An external approval with no client open (slice 19): the Sidecar tells its
-    // Tauri parent over stdout; a container has no desktop and logs it.
+    mounts:
+      mode === "sidecar"
+        ? [
+            upgradeRoutes(upgrade),
+            serviceRoutes({ status: serviceStatus, stop: (r) => void shutdown(r) }),
+          ]
+        : [],
+    // An external approval with no client open (slice 19): the Sidecar posts the
+    // desktop notification itself (it runs on the owner's computer, ADR 0013);
+    // a container has no desktop and logs it.
     notifier:
       mode === "sidecar"
-        ? createLineNotifier((line) => console.log(line))
+        ? {
+            notify: async (n) => {
+              if (!(await localSettings(["notifications.enabled"]))["notifications.enabled"])
+                return;
+              await desktopNotify(n).catch((error) => log(`notification failed: ${error}`));
+            },
+          }
         : createMemoryNotifier((line) => log(line)),
+    presence,
     publicUrl: publicUrlReader(handle.db, process.env),
     log,
   });
@@ -247,11 +357,70 @@ async function main() {
     websocket: changesSocket.websocket,
   });
 
-  // The Tauri parent reads this single line to learn the port.
+  // A plain start prints this line for whoever started it; the service also
+  // writes the runtime file, which is how the app finds it (ADR 0013).
   console.log(`monday server listening on http://127.0.0.1:${server.port}`);
   if (hostname !== "127.0.0.1") log(`bound to ${hostname}:${server.port} in ${mode} mode`);
+  if (service) {
+    await writeRuntimeFile(dataDir, {
+      pid: process.pid,
+      port: server.port ?? 0,
+      build,
+      startedAt: startedAt.toISOString(),
+      state: "ready",
+      managedBy,
+    });
+    log(`background service ready on port ${server.port} (build ${build}, ${managedBy})`);
+  }
 
-  await kicker.start();
+  // New mail and waiting approvals told by the Sidecar itself while no client
+  // is connected (ADR 0013), under the local client's notification Settings.
+  const notices =
+    mode === "sidecar"
+      ? createSidecarNotices({
+          source: createDbNoticeSource(handle.db, (threadId) =>
+            mailstore.readThreadSubject(threadId),
+          ),
+          settings: () => localSettings(SIDECAR_NOTICE_KEYS),
+          present: (graceMs) => presence.present(graceMs),
+          post: desktopNotify,
+          log,
+        })
+      : null;
+  const stopNotices = notices?.start();
+
+  // The service's log is its stdout and stderr, appended to by whoever
+  // started it; rotated by size (server.sidecar.log_max_mb), checked hourly.
+  let logTimer: ReturnType<typeof setInterval> | null = null;
+  if (service) {
+    const logPath = join(dataDir, LOG_FILE);
+    const rotate = async () => {
+      const mb = await readGlobalSetting(handle.db, "server.sidecar.log_max_mb").catch(() => 10);
+      if (await rotateLog(logPath, mb * 1024 * 1024).catch(() => false)) log("log rotated");
+    };
+    void rotate();
+    logTimer = setInterval(() => void rotate(), 60 * 60_000);
+    logTimer.unref();
+  }
+
+  async function serviceStatus(): Promise<ServiceStatus> {
+    return {
+      pid: process.pid,
+      port: server.port ?? 0,
+      build,
+      startedAt: startedAt.toISOString(),
+      managedBy,
+      rssBytes: process.memoryUsage().rss,
+      postgresRssBytes: embedded ? await postgresRss(dataDir) : null,
+      unlocked: keys.isUnlocked(),
+      clientPresent: presence.present(
+        (await localSettings(["notifications.sidecar.absent_seconds"]))[
+          "notifications.sidecar.absent_seconds"
+        ] * 1000,
+      ),
+      notified: notices?.told() ?? { mailThrough: null, approvals: [] },
+    };
+  }
 
   let stopping = false;
   const shutdown = async (reason: string) => {
@@ -261,6 +430,8 @@ async function main() {
     const deadline = setTimeout(() => process.exit(1), 10_000);
     deadline.unref();
     try {
+      stopNotices?.();
+      if (logTimer) clearInterval(logTimer);
       server.stop(true);
       await kicker.stop();
       await sync.close();
@@ -269,6 +440,7 @@ async function main() {
       await checkpointer.end().catch(() => {});
       await handle.close();
       await embedded?.stop();
+      if (service) await removeRuntimeFile(dataDir, process.pid).catch(() => {});
     } finally {
       process.exit(0);
     }
@@ -286,7 +458,9 @@ async function main() {
   process.on("exit", () => embedded?.killSync());
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
-  const parentPid = Number(process.env.MONDAY_PARENT_PID);
+  // A plain start by a parent that wants it gone with itself; the background
+  // service outlives the app on purpose and never watches one (ADR 0013).
+  const parentPid = service ? Number.NaN : Number(process.env.MONDAY_PARENT_PID);
   if (Number.isInteger(parentPid) && parentPid > 0) {
     const watchdog = setInterval(() => {
       try {
@@ -298,6 +472,28 @@ async function main() {
     }, 5_000);
     watchdog.unref();
   }
+
+  // Everything above answers already (GET /service, POST /unlock, a stop);
+  // the work starts now, or once the key came, or after the wait.
+  if (waitForKey) {
+    const seconds = await readGlobalSetting(handle.db, "server.sidecar.unlock_wait_seconds");
+    const unlocked = await new Promise<boolean>((resolve) => {
+      if (keys.isUnlocked()) return resolve(true);
+      const timer = setTimeout(() => {
+        off();
+        resolve(false);
+      }, seconds * 1000);
+      const off = keys.onUnlock(() => {
+        clearTimeout(timer);
+        off();
+        resolve(true);
+      });
+    });
+    if (stopping) return;
+    if (!unlocked) log(`no key after ${seconds}s; working locked until monday unlocks it`);
+    await services.startAccounts();
+  }
+  if (!stopping) await kicker.start();
 }
 
 if (process.argv[2] === "mcp") {
@@ -306,8 +502,28 @@ if (process.argv[2] === "mcp") {
     log(error instanceof Error ? error.message : String(error));
     process.exit(2);
   });
+} else if (process.argv[2] === "stop" || process.argv[2] === "status") {
+  const args = parseServiceArgs(process.argv.slice(3));
+  const dataDir =
+    args.dataDir ||
+    process.env.MONDAY_DATA_DIR ||
+    defaultDataDir(process.platform, process.env, homedir());
+  if (process.argv[2] === "status") {
+    const info = await readRuntimeFile(dataDir);
+    console.log(info ? JSON.stringify(info, null, 2) : `not running (${dataDir})`);
+  } else {
+    const result = await stopService(dataDir);
+    console.log(
+      result === "stopped"
+        ? "the background service stopped"
+        : result === "not-running"
+          ? `the background service is not running (${dataDir})`
+          : "the background service did not stop in time",
+    );
+    process.exit(result === "timeout" ? 1 : 0);
+  }
 } else {
-  main().catch((error) => {
+  main(serviceOf(process.argv)).catch((error) => {
     log(error instanceof Error ? (error.stack ?? error.message) : String(error));
     process.exit(1);
   });

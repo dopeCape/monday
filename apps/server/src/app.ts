@@ -59,6 +59,7 @@ import {
 import { createLocalBridge, type LocalBridge } from "./intelligence/runtime/local.ts";
 import type { Jobs } from "./jobs/index.ts";
 import { createMailstore, type Mailstore, NotFoundError } from "./mailstore/index.ts";
+import type { Presence } from "./presence.ts";
 import { createCredentialStore as createAccountCredentialStore } from "./providers/credentials.ts";
 import { createFirstSyncReader } from "./providers/first-sync.ts";
 import { createOAuthAppStore, legacyFromAccounts } from "./providers/oauth/apps.ts";
@@ -199,6 +200,12 @@ export interface AppOptions {
   notifier?: Notifier;
   /** The Server's public URL, the OAuth issuer, when configured; the request's origin otherwise. */
   publicUrl?: () => Promise<string | null>;
+  /**
+   * Whether a client is connected (ADR 0013): every authenticated request
+   * touches it. The Bun entry shares it with the WebSocket transport and the
+   * Sidecar's own notifications.
+   */
+  presence?: Presence;
   /** Where the boot and unlock sweeps report; defaults to console.warn. */
   log?: (message: string) => void;
   /**
@@ -432,6 +439,14 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   };
   app.use("*", cors(allowedOrigins));
   app.use("*", authenticate(auth, isLoopback));
+  // A client's request says a client is here (ADR 0013); a script reading /service does not.
+  const presence = options.presence;
+  if (presence) {
+    app.use("*", async (c, next) => {
+      if (c.get("principal") && !c.req.path.startsWith("/service")) presence.touch();
+      await next();
+    });
+  }
   app.use(
     "*",
     requireAuth(

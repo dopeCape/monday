@@ -32,6 +32,35 @@ export async function readGlobalSettings<K extends SettingKey>(
   return out as Pick<Settings, K>;
 }
 
+/**
+ * Settings as one Device sees them: its own device-scoped row first, then the
+ * global row, then the shipped default. The Sidecar reads the notification
+ * Settings of the client on its own computer (the "local" Device) this way.
+ */
+export async function readDeviceSettings<K extends SettingKey>(
+  db: Db,
+  deviceId: string,
+  keys: readonly K[],
+): Promise<Pick<Settings, K>> {
+  const out = (await readGlobalSettings(db, keys)) as Record<string, unknown>;
+  if (keys.length === 0) return out as Pick<Settings, K>;
+  const rows = await db
+    .select({ key: settings.key, value: settings.value })
+    .from(settings)
+    .where(
+      and(
+        eq(settings.scope, "device"),
+        eq(settings.deviceId, deviceId),
+        inArray(settings.key, keys as readonly string[] as string[]),
+      ),
+    );
+  for (const row of rows) {
+    const checked = validateSetting(row.key, row.value);
+    if (checked.ok) out[row.key] = checked.value;
+  }
+  return out as Pick<Settings, K>;
+}
+
 /** One global Setting. */
 export async function readGlobalSetting<K extends SettingKey>(
   db: Db,

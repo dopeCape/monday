@@ -118,7 +118,7 @@ The research behind this is `docs/research/mcp-connect.md`.
 - A Workflow Step that calls a local server and runs on a Vercel or Netlify Server fails with "Needs the Sidecar". Open item: routing such Steps' Jobs only to a Server that can start processes.
 
 ### Sync server
-- Current mode (Sidecar only, Cloud, both) with health and latency. The three upgrade cards (Vercel, Netlify, container) when Sidecar only. Devices list with pairing and revoke. Insecure server switch for private networks with its persistent warning.
+- Current mode (Sidecar only, Cloud, both) with health and latency. Background service (ADR 0013): running since, PID and memory, who runs it, locked or not, Restart and Stop (asked first), Start when stopped; Start at login (`server.sidecar.start_at_login`). The three upgrade cards (Vercel, Netlify, container) when Sidecar only. Devices list with pairing and revoke. Insecure server switch for private networks with its persistent warning.
 - Storage: message count and size, Cache size cap and pre-warm window, encryption recovery file status with export.
 
 ### Shortcuts

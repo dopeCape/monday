@@ -4,7 +4,7 @@ status: accepted
 
 # A single-user Server authenticates devices by pairing, not passwords
 
-A Cloud server has exactly one owner, so the question is device trust, not identity. We decided there is no password. The first device enters a one-time setup code the install produces; every later device is approved from an existing device with a short code, after which the Server mints a long-lived per-device token kept in the OS keychain. A passkey registered at setup, or a new setup code from the host, is the recovery path. The Sidecar is spawned with a per-launch token over the environment and accepts only its parent client on loopback.
+A Cloud server has exactly one owner, so the question is device trust, not identity. We decided there is no password. The first device enters a one-time setup code the install produces; every later device is approved from an existing device with a short code, after which the Server mints a long-lived per-device token kept in the OS keychain. A passkey registered at setup, or a new setup code from the host, is the recovery path. The Sidecar accepts its own client on loopback with a loopback token; since ADR 0013 that token is stable across launches (kept in the keychain, read by the background service from a 0600 file) rather than per launch.
 
 ## Considered options
 

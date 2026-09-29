@@ -1,10 +1,11 @@
 mod config;
 mod db;
 mod notify;
-mod rootkey;
 mod power;
+mod rootkey;
 mod runtimes;
 mod secrets;
+mod service;
 mod sidecar;
 mod webview_memory;
 
@@ -28,6 +29,9 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_delete,
             sidecar::sidecar_info,
+            sidecar::sidecar_stop,
+            sidecar::sidecar_restart,
+            sidecar::sidecar_login_start,
             rootkey::recovery_file,
             rootkey::import_recovery_key,
             db::db_exec,
@@ -45,35 +49,14 @@ pub fn run() {
                 webview_memory::lean_cache(window);
             }
             config::watch(app.handle().clone());
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                match sidecar::start(&handle).await {
-                    Ok(info) => {
-                        use tauri::Emitter;
-                        let _ = handle.emit("sidecar:ready", info);
-                    }
-                    Err(e) => {
-                        use tauri::Emitter;
-                        eprintln!("[monday] sidecar failed to start: {e}");
-                        // The webview shows the Server section instead of a blank window.
-                        let _ = handle.emit("sidecar:failed", e);
-                    }
-                }
-            });
+            // The Sidecar is a background service (ADR 0013): found or started
+            // here, and left running when the window closes.
+            sidecar::start_in_background(app.handle());
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                sidecar::stop(window.app_handle());
-            }
-        })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Quitting without closing the window (the dock, Cmd+Q) must still
-            // stop the sidecar and its Postgres; stop() is idempotent.
-            if let tauri::RunEvent::Exit = event {
-                sidecar::stop(app);
-            }
-        });
+        // Closing the window quits the app and nothing else: the Sidecar and its
+        // Postgres keep syncing, sorting and running Workflows (ADR 0013).
+        // Settings › Sync server stops it on purpose.
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

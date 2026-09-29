@@ -26,6 +26,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Client protocol, device pairing, TLS, versioning | ADR 0006 |
 | Hosted runtimes, model roles, meter, keys | ADR 0007 |
 | Install, cloud upgrade, channels, CI | ADR 0008 |
+| The Sidecar as a background service: lifecycle, token, login start, notifications with the window closed | ADR 0013, `docs/dev/sidecar.md` |
 | Repo, modules, store, tests, UI stack | ADR 0009 |
 | Drafts, send, voice, attachments | ADR 0010 |
 | Search and command palette | ADR 0011, ADR 0015, `inbox.md`; re-ranking in `signal-features.md` |
@@ -59,6 +60,7 @@ Mobile clients, multi-user servers, PGP, a unified inbox across accounts, shared
 - Plain-language schedule to cron: supported phrases and how ambiguity is confirmed.
 - Attachment preview in the reader and Server storage limits.
 - Desktop notification policy beyond calendar, workflow failures and the Interruption policy (`signal-features.md`).
+- A background service started at login runs locked until monday opens (ADR 0013); a keychain reader in the server would let it unlock itself.
 - Agent memory across Sessions beyond the Voice profile.
 - Backup, export and account deletion.
 - Spam handling.

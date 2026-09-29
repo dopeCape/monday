@@ -15,5 +15,6 @@ Easy install was a hard requirement. We decided that a new user only downloads t
 ## Consequences
 
 - The Sidecar must be a complete server, which ADR 0005 already requires.
+- The Sidecar keeps running when the window closes, as a background service the app starts and reuses (ADR 0013), so the Sidecar-only install syncs while monday is closed; a Cloud server remains the answer for a laptop that is shut.
 - One CI matrix builds the Bun server and embedded Postgres per target; the same server binary is the container entrypoint and a standalone download for headless hosts.
 - Gmail and Microsoft cannot hit the 5 minute target because of credential registration; an in-app wizard with deep links and live-validated paste boxes is the mitigation, and IMAP with an app password is the escape hatch.

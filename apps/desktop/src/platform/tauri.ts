@@ -41,8 +41,8 @@ export interface WindowFrame {
   minimize(): Promise<void>;
   toggleMaximize(): Promise<void>;
   /**
-   * Closes the window the way the window manager would: Rust sees the window
-   * destroyed and stops the Sidecar and its Postgres (src-tauri/src/lib.rs).
+   * Closes the window the way the window manager would. The app quits; the
+   * Sidecar keeps running as a background service (ADR 0013).
    */
   close(): Promise<void>;
   /** Moves the window with the pointer, from a press on the title strip. */
@@ -75,6 +75,21 @@ export interface Platform {
   onSidecarReady(cb: (info: SidecarInfo) => void): () => void;
   /** The Sidecar could not start (no Postgres, a bad data directory); the message is the host's. */
   onSidecarFailed(cb: (message: string) => void): () => void;
+  /** The Sidecar was stopped on purpose (Settings, Stop). */
+  onSidecarStopped(cb: () => void): () => void;
+  /**
+   * Stops the background service on purpose (ADR 0013): mail does not sync
+   * until it is started again or monday opens again. Rejects outside the app.
+   */
+  sidecarStop(): Promise<void>;
+  /** Stops and starts the background service (Start when it is stopped); resolves with the new connection. */
+  sidecarRestart(): Promise<SidecarInfo>;
+  /**
+   * Applies server.sidecar.start_at_login: installs or removes the login start
+   * (a systemd user unit, a LaunchAgent, an autostart entry or a Run key).
+   * Resolves with whether it is on now.
+   */
+  sidecarLoginStart(enabled: boolean): Promise<boolean>;
   /** Opens a URL in the system browser (the OAuth wizards, deep links into consoles). */
   openExternal(url: string): Promise<void>;
   network(): Promise<NetworkInfo>;
@@ -200,6 +215,10 @@ async function tauriPlatform(): Promise<Platform> {
     sidecarInfo: () => invoke<SidecarInfo>("sidecar_info"),
     onSidecarReady: (cb) => sub<SidecarInfo>("sidecar:ready", cb),
     onSidecarFailed: (cb) => sub<string>("sidecar:failed", cb),
+    onSidecarStopped: (cb) => sub<null>("sidecar:stopped", () => cb()),
+    sidecarStop: () => invoke("sidecar_stop"),
+    sidecarRestart: () => invoke<SidecarInfo>("sidecar_restart"),
+    sidecarLoginStart: (enabled) => invoke<boolean>("sidecar_login_start", { enabled }),
     openExternal: (url) => openUrl(url),
     network: () => invoke<NetworkInfo>("network_info"),
     power: () => invoke<PowerInfo>("power_info"),
@@ -344,6 +363,14 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     sidecarInfo: async () => ({ port: 0, token: "", running: false }),
     onSidecarReady: () => () => {},
     onSidecarFailed: () => () => {},
+    onSidecarStopped: () => () => {},
+    sidecarStop: async () => {
+      throw new Error("no background service outside the app");
+    },
+    sidecarRestart: async () => {
+      throw new Error("no background service outside the app");
+    },
+    sidecarLoginStart: async () => false,
     openExternal: async (url) => {
       if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
     },
