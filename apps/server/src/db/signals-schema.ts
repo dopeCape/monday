@@ -58,6 +58,42 @@ export const signalDefs = pgTable(
   (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
 );
 
+/**
+ * A Signal backfill (slice 31): one walk per Workspace over
+ * signals.backfill.scope, newest first, with the cursor shape of
+ * routing_backlogs so a restart resumes. `signal_ids` are the Signals it
+ * fills; a second change while it runs widens them.
+ */
+export const signalBackfills = pgTable("signal_backfills", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  runId: text("run_id").notNull(),
+  status: text("status")
+    .$type<"confirm" | "running" | "waiting" | "paused" | "done" | "cancelled">()
+    .notNull(),
+  reason: text("reason").$type<"budget" | "no_judge" | "level">(),
+  signalIds: jsonb("signal_ids").$type<string[]>().notNull().default([]),
+  scope: text("scope").notNull(),
+  since: timestamp("since", { withTimezone: true, mode: "date" }),
+  limit: integer("limit"),
+  topAt: timestamp("top_at", { withTimezone: true, mode: "date" }),
+  topId: text("top_id"),
+  cursorAt: timestamp("cursor_at", { withTimezone: true, mode: "date" }),
+  cursorId: text("cursor_id"),
+  walked: integer("walked").notNull().default(0),
+  done: integer("done").notNull().default(0),
+  total: integer("total").notNull().default(0),
+  asked: integer("asked").notNull().default(0),
+  calls: integer("calls").notNull().default(0),
+  estimateThreads: integer("estimate_threads"),
+  estimateMicros: integer("estimate_micros"),
+  lastError: text("last_error"),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
+});
+
 /** Every wording a Signal had, so an old answer can be explained. */
 export const signalVersions = pgTable(
   "signal_versions",

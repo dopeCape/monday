@@ -92,7 +92,7 @@ const SETTING_KEYS = [
   "signals.keep_inactive_days",
   "judgments.on_arrival",
   "ai.judge.model",
-  "routing.backfill.scope",
+  "signals.backfill.scope",
   "routing.backfill.request_tokens",
   "routing.backfill.state_tokens",
   "calendar.time_zone",
@@ -207,6 +207,10 @@ export interface Signals {
   /** Drops every answer to one Signal in a Workspace (an owner's Undo); returns how many. */
   forget(workspaceId: Id, signalId: string): Promise<number>;
   settings(): Promise<SignalsSettings>;
+  /** Told the Signals a new or reworded definition needs read over the mail already there (the backfill). */
+  setDefsListener(
+    listener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null,
+  ): void;
 }
 
 export interface SignalsOptions {
@@ -232,7 +236,7 @@ export function questionHash(question: JudgeQuestion, model: string): Promise<st
 
 const TASK: Record<AskReason, JudgeTask> = {
   arrival: "judge.signals",
-  background: "judge.signals",
+  background: "judge.backfill",
   backlog: "judge.backlog",
 };
 
@@ -364,8 +368,8 @@ export function createSignals(options: SignalsOptions): Signals {
 
   /** Every Signal the Settings declare now: the shipped ones and each owner's. */
   const wanted = (s: Settings): Array<WantedSignal & { owner: SignalOwner }> => {
-    const window = parseSortScope(s["routing.backfill.scope"])
-      ? s["routing.backfill.scope"]
+    const window = parseSortScope(s["signals.backfill.scope"])
+      ? s["signals.backfill.scope"]
       : "last 3 months";
     const out: Array<WantedSignal & { owner: SignalOwner }> = shippedSignals(
       s as unknown as ShippedSettings,
@@ -479,6 +483,18 @@ export function createSignals(options: SignalsOptions): Signals {
     const rows = await db.select().from(signalDefs).where(eq(signalDefs.workspaceId, workspaceId));
     const byId = new Map(rows.map((r) => [r.id, r]));
     const at = now();
+    // A new Signal needs the mail already there read; on a Workspace's very first sync nothing
+    // is there to read yet, unless answers came over from before the Signal store (a migration).
+    const established =
+      rows.length > 0 ||
+      (
+        await db
+          .select({ id: signalAnswers.signalId })
+          .from(signalAnswers)
+          .where(eq(signalAnswers.workspaceId, workspaceId))
+          .limit(1)
+      ).length > 0;
+    const toRead: string[] = [];
     for (const w of want) {
       const hash = await questionHash(w.question, model);
       const row = byId.get(w.id);
@@ -508,6 +524,7 @@ export function createSignals(options: SignalsOptions): Signals {
           .onConflictDoNothing()
           .returning();
         if (!inserted) continue;
+        if (established) toRead.push(w.id);
         await db
           .insert(signalVersions)
           .values({
@@ -569,6 +586,7 @@ export function createSignals(options: SignalsOptions): Signals {
       }
       await recordDef(workspaceId, updated);
       byId.set(w.id, updated);
+      if (changedWords) toRead.push(w.id);
     }
     // A Signal nobody declares any more is retired; its answers stay signals.keep_inactive_days for an Undo.
     const wantedIds = new Set(want.map((w) => w.id));
@@ -612,8 +630,19 @@ export function createSignals(options: SignalsOptions): Signals {
     }
     const defs = [...byId.values()].map(toDef);
     synced.set(workspaceId, { key, at: now().getTime(), defs });
+    // The backfill reads the mail already there for what the arrival request carries.
+    const carried = new Set(defs.filter((d) => d.active && inArrival(d, s)).map((d) => d.id));
+    const read = toRead.filter((id) => carried.has(id));
+    if (read.length > 0 && defsListener) {
+      await defsListener(workspaceId, read).catch((error: unknown) =>
+        log(
+          `signals backfill ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    }
     return defs;
   };
+  let defsListener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null = null;
 
   const versionsOf = async (threadIds: readonly Id[]): Promise<Map<Id, ThreadVersion>> => {
     const out = new Map<Id, ThreadVersion>();
@@ -832,15 +861,16 @@ export function createSignals(options: SignalsOptions): Signals {
     const rows = new Map((await readRows([threadId])).map((r) => [r.signalId, r]));
     const only = opts.only ? new Set(opts.only) : null;
     // The arrival request carries the shipped Signals; a Section's or action's own is asked with its owner (slice 33 joins them).
-    const inRequest = (d: StoredDef) =>
-      only
-        ? only.has(d.id)
-        : d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id));
+    const inRequest = (d: StoredDef) => (only ? only.has(d.id) : inArrival(d, s));
     const need = defs.filter(
       (d) => inRequest(d) && (opts.force || !currentFor(rows.get(d.id), d, version)),
     );
     return { need, version };
   };
+
+  /** Whether the arrival request carries a Signal: the shipped ones (only the slice 25 set while Signals are off). */
+  const inArrival = (d: StoredDef, s: Settings) =>
+    d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id));
 
   const isArrivalSignal = (id: string) =>
     (Object.values(ARRIVAL_SIGNALS) as string[]).includes(id) ||
@@ -848,6 +878,10 @@ export function createSignals(options: SignalsOptions): Signals {
     id.startsWith("chip_");
 
   const api: Signals = {
+    setDefsListener(listener) {
+      defsListener = listener;
+    },
+
     async defs(workspaceId) {
       return syncDefs(workspaceId, await readSettings());
     },
@@ -877,6 +911,7 @@ export function createSignals(options: SignalsOptions): Signals {
           })) {
             const r = await runtime.judge(TASK[opts.reason], state, part, {
               workspaceId,
+              priority: opts.reason === "arrival" ? "arrival" : "background",
               jobId: opts.jobId ?? null,
             });
             result.calls += 1;

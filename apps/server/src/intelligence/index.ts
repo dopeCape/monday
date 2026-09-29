@@ -24,6 +24,8 @@ import {
   HOSTED_PROVIDERS,
   HOSTED_SETTING_KEYS,
   type HostedSettings,
+  priceFor,
+  pricingFor,
   resolveTaskModel,
   rolesFor,
   scopeWordsFrom,
@@ -86,7 +88,10 @@ import {
   localLanguageModel,
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
+import { createSignalBackfills, type SignalBackfills } from "./signals/backfill.ts";
+import { backgroundBudget } from "./signals/budget.ts";
 import { createSignals, type Signals } from "./signals/index.ts";
+import { createJudgeLimiter, type JudgeLimiter, type LimiterSettings } from "./signals/limiter.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
@@ -227,6 +232,8 @@ export interface IntelligenceOptions {
   log?: (message: string) => void;
   /** The AI level; defaults to the Setting ai.level. Tests may pin it. */
   level?: () => Promise<AiLevel>;
+  /** The judge's limiter; defaults to one over the signals.rate Settings. Tests pass one with a fake clock. */
+  limiter?: JudgeLimiter;
   /**
    * Where a Device's Local runtime takes background work (runtime/local.ts):
    * the Sidecar makes one; a Server no client drives has none.
@@ -252,6 +259,10 @@ export interface Intelligence {
   judgments: Judgments;
   /** The Signal store and the Signal request (ADR 0014, slice 30). */
   signals: Signals;
+  /** The background read of new and reworded Signals (slice 31). */
+  signalBackfills: SignalBackfills;
+  /** The one limiter every judge request passes (slice 31). */
+  limiter: JudgeLimiter;
   routing: Routing;
   /** The Backlog sort: the mail already there, sorted in the background within a Sort scope. */
   backlog: Backlog;
@@ -513,7 +524,32 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         async (): Promise<readonly Task[]> => readGlobalSetting(db, "ai.local.background.tasks"),
       )
     : undefined;
+  // Every judge request passes one limiter: its Settings are read at most every few seconds.
+  let limiterCache: { at: number; value: LimiterSettings } | null = null;
+  const limiter =
+    options.limiter ??
+    createJudgeLimiter({
+      settings: async () => {
+        const at = Date.now();
+        if (limiterCache && at - limiterCache.at < 5000) return limiterCache.value;
+        const s = await readGlobalSettings(db, [
+          "signals.rate.requests_per_minute",
+          "signals.rate.cooldown_seconds",
+          "signals.backfill.concurrency",
+        ] as const);
+        limiterCache = {
+          at,
+          value: {
+            requestsPerMinute: s["signals.rate.requests_per_minute"],
+            cooldownSeconds: s["signals.rate.cooldown_seconds"],
+            concurrency: s["signals.backfill.concurrency"],
+          },
+        };
+        return limiterCache.value;
+      },
+    });
   const runtime = createHostedRuntime({
+    limiter,
     ...(local ? { local } : {}),
     chat: demoChat(options.chat ?? lazyLangChainChat()),
     converse: demoConverse(options.converse ?? lazyLangChainConverse()),
@@ -705,11 +741,16 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       options.judge !== undefined,
       (await local?.takes("classify")) ?? null,
     );
+  const backgroundBudgetNow = async (workspaceId: string) => {
+    const s = await readGlobalSettings(db, ["signals.budget.background_monthly_usd"] as const);
+    return backgroundBudget(db, workspaceId, s["signals.budget.background_monthly_usd"], now());
+  };
   const backlog = createBacklog({
     db,
     routing,
     now,
     level,
+    budget: backgroundBudgetNow,
     ...(options.log ? { log: options.log } : {}),
     judgeAvailable: () => runtime.judgeAvailable(),
     sorterIsLocal: async () => (await judgeStateNow()).runtime === "local",
@@ -881,8 +922,54 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
 
   const batchingEval = createBatchingEval({ db, routing, runtime, now, log });
 
+  // The background read (slice 31): new and reworded Signals over the mail already there.
+  const signalBackfills = createSignalBackfills({
+    db,
+    signals,
+    now,
+    log,
+    level,
+    canAnswer: async () =>
+      (await runtime.judgeAvailable()) ||
+      ((await signals.settings()).llmFallback !== "none" &&
+        (await judgeStateNow()).provider === "llm"),
+    settings: async () => {
+      const s = await readGlobalSettings(db, [
+        "signals.backfill.scope",
+        "signals.backfill.concurrency",
+        "signals.backfill.confirm_above",
+        "signals.backfill.tokens_per_thread",
+        "signals.budget.background_monthly_usd",
+        "routing.wait_seconds",
+      ] as const);
+      const hosted = await hostedSettings();
+      return {
+        scope: s["signals.backfill.scope"],
+        concurrency: s["signals.backfill.concurrency"],
+        confirmAbove: s["signals.backfill.confirm_above"],
+        budgetUsd: s["signals.budget.background_monthly_usd"],
+        waitSeconds: s["routing.wait_seconds"],
+        tokensPerThread: s["signals.backfill.tokens_per_thread"],
+        usdPerMillion:
+          priceFor(pricingFor(hosted, "typesafe"), hosted["ai.judge.model"])?.input ?? 0,
+      };
+    },
+  });
+  signals.setDefsListener((workspaceId, ids) => signalBackfills.request(workspaceId, ids));
+  // A running Backlog sort carries the Signals a Thread lacks in its one request per Thread.
+  routing.setOneThreadAsk(async (req) => {
+    const r = await signals.ask(req.workspaceId, req.threadId, {
+      reason: "backlog",
+      extra: req.questions,
+      jobId: req.jobId,
+    });
+    return { answers: r.extra, calls: r.calls };
+  });
+
   return {
     batchingEval,
+    signalBackfills,
+    limiter,
     attachCalendar(seam) {
       extensions.calendar = seam;
     },
@@ -954,6 +1041,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       briefs.registerSteps(jobs);
       routing.registerSteps(jobs);
       backlog.registerSteps(jobs);
+      signalBackfills.registerSteps(jobs);
       workflows.registerSteps(jobs);
     },
   };

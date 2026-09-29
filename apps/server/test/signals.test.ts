@@ -262,7 +262,10 @@ describe("the Signal store", () => {
     const before = judge.calls.length;
     await intelligence.judgments.threadReady(workspaceId, digest);
     await runDue();
-    expect(judge.calls.slice(before).map((c) => c.questions)).toEqual([["newsletter"]]);
+    // The judge Job re-reads the digest; the backfill the reword started reads the contract; nothing twice.
+    const asked = judge.calls.slice(before);
+    expect(asked.map((c) => c.questions)).toEqual([["newsletter"], ["newsletter"]]);
+    expect(new Set(asked.map((c) => subjectOf(c.state))).size).toBe(2);
     expect((await intelligence.signals.readings([digest])).get(digest)?.newsletter?.stale).toBe(
       false,
     );

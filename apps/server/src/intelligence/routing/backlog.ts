@@ -79,6 +79,8 @@ export interface BacklogOptions {
   sorterIsLocal?: () => Promise<boolean>;
   /** Background sorting runs only at `automate`. Absent means `automate`. */
   level?: () => Promise<AiLevel>;
+  /** This month's background judge spending against signals.budget (slice 31); absent means no cap. */
+  budget?: (workspaceId: Id) => Promise<{ over: boolean; resumesAt: Date }>;
   now?: () => Date;
   log?: (message: string) => void;
 }
@@ -251,7 +253,11 @@ export function createBacklog(options: BacklogOptions): Backlog {
       total: Math.max(row.total, row.done),
     });
 
-  const wait = async (row: Row, reason: "no_judge" | "sync" | "level", seconds: number) => {
+  const wait = async (
+    row: Row,
+    reason: "no_judge" | "sync" | "level" | "budget",
+    seconds: number,
+  ) => {
     await patch(row.workspaceId, { status: "waiting", reason });
     return { sleepMs: Math.max(1, seconds) * 1000 };
   };
@@ -278,6 +284,14 @@ export function createBacklog(options: BacklogOptions): Backlog {
       return "done";
     }
     const judge = await options.judgeAvailable();
+    // The month's background budget spent: paused with the reason until it is raised or the month turns.
+    if (judge && options.budget) {
+      const budget = await options.budget(workspaceId);
+      if (budget.over) {
+        const untilMonth = Math.ceil((budget.resumesAt.getTime() - now().getTime()) / 1000);
+        return wait(row, "budget", Math.max(1, Math.min(s.waitSeconds, untilMonth)));
+      }
+    }
     const round = judge
       ? Math.max(1, s.batchSize) * Math.max(1, s.concurrency)
       : Math.max(1, s.llmBatchSize);

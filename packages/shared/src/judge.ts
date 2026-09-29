@@ -30,7 +30,9 @@ export type JudgeTask =
   /** The Backlog sort's one-Thread requests (slice 29): background, under the monthly budget. */
   | "judge.backlog"
   /** The Signal request on arrival (slice 30): every active Signal for one Thread. */
-  | "judge.signals";
+  | "judge.signals"
+  /** The Signal backfill (slice 31): background, under the monthly budget. */
+  | "judge.backfill";
 
 export type JsonValue =
   | string

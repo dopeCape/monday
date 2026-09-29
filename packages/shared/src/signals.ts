@@ -134,6 +134,31 @@ export interface SignalDefChange {
   deleted?: boolean | undefined;
 }
 
+/** A Signal backfill (slice 31): one walk per Workspace over signals.backfill.scope. */
+export interface SignalBackfill {
+  workspaceId: Id;
+  /** `confirm` waits for the owner's yes above signals.backfill.confirm_above. */
+  status: "confirm" | "running" | "waiting" | "paused" | "done" | "cancelled";
+  /** Why it waits: the month's background budget is spent, nothing can answer, or the AI level. */
+  reason: "budget" | "no_judge" | "level" | null;
+  /** The Signals it fills. */
+  signals: string[];
+  scope: string;
+  done: number;
+  total: number;
+  /** Threads that needed a request. */
+  asked: number;
+  calls: number;
+  /** The count and cost it was estimated at, from the recent average tokens per Thread. */
+  estimate: { threads: number; costMicros: number } | null;
+  /** This month's background spending and the budget, micro-dollars. */
+  budget: { spentMicros: number; budgetMicros: number } | null;
+  startedAt: IsoDate;
+  updatedAt: IsoDate;
+  finishedAt: IsoDate | null;
+  lastError: string | null;
+}
+
 /* ------------------------------ The shipped Signals ------------------------------ */
 
 /** The chips the arrival request still asks until Recommended actions replace them (slice 34). */

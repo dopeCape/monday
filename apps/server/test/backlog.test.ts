@@ -73,6 +73,21 @@ function countingJudge() {
     const subjects: string[] = [];
     const answers: Record<string, JudgeAnswer> = {};
     for (const [id, q] of Object.entries(call.questions)) {
+      // A Signal riding in the one-Thread request (slice 31): a neutral answer, not recorded as sorting.
+      if ((q as { type: string }).type === "noul") {
+        answers[id] = { type: "noul", noul: 0.5 };
+        continue;
+      }
+      if ((q as { type: string }).type === "score") {
+        const levels = (q as { criteria: unknown[] }).criteria.length;
+        answers[id] = {
+          type: "score",
+          score: 0,
+          probabilities: Array.from({ length: levels }, (_, i) => (i === 0 ? 1 : 0)),
+          confidence: 1,
+        };
+        continue;
+      }
       const question = q as ChoiceQuestion;
       const subject = state.threads?.[id]?.subject ?? state.thread?.subject ?? "";
       subjects.push(subject);
@@ -93,7 +108,10 @@ function countingJudge() {
         confidence: 0.93,
       };
     }
-    requests.push({ questions: Object.keys(call.questions).length, subjects });
+    const routed = Object.values(call.questions).filter(
+      (q) => (q as { type: string }).type === "choice",
+    ).length;
+    requests.push({ questions: routed, subjects });
     return {
       answers: answers as JudgeResponse<Q>["answers"],
       model: "jev-1.13.0",

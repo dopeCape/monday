@@ -4,6 +4,7 @@
 // the schema's other slices merge without touching these.
 
 import { z } from "zod";
+import { parseSortScope } from "../routing/scope.ts";
 import type { SettingEntry, SettingSection } from "./schema.ts";
 
 function setting<T extends z.ZodType>(entry: SettingEntry<T>): SettingEntry<T> {
@@ -60,7 +61,7 @@ export const signalsSettings = {
     scope: "global",
     section: "ai",
     group: "Signals",
-    tier: "primary",
+    tier: "more",
     label: "Keep Signals on your mail",
     help: "monday keeps a few standing answers about every thread (needs a reply, waiting on you, money, a deadline) and asks for all of them in one request per thread. Off asks only what Sections and Briefs need on arrival.",
   }),
@@ -219,6 +220,105 @@ export const signalsSettings = {
     help: "Days the answers of a deleted Board's or Section's Signal are kept, so an Undo brings them back without asking again.",
   }),
   "strings.meter.judge.signals": str("ai", "Meter line: Signals on arrival", "Reading new mail"),
+
+  /* Slice 31: backfill, rate and budget. */
+  "signals.backfill.scope": setting({
+    type: z.string().refine((v) => parseSortScope(v) !== null, {
+      message: 'Say "latest 500", "last 3 months", "since 2026-01-01" or "all".',
+    }),
+    default: "last 3 months",
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "more",
+    label: "Read the mail already there",
+    help: "How far back a new or reworded Signal is read in the background, newest first. Older mail stays not read until asked.",
+  }),
+  "signals.backfill.concurrency": setting({
+    type: z.int().min(1).max(16),
+    default: 4,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Background reading pace",
+    help: "How many background requests are in flight at once. The rate limit below caps it anyway, and new mail always goes first.",
+  }),
+  "signals.backfill.confirm_above": setting({
+    type: z.int().min(0).max(1_000_000),
+    default: 2000,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Ask before reading more than",
+    help: "Above this many threads a background read asks first, with the count and an estimate of the cost. Smaller ones just run.",
+  }),
+  "signals.backfill.tokens_per_thread": setting({
+    type: z.int().min(100).max(64_000),
+    default: 5000,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Estimated tokens per thread",
+    help: "What one thread is assumed to cost before monday has measured your own mail; after that the recent average is used.",
+  }),
+  "signals.rate.requests_per_minute": setting({
+    type: z.int().min(1).max(10_000),
+    default: 600,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Most TypeSafe requests a minute",
+    help: "Every judge request from this Server passes one limit: half of Jev 1.13's published 1,200 a minute, leaving room for new mail.",
+  }),
+  "signals.rate.cooldown_seconds": setting({
+    type: z.int().min(0).max(3600),
+    default: 60,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "advanced",
+    label: "Slow down after a rate limit",
+    help: "After TypeSafe says too many requests, background reading runs at half its pace for this long, then grows back one request at a time.",
+  }),
+  "signals.budget.background_monthly_usd": setting({
+    type: z.number().min(0).max(10_000),
+    default: 3,
+    scope: "global",
+    section: "ai",
+    group: "Signals",
+    tier: "more",
+    label: "Background reading budget a month (USD)",
+    help: "What reading older mail may spend in a calendar month: Signal backfills and background sorting. Reaching it pauses them until you raise it or the month turns. New mail is never capped.",
+  }),
+  "strings.meter.judge.backfill": str("ai", "Meter line: background reading", "Background reading"),
+  "strings.signals.reading": str(
+    "ai",
+    "Signals: background reading progress",
+    "Reading your mail: {done} of {total} threads",
+  ),
+  "strings.signals.confirm_backfill": str(
+    "ai",
+    "Signals: ask before a large backfill",
+    "About {count} threads, about {cost} at TypeSafe's price. Read them now?",
+  ),
+  "strings.signals.budget_paused": str(
+    "ai",
+    "Signals: paused by the budget",
+    "Paused: this month's background reading budget of {budget} is spent.",
+  ),
+  "strings.signals.read_now": str("ai", "Signals: read now", "Read them now"),
+  "strings.signals.raise_budget": str("ai", "Signals: raise the budget", "Raise the budget"),
+  "strings.signals.resume": str("ai", "Signals: resume", "Resume"),
+  "strings.signals.pause": str("ai", "Signals: pause", "Pause"),
+  "strings.signals.waiting_no_judge": str(
+    "ai",
+    "Signals: waiting for TypeSafe",
+    "Waiting: nothing can read your mail right now.",
+  ),
   "strings.signals.not_read": str("ai", "Signal not read yet", "Not read yet"),
   "strings.signals.unsure": str("ai", "Signal unsure", "Unsure"),
   "strings.signals.stale": str(

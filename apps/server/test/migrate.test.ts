@@ -66,6 +66,7 @@ describe("migrations", () => {
       "sessions",
       "settings",
       "signal_answers",
+      "signal_backfills",
       "signal_defs",
       "signal_versions",
       "sync_messages",

@@ -243,6 +243,10 @@ export function useBacklogFromContext(enabled = true): {
 export function waitingWords(b: RoutingBacklog, s: Settings): string {
   if (b.reason === "sync") return s["strings.routing.backlog.sync"];
   if (b.reason === "level") return s["strings.routing.backlog.level"];
+  if (b.reason === "budget") {
+    const budget = `$${s["signals.budget.background_monthly_usd"].toFixed(2)}`;
+    return s["strings.signals.budget_paused"].replaceAll("{budget}", budget);
+  }
   return s["strings.routing.hosted_needed"];
 }
 

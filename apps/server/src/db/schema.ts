@@ -970,7 +970,7 @@ export const routingBacklogs = pgTable("routing_backlogs", {
   runId: text("run_id").notNull(),
   scope: text("scope").notNull(),
   status: text("status").$type<BacklogStatus>().notNull(),
-  reason: text("reason").$type<"no_judge" | "sync" | "level">(),
+  reason: text("reason").$type<"no_judge" | "sync" | "level" | "budget">(),
   sorter: text("sorter").$type<"typesafe" | "llm">(),
   local: boolean("local").notNull().default(false),
   /** Resolved once at the start for a date scope; null for a count or everything. */

@@ -16,6 +16,8 @@ import { EvalDisabledError } from "../intelligence/measure/index.ts";
 import { NoJudgeError } from "../intelligence/runtime/index.ts";
 import { parseBody } from "./validate.ts";
 
+const workspaceBody = z.object({ workspace: z.string().min(1) });
+
 const evalBody = z.object({
   workspace: z.string().min(1),
   sample: z.number().int().min(3).max(3000).optional(),
@@ -63,6 +65,21 @@ export function signalsRoutes(
       throw error;
     }
   });
+
+  // The background read of Signals (slice 31): its progress, the confirm-above yes, pause, resume, stop.
+  app.get("/signals/backfill", async (c) => {
+    const workspace = c.req.query("workspace");
+    if (!workspace) return c.json({ error: "invalid_query" }, 400);
+    return c.json({ backfill: await intelligence.signalBackfills.status(workspace) });
+  });
+  for (const action of ["confirm", "pause", "resume", "cancel"] as const) {
+    app.post(`/signals/backfill/${action}`, async (c) => {
+      const parsed = await parseBody(c, workspaceBody);
+      if (!parsed.ok) return parsed.response;
+      const backfill = await intelligence.signalBackfills[action](parsed.data.workspace);
+      return backfill ? c.json({ backfill }) : c.json({ error: "not_found" }, 404);
+    });
+  }
 
   app.get("/intelligence/eval/batching/:id", (c) => {
     const status = intelligence.batchingEval.status(c.req.param("id"));
