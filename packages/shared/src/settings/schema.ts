@@ -279,6 +279,17 @@ const sectionWhen = z.object({
   ungrouped: z.boolean().optional(),
   /** The Thread has its arrival Judgments; true never holds on header guesses. */
   judged: z.boolean().optional(),
+  /** Conditions on Signals by id (slice 30): a Noul or Score bound, or a Choice's option. */
+  signals: z
+    .array(
+      z.object({
+        signal: z.string().min(1),
+        at_least: z.number().min(0).optional(),
+        at_most: z.number().min(0).optional(),
+        is: z.string().min(1).optional(),
+      }),
+    )
+    .optional(),
 });
 export const sectionRuleShape = z.object({
   id: z.string().min(1),
@@ -9269,6 +9280,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Level",
     "Runtime",
     "TypeSafe",
+    "Signals",
     "Anthropic",
     "Gemini",
     "OpenAI",

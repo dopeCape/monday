@@ -34,11 +34,17 @@ import type {
   Message,
   SectionJudged,
   SectionRuleSetting,
+  SignalRules,
   Tag,
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
-import { sectionOf, sectionsToJudge } from "@monday/shared";
+import {
+  DEFAULT_SIGNAL_RULES,
+  judgmentsFromSignals,
+  sectionOf,
+  sectionsToJudge,
+} from "@monday/shared";
 import {
   ALL_THREADS_SQL,
   BRIEF_OF_THREAD_SQL,
@@ -106,6 +112,8 @@ export interface SectionSource {
   actions?: (() => readonly CustomActionSetting[]) | undefined;
   /** How many Threads one request judges (sections.judge_batch). */
   judgeBatch?: (() => number) | undefined;
+  /** The Unsure band, staleness and hysteresis (signals.*); absent means the shipped defaults. */
+  signalRules?: (() => SignalRules) | undefined;
 }
 
 export interface StoreInboxOptions {
@@ -335,15 +343,33 @@ export async function createStoreInbox(
   let judgeTimer: ReturnType<typeof setTimeout> | null = null;
   const EMPTY_JUDGED: SectionJudged = Object.freeze({});
 
-  /** The facts a rule reads: the row, the arrival Judgments the Cache holds (slice 25), the judged answers (slice 26). */
-  const factsFor = (entry: ReturnType<typeof rowToCachedThread>, rules: SectionSource) => ({
-    lastSender: entry.lastSender,
-    owner: rules.owner,
-    ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
-    judgments: entry.judgments,
-    judged: judgedById.get(entry.thread.id),
-    ...(rules.judgeThreshold ? { judgeThreshold: rules.judgeThreshold() } : {}),
-  });
+  /**
+   * The facts a rule reads: the row, the Signal answers the Cache holds (slice
+   * 30) and the slice 25 Judgments they stand for, the judged answers asked on
+   * demand (slice 26), and the Section the Thread sat in, for the hysteresis.
+   */
+  const factsFor = (
+    entry: ReturnType<typeof rowToCachedThread>,
+    rules: SectionSource,
+    previous: string | null,
+  ) => {
+    const signalRules = rules.signalRules?.() ?? DEFAULT_SIGNAL_RULES;
+    const hide = signalRules.staleAnswers === "hide";
+    const signals = hide
+      ? Object.fromEntries(Object.entries(entry.signals).filter(([, a]) => !a.stale))
+      : entry.signals;
+    return {
+      lastSender: entry.lastSender,
+      owner: rules.owner,
+      ...(rules.groupNames ? { groupNames: rules.groupNames() } : {}),
+      judgments: hide ? judgmentsFromSignals(entry.thread.id, signals) : entry.judgments,
+      signals,
+      signalRules,
+      previous,
+      judged: judgedById.get(entry.thread.id),
+      ...(rules.judgeThreshold ? { judgeThreshold: rules.judgeThreshold() } : {}),
+    };
+  };
 
   /** Whether any custom action with a judge statement lacks an answer for a Thread. */
   const actionsToJudge = (threadId: string): boolean => {
@@ -353,10 +379,13 @@ export async function createStoreInbox(
   };
 
   /** The Section a row lands in: the Server's when it set one, else the rules over the row, its Judgments and the judged answers. */
-  const sectioned = (entry: ReturnType<typeof rowToCachedThread>): Thread => {
+  const sectioned = (
+    entry: ReturnType<typeof rowToCachedThread>,
+    previous: string | null = null,
+  ): Thread => {
     const rules = options.sections;
     if (!rules) return entry.thread;
-    const facts = factsFor(entry, rules);
+    const facts = factsFor(entry, rules, previous);
     const ruleList = rules.rules();
     const order = rules.order();
     const queue = () => {
@@ -526,7 +555,7 @@ export async function createStoreInbox(
         judgments = held.judgments;
       } else {
         const entry = rowToCachedThread(r, store.workspaceId);
-        thread = sectioned(entry);
+        thread = sectioned(entry, held?.thread.section ?? null);
         judgments = entry.judgments;
         projectedById.set(id, { row: r, generation, thread, judgments });
       }

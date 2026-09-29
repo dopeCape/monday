@@ -929,36 +929,12 @@ export const threadRoutes = pgTable(
   (t) => [index("thread_routes_group_idx").on(t.workspaceId, t.groupId)],
 );
 
-/**
- * A Thread's Judgments (CONTEXT.md, ADR 0012; slice 25): what the arrival
- * request answered, keyed by Thread and stamped with the Thread version
- * (message count, newest Message id) it saw, so a new Message re-judges and
- * the same version is never asked twice. Probabilities only, never text:
- * nothing here is mail content, so the row is in the clear like a route.
+/*
+ * A Thread's Judgments (slice 25) and the judged Sections and custom
+ * actions (slice 26) moved into the Signal store (ADR 0014, slice 30):
+ * signal_defs, signal_versions and signal_answers in signals-schema.ts.
  */
-export const threadJudgments = pgTable(
-  "thread_judgments",
-  {
-    threadId: text("thread_id")
-      .primaryKey()
-      .references(() => threads.id, { onDelete: "cascade" }),
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    needsReply: real("needs_reply").notNull(),
-    waitingOnOthers: real("waiting_on_others").notNull(),
-    newsletter: real("newsletter").notNull(),
-    automated: real("automated").notNull(),
-    briefWorth: real("brief_worth").notNull(),
-    urgency: real("urgency").notNull(),
-    chips: jsonb("chips").$type<Record<string, number>>().notNull().default({}),
-    model: text("model").notNull(),
-    judgedAt: timestamp("judged_at", { withTimezone: true, mode: "date" }).notNull(),
-    messageCount: integer("message_count").notNull().default(0),
-    latestMessageId: text("latest_message_id").notNull().default(""),
-  },
-  (t) => [index("thread_judgments_workspace_idx").on(t.workspaceId, t.judgedAt)],
-);
+export * from "./signals-schema.ts";
 
 /** Needs a decision (CONTEXT.md): a Thread whose best rule was not sure enough, with its candidates. */
 export const routingDecisions = pgTable(
@@ -1337,36 +1313,6 @@ export const invites = pgTable(
     unique("invites_message").on(t.messageId),
     index("invites_thread_idx").on(t.threadId),
     index("invites_uid_idx").on(t.workspaceId, t.uid),
-  ],
-);
-
-/**
- * A judged Section or custom action per Thread (slice 26, ADR 0012): the
- * probability that the rule's statement holds, keyed by the rule id and the
- * statement it was asked with, so a reworded statement is asked again and
- * the old answer never decides. Headers only went into the state; the row
- * holds a number. The client reads it through POST /sections/judgments and
- * keeps the Thread's Section local from there.
- */
-export const sectionJudgments = pgTable(
-  "section_judgments",
-  {
-    workspaceId: text("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "cascade" }),
-    threadId: text("thread_id")
-      .notNull()
-      .references(() => threads.id, { onDelete: "cascade" }),
-    /** The Section or custom action id. */
-    ruleId: text("rule_id").notNull(),
-    statement: text("statement").notNull(),
-    probability: real("probability").notNull(),
-    model: text("model").notNull(),
-    judgedAt: timestamp("judged_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.threadId, t.ruleId] }),
-    index("section_judgments_rule_idx").on(t.workspaceId, t.ruleId),
   ],
 );
 

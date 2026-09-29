@@ -52,6 +52,11 @@ export interface TestDatabase {
 }
 
 export async function testDatabase(): Promise<TestDatabase> {
+  return testDatabaseAt();
+}
+
+/** A fresh database migrated with the migrations in `folder` (all of them when absent). */
+export async function testDatabaseAt(folder?: string): Promise<TestDatabase> {
   cluster ??= startCluster();
   const { adminUrl } = await cluster;
   const name = `monday_test_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -62,7 +67,7 @@ export async function testDatabase(): Promise<TestDatabase> {
 
   const url = withDatabase(adminUrl, name);
   const handle = createDb(url, { max: 3 });
-  await migrate(handle.sql);
+  await migrate(handle.sql, folder ? { migrationsFolder: folder } : {});
 
   return {
     url,

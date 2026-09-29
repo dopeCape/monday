@@ -28,7 +28,9 @@ export type JudgeTask =
   /** The batching measurement (slice 28), Sidecar only. */
   | "judge.eval"
   /** The Backlog sort's one-Thread requests (slice 29): background, under the monthly budget. */
-  | "judge.backlog";
+  | "judge.backlog"
+  /** The Signal request on arrival (slice 30): every active Signal for one Thread. */
+  | "judge.signals";
 
 export type JsonValue =
   | string

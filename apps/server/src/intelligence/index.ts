@@ -86,6 +86,7 @@ import {
   localLanguageModel,
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
+import { createSignals, type Signals } from "./signals/index.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
@@ -247,8 +248,10 @@ export interface Intelligence {
   meter: Meter;
   briefs: Briefs;
   policy: BriefPolicyRule;
-  /** The arrival request and its stored answers (slice 25). */
+  /** The arrival request and its stored answers (slice 25), read from the Signal store since slice 30. */
   judgments: Judgments;
+  /** The Signal store and the Signal request (ADR 0014, slice 30). */
+  signals: Signals;
   routing: Routing;
   /** The Backlog sort: the mail already there, sorted in the background within a Sort scope. */
   backlog: Backlog;
@@ -541,10 +544,13 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       automatedSenders: s["briefs.automated_senders"],
     };
   };
+  const signals = createSignals({ db, mailstore, runtime, now, log, level });
   const judgments = createJudgments({
     db,
     mailstore,
     runtime,
+    signals,
+    llmAvailable: async () => (await judgeStateNow()).provider === "llm",
     now,
     log,
     level,
@@ -855,7 +861,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   extensions.workflows = workflows;
   const onboarding = createOnboarding({ db, routing, workflows, level });
   extensions.onboarding = onboarding;
-  const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
+  const organize = createOrganize({ db, mailstore, runtime, routing, signals, now, log });
   extensions.organize = organize;
   extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
   extensions.backlog = {
@@ -887,6 +893,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     briefs,
     policy,
     judgments,
+    signals,
     routing,
     backlog,
     agent,

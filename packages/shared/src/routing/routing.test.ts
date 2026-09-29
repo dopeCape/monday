@@ -158,13 +158,17 @@ describe("Section rules", () => {
     // Thread someone else wrote last (a shipment notice, a one-time code) is For your information.
     expect(at(thread(), "aoife@northwind.test")).toBe("fyi");
     expect(at(thread({ unread: false }), "mateus@x.test")).toBe("fyi");
-    // An ongoing exchange someone else wrote last is Waiting on you by the headers.
-    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("waiting");
-    // Before the judge answers, Waiting on you catches the ongoing exchanges it is ordered ahead of.
+    // Waiting on you reads the waiting_on_me Signal (slice 30): an ongoing exchange someone
+    // else wrote last is For your information until it is read, then Waiting on you.
+    expect(at(thread({ unread: false, messageCount: 5 }), "mateus@x.test")).toBe("fyi");
     expect(
       sectionOf(
         thread({ unread: false, messageCount: 5 }),
-        { lastSender: "mateus@x.test", owner: me },
+        {
+          lastSender: "mateus@x.test",
+          owner: me,
+          signals: { waiting_on_me: { noul: 0.9 }, automated: { noul: 0.05 } },
+        },
         DEFAULT_SECTION_RULES,
         ["waiting", "needs-reply", "fyi", "newsletters"],
       ),
@@ -232,8 +236,8 @@ describe("Section rules", () => {
     // The owner wrote last: For your information by the headers, Needs your reply once judged.
     expect(at(read, me, null)).toBe("fyi");
     expect(at(read, me, judged({ needsReply: 0.7 }))).toBe("needs-reply");
-    // The owner wrote last and waits: the headers say fyi, the judge says waiting.
-    expect(at(thread({ messageCount: 3 }), me, judged({ waitingOnOthers: 0.8 }))).toBe("waiting");
+    // The owner wrote last and waits on someone else: that is not Waiting on you.
+    expect(at(thread({ messageCount: 3 }), me, judged({ waitingOnOthers: 0.8 }))).toBe("fyi");
     // List headers put a Thread in Newsletters; so does the judge without them, and a
     // judged non-newsletter with list headers is For your information.
     expect(at(thread({ bulk: true }), "digest@theweekly.test", null)).toBe("newsletters");

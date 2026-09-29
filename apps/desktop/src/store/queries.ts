@@ -16,11 +16,13 @@ import type {
   ScheduledSend,
   SectionRule,
   SendError,
+  SignalReading,
   Tag,
   Thread,
   ThreadJudgments,
 } from "@monday/shared";
 import type { Row, SqlParam } from "./driver.ts";
+import { readingsToJudgments, rowToReadings, SIGNALS_COLUMN_SQL } from "./signals.ts";
 
 const json = <T>(value: unknown, fallback: T): T => {
   if (typeof value !== "string") return fallback;
@@ -47,17 +49,15 @@ export const INBOX_THREADS_SQL = `
  * The columns a Thread list row carries: the Thread, its tag and label ids in
  * the order they were applied, the newest Message's sender for the Section
  * rules ("lastFrom"), every sender's address (space-separated, for the
- * Filter menu's Person and Domain) and the Thread's Judgments (slice 25) as
- * `j_*` columns. Read over `threads t left join thread_judgments j`.
+ * Filter menu's Person and Domain) and the Thread's Signal answers (slice
+ * 30) as the one `j_signals` column (store/signals.ts).
  */
 const THREAD_LIST_COLUMNS = `t.*,
     (select group_concat(tag_id) from (select tag_id from thread_tags where thread_id = t.id order by rowid)) as tag_ids,
     (select group_concat(label_id) from (select label_id from thread_labels where thread_id = t.id order by rowid)) as label_ids,
     (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender,
     (select group_concat(email, ' ') from thread_senders where thread_id = t.id) as sender_emails,
-    j.needs_reply as j_needs_reply, j.waiting_on_others as j_waiting_on_others, j.newsletter as j_newsletter,
-    j.automated as j_automated, j.brief_worth as j_brief_worth, j.urgency as j_urgency,
-    j.chips as j_chips, j.model as j_model, j.judged_at as j_judged_at`;
+    ${SIGNALS_COLUMN_SQL}`;
 
 /**
  * Every Thread the Cache holds, trash included, newest first, with the
@@ -68,7 +68,6 @@ const THREAD_LIST_COLUMNS = `t.*,
 export const ALL_THREADS_SQL = `
   select ${THREAD_LIST_COLUMNS}
   from threads t
-  left join thread_judgments j on j.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
 
 /** ALL_THREADS_SQL for some Threads only: the rows a write named, or Threads asked for by id. */
@@ -137,7 +136,6 @@ export function threadPageSql(
   const sql = `
   select ${THREAD_LIST_COLUMNS}
   from threads t
-  left join thread_judgments j on j.thread_id = t.id
   where t.rid in (select t.rid from threads t where (${list.where})${keyset} order by ${orderBy} limit ?)
   order by ${orderBy}`;
   return { sql, params: [...list.params, ...keyParams, limit] };
@@ -159,22 +157,23 @@ export const INBOX_COUNTS_SQL = `
     from threads t where t.unread = 1 and ${INBOX_WHERE}
     group by t.group_id, t.subgroup_id, t.starred`;
 
-/** The Judgments joined onto a Thread row as `j_*` columns, or null when the Thread is not judged yet. */
-export function rowToJudgments(r: Row): ThreadJudgments | null {
-  if (typeof r.j_judged_at !== "string" || r.j_judged_at === "") return null;
-  const num = (value: unknown) => (typeof value === "number" ? value : Number(value ?? 0) || 0);
-  return {
-    threadId: text(r.id),
-    needsReply: num(r.j_needs_reply),
-    waitingOnOthers: num(r.j_waiting_on_others),
-    newsletter: num(r.j_newsletter),
-    automated: num(r.j_automated),
-    briefWorth: num(r.j_brief_worth),
-    urgency: num(r.j_urgency),
-    chips: json<Record<string, number>>(r.j_chips, {}),
-    model: text(r.j_model),
-    judgedAt: r.j_judged_at,
-  };
+/**
+ * The slice 25 Judgments a Thread row's Signals stand for (the `j_signals`
+ * column), or null when the Thread has no shipped answer yet. A stale answer
+ * counts only while signals.stale_answers shows it (`hideStale` false).
+ */
+export function rowToJudgments(r: Row, hideStale = false): ThreadJudgments | null {
+  return readingsToJudgments(text(r.id), rowSignals(r, hideStale));
+}
+
+/** A Thread row's Signal answers by Signal id, without the stale ones when they are hidden. */
+export function rowSignals(
+  r: Row,
+  hideStale = false,
+): Record<string, SignalReading & { judgedAt: string }> {
+  const all = rowToReadings(r);
+  if (!hideStale) return all;
+  return Object.fromEntries(Object.entries(all).filter(([, a]) => !a.stale));
 }
 
 export const THREAD_BY_ID_SQL = `
@@ -215,12 +214,16 @@ export function rowToCachedThread(
   deleted: boolean;
   lastSender: string | null;
   judgments: ThreadJudgments | null;
+  /** The Thread's Signal answers (slice 30), stale ones marked. */
+  signals: Record<string, SignalReading>;
 } {
+  const signals = rowSignals(r);
   return {
     thread: rowToThread(r, workspaceId),
     deleted: bool(r.deleted),
     lastSender: nullable(r.last_sender),
-    judgments: rowToJudgments(r),
+    judgments: readingsToJudgments(text(r.id), signals),
+    signals,
   };
 }
 
