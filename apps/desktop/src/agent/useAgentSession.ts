@@ -217,6 +217,26 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
     };
   }, [client, workspaceId, newAfterHours, now]);
 
+  // A Server card still running when its turn ended missed its last live
+  // event (a Local runtime hears them over a separate stream): the Session's
+  // stored events have how it ended.
+  const settleTools = useCallback(
+    async (sessionId: string, running: ReadonlySet<string>) => {
+      if (!client || running.size === 0) return;
+      try {
+        const loaded = await client.load(sessionId);
+        if (sessionRef.current?.id !== sessionId) return;
+        const endings = loaded.events.filter(
+          (e) => e.kind === "tool" && running.has(e.call.id) && e.call.status !== "running",
+        );
+        if (endings.length > 0) setEvents((list) => applyEvents(list, endings));
+      } catch {
+        // The card says Stopped until the Session is opened again.
+      }
+    },
+    [client],
+  );
+
   const run = useCallback(
     async (
       work: (
@@ -237,13 +257,20 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
       const id = ++runSeq.current;
       runRef.current = { id, controller };
       const current = () => runRef.current?.id === id;
+      // The Server's calls this turn started and has not seen end.
+      const unsettled = new Set<string>();
       const live = (event: AgentEvent) => {
+        if (event.kind === "tool" && !event.call.builtin) {
+          if (event.call.status === "running") unsettled.add(event.call.id);
+          else unsettled.delete(event.call.id);
+        }
         if (current()) onEvent(event);
       };
       try {
         const s = await ensureRuntime(await ensureSession());
         await work(s, live, controller.signal);
         if (!current()) return;
+        void settleTools(s.id, unsettled);
         setRuntimeInfo(client.runtimeOf(s.id));
         void refreshHistory();
       } catch (e) {
@@ -257,7 +284,7 @@ export function useAgentSession(options: AgentSessionOptions): AgentSession {
         }
       }
     },
-    [client, ensureSession, ensureRuntime, refreshHistory, onEvent],
+    [client, ensureSession, ensureRuntime, refreshHistory, onEvent, settleTools],
   );
 
   const stop = useCallback(async () => {

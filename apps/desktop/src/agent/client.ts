@@ -77,6 +77,8 @@ export interface FakeAgentClientOptions {
   turns?: FakeTurn[];
   /** What an approval streams; defaults to the card as done, then done. */
   onApprove?: (call: ToolCall, decision: ApprovalDecision) => AgentEvent[];
+  /** Events the Session stores but the turn never streams (a live event lost on the way). */
+  unheard?: (event: AgentEvent) => boolean;
   now?: () => Date;
 }
 
@@ -124,7 +126,7 @@ export function fakeAgentClient(options: FakeAgentClientOptions = {}): FakeAgent
   const record = (sessionId: Id, events: AgentEvent[], onEvent: (e: AgentEvent) => void) => {
     const transcript = transcripts.get(sessionId) ?? [];
     for (const event of events) {
-      onEvent(event);
+      if (!options.unheard?.(event)) onEvent(event);
       if (event.kind === "tool" && event.call.status === "waiting") {
         waitingCalls.set(event.call.id, event.call);
       }
