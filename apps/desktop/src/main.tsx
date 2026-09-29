@@ -17,8 +17,8 @@ import { createStoreInbox, type StoreInbox } from "./screens/inbox/store-inbox.t
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import { createStoreRouting, type StoreRouting } from "./screens/routing/routing-data.ts";
 import { Settings } from "./screens/Settings.tsx";
-import { createSearch, type FetchBodies } from "./search/index.ts";
-import { createPrewarm } from "./search/prewarm.ts";
+import { createSearch } from "./search/index.ts";
+import { createPrewarm, type FetchBodies } from "./search/prewarm.ts";
 import { ActivePaneContext } from "./shell/active.ts";
 import { ErrorBoundary } from "./shell/ErrorBoundary.tsx";
 import { Shell, useShell } from "./shell/Shell.tsx";
@@ -61,7 +61,8 @@ function Root() {
     calendar: StoreCalendar;
   } | null>(null);
 
-  // The bulk body route: "search older mail" and the pre-warm Job share it.
+  // The bulk body route, for the pre-warm Job only: "Search older mail" is a
+  // full search on the Server and copies no body into the Cache (ADR 0015).
   const fetchBodies = useMemo<FetchBodies>(
     () => (workspaceId, range) => shell.api.messages.bodies(workspaceId, range),
     [shell.api],
@@ -76,11 +77,10 @@ function Root() {
           recencyDays: settingsRef.current["search.recency_boost_days"],
           limit: settingsRef.current["search.results_limit"],
           recentMax: settingsRef.current["search.recent_max"],
-          olderBatch: settingsRef.current["search.older_batch"],
         }),
-        fetchBodies,
+        fullSearch: (request, onEvent, signal) => shell.api.search.full(request, onEvent, signal),
       }),
-    [store, fetchBodies, ws.address],
+    [store, shell.api, ws.address],
   );
 
   // The pre-warm Job runs only against a live Sidecar; the browser dev server has none.

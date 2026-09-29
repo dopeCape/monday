@@ -49,7 +49,13 @@ import {
   useKeymap,
 } from "../keyboard/useKeymap.ts";
 import { openExternal, saveDownload } from "../platform/open.ts";
-import type { OlderMail, PullProgress, SearchHit, SearchModule } from "../search/index.ts";
+import {
+  FullSearchError,
+  mergeHits,
+  type OlderMail,
+  type SearchHit,
+  type SearchModule,
+} from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
@@ -210,8 +216,19 @@ interface ListItem {
   key: string;
   row: DisplayRow;
 }
-/** The search's "search older mail" pull in flight. */
-type Pull = { older: OlderMail; progress: PullProgress | null; error: string | null };
+/**
+ * "Search older mail": the full search on the Server (ADR 0015) for the
+ * query as typed. Its hits are merged into the local ones; nothing lands in
+ * the Cache. `cursor` resumes below where it stopped ("Search further").
+ */
+type OlderRun = {
+  status: "running" | "paused" | "done" | "error";
+  hits: readonly SearchHit[];
+  scanned: number;
+  total: number;
+  cursor: string | null;
+  error: string | null;
+};
 
 /**
  * The Filter menu's chips per Workspace (one mailbox seam each), for the
@@ -553,7 +570,8 @@ function InboxBody({
   const searching = searchText.trim() !== "";
   const [hits, setHits] = useState<readonly SearchHit[] | null>(null);
   const [older, setOlder] = useState<readonly OlderMail[]>([]);
-  const [pull, setPull] = useState<Pull | null>(null);
+  const [olderRun, setOlderRun] = useState<OlderRun | null>(null);
+  const olderAbort = useRef<AbortController | null>(null);
   const searchSeq = useRef(0);
   const searchLimit = settings["search.results_limit"];
   // Under chips the Cache search answers both at once, through its own operators.
@@ -579,34 +597,84 @@ function InboxBody({
       searchSeq.current++;
       setHits(null);
       setOlder([]);
-      setPull(null);
       return;
     }
     void runSearch();
   }, [searching, runSearch]);
-  const pullOlder = useCallback(
-    async (o: OlderMail) => {
+  // A full search belongs to the query it ran for: a new query stops it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: searchQuery is the trigger, not a read
+  useEffect(() => {
+    olderAbort.current?.abort();
+    olderAbort.current = null;
+    setOlderRun(null);
+  }, [searchQuery]);
+  useEffect(() => () => olderAbort.current?.abort(), []);
+  /** Starts the full search, or resumes it below `cursor`, keeping the hits found so far. */
+  const searchOlder = useCallback(
+    async (cursor: string | null) => {
       if (!search) return;
-      setPull({ older: o, progress: { done: 0, total: o.missing }, error: null });
+      olderAbort.current?.abort();
+      const abort = new AbortController();
+      olderAbort.current = abort;
+      // Only this run's own events count; decided when they arrive, since a
+      // queued updater may run after the run has already let go of the ref.
+      const mine = (update: (run: OlderRun) => OlderRun) => {
+        if (olderAbort.current !== abort) return;
+        setOlderRun((run) => (run ? update(run) : run));
+      };
+      setOlderRun((run) => ({
+        status: "running",
+        hits: cursor ? (run?.hits ?? []) : [],
+        scanned: cursor ? (run?.scanned ?? 0) : 0,
+        total: cursor ? (run?.total ?? 0) : 0,
+        cursor,
+        error: null,
+      }));
       try {
-        await search.pullOlder(o, (p) => {
-          setPull({ older: o, progress: p, error: null });
-          void runSearch();
+        const done = await search.searchOlder(searchQuery, {
+          workspace: workspaceId,
+          cursor,
+          limit: settings["search.full_limit"],
+          ...(nowProp ? { now: nowProp } : {}),
+          signal: abort.signal,
+          onHit: (hit) => mine((run) => ({ ...run, hits: [...run.hits, hit] })),
+          onProgress: (p) =>
+            mine((run) => ({
+              ...run,
+              scanned: p.scanned,
+              total: p.total,
+              cursor: p.cursor ?? run.cursor,
+            })),
         });
-        setPull(null);
-        await runSearch();
+        if (!done) return;
+        mine((run) => ({
+          ...run,
+          status: done.reason === "limit" ? "paused" : "done",
+          scanned: done.scanned,
+          total: done.total,
+          cursor: done.cursor,
+        }));
       } catch (error) {
         const message =
-          error instanceof Error && /423|locked/i.test(error.message)
+          error instanceof FullSearchError && error.code === "locked"
             ? String(settings["strings.search.older_locked"])
             : error instanceof Error
               ? error.message
               : String(error);
-        setPull({ older: o, progress: null, error: message });
+        mine((run) => ({ ...run, status: "error", error: message }));
+      } finally {
+        if (olderAbort.current === abort) olderAbort.current = null;
       }
     },
-    [search, runSearch, settings],
+    [search, searchQuery, workspaceId, settings, nowProp],
   );
+  /** Stop: the request closes, the Server stops scanning, the hits stay. */
+  const stopOlder = useCallback(() => {
+    const abort = olderAbort.current;
+    olderAbort.current = null;
+    abort?.abort();
+    setOlderRun((run) => (run ? { ...run, status: "paused" } : run));
+  }, []);
   const highlight = useMemo(
     () => (searching ? searchTerms(searchText) : undefined),
     [searching, searchText],
@@ -615,14 +683,15 @@ function InboxBody({
   /** The results as rows: the live Thread where the list has it, the hit's passage as its snippet. */
   const searchRows = useMemo<DisplayRow[] | null>(() => {
     if (!searching) return null;
+    const shown = olderRun ? mergeHits(hits ?? [], olderRun.hits) : (hits ?? []);
     const found: Thread[] = search
-      ? (hits ?? []).map((h) => {
+      ? shown.map((h) => {
           const live = liveById.get(h.thread.id) ?? inbox.thread(h.thread.id) ?? h.thread;
           return h.snippet ? { ...live, snippet: h.snippet } : live;
         })
       : localSearch(allThreads, searchText);
     return found.filter(keeps).map((th) => ({ thread: th, leaving: false }));
-  }, [searching, search, hits, liveById, inbox, allThreads, searchText, keeps]);
+  }, [searching, search, hits, olderRun, liveById, inbox, allThreads, searchText, keeps]);
 
   // The Inbox is one plain list, newest activity first (docs/spec/inbox.md,
   // Stream): no Section headings, nothing reordered by Groups or Sections.
@@ -1670,7 +1739,10 @@ function InboxBody({
         highlight={highlight}
         onOpen={(id) => {
           if (searching && search) void search.remember(searchText);
-          open(id);
+          // A full search hit may be a Thread the list does not hold: read it
+          // from the Cache like any Thread outside the window.
+          if (searching) openAnywhere(id);
+          else open(id);
         }}
         onArchive={(id) => request("archive", [id])}
         onSnooze={(id) => openPicker("snooze", [id])}
@@ -1863,27 +1935,59 @@ function InboxBody({
                   })}
                 </div>
               ) : null}
-              {searching && pull ? (
-                <div className="search-older" role="status">
+              {searching && olderRun ? (
+                <div
+                  className="search-older"
+                  role="status"
+                  aria-live="polite"
+                  data-state={olderRun.status}
+                >
                   <span>
-                    {pull.error ??
-                      fill(t("strings.search.older_pulling"), {
-                        done: pull.progress?.done ?? 0,
-                        total: pull.progress?.total ?? pull.older.missing,
-                      })}
+                    {olderRun.status === "error"
+                      ? olderRun.error
+                      : fill(
+                          t(
+                            olderRun.status === "running"
+                              ? "strings.search.older_progress"
+                              : olderRun.status === "done"
+                                ? "strings.search.older_done"
+                                : "strings.search.older_stopped",
+                          ),
+                          {
+                            scanned: olderRun.scanned.toLocaleString("en-US"),
+                            total: olderRun.total.toLocaleString("en-US"),
+                            n: olderRun.hits.length.toLocaleString("en-US"),
+                          },
+                        )}
                   </span>
+                  {olderRun.status === "running" ? (
+                    <Btn sm outline className="older-stop" onClick={stopOlder}>
+                      {t("strings.search.older_stop")}
+                    </Btn>
+                  ) : olderRun.status === "paused" && olderRun.cursor ? (
+                    <Btn
+                      sm
+                      outline
+                      className="older-further"
+                      onClick={() => void searchOlder(olderRun.cursor)}
+                    >
+                      {t("strings.search.older_further")}
+                    </Btn>
+                  ) : olderRun.status === "error" ? (
+                    <Btn
+                      sm
+                      outline
+                      className="older-further"
+                      onClick={() => void searchOlder(olderRun.cursor)}
+                    >
+                      {t("strings.search.older")}
+                    </Btn>
+                  ) : null}
                 </div>
               ) : searching && olderMissing > 0 ? (
                 <div className="search-older">
                   <span>{t("strings.search.older_help")}</span>
-                  <Btn
-                    sm
-                    outline
-                    onClick={() => {
-                      const first = older[0];
-                      if (first) void pullOlder(first);
-                    }}
-                  >
+                  <Btn sm outline className="older-start" onClick={() => void searchOlder(null)}>
                     {t("strings.search.older")}
                   </Btn>
                 </div>

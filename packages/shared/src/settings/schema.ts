@@ -692,7 +692,7 @@ export const settingsSchema = {
   }),
   "intent.debounce_ms": setting({
     type: z.int().min(0).max(5000),
-    default: 250,
+    default: 500,
     scope: "global",
     section: "ai",
     group: "Typed commands",
@@ -2625,15 +2625,35 @@ export const settingsSchema = {
     label: "Pre-warm batch",
     help: "Bodies fetched per request while the Cache pre-warms. Per device.",
   }),
-  "search.older_batch": setting({
+  "search.full_limit": setting({
     type: z.int().min(1).max(1000),
-    default: 200,
-    scope: "device",
-    section: "server",
-    group: "Storage",
+    default: 100,
+    scope: "global",
+    section: "appearance",
+    group: "Search",
     tier: "advanced",
-    label: "Search older mail batch",
-    help: "Bodies fetched per request when a search reaches past the Cache. Per device.",
+    label: "Older mail results",
+    help: "Search older mail stops after this many results and offers to search further. It searches the whole mailbox on your server, newest first.",
+  }),
+  "search.full_page_size": setting({
+    type: z.int().min(10).max(2000),
+    default: 500,
+    scope: "global",
+    section: "appearance",
+    group: "Search",
+    tier: "advanced",
+    label: "Older mail page size",
+    help: "How many threads the server reads and decrypts at a time while it searches older mail. Larger is faster and uses more memory on the server.",
+  }),
+  "search.full_concurrency": setting({
+    type: z.int().min(1).max(8),
+    default: 3,
+    scope: "global",
+    section: "appearance",
+    group: "Search",
+    tier: "advanced",
+    label: "Older mail parallel reads",
+    help: "How many pages the server reads from its database at once while it searches older mail.",
   }),
 
   /* AI and agent */
@@ -3463,7 +3483,7 @@ export const settingsSchema = {
   }),
   "workflows.mcp_connect.debounce_ms": setting({
     type: z.int().min(0).max(2000),
-    default: 250,
+    default: 500,
     scope: "global",
     section: "workflows",
     group: "MCP servers",
@@ -8087,17 +8107,33 @@ export const settingsSchema = {
   "strings.search.older_help": str(
     "appearance",
     "Search older mail help",
-    "Older bodies are not in the Cache yet. Fetch them to search inside.",
+    "Only mail kept on this computer was searched. Search the whole mailbox on your server.",
   ),
-  "strings.search.older_pulling": str(
+  "strings.search.older_progress": str(
     "appearance",
     "Search older mail progress",
-    "Fetching older mail, {done} of {total}",
+    "Searched {scanned} of {total}",
+  ),
+  "strings.search.older_stop": str("appearance", "Search older mail: stop", "Stop"),
+  "strings.search.older_further": str(
+    "appearance",
+    "Search older mail: search further",
+    "Search further",
+  ),
+  "strings.search.older_stopped": str(
+    "appearance",
+    "Search older mail: stopped or paused",
+    "Searched {scanned} of {total}. {n} found.",
+  ),
+  "strings.search.older_done": str(
+    "appearance",
+    "Search older mail: finished",
+    "Searched all {total}. {n} found.",
   ),
   "strings.search.older_locked": str(
     "appearance",
     "Search older mail when locked",
-    "The Server is locked; unlock it to fetch older mail.",
+    "The Server is locked; unlock it to search older mail.",
   ),
   "strings.search.all_accounts": str("appearance", "All accounts toggle", "All accounts"),
   "strings.search.chip.unread": str("appearance", "Filter chip: unread", "Unread"),

@@ -285,7 +285,7 @@ describe("LRU eviction", () => {
     });
     await drain(prewarm);
     const before = requests.length;
-    // Something else overfilled the Cache (a big "search older mail" pull): the next step evicts.
+    // Something else overfilled the Cache (many opened Threads): the next step evicts.
     await fake.store.write([
       {
         sql: "update messages set body_text = body_text || ?, body_at = ? where body_text is not null",

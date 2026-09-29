@@ -22,6 +22,7 @@ import {
   defaultSettings,
   isSettingKey,
   orderedSectionRules,
+  parseQuery,
   type Settings,
   sectionLabel,
 } from "@monday/shared";
@@ -121,6 +122,42 @@ export function createServerToolHost(options: ServerToolHostOptions): ToolHost {
     workspaceId,
 
     async listThreads(filter: ThreadFilter) {
+      if (filter.full && filter.query?.trim()) {
+        // The same scan as POST /search/full (ADR 0015): the operators, the
+        // SQL filters, bodies decrypted in memory. Section and Group narrow
+        // what comes back; archived Threads count, since old mail mostly is.
+        const s = await readGlobalSettings(db, [
+          "search.full_page_size",
+          "search.full_concurrency",
+        ] as const);
+        const query = parseQuery(filter.query, { now: now() });
+        if (filter.unread !== undefined) query.unread = filter.unread;
+        const narrowed = filter.section !== undefined || filter.group !== undefined;
+        const events = await mailstore.searchFull(workspaceId, {
+          query,
+          before: filter.olderThan ?? null,
+          // A Section or Group is applied after the scan, so it reads further.
+          limit: narrowed ? Math.max(filter.limit * 5, 100) : filter.limit,
+          pageSize: s["search.full_page_size"],
+          concurrency: s["search.full_concurrency"],
+        });
+        const found = [];
+        for await (const event of events) {
+          if (event.type !== "hit") continue;
+          const t = event.thread;
+          if (filter.section !== undefined && t.section !== filter.section) continue;
+          if (
+            filter.group !== undefined &&
+            t.group !== filter.group &&
+            t.subgroup !== filter.group
+          ) {
+            continue;
+          }
+          found.push(t);
+          if (found.length >= filter.limit) break;
+        }
+        return Promise.all(found.map(summarize));
+      }
       if (filter.query?.trim()) {
         const { hits } = await mailstore.searchHeaders(workspaceId, {
           q: filter.query,

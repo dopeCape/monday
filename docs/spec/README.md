@@ -28,7 +28,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Install, cloud upgrade, channels, CI | ADR 0008 |
 | Repo, modules, store, tests, UI stack | ADR 0009 |
 | Drafts, send, voice, attachments | ADR 0010 |
-| Search and command palette | ADR 0011 |
+| Search and command palette | ADR 0011, ADR 0015, `inbox.md` |
 | Calendar | `calendar.md`, issue 15, issue 16, research 6 |
 | External MCP | `external-mcp.md` |
 | Onboarding | `onboarding.md` |

@@ -55,6 +55,14 @@ export interface ContentStore {
   /** readContent for text kinds. */
   readText(ref: ContentRef): Promise<string>;
   /**
+   * A synchronous readText for one Workspace's single-envelope kinds, for a
+   * scan that opens thousands of envelopes (the full search, ADR 0015): the
+   * Workspace key is resolved once. Throws LockedError when locked.
+   */
+  textOpener(
+    workspaceId: string,
+  ): Promise<(kind: ContentKind, key: Uint8Array, envelope: Uint8Array) => string>;
+  /**
    * A fresh data key wrapped under the Workspace key, for content that arrives
    * chunk by chunk (a compose upload). Pair with sealChunk; readContent opens
    * the result like any other chunked ref.
@@ -100,6 +108,20 @@ export function createContentStore(keys: Keys, chunkSize: number = CHUNK_BYTES):
 
     async readText(ref) {
       return decoder.decode(await store.readContent(ref));
+    },
+
+    async textOpener(workspaceId) {
+      const unwrap = await keys.unwrapper(workspaceId);
+      const aads = new Map<ContentKind, Uint8Array>();
+      return (kind, key, envelope) => {
+        if (kind === "attachment") throw new RangeError("attachment content is chunked");
+        let aad = aads.get(kind);
+        if (!aad) {
+          aad = kindAad(kind);
+          aads.set(kind, aad);
+        }
+        return decoder.decode(open(unwrap(key), envelope, aad));
+      };
     },
 
     async createContentKey(workspaceId) {

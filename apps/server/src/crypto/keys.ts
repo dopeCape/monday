@@ -67,6 +67,12 @@ export interface Keys {
   wrapKey(workspaceId: string, dek: Uint8Array): Promise<Uint8Array>;
   unwrapKey(workspaceId: string, wrapped: Uint8Array): Promise<Uint8Array>;
   /**
+   * unwrapKey without a promise per call, for a scan that opens many data
+   * keys of one Workspace (the full search): K_ws is resolved once, and the
+   * returned function unwraps under it. Throws LockedError.
+   */
+  unwrapper(workspaceId: string): Promise<(wrapped: Uint8Array) => Uint8Array>;
+  /**
    * Replaces K_ws. Inside one transaction the caller receives `rewrap`, which
    * takes a data key wrapped under the old K_ws and returns it wrapped under
    * the new one; the caller applies it to every wrapped key it stores and
@@ -169,6 +175,12 @@ export function createKeys(db: Db, options: KeysOptions = {}): Keys {
 
     async unwrapKey(workspaceId, wrapped) {
       return open(await keys.workspaceKey(workspaceId), wrapped, dataKeyAad(workspaceId));
+    },
+
+    async unwrapper(workspaceId) {
+      const key = await keys.workspaceKey(workspaceId);
+      const aad = dataKeyAad(workspaceId);
+      return (wrapped) => open(key, wrapped, aad);
     },
 
     async rotateWorkspaceKey(workspaceId, rewrapAll) {

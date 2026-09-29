@@ -6,6 +6,10 @@
 //   GET /messages/:id/body?images=                            {text, html, snippet, bodyState, display: {html, quoted, blockedImages}}
 //   GET /messages/bodies?workspace=&after=&before=&limit=     fetched bodies by date range, newest first, html sanitised (423 locked)
 //   GET /search/headers?workspace=&q=&limit=                  the headers-only index (ADR 0011), no decryption
+//   POST /search/full {workspace, q, before?, limit?, cursor?, now?}
+//                                                             the whole mailbox, decrypted in memory (ADR 0015); with
+//                                                             Accept: application/x-ndjson, lines of {type: hit|progress|done|error}
+//                                                             (423 locked, before anything streams)
 //   GET /attachments/:id                                      the bytes, with name and media type
 // Write intents, the ones the Outbox replays (ADR 0005). Each body carries
 // `at` (the actor's clock) and `actor`; the Mailstore applies last-writer-wins
@@ -17,7 +21,13 @@
 //   PUT  /threads/:id/tags      {at, actor, tags: [id]}
 // Content ingestion arrives with the Providers.
 
-import type { Intent, IntentKind } from "@monday/shared";
+import {
+  type FullSearchEvent,
+  type Intent,
+  type IntentKind,
+  isEmpty,
+  parseQuery,
+} from "@monday/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../auth/middleware.ts";
@@ -50,6 +60,24 @@ const headersQuery = z.object({
   q: z.string().max(500).default(""),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+
+const fullBody = z.object({
+  workspace: z.string().min(1),
+  q: z.string().max(500),
+  before: z.iso.datetime({ offset: true }).optional(),
+  limit: z.int().min(1).max(1000).optional(),
+  cursor: z.string().min(1).max(500).optional(),
+  now: z.iso.datetime({ offset: true }).optional(),
+});
+
+/** The full search's Settings (search.full_*), read per request. */
+export interface FullSearchSettings {
+  limit: number;
+  pageSize: number;
+  concurrency: number;
+}
+
+const FULL_SEARCH_DEFAULTS: FullSearchSettings = { limit: 100, pageSize: 500, concurrency: 3 };
 
 const stamp = z.object({
   at: z.iso.datetime({ offset: true }),
@@ -100,6 +128,8 @@ export interface MailRouteOptions {
   remoteImages?: () => Promise<boolean>;
   /** The reader.tracker_hosts Setting: images from these hosts never load. */
   trackerHosts?: () => Promise<readonly string[]>;
+  /** The search.full_* Settings for POST /search/full. */
+  fullSearch?: () => Promise<FullSearchSettings>;
   log?: (message: string) => void;
 }
 
@@ -266,6 +296,71 @@ export function mailRoutes(mailstore: Mailstore, options: MailRouteOptions = {})
     }
     const q = parsed.data;
     return c.json(await mailstore.searchHeaders(q.workspace, { q: q.q, limit: q.limit }));
+  });
+
+  // The full search (ADR 0015): only when asked, never on a keystroke. The
+  // scan advances as the client reads, and stops when the client goes away.
+  app.post("/search/full", async (c) => {
+    const body = await parseBody(c, fullBody);
+    if (!body.ok) return body.response;
+    const input = body.data;
+    const query = parseQuery(input.q, input.now ? { now: new Date(input.now) } : {});
+    if (isEmpty(query)) return c.json({ error: "empty_query" }, 400);
+    const settings = (await options.fullSearch?.().catch(() => null)) ?? FULL_SEARCH_DEFAULTS;
+    const abort = new AbortController();
+    c.req.raw.signal?.addEventListener("abort", () => abort.abort(), { once: true });
+    // A LockedError here answers 423 before any line is written.
+    const events = await mailstore.searchFull(input.workspace, {
+      query,
+      before: input.before ?? null,
+      limit: input.limit ?? settings.limit,
+      cursor: input.cursor ?? null,
+      pageSize: settings.pageSize,
+      concurrency: settings.concurrency,
+      signal: abort.signal,
+    });
+    if (!(c.req.header("accept") ?? "").includes("application/x-ndjson")) {
+      const hits: FullSearchEvent[] = [];
+      let done: FullSearchEvent | null = null;
+      for await (const event of events) {
+        if (event.type === "hit") hits.push(event);
+        else if (event.type === "done") done = event;
+      }
+      return c.json({ hits, done });
+    }
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await events.next();
+          if (next.done) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(
+            encoder.encode(`${JSON.stringify(next.value)}
+`),
+          );
+        } catch (error) {
+          const line: FullSearchEvent = {
+            type: "error",
+            message: error instanceof Error ? error.message : String(error),
+          };
+          controller.enqueue(
+            encoder.encode(`${JSON.stringify(line)}
+`),
+          );
+          controller.close();
+        }
+      },
+      async cancel() {
+        abort.abort();
+        await events.return(undefined);
+      },
+    });
+    return new Response(stream, {
+      headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" },
+    });
   });
 
   app.get("/attachments/:id", async (c) => {

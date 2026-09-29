@@ -1,15 +1,24 @@
 // The search module through its interface over real FTS5 in bun:sqlite:
 // ranking on a 50-thread fixture, prefix and trigram matching, the recency
-// boost, chips, all accounts across two Caches, "search older mail", recent
+// boost, chips, all accounts across two Caches, "Search older mail" (the
+// full search stream, merged, never filling the Cache), recent
 // searches, index integrity under the triggers, and the 50,000-thread budget.
 
 import { describe, expect, test } from "bun:test";
-import type { MessageBodiesPage, MessageBodyRow } from "@monday/shared";
+import type { FullSearchRequest, Thread } from "@monday/shared";
+import { compileMatcher, parseQuery, peopleText } from "@monday/shared";
 import { bunDriver } from "../store/bun-driver.ts";
 import { createFakeStore, type FakeStore } from "../store/fake.ts";
 import { FTS_MERGE_SQL } from "../store/store.ts";
 import { AOIFE, generateMailbox, KENJI, ME, mailboxStatements, plant } from "./fixture.ts";
-import { createSearch, DEFAULT_SEARCH_SETTINGS, type SearchSource } from "./index.ts";
+import {
+  createSearch,
+  DEFAULT_SEARCH_SETTINGS,
+  FullSearchError,
+  type FullSearchStream,
+  mergeHits,
+  type SearchSource,
+} from "./index.ts";
 
 const NOW = new Date("2026-09-16T10:00:00");
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000).toISOString();
@@ -304,107 +313,199 @@ describe("all accounts", () => {
 });
 
 describe("search older mail", () => {
-  /** A Server that holds every body the fixture has, paged newest first. */
-  function fakeBodies(box: ReturnType<typeof fixture>, log: string[] = []) {
-    return async (
-      _workspaceId: string,
-      range: { after: string | null; before: string | null; limit: number },
-    ): Promise<MessageBodiesPage> => {
-      log.push(`${range.after ?? "-"}..${range.before ?? "-"}/${range.limit}`);
-      const inRange = box.messages
-        .filter(
-          (m) =>
-            (range.after === null || m.date >= range.after) &&
-            (range.before === null || m.date < range.before),
-        )
-        .sort((x, y) => y.date.localeCompare(x.date));
-      const page = inRange.slice(0, range.limit);
-      const bodies: MessageBodyRow[] = page.map((m) => ({
-        id: m.id,
-        threadId: m.threadId,
-        date: m.date,
-        text: m.bodyText ?? "",
-        html: null,
-        snippet: (m.bodyText ?? "").slice(0, 40),
-      }));
-      const last = page[page.length - 1];
-      return {
-        bodies,
-        cursor: inRange.length > page.length && last ? last.date : null,
-        total: inRange.length,
-      };
+  /**
+   * A Server's full search over the whole fixture, bodies included: the
+   * shared matcher over every Thread, newest first, a progress line per
+   * `page` Threads, stopping at the limit with a cursor.
+   */
+  function fakeFullSearch(box: ReturnType<typeof fixture>, log: FullSearchRequest[] = []) {
+    const stream: FullSearchStream = async (request, onEvent, signal) => {
+      log.push(request);
+      const q = parseQuery(request.q, request.now ? { now: new Date(request.now) } : {});
+      const match = compileMatcher(q);
+      const threads = [...box.threads].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+      const total = threads.length;
+      let scanned = request.cursor ? Number(request.cursor) : 0;
+      let hits = 0;
+      const limit = request.limit ?? 100;
+      onEvent({ type: "progress", scanned, total, cursor: request.cursor ?? null });
+      for (const t of threads.slice(scanned)) {
+        if (signal?.aborted) return;
+        scanned += 1;
+        const messages = box.messages
+          .filter((m) => m.threadId === t.id)
+          .map((m) => ({
+            sender: `${m.from.name} ${m.from.email}`,
+            recipients: peopleText([...m.to, ...m.cc]),
+            body: m.bodyText ?? "",
+          }));
+        const r = match({ subject: t.subject, participants: peopleText(t.participants), messages });
+        if (r.matched) {
+          hits += 1;
+          onEvent({ type: "hit", thread: t, snippet: `found ${t.id}` });
+          if (hits >= limit) {
+            onEvent({
+              type: "done",
+              scanned,
+              total,
+              hits,
+              cursor: String(scanned),
+              reason: "limit",
+              decrypted: 0,
+              elapsedMs: 1,
+            });
+            return;
+          }
+        }
+        if (scanned % 10 === 0)
+          onEvent({ type: "progress", scanned, total, cursor: String(scanned) });
+      }
+      onEvent({
+        type: "done",
+        scanned,
+        total,
+        hits,
+        cursor: null,
+        reason: "exhausted",
+        decrypted: 0,
+        elapsedMs: 1,
+      });
     };
+    return stream;
   }
 
-  test("is offered when the query has body terms and bodies are missing in range, and pulling them updates results", async () => {
+  /** The Cache holds headers for everything but bodies only for the last 100 days. */
+  async function windowed() {
     const full = fixture();
-    // The Cache holds headers for everything but bodies only for the last 100 days.
     const cache = structuredClone(full);
     for (const m of cache.messages) if (m.date < daysAgo(100)) delete m.bodyText;
     const { store } = await open("ws-a", cache);
-    const log: string[] = [];
-    const search = moduleOver([{ store, account: "a" }], {
-      fetchBodies: fakeBodies(full, log),
-      settings: () => ({ ...DEFAULT_SEARCH_SETTINGS, olderBatch: 25 }),
-    });
+    return { full, store };
+  }
 
+  const bodiesInCache = async (store: FakeStore["store"]) => {
+    const [row] = await store.query<{ n: number }>(
+      "select count(*) as n from messages where body_text is not null",
+    );
+    return Number(row?.n ?? 0);
+  };
+
+  test("is offered when the query has body terms and bodies are missing in range", async () => {
+    const { full, store } = await windowed();
+    const search = moduleOver([{ store, account: "a" }], { fullSearch: fakeFullSearch(full) });
     const before = await search.search("pro-rata", { workspace: "ws-a" });
     expect(ids(before.hits)).toEqual([]);
     expect(before.older.length).toBe(1);
     expect(before.older[0]?.missing).toBeGreaterThan(0);
-
-    // A header-only query never offers the pull; neither does a query whose range is covered.
+    // A header-only query never offers it; neither does a query whose range is covered.
     expect((await search.search("from:kenji", { workspace: "ws-a" })).older).toEqual([]);
     expect((await search.search("zebra newer_than:30d", { workspace: "ws-a" })).older).toEqual([]);
+  });
 
+  test("runs the query on the Server, streams hits and progress, and writes no body to the Cache", async () => {
+    const { full, store } = await windowed();
+    const log: FullSearchRequest[] = [];
+    const search = moduleOver([{ store, account: "tejas@genai-labs.io" }], {
+      fullSearch: fakeFullSearch(full, log),
+    });
+    const held = await bodiesInCache(store);
+    const hits: string[] = [];
     const progress: number[] = [];
-    const older = before.older[0];
-    if (!older) throw new Error("no offer");
-    const landed = await search.pullOlder(older, (p) => progress.push(p.done));
-    expect(landed).toBe(older.missing);
-    expect(progress.length).toBeGreaterThan(1);
-    expect(progress[progress.length - 1]).toBe(older.missing);
-    expect(log.length).toBeGreaterThan(1);
-
-    const after = await search.search("pro-rata", { workspace: "ws-a" });
-    expect(ids(after.hits)).toEqual(["kenji-old"]);
-    expect(after.older).toEqual([]);
+    const done = await search.searchOlder("pro-rata", {
+      workspace: "ws-a",
+      onHit: (h) => {
+        hits.push(h.thread.id);
+        expect(h.account).toBe("tejas@genai-labs.io");
+        expect(h.snippet).toBe(`found ${h.thread.id}`);
+      },
+      onProgress: (p) => progress.push(p.scanned),
+    });
+    expect(hits).toEqual(["kenji-old"]);
+    expect(done).toMatchObject({ reason: "exhausted", cursor: null });
+    expect(progress[0]).toBe(0);
+    expect(progress.length).toBeGreaterThan(2);
+    // The query goes as typed, with the clock the relative dates count from.
+    expect(log[0]).toMatchObject({ workspace: "ws-a", q: "pro-rata", now: NOW.toISOString() });
+    // Nothing was copied into the Cache: the local search still cannot see it.
+    expect(await bodiesInCache(store)).toBe(held);
+    expect(ids((await search.search("pro-rata", { workspace: "ws-a" })).hits)).toEqual([]);
   });
 
-  test("a date-bounded query only asks for bodies in its range", async () => {
-    const full = fixture();
-    const cache = structuredClone(full);
-    for (const m of cache.messages) delete m.bodyText;
-    const { store } = await open("ws-a", cache);
-    const log: string[] = [];
-    const search = moduleOver([{ store, account: "a" }], { fetchBodies: fakeBodies(full, log) });
-    const r = await search.search("zebra older_than:100d newer_than:400d", { workspace: "ws-a" });
-    const older = r.older[0];
-    if (!older) throw new Error("no offer");
-    expect(older.after).not.toBeNull();
-    expect(older.before).not.toBeNull();
-    // The offer spans the gap inside the asked range, never the whole mailbox.
-    expect((older.after as string) >= daysAgo(400)).toBe(true);
-    expect((older.before as string) <= daysAgo(99)).toBe(true);
-    await search.pullOlder(older);
-    expect(log[0]).toBe(`${older.after}..${older.before}/${DEFAULT_SEARCH_SETTINGS.olderBatch}`);
-    const [row] = await store.query<{ n: number }>(
-      "select count(*) as n from messages where body_text is not null",
+  test("stops at the limit with a cursor, and searching further resumes below it", async () => {
+    const { full, store } = await windowed();
+    const log: FullSearchRequest[] = [];
+    const search = moduleOver([{ store, account: "a" }], { fullSearch: fakeFullSearch(full, log) });
+    const first: string[] = [];
+    const done = await search.searchOlder("zebra", {
+      workspace: "ws-a",
+      limit: 2,
+      onHit: (h) => first.push(h.thread.id),
+    });
+    expect(first).toEqual(["fresh", "stale"]);
+    expect(done?.reason).toBe("limit");
+    const rest: string[] = [];
+    const end = await search.searchOlder("zebra", {
+      workspace: "ws-a",
+      limit: 2,
+      cursor: done?.cursor ?? null,
+      onHit: (h) => rest.push(h.thread.id),
+    });
+    expect(log[1]?.cursor).toBe(done?.cursor ?? "");
+    expect(rest).toEqual(["exact"]);
+    expect(end?.reason).toBe("exhausted");
+  });
+
+  test("an aborted search resolves null; a locked Server is a FullSearchError", async () => {
+    const { full, store } = await windowed();
+    const search = moduleOver([{ store, account: "a" }], { fullSearch: fakeFullSearch(full) });
+    const abort = new AbortController();
+    const seen: string[] = [];
+    const r = await search.searchOlder("the", {
+      workspace: "ws-a",
+      signal: abort.signal,
+      onHit: (h) => {
+        seen.push(h.thread.id);
+        abort.abort();
+      },
+    });
+    expect(r).toBeNull();
+    expect(seen.length).toBe(1);
+
+    const locked = moduleOver([{ store, account: "a" }], {
+      fullSearch: async () => {
+        throw Object.assign(new Error("locked"), { status: 423 });
+      },
+    });
+    const error = await locked.searchOlder("zebra", { workspace: "ws-a" }).catch((e) => e);
+    expect(error).toBeInstanceOf(FullSearchError);
+    expect((error as FullSearchError).code).toBe("locked");
+  });
+
+  test("the Server's hits merge with the local ones: each Thread once, newest first", () => {
+    const at = (id: string, days: number, snippet = "") => ({
+      thread: { id, lastActivity: daysAgo(days) } as Thread,
+      tags: [],
+      workspaceId: "ws-a",
+      account: "a",
+      snippet,
+      score: 1,
+      pinned: false,
+    });
+    const merged = mergeHits(
+      [at("b", 5, "local"), at("a", 1)],
+      [at("b", 5, "server"), at("c", 300), at("d", 3)],
     );
-    expect(Number(row?.n)).toBeGreaterThan(0);
-    expect(
-      ids(
-        (await search.search("zebra older_than:100d newer_than:400d", { workspace: "ws-a" })).hits,
-      ),
-    ).toEqual(["stale"]);
+    expect(merged.map((h) => h.thread.id)).toEqual(["a", "d", "b", "c"]);
+    expect(merged.find((h) => h.thread.id === "b")?.snippet).toBe("local");
   });
 
-  test("without a body route the offer is never made", async () => {
+  test("without a full search the offer is never made", async () => {
     const cache = fixture();
     for (const m of cache.messages) delete m.bodyText;
     const { store } = await open("ws-a", cache);
     const search = moduleOver([{ store, account: "a" }]);
     expect((await search.search("zebra", { workspace: "ws-a" })).older).toEqual([]);
+    expect(await search.searchOlder("zebra", { workspace: "ws-a" })).toBeNull();
   });
 });
 

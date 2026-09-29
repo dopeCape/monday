@@ -34,6 +34,8 @@ import type {
   ExternalKeyInput,
   ExternalPending,
   FirstSyncProgress,
+  FullSearchEvent,
+  FullSearchRequest,
   GroupInput,
   GroupView,
   HeaderSearchPage,
@@ -387,6 +389,46 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         request<HeaderSearchPage>(
           `/search/headers?${new URLSearchParams({ workspace: workspaceId, q, limit: String(limit) })}`,
         ),
+      /**
+       * The full search over the whole mailbox on the Server (ADR 0015),
+       * only when the user asks: every NDJSON line to `onEvent` as it
+       * arrives. Aborting `signal` closes the request, and the Server stops
+       * scanning. 423 (an ApiError) when the Server is locked.
+       */
+      full: async (
+        body: FullSearchRequest,
+        onEvent: (event: FullSearchEvent) => void,
+        signal?: AbortSignal,
+      ): Promise<void> => {
+        const res = await raw("/search/full", {
+          ...json("POST", body),
+          headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+          ...(signal ? { signal } : {}),
+        });
+        const reader = res.body?.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const flush = () => {
+          let at = buffer.indexOf("\n");
+          while (at >= 0) {
+            const line = buffer.slice(0, at).trim();
+            buffer = buffer.slice(at + 1);
+            at = buffer.indexOf("\n");
+            if (line) onEvent(JSON.parse(line) as FullSearchEvent);
+          }
+        };
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+            flush();
+            if (done) break;
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      },
     },
     /** Shared provider keys (ADR 0007): "Let the server use this key". The Server never returns a key. */
     keys: {

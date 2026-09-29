@@ -14,6 +14,18 @@ Behaviors a tester can check. Every default below is a Setting (ADR 0004) unless
 - A Thread is in exactly one Section and at most one Group plus one Sub-group.
 - **The Filter menu** in the list header narrows whichever list is shown (the Inbox, a Section, a Group, a Mail folder, the search results): Unread, Starred, Has attachments, Needs a reply, a Year, a Person (a sender), a Domain (a sender's domain) and a Date (this week, this month, or two days picked). Year, Person and Domain list their choices from the whole Cache with counts, years newest first, people and domains most mail first (`inbox.filter_facet_limit`), typed ahead over the whole Cache. Picks stack as chips under the header and combine with AND; a chip's click removes it, Escape removes the last one, Clear all removes every one. The list and its count come from the Cache, not from the Threads held in memory, and grow on scroll like the Inbox. Chips last for the session, per Workspace. The menu opens from its key (`list.filter`: Shift-F in Vim and Gmail) and from the palette.
 
+## Search
+
+- **Typing answers locally.** The field in the list header searches the Cache as the user types (ADR 0011): Gmail-style operators, one ranked list of Threads in place of the stream, the match marked. Nothing on that path touches the network. Up to `search.results_limit` results.
+- **Search older mail.** When the query has words to find inside messages and the Cache lacks bodies in the asked range, a line under the header says only mail on this computer was searched (`strings.search.older_help`) with a "Search older mail" button. The button runs the same query as a full search on the Server over the whole mailbox (ADR 0015): archived mail included, the trash left out, newest first.
+  - While it runs the line reads "Searched 12,000 of 56,000" (`strings.search.older_progress`) with Stop. Hits join the list as they arrive: each Thread once, local and Server hits together, newest activity first.
+  - It stops by itself after `search.full_limit` results; the line reads "Searched 30,000 of 56,000. 100 found." (`strings.search.older_stopped`) with "Search further", which carries on below where it stopped. Stop leaves the same line and the same button; the results found stay.
+  - At the end the line reads "Searched all 56,000. 12 found." (`strings.search.older_done`). A locked Server says so (`strings.search.older_locked`) and nothing is searched.
+  - Nothing is copied into the Cache. Opening a result opens the Thread like any Thread outside the Cache window: its body is fetched on open.
+  - Changing the query stops the full search and drops its results.
+- The Agent's `search_threads` runs the same full search when asked about older mail or words inside messages (its `full` parameter).
+- The Server keeps no index of body text: it decrypts each candidate in memory, matches, and discards the text (ADR 0015). How much it reads at a time is `search.full_page_size` and `search.full_concurrency`.
+
 ## Rows
 
 Row fields are a Setting; defaults per density:
