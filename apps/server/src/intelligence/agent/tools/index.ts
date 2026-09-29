@@ -13,6 +13,7 @@ import { tierOf } from "@monday/shared";
 import { z } from "zod";
 import type { ToolSpec } from "../../runtime/index.ts";
 import type { ActivityLog, ActivityRow } from "../activity.ts";
+import { undoBoard } from "./boards.ts";
 import { findTool, TOOL_CATALOG, type ToolContext, type ToolSettings } from "./catalog.ts";
 import type { ToolExtensions } from "./extensions.ts";
 import { undoTemplate } from "./templates.ts";
@@ -529,6 +530,8 @@ export async function replayUndo(
     }
     case "template":
       return undoTemplate(extensions?.templates, undo);
+    case "board":
+      return undoBoard(extensions?.boards, undo);
     case "example": {
       const tune = extensions?.tune;
       if (!tune) return "Cannot undo: Examples cannot be changed from this host.";

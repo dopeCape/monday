@@ -41,6 +41,8 @@ export interface NavLabels {
   compose: string;
   mail: string;
   groups: string;
+  /** The heading over the Boards; absent means "Boards". */
+  boards?: string | undefined;
   /** The heading over the Sections; absent means "Sections". */
   sections?: string | undefined;
   automation: string;
@@ -52,6 +54,7 @@ export const DEFAULT_NAV_LABELS: NavLabels = {
   compose: "New message",
   mail: "Mail",
   groups: "Groups",
+  boards: "Boards",
   sections: "Sections",
   automation: "Automation",
   settings: "Settings",
@@ -69,6 +72,8 @@ export interface NavSidebarProps {
   counts?: Readonly<Record<string, number>> | undefined;
   /** Icons for top-level Groups; Sub-groups never carry one. */
   groupIcon?: (group: Group) => IconComponent | undefined;
+  /** The pinned Boards, above Groups, in the user's order; none hides the block. */
+  boards?: readonly NavItem[] | undefined;
   /** Every Section, under Groups; none hides the block. */
   sections?: readonly NavItem[] | undefined;
   /**
@@ -123,6 +128,7 @@ export function NavSidebar({
   groups,
   counts,
   groupIcon,
+  boards,
   sections,
   sectionsHint,
   automation,
@@ -176,6 +182,13 @@ export function NavSidebar({
       {calendar ? (
         <Item item={withCount(calendar)} on={active === calendar.key} onSelect={onSelect} />
       ) : null}
+
+      {boards?.length ? (
+        <div className="nav-sec">{labels.boards ?? DEFAULT_NAV_LABELS.boards}</div>
+      ) : null}
+      {boards?.map((b) => (
+        <Item key={b.key} item={withCount(b)} on={active === b.key} onSelect={onSelect} />
+      ))}
 
       {top.length ? <div className="nav-sec">{labels.groups}</div> : null}
       {top.map((g) => (

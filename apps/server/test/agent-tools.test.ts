@@ -166,6 +166,12 @@ describe("the tool catalog", () => {
       update_judgment: "reversible",
       add_example: "reversible",
       list_templates: "read",
+      // Slice 40: Boards; drafting and testing change nothing until the user pins it.
+      list_boards: "read",
+      create_board: "read",
+      revise_board: "read",
+      update_board: "reversible",
+      delete_board: "reversible",
       use_template: "reversible",
       create_template: "reversible",
       update_template: "reversible",

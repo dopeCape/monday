@@ -84,6 +84,7 @@ import type {
   WorkflowInputRaw,
   WorkflowView,
 } from "@monday/shared";
+import { boardsApi } from "../boards/api.ts";
 import { templatesApi } from "../templates/api.ts";
 
 export interface ServerTarget {
@@ -542,6 +543,8 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
     },
     /** Templates and their Placeholders (docs/spec/templates.md). */
     templates: templatesApi(request),
+    /** Boards (docs/spec/boards.md). */
+    boards: boardsApi(request),
     judge: {
       /**
        * The palette's typed sentence as one Judgment (slice 27): the reading

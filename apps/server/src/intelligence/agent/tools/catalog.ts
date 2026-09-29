@@ -19,6 +19,7 @@ import type {
 } from "@monday/shared";
 import { isSettingKey, PREVIEW_LIST_MAX, settingsSchema, validateSetting } from "@monday/shared";
 import { z } from "zod";
+import { BOARD_TOOLS } from "./boards.ts";
 import { COMPOSE_TOOLS } from "./compose.ts";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
@@ -751,6 +752,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   ...ONBOARDING_TOOLS,
   ...ORGANIZE_TOOLS,
   ...TUNE_TOOLS,
+  ...BOARD_TOOLS,
   ...COMPOSE_TOOLS,
   ...TEMPLATE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];

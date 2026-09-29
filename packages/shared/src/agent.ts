@@ -3,6 +3,7 @@
 // the events a Session streams, and the Activity log rows. Runtime-neutral so
 // the Server's tool server and a Device's ToolHost share one vocabulary.
 
+import type { BoardDraft } from "./board/types.ts";
 import type {
   CalendarDraft,
   Draft,
@@ -138,6 +139,14 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   create_group: "reversible",
   update_group: "reversible",
   organize_existing: "reversible",
+  // Boards (slice 40, docs/spec/boards.md): drafting and testing a Board reads
+  // and changes nothing until the user clicks Pin board or Apply on the card;
+  // a name or layout change applies with Undo, and so does a delete.
+  list_boards: "read",
+  create_board: "read",
+  revise_board: "read",
+  update_board: "reversible",
+  delete_board: "reversible",
   // Tuning the judgments behind routing and Sections from the user's feedback
   // (ADR 0012): explaining and listing read what is stored, a test re-asks the
   // judge on recent Threads without changing anything, and an update or an
@@ -209,7 +218,24 @@ export type ToolPreview =
     }
   /** A Workflow the Agent creates, changes or switches: the card draws its flow and, for an edit, what changed. */
   | WorkflowPreview
+  /** A Board the Agent drafted and tried, changed or deleted: the card shows the tried Threads and Pin board or Apply. */
+  | BoardPreview
   | { kind: "text"; text: string };
+
+/**
+ * The Board card (create_board, revise_board, update_board, delete_board):
+ * the draft as tested when the call finished (the card reads the live draft
+ * by id for corrections, Pin board and Apply), or the Board a name, layout
+ * or delete changed.
+ */
+export interface BoardPreview {
+  kind: "board";
+  action: "create" | "revise" | "update" | "delete";
+  draftId: Id | null;
+  boardId: Id | null;
+  name: string;
+  draft: BoardDraft | null;
+}
 
 /**
  * The Workflow card (create_workflow, update_workflow, enable_workflow,
@@ -316,6 +342,8 @@ export type UndoRecord =
    * or puts back the Example the Thread already was for that Group.
    */
   | { kind: "example"; threadId: Id; groupId: Id; previous: { positive: boolean } | null }
+  /** A Board the Agent changed or deleted (slice 40): Undo puts the version back, or restores it. */
+  | { kind: "board"; action: "update" | "delete"; boardId: Id; previous: number | null }
   /**
    * Templates the Agent wrote, changed or deleted (slice 37): Undo deletes
    * what was created, puts the previous words back, or restores what was deleted.

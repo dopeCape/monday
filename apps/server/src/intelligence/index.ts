@@ -31,6 +31,7 @@ import {
   scopeWordsFrom,
 } from "@monday/shared";
 import { asc, eq } from "drizzle-orm";
+import { createBoardStore } from "../boards/index.ts";
 import type { Db } from "../db/client.ts";
 import { accounts, workspaces } from "../db/schema.ts";
 import { createDrafts, type Drafts } from "../drafts/index.ts";
@@ -58,6 +59,7 @@ import {
   createSessionStore,
   type ToolExtensions,
 } from "./agent/index.ts";
+import { type BoardIntelligence, createBoardIntelligence } from "./boards/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { type ComposeAssist, createComposeAssist } from "./compose-assist.ts";
 import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts";
@@ -304,6 +306,8 @@ export interface Intelligence {
   guard: GuardSeam;
   /** Templates, their Placeholders filled from a Thread, and what the judge adds (slices 36 to 38). */
   templates: TemplateIntelligence;
+  /** Boards (docs/spec/boards.md, slices 39 and 40): the store, the Agent's drafts and their tests. */
+  boards: BoardIntelligence;
   /** The Brief verifier (slice 27). */
   verify: BriefVerifier;
   /** The batching measurement (slice 28), Sidecar only; its route checks where it runs. */
@@ -603,7 +607,25 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       automatedSenders: s["briefs.automated_senders"],
     };
   };
-  const signals = createSignals({ db, mailstore, runtime, now, log, level });
+  const boardStore = createBoardStore({ db, mailstore, now });
+  const signals = createSignals({
+    db,
+    mailstore,
+    runtime,
+    now,
+    log,
+    level,
+    boardSignals: (workspaceId) => boardStore.signalsWanted(workspaceId),
+  });
+  const boards = createBoardIntelligence({
+    db,
+    mailstore,
+    runtime,
+    signals,
+    store: boardStore,
+    now,
+    log,
+  });
   /**
    * One request for an arriving Thread (slice 33): the Signals it lacks and,
    * when routing places it now, the Group Choice and the speculative
@@ -984,6 +1006,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   });
   extensions.meetings = meetings;
   extensions.templates = templates;
+  extensions.boards = boards;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
@@ -1075,6 +1098,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     composeAssist,
     guard,
     templates,
+    boards,
     verify,
     intent: async (request) => judgeIntent(runtime, request, await intentSettings()),
     meetings,

@@ -194,5 +194,7 @@ export function isStep(call: ToolCall): boolean {
   if (call.tool === ERROR_TOOL || call.status === "waiting") return false;
   // A calendar draft is read-only on the Server but is the turn's answer: always a card.
   if (call.tool === "propose_calendar_draft") return false;
+  // A Board draft is read-only on the Server too; its card is where the user pins it.
+  if (call.tool === "create_board" || call.tool === "revise_board") return false;
   return call.tier === "read-only" || call.builtin === true;
 }

@@ -932,6 +932,8 @@ export const threadRoutes = pgTable(
   (t) => [index("thread_routes_group_idx").on(t.workspaceId, t.groupId)],
 );
 
+/* Boards (docs/spec/boards.md): boards, board_versions, board_drafts in boards-schema.ts. */
+export * from "./boards-schema.ts";
 /*
  * A Thread's Judgments (slice 25) and the judged Sections and custom
  * actions (slice 26) moved into the Signal store (ADR 0014, slice 30):

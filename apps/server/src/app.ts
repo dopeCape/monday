@@ -75,6 +75,7 @@ import type { SyncEngine } from "./providers/sync.ts";
 import { ProviderError } from "./providers/types.ts";
 import { type AccountRoutesOptions, accountRoutes } from "./routes/accounts.ts";
 import { agentRoutes } from "./routes/agent.ts";
+import { boardRoutes } from "./routes/boards.ts";
 import { calendarRoutes } from "./routes/calendar.ts";
 import { changesRoutes } from "./routes/changes.ts";
 import { devicesRoutes } from "./routes/devices.ts";
@@ -552,6 +553,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", routingRoutes(intelligence));
   app.route("/", agentRoutes(intelligence.agent));
   app.route("/", templateRoutes(intelligence.templates));
+  app.route("/", boardRoutes(intelligence.boards));
   app.route("/", workflowRoutes(intelligence.workflows));
   // Before the provider OAuth wizard routes, whose /oauth/:provider/* must not catch these.
   app.route(

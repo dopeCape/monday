@@ -241,7 +241,9 @@ export type ContentKind =
   /** A Template's name, fits-when, subject, body and Placeholders (docs/spec/templates.md). */
   | "template"
   /** A Thread's Facts drawn from its text (amounts, addresses, links) and the picked amount (slice 32). */
-  | "facts";
+  | "facts"
+  /** A Board document, its drafts and the user's placements: they name people and domains (docs/spec/boards.md). */
+  | "board";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read
@@ -395,7 +397,9 @@ export type Task =
   | "draft-in-voice"
   | "summarize"
   /** Drafting a Template from example Messages (docs/spec/templates.md). */
-  | "template";
+  | "template"
+  /** Writing and revising a Board document from a sentence (docs/spec/boards.md). */
+  | "board";
 
 export type Tier = "always-ask" | "reversible" | "read-only";
 

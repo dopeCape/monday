@@ -42,6 +42,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   Fragment,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -230,6 +231,14 @@ export interface InboxProps {
    */
   folder?: FolderKey | undefined;
   /**
+   * A Board lens (docs/spec/boards.md): the Board's Threads in Lane order in
+   * the list area, rendered by the Board's component, with the Inbox's rows,
+   * keys, reader, row actions and multi-select.
+   */
+  board?: BoardLens | undefined;
+  /** Panels above the stream beside the Today panel: the `board` Panel (boards.panel). */
+  panels?: ReactNode | undefined;
+  /**
    * The judge behind the palette's typed sentences (slice 27, ADR 0012).
    * Absent, or answering null, the palette behaves as before.
    */
@@ -239,6 +248,24 @@ export interface InboxProps {
    * reply text for a chip. Absent, no meeting chips.
    */
   meetings?: MeetingsSeam | null | undefined;
+}
+
+/** What the Board screen hands the Inbox: its Threads in Lane order, and how to draw them. */
+export interface BoardLens {
+  id: string;
+  name: string;
+  /** Every Thread the Board shows, in the order its component shows them (Lane by Lane). */
+  threads: readonly Thread[];
+  /** The header's own controls: the menu, the count line. */
+  header: ReactNode;
+  /** Above the rows: the check bar, the tighten offer. */
+  above?: ReactNode;
+  /** Draws the component, with the Inbox's own row for a Thread. */
+  render(ctx: {
+    row(thread: Thread): ReactNode;
+    focus: string | null;
+    open(threadId: string): void;
+  }): ReactNode;
 }
 
 /** An action that takes Threads out of the list shown ("unarchive" out of Archive). */
@@ -461,6 +488,8 @@ function InboxBody({
   folder,
   judge,
   meetings,
+  board,
+  panels,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -568,6 +597,8 @@ function InboxBody({
       : { id: section, name: section };
   }, [section, settings]);
   const threads = useMemo(() => {
+    // A Board orders its own Threads, Lane by Lane.
+    if (board) return board.threads;
     const list = lens
       ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
       : sectionLens
@@ -577,7 +608,11 @@ function InboxBody({
     if (folder === "snoozed") return list.map((t) => wakeSnippet(t, settings, now));
     if (folder) return list;
     return newestFirst(list);
-  }, [allThreads, lens, sectionLens, folder, settings, now]);
+  }, [allThreads, lens, sectionLens, folder, settings, now, board]);
+  const boardThreads = useMemo(
+    () => (board ? new Map(board.threads.map((th) => [th.id, th])) : null),
+    [board],
+  );
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
     [tags],
@@ -941,7 +976,7 @@ function InboxBody({
     openSearch();
   }, [searchRequest, openSearch]);
 
-  const thread = focus ? inbox.thread(focus) : undefined;
+  const thread = focus ? (inbox.thread(focus) ?? boardThreads?.get(focus)) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
   // The rows next to the one in hand stay warm, so j and k (or a click on a
@@ -2061,6 +2096,7 @@ function InboxBody({
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
   const listTitle =
+    board?.name ??
     lens?.name ??
     sectionLens?.name ??
     (folder ? t(`strings.nav.${folder}`) : t("strings.inbox.title"));
@@ -2350,56 +2386,61 @@ function InboxBody({
       >
         {selectionBar ?? (
           <ColHead title={listTitle} count={headCount}>
-            <label className={`list-search${searching ? " on" : ""}`}>
-              <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
-              <input
-                ref={searchInput}
-                type="search"
-                value={searchText}
-                placeholder={t("strings.inbox.search.placeholder")}
-                aria-label={t("strings.inbox.search.placeholder")}
-                spellCheck={false}
-                onChange={(e) => setSearchText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === "ArrowDown") {
-                    e.preventDefault();
-                    searchInput.current?.blur();
-                    if (e.key === "Enter" && order[0]) {
-                      if (search && searching) void search.remember(searchText);
-                      open(focus && order.includes(focus) ? focus : order[0]);
-                    }
-                  }
-                }}
-              />
-              {searching ? (
-                <button
-                  type="button"
-                  className="search-clear"
-                  title={t("strings.inbox.search.clear")}
-                  aria-label={t("strings.inbox.search.clear")}
-                  onClick={closeSearch}
-                >
-                  <XIcon />
-                </button>
-              ) : null}
-            </label>
-            {stream ? (
-              <Btn
-                on={filtering}
-                className="filter-btn"
-                aria-haspopup="menu"
-                title={`${t("strings.inbox.filter")} (${key("list.filter")})`}
-                onClick={() => openPicker("filter", [])}
-              >
-                <FunnelSimpleIcon />{" "}
-                {filterChips.length === 1 && firstChip
-                  ? chipLabel(firstChip, t, now)
-                  : t("strings.inbox.filter")}
-                {filterChips.length > 1 ? (
-                  <span className="filter-n">{filterChips.length}</span>
+            {board ? board.header : null}
+            {board ? null : (
+              <>
+                <label className={`list-search${searching ? " on" : ""}`}>
+                  <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
+                  <input
+                    ref={searchInput}
+                    type="search"
+                    value={searchText}
+                    placeholder={t("strings.inbox.search.placeholder")}
+                    aria-label={t("strings.inbox.search.placeholder")}
+                    spellCheck={false}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === "ArrowDown") {
+                        e.preventDefault();
+                        searchInput.current?.blur();
+                        if (e.key === "Enter" && order[0]) {
+                          if (search && searching) void search.remember(searchText);
+                          open(focus && order.includes(focus) ? focus : order[0]);
+                        }
+                      }
+                    }}
+                  />
+                  {searching ? (
+                    <button
+                      type="button"
+                      className="search-clear"
+                      title={t("strings.inbox.search.clear")}
+                      aria-label={t("strings.inbox.search.clear")}
+                      onClick={closeSearch}
+                    >
+                      <XIcon />
+                    </button>
+                  ) : null}
+                </label>
+                {stream ? (
+                  <Btn
+                    on={filtering}
+                    className="filter-btn"
+                    aria-haspopup="menu"
+                    title={`${t("strings.inbox.filter")} (${key("list.filter")})`}
+                    onClick={() => openPicker("filter", [])}
+                  >
+                    <FunnelSimpleIcon />{" "}
+                    {filterChips.length === 1 && firstChip
+                      ? chipLabel(firstChip, t, now)
+                      : t("strings.inbox.filter")}
+                    {filterChips.length > 1 ? (
+                      <span className="filter-n">{filterChips.length}</span>
+                    ) : null}
+                  </Btn>
                 ) : null}
-              </Btn>
-            ) : null}
+              </>
+            )}
           </ColHead>
         )}
         <FilterChips chips={filterChips} t={t} now={now} onChange={setFilterChips} />
@@ -2458,128 +2499,142 @@ function InboxBody({
             onLeft={pickerExit.onEnd}
           />
         ) : null}
-        <VirtualList
-          role="listbox"
-          aria-label={listTitle}
-          items={items}
-          render={renderItem}
-          overscan={s["inbox.overscan_rows"]}
-          focusKey={focus}
-          scrollKey={searching ? "search" : `stream:${listKey}|${needsReplyOn}`}
-          onNearEnd={searching ? undefined : readMore}
-          nearEnd={growAt}
-          layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
-          before={
-            <>
-              {syncing ? (
-                <div
-                  className="sync"
-                  role="progressbar"
-                  aria-valuenow={syncing.done}
-                  aria-valuemax={syncing.total}
-                >
-                  <span
-                    className="bar"
-                    style={{
-                      width: `${syncing.total ? Math.min(100, (100 * syncing.done) / syncing.total).toFixed(2) : 0}%`,
-                    }}
-                  />
-                  {fill(t("strings.inbox.syncing"), {
-                    done: syncing.done.toLocaleString("en-US"),
-                    total: syncing.total.toLocaleString("en-US"),
-                  })}
-                </div>
-              ) : null}
-              {searching && olderRun ? (
-                <div
-                  className="search-older"
-                  role="status"
-                  aria-live="polite"
-                  data-state={olderRun.status}
-                >
-                  <span>
-                    {olderRun.status === "error"
-                      ? olderRun.error
-                      : fill(
-                          t(
-                            olderRun.status === "running"
-                              ? "strings.search.older_progress"
-                              : olderRun.status === "done"
-                                ? "strings.search.older_done"
-                                : "strings.search.older_stopped",
-                          ),
-                          {
-                            scanned: olderRun.scanned.toLocaleString("en-US"),
-                            total: olderRun.total.toLocaleString("en-US"),
-                            n: olderRun.hits.length.toLocaleString("en-US"),
-                          },
-                        )}
-                  </span>
-                  {olderRun.status === "running" ? (
-                    <Btn sm outline className="older-stop" onClick={stopOlder}>
-                      {t("strings.search.older_stop")}
-                    </Btn>
-                  ) : olderRun.status === "paused" && olderRun.cursor ? (
-                    <Btn
-                      sm
-                      outline
-                      className="older-further"
-                      onClick={() => void searchOlder(olderRun.cursor)}
-                    >
-                      {t("strings.search.older_further")}
-                    </Btn>
-                  ) : olderRun.status === "error" ? (
-                    <Btn
-                      sm
-                      outline
-                      className="older-further"
-                      onClick={() => void searchOlder(olderRun.cursor)}
-                    >
-                      {t("strings.search.older")}
-                    </Btn>
-                  ) : null}
-                </div>
-              ) : searching && olderMissing > 0 ? (
-                <div className="search-older">
-                  <span>{t("strings.search.older_help")}</span>
-                  <Btn sm outline className="older-start" onClick={() => void searchOlder(null)}>
-                    {t("strings.search.older")}
-                  </Btn>
-                </div>
-              ) : null}
-              {calendar && s["calendar.today_panel"] && !searching ? (
-                <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
-              ) : null}
-              {items.length === 0 && !syncing ? (
-                lens && !searching && !filtering ? (
-                  // A Group routes new mail as it arrives; what was already here moves
-                  // only when it is sorted, which the Agent does with a preview first.
-                  <div className="empty-line group-empty">
-                    <span>{fill(t("strings.inbox.group_empty"), { group: lens.name })}</span>
-                    {!aiOff ? (
+        {board ? (
+          <div className="board-body" role="listbox" aria-label={listTitle} tabIndex={-1}>
+            {board.above}
+            {board.render({
+              row: (th) => renderItem({ key: th.id, row: { thread: th, leaving: false } }),
+              focus,
+              open: openAnywhere,
+            })}
+          </div>
+        ) : (
+          <VirtualList
+            role="listbox"
+            aria-label={listTitle}
+            items={items}
+            render={renderItem}
+            overscan={s["inbox.overscan_rows"]}
+            focusKey={focus}
+            scrollKey={searching ? "search" : `stream:${listKey}|${needsReplyOn}`}
+            onNearEnd={searching ? undefined : readMore}
+            nearEnd={growAt}
+            layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
+            before={
+              <>
+                {syncing ? (
+                  <div
+                    className="sync"
+                    role="progressbar"
+                    aria-valuenow={syncing.done}
+                    aria-valuemax={syncing.total}
+                  >
+                    <span
+                      className="bar"
+                      style={{
+                        width: `${syncing.total ? Math.min(100, (100 * syncing.done) / syncing.total).toFixed(2) : 0}%`,
+                      }}
+                    />
+                    {fill(t("strings.inbox.syncing"), {
+                      done: syncing.done.toLocaleString("en-US"),
+                      total: syncing.total.toLocaleString("en-US"),
+                    })}
+                  </div>
+                ) : null}
+                {searching && olderRun ? (
+                  <div
+                    className="search-older"
+                    role="status"
+                    aria-live="polite"
+                    data-state={olderRun.status}
+                  >
+                    <span>
+                      {olderRun.status === "error"
+                        ? olderRun.error
+                        : fill(
+                            t(
+                              olderRun.status === "running"
+                                ? "strings.search.older_progress"
+                                : olderRun.status === "done"
+                                  ? "strings.search.older_done"
+                                  : "strings.search.older_stopped",
+                            ),
+                            {
+                              scanned: olderRun.scanned.toLocaleString("en-US"),
+                              total: olderRun.total.toLocaleString("en-US"),
+                              n: olderRun.hits.length.toLocaleString("en-US"),
+                            },
+                          )}
+                    </span>
+                    {olderRun.status === "running" ? (
+                      <Btn sm outline className="older-stop" onClick={stopOlder}>
+                        {t("strings.search.older_stop")}
+                      </Btn>
+                    ) : olderRun.status === "paused" && olderRun.cursor ? (
                       <Btn
                         sm
-                        onClick={() =>
-                          askAgent(fill(t("strings.inbox.group_sort_prompt"), { group: lens.name }))
-                        }
+                        outline
+                        className="older-further"
+                        onClick={() => void searchOlder(olderRun.cursor)}
                       >
-                        {fill(t("strings.inbox.group_sort"), { group: lens.name })}
+                        {t("strings.search.older_further")}
+                      </Btn>
+                    ) : olderRun.status === "error" ? (
+                      <Btn
+                        sm
+                        outline
+                        className="older-further"
+                        onClick={() => void searchOlder(olderRun.cursor)}
+                      >
+                        {t("strings.search.older")}
                       </Btn>
                     ) : null}
                   </div>
-                ) : (
-                  <div className="empty-line">
-                    {searching
-                      ? t("strings.search.empty")
-                      : filtering
-                        ? t("strings.inbox.filter.empty")
-                        : t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
+                ) : searching && olderMissing > 0 ? (
+                  <div className="search-older">
+                    <span>{t("strings.search.older_help")}</span>
+                    <Btn sm outline className="older-start" onClick={() => void searchOlder(null)}>
+                      {t("strings.search.older")}
+                    </Btn>
                   </div>
-                )
-              ) : null}
-            </>
-          }
-        />
+                ) : null}
+                {calendar && s["calendar.today_panel"] && !searching ? (
+                  <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
+                ) : null}
+                {!searching ? panels : null}
+                {items.length === 0 && !syncing ? (
+                  lens && !searching && !filtering ? (
+                    // A Group routes new mail as it arrives; what was already here moves
+                    // only when it is sorted, which the Agent does with a preview first.
+                    <div className="empty-line group-empty">
+                      <span>{fill(t("strings.inbox.group_empty"), { group: lens.name })}</span>
+                      {!aiOff ? (
+                        <Btn
+                          sm
+                          onClick={() =>
+                            askAgent(
+                              fill(t("strings.inbox.group_sort_prompt"), { group: lens.name }),
+                            )
+                          }
+                        >
+                          {fill(t("strings.inbox.group_sort"), { group: lens.name })}
+                        </Btn>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="empty-line">
+                      {searching
+                        ? t("strings.search.empty")
+                        : filtering
+                          ? t("strings.inbox.filter.empty")
+                          : t(folder ? `strings.folder.${folder}.empty` : "strings.inbox.empty")}
+                    </div>
+                  )
+                ) : null}
+              </>
+            }
+          />
+        )}
       </section>
 
       {shownThread ? (

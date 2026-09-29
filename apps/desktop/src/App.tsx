@@ -51,6 +51,9 @@ import { useLocalWorker } from "./agent/useLocalWorker.ts";
 import { ApprovalsSheet } from "./approvals/ApprovalsSheet.tsx";
 import type { ApprovalNotice } from "./approvals/notices.ts";
 import { type RunFeed, useApprovals } from "./approvals/useApprovals.ts";
+import { BoardPanel } from "./boards/BoardPanel.tsx";
+import { BoardScreen } from "./boards/BoardScreen.tsx";
+import { useBoardCounts, useBoards } from "./boards/useBoards.ts";
 import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
 import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
@@ -74,10 +77,11 @@ import { composeStrings } from "./screens/compose/strings.ts";
 import { useCompose } from "./screens/compose/useCompose.ts";
 import { Drafts, openDrafts } from "./screens/Drafts.tsx";
 import { windowInFront } from "./screens/first-sync/ready.ts";
-import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
+import { type BoardLens, Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { type FolderKey, isStreamFolder } from "./screens/inbox/folders.ts";
 import { parseCalendarNewTarget } from "./screens/inbox/meetings.ts";
+import { useClock } from "./screens/inbox/useClock.ts";
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import {
   ONBOARDING_FIXTURE_SENDERS,
@@ -609,6 +613,17 @@ export function App({
     () => groupIconFor(groupIcons, groupIconFallback),
     [groupIcons, groupIconFallback],
   );
+  // Boards (docs/spec/boards.md): the pinned ones in the nav above Groups, with their counts, live.
+  const boardClock = useClock(60, nowProp);
+  const boardList = useBoards();
+  const boardCounts = useBoardCounts(boardList, boardClock);
+  const navBoards = useMemo(
+    () =>
+      (boardList ?? [])
+        .filter((b) => b.pinned)
+        .map((b) => ({ id: b.id, name: b.doc.name, icon: b.doc.nav.icon })),
+    [boardList],
+  );
   const nav = useMemo(
     () =>
       navModel({
@@ -624,9 +639,14 @@ export function App({
         sectionOrder: shell.settings["sections.order"],
         sectionsOff: !sectionsOn,
         automation: { running: approvals.running, approvals: aiOff ? null : approvals.count },
+        boards: navBoards,
+        boardCounts,
+        boardsLabel: shell.settings["strings.boards.nav"],
         strings: shell.settings,
       }),
     [
+      navBoards,
+      boardCounts,
       approvals.running,
       approvals.count,
       aiOff,
@@ -686,6 +706,7 @@ export function App({
     key === "inbox" ||
     isStreamFolder(key) ||
     key.startsWith("section:") ||
+    key.startsWith("board:") ||
     navGroups.some((g) => g.id === key);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -781,6 +802,7 @@ export function App({
         setActive("inbox");
       } else if (target.startsWith("group:")) setActive(target.slice("group:".length));
       else if (target.startsWith("section:")) setActive(target);
+      else if (target.startsWith("board:")) setActive(target);
       else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
       else setActive("inbox");
     },
@@ -948,6 +970,8 @@ export function App({
     if (group) return group.name;
     const placed = nav.sections.find((x) => x.key === active);
     if (placed) return placed.label;
+    const pinnedBoard = nav.boards.find((x) => x.key === active);
+    if (pinnedBoard) return pinnedBoard.label;
     if (active === "calendar") return s["strings.nav.calendar"];
     if (active === "workflows") return s["strings.nav.workflows"];
     if (active === "routing") return s["strings.nav.routing"];
@@ -1031,6 +1055,7 @@ export function App({
         groups={navGroups}
         groupIcon={nav.groupIcon}
         counts={nav.counts}
+        boards={nav.boards}
         sections={nav.sections}
         // The line waits for the runtimes to answer, so it never flashes on start.
         sectionsHint={
@@ -1170,11 +1195,32 @@ export function App({
         now={now}
         onOpen={(draftId) => void compose.openDraft(draftId, null)}
       />
+    ) : active.startsWith("board:") ? (
+      // A pinned Board in the list area, like a Section, through the Inbox's Board lens.
+      <BoardScreen
+        key={`screen-${active}`}
+        boardId={active.slice("board:".length)}
+        now={boardClock}
+        onAsk={(text) => askHere(text)}
+        onLeave={() => setActive("inbox")}
+        render={(lens) => inboxView(lens)}
+      />
     ) : (
+      inboxView(undefined)
+    ),
+  );
+  function inboxView(board: BoardLens | undefined) {
+    return (
       <Inbox
-        // Each view (the Inbox, a folder, a Group, a Section) is its own list: switching
+        // Each view (the Inbox, a folder, a Group, a Section, a Board) is its own list: switching
         // remounts it, so rows outside the new view never linger as leaving rows.
-        key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}`}
+        key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}:${board?.id ?? ""}`}
+        board={board}
+        panels={
+          board ? undefined : (
+            <BoardPanel now={boardClock} onOpen={(id) => setActive(`board:${id}`)} />
+          )
+        }
         inbox={inbox}
         composer={composer}
         compose={compose}
@@ -1196,8 +1242,8 @@ export function App({
         judge={shell.api.judge}
         meetings={shell.api.meetings}
       />
-    ),
-  );
+    );
+  }
   if (shell.layout.agent === "right" && !aiOff) {
     cols.push("var(--agent-w)");
     parts.push(column("right"));
