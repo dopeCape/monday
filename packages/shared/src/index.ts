@@ -1,6 +1,5 @@
 export * from "./actions.ts";
 export * from "./agent.ts";
-export * from "./board/index.ts";
 export * from "./calendar.ts";
 export * from "./coming-soon.ts";
 export * from "./config/index.ts";
@@ -19,4 +18,5 @@ export * from "./settings/index.ts";
 export * from "./signals.ts";
 export * from "./sync.ts";
 export * from "./templates/index.ts";
+export * from "./view/index.ts";
 export * from "./workflow/index.ts";

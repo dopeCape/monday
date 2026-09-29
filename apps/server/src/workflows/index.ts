@@ -679,8 +679,8 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
                       ? `${preview.preview.action} workflow "${preview.preview.workflow.name}"`
                       : preview.preview.kind === "template"
                         ? `${preview.preview.action} template "${preview.preview.template.name}"`
-                        : preview.preview.kind === "board"
-                          ? `${preview.preview.action} board "${preview.preview.name}"`
+                        : preview.preview.kind === "view"
+                          ? `${preview.preview.action} view "${preview.preview.name}"`
                           : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }

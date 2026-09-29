@@ -75,6 +75,17 @@ describe("parseConfig", () => {
     ]);
   });
 
+  test("Boards became Views: boards.* keys still apply, and [views.test] is Settings, not a Layout shortcut", () => {
+    const result = ok(
+      `[boards]\nmax = 4\n[boards.test]\npool = 12\n[views.test]\nshown = 5\n[views.focus]\npreset = "columns"\nshortcut = "mod+1"\n`,
+    );
+    expect(result.warnings).toEqual([]);
+    expect(result.values["views.max"]).toBe(4);
+    expect(result.values["views.test.pool"]).toBe(12);
+    expect(result.values["views.test.shown"]).toBe(5);
+    expect(result.values["views.list"]?.map((v) => v.id)).toEqual(["focus"]);
+  });
+
   test("a bad value warns and is dropped while the rest applies", () => {
     const result = ok(`[routing.threshold]\nroute = 1.4\nask = 0.6\n`);
     expect(result.values["routing.threshold.route"]).toBeUndefined();

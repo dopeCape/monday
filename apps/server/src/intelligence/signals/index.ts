@@ -19,7 +19,6 @@
 
 import type {
   AiLevel,
-  BoardScopeFacts,
   FactsChange,
   Id,
   JsonValue,
@@ -40,6 +39,7 @@ import type {
   SignalsExplain,
   SignalsPage,
   ThreadJudgments,
+  ViewScopeFacts,
 } from "@monday/shared";
 import {
   ARRIVAL_SIGNALS,
@@ -53,7 +53,6 @@ import {
   sectionSignalId,
 } from "@monday/shared";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import { loadBoardThreads } from "../../boards/threads.ts";
 import type { Db } from "../../db/client.ts";
 import {
   accounts,
@@ -68,6 +67,7 @@ import {
 } from "../../db/schema.ts";
 import { type Mailstore, NotFoundError } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
+import { loadViewThreads } from "../../views/threads.ts";
 import {
   listOptions,
   RECOMMENDED_SIGNAL_SETTING_KEYS,
@@ -150,8 +150,8 @@ export interface StoredDef {
   version: number;
   hash: string;
   window: string;
-  /** A Board's exact scope: its Signal is asked only of Threads these admit. */
-  facts: BoardScopeFacts | null;
+  /** A View's exact scope: its Signal is asked only of Threads these admit. */
+  facts: ViewScopeFacts | null;
   gate: SignalGate | null;
   optionsFrom: SignalOptionsFrom | null;
   consumers: string[];
@@ -176,8 +176,8 @@ export interface ThreadVersion {
 }
 
 /** Why a Signal request is made; each is metered on its own line. */
-/** `board` is a Board's test before it is pinned (docs/spec/boards.md): the user waits on it. */
-export type AskReason = "arrival" | "background" | "backlog" | "board";
+/** `view` is a View's test before it is pinned (docs/spec/views.md): the user waits on it. */
+export type AskReason = "arrival" | "background" | "backlog" | "view";
 
 export interface AskOptions {
   reason: AskReason;
@@ -313,13 +313,13 @@ function shippedSettingKeys(): Record<string, string> {
   return out;
 }
 
-/** A Signal a Board declares (docs/spec/boards.md), scoped by the Board's Facts. */
+/** A Signal a View declares (docs/spec/views.md), scoped by the View's Facts. */
 export interface OwnedSignal {
   id: string;
   kind: SignalKind;
   question: JudgeQuestion;
-  facts: BoardScopeFacts;
-  boardId: string;
+  facts: ViewScopeFacts;
+  viewId: string;
   consumer: string;
 }
 
@@ -327,8 +327,8 @@ export interface SignalsOptions {
   db: Db;
   mailstore: Mailstore;
   runtime: HostedRuntime;
-  /** The pinned Boards' own Signals, per Workspace; absent, none. */
-  boardSignals?: ((workspaceId: Id) => Promise<OwnedSignal[]>) | undefined;
+  /** The pinned Views' own Signals, per Workspace; absent, none. */
+  viewSignals?: ((workspaceId: Id) => Promise<OwnedSignal[]>) | undefined;
   level?: () => Promise<AiLevel>;
   now?: () => Date;
   log?: (message: string) => void;
@@ -350,7 +350,7 @@ const TASK: Record<AskReason, JudgeTask> = {
   arrival: "judge.signals",
   background: "judge.backfill",
   backlog: "judge.backlog",
-  board: "judge.board",
+  view: "judge.board",
 };
 
 const clamp = (v: number, max = 1) =>
@@ -563,7 +563,7 @@ export function createSignals(options: SignalsOptions): Signals {
     version: r.version,
     hash: r.hash,
     window: r.scope.window,
-    facts: (r.scope.facts as BoardScopeFacts | undefined) ?? null,
+    facts: (r.scope.facts as ViewScopeFacts | undefined) ?? null,
     gate: r.gate,
     optionsFrom: r.optionsFrom,
     consumers: r.consumers,
@@ -606,24 +606,23 @@ export function createSignals(options: SignalsOptions): Signals {
 
   const syncDefs = async (workspaceId: Id, s: Settings): Promise<StoredDef[]> => {
     const model = s["ai.judge.model"];
-    const boardWindow = parseSortScope(s["signals.backfill.scope"])
+    const viewWindow = parseSortScope(s["signals.backfill.scope"])
       ? s["signals.backfill.scope"]
       : "last 3 months";
-    // A pinned Board's Signals, asked only inside its scope (docs/spec/boards.md).
-    const owned = options.boardSignals ? await options.boardSignals(workspaceId) : [];
-    const want: Array<WantedSignal & { owner: SignalOwner; facts?: BoardScopeFacts | undefined }> =
-      [
-        ...wanted(s),
-        ...owned.map((b) => ({
-          id: b.id,
-          kind: b.kind,
-          question: b.question,
-          window: boardWindow,
-          facts: b.facts,
-          consumers: [b.consumer],
-          owner: { kind: "board" as const, id: b.boardId },
-        })),
-      ];
+    // A pinned View's Signals, asked only inside its scope (docs/spec/views.md).
+    const owned = options.viewSignals ? await options.viewSignals(workspaceId) : [];
+    const want: Array<WantedSignal & { owner: SignalOwner; facts?: ViewScopeFacts | undefined }> = [
+      ...wanted(s),
+      ...owned.map((b) => ({
+        id: b.id,
+        kind: b.kind,
+        question: b.question,
+        window: viewWindow,
+        facts: b.facts,
+        consumers: [b.consumer],
+        owner: { kind: "view" as const, id: b.viewId },
+      })),
+    ];
     const key = canonicalJson({ model, want });
     const cached = synced.get(workspaceId);
     if (cached && cached.key === key && now().getTime() - cached.at < 60_000) return cached.defs;
@@ -1114,7 +1113,7 @@ export function createSignals(options: SignalsOptions): Signals {
     };
   };
 
-  /** The Board Signals among `need` whose Board's scope does not admit this Thread. */
+  /** The View Signals among `need` whose View's scope does not admit this Thread. */
   const scopedOut = async (
     workspaceId: Id,
     threadId: Id,
@@ -1123,11 +1122,11 @@ export function createSignals(options: SignalsOptions): Signals {
   ): Promise<Set<string>> => {
     const scoped = need.filter((d) => d.facts);
     if (scoped.length === 0) return new Set();
-    const [thread] = await loadBoardThreads(db, { workspaceId, ids: [threadId], limit: 1 });
+    const [thread] = await loadViewThreads(db, { workspaceId, ids: [threadId], limit: 1 });
     const ctx = { now: now(), zone: s["calendar.time_zone"] };
     return new Set(
       scoped
-        .filter((d) => !thread || !scopeAdmits(d.facts as BoardScopeFacts, thread, ctx))
+        .filter((d) => !thread || !scopeAdmits(d.facts as ViewScopeFacts, thread, ctx))
         .map((d) => d.id),
     );
   };
@@ -1324,11 +1323,11 @@ export function createSignals(options: SignalsOptions): Signals {
   const inArrival = (d: StoredDef, s: Settings) =>
     (d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id))) ||
     // A Section's, a Custom action's and a Recommended action's own questions ride in the same
-    // request (slice 33), and a pinned Board's, on the Threads its scope admits (docs/spec/boards.md).
+    // request (slice 33), and a pinned View's, on the Threads its scope admits (docs/spec/views.md).
     (s["signals.enabled"] &&
       (d.owner.kind === "section" ||
         d.owner.kind === "custom_action" ||
-        d.owner.kind === "board" ||
+        d.owner.kind === "view" ||
         d.owner.kind === "recommended_action"));
 
   const isArrivalSignal = (id: string) =>
@@ -1364,7 +1363,7 @@ export function createSignals(options: SignalsOptions): Signals {
       if (need.length === 0 && Object.keys(extra).length === 0) return result;
       const loaded = await loadThread(workspaceId, threadId, s);
       const state = loaded.state;
-      // A Board's Signal is asked only of the Threads its scope's Facts admit; code decides.
+      // A View's Signal is asked only of the Threads its scope's Facts admit; code decides.
       const outOfScope = await scopedOut(workspaceId, threadId, need, s);
       // Code decides what applies: a gated Signal whose gate fails is answered by code as not stated.
       const gatedOut = need.filter((d) => !outOfScope.has(d.id) && !gateHolds(d, loaded));
@@ -1407,7 +1406,7 @@ export function createSignals(options: SignalsOptions): Signals {
             const r = await runtime.judge(TASK[opts.reason], state, part, {
               workspaceId,
               priority:
-                opts.reason === "arrival" || opts.reason === "board" ? "arrival" : "background",
+                opts.reason === "arrival" || opts.reason === "view" ? "arrival" : "background",
               jobId: opts.jobId ?? null,
             });
             result.calls += 1;

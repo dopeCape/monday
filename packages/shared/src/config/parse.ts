@@ -10,6 +10,7 @@ import {
   isSettingKey,
   type PartialSettings,
   type SettingKey,
+  settingKeys,
   validateSetting,
   viewShape,
 } from "../settings/schema.ts";
@@ -51,9 +52,28 @@ export const KEY_ALIASES: Readonly<Record<string, SettingKey>> = {
   "appearance.theme": "appearance.mode",
   "layout.sections": "sections.order",
   "ai.api.provider": "ai.hosted.provider",
+  // Boards became Views (ADR 0016): a file that still says boards.* applies.
+  ...Object.fromEntries(
+    settingKeys.flatMap(
+      (k): Array<[string, SettingKey]> =>
+        k.startsWith("strings.views.")
+          ? [[`strings.boards.${k.slice("strings.views.".length)}`, k]]
+          : k.startsWith("views.") && k !== "views.list"
+            ? [[`boards.${k.slice("views.".length)}`, k]]
+            : [],
+    ),
+  ),
 };
 
 type Table = Record<string, unknown>;
+
+/** Whether some Setting key starts with this prefix (`views.test.` starts views.test.pool). */
+function isSettingPrefix(prefix: string): boolean {
+  return (
+    settingKeys.some((k) => k.startsWith(prefix)) ||
+    Object.keys(KEY_ALIASES).some((k) => k.startsWith(prefix))
+  );
+}
 
 function isTable(value: unknown): value is Table {
   return (
@@ -114,8 +134,14 @@ export function parseConfig(text: string): ParseConfigResult {
       apply(path, value);
       return;
     }
-    // A [views.<name>] table is one View whose id is the name.
-    if (path.length === 2 && path[0] === "views" && isTable(value)) {
+    // A [views.<name>] table is one Layout shortcut whose id is the name, unless
+    // views.<name> starts Setting keys (views.test.pool): then it is those Settings.
+    if (
+      path.length === 2 &&
+      path[0] === "views" &&
+      isTable(value) &&
+      !isSettingPrefix(`${dotted}.`)
+    ) {
       const view = viewFromTable(path[1] as string, value, path, warn);
       if (view) views.push(view);
       return;

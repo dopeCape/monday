@@ -3,7 +3,6 @@
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
 import type { RecommendationsChange } from "./actions.ts";
-import type { BoardChange } from "./board/types.ts";
 import type {
   Attendee,
   CalendarAccess,
@@ -27,6 +26,7 @@ import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
 import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
 import type { TemplateChange } from "./templates/types.ts";
+import type { ViewChange } from "./view/types.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -242,8 +242,8 @@ export type ChangeKind =
   | "settings"
   | "run"
   | "template"
-  /** A Board saved, pinned, moved or deleted (docs/spec/boards.md): headers only. */
-  | "board";
+  /** A View saved, pinned, moved or deleted (docs/spec/views.md): headers only. */
+  | "view";
 
 /**
  * A Workflow Run moved: it started, reached a Step, paused for an approval or
@@ -467,7 +467,7 @@ export type ChangePayload =
   | { kind: "settings"; payload: SettingsChange }
   | { kind: "run"; payload: RunChange }
   | { kind: "template"; payload: TemplateChange }
-  | { kind: "board"; payload: BoardChange };
+  | { kind: "view"; payload: ViewChange };
 
 export type Change = ChangePayload & {
   seq: number;

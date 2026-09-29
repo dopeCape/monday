@@ -104,14 +104,14 @@ export const GROUP_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
   truck: TruckIcon,
 };
 
-/** The icons a Board may carry: the Group icons and a board of lanes (BOARD_ICONS). */
-export const BOARD_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
+/** The icons a View may carry: the Group icons and a view of lanes (VIEW_ICONS). */
+export const VIEW_ICON_CATALOG: Readonly<Record<string, IconComponent>> = {
   ...GROUP_ICON_CATALOG,
   kanban: KanbanIcon,
 };
 
-/** A pinned Board as the nav lists it. */
-export interface NavBoard {
+/** A pinned View as the nav lists it. */
+export interface NavView {
   id: string;
   name: string;
   icon: string;
@@ -179,12 +179,12 @@ export interface NavInput {
    * leaves the Approvals entry out (just mail: nothing asks).
    */
   automation?: { running: number; approvals: number | null } | undefined;
-  /** The pinned Boards in nav order (docs/spec/boards.md), listed under their own heading above Groups. */
-  boards?: readonly NavBoard[] | undefined;
-  /** Each Board's nav number, by Board id; absent shows none (boards.nav.show_counts off). */
-  boardCounts?: Readonly<Record<string, number>> | undefined;
-  /** The Boards heading, strings.boards.nav. */
-  boardsLabel?: string | undefined;
+  /** The pinned Views in nav order (docs/spec/views.md), listed under their own heading above Groups. */
+  views?: readonly NavView[] | undefined;
+  /** Each View's nav number, by View id; absent shows none (views.nav.show_counts off). */
+  viewCounts?: Readonly<Record<string, number>> | undefined;
+  /** The Views heading, strings.views.nav. */
+  viewsLabel?: string | undefined;
   strings: NavStrings;
 }
 
@@ -194,8 +194,8 @@ export interface NavModel {
   folders: NavItem[];
   calendar: NavItem;
   automation: NavItem[];
-  /** The pinned Boards, keyed "board:<id>", with their counts. */
-  boards: NavItem[];
+  /** The pinned Views, keyed "views:<id>", with their counts. */
+  views: NavItem[];
   /** Every Section not hidden, in Section order, keyed "section:<id>"; none while Sections are off. */
   sections: NavItem[];
   /** While Sections are off: the quiet line in their place and its link's words. */
@@ -340,12 +340,12 @@ export function navModel(input: NavInput): NavModel {
   const sections = input.sectionsOff
     ? []
     : navSections(input.sections ?? [], input.sectionOrder ?? [], s);
-  const boards: NavItem[] = (input.boards ?? []).map((b) => {
-    const n = input.boardCounts?.[b.id];
+  const views: NavItem[] = (input.views ?? []).map((b) => {
+    const n = input.viewCounts?.[b.id];
     return {
-      key: `board:${b.id}`,
+      key: `views:${b.id}`,
       label: b.name,
-      icon: BOARD_ICON_CATALOG[b.icon] ?? KanbanIcon,
+      icon: VIEW_ICON_CATALOG[b.icon] ?? KanbanIcon,
       ...(n ? { count: n } : {}),
     };
   });
@@ -358,7 +358,7 @@ export function navModel(input: NavInput): NavModel {
       compose: s["strings.nav.compose"],
       mail: s["strings.nav.mail"],
       groups: s["strings.nav.groups"],
-      boards: input.boardsLabel,
+      views: input.viewsLabel,
       sections: s["strings.nav.sections"],
       automation: s["strings.nav.automation"],
       settings: s["strings.nav.settings"],
@@ -392,7 +392,7 @@ export function navModel(input: NavInput): NavModel {
         : []),
       { key: "routing", label: s["strings.nav.routing"], icon: GitBranchIcon },
     ],
-    boards,
+    views,
     sections,
     sectionsHint: input.sectionsOff
       ? { text: s["strings.nav.sections_off"], action: s["strings.nav.sections_off_action"] }
@@ -410,7 +410,7 @@ export function navModel(input: NavInput): NavModel {
     },
     rail: [
       ...railFolders,
-      ...boards.map((b) => ({
+      ...views.map((b) => ({
         key: b.key,
         icon: b.icon ?? KanbanIcon,
         title: b.count ? `${b.label}, ${b.count}` : b.label,

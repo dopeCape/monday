@@ -137,16 +137,16 @@ function toolVerb(call: ToolCall): string {
       return done ? "Scheduled event" : "Schedule event";
     case "move_event":
       return done ? "Moved event" : "Move event";
-    case "list_boards":
-      return "Listed boards";
-    case "create_board":
-      return done ? "Made a board and tried it" : "Making a board";
-    case "revise_board":
-      return done ? "Revised the board" : "Revising the board";
-    case "update_board":
-      return done ? "Changed the board" : "Change the board";
-    case "delete_board":
-      return done ? "Deleted the board" : "Delete the board";
+    case "list_views":
+      return "Listed views";
+    case "create_view":
+      return done ? "Made a view and tried it" : "Making a view";
+    case "revise_view":
+      return done ? "Revised the view" : "Revising the view";
+    case "update_view":
+      return done ? "Changed the view" : "Change the view";
+    case "delete_view":
+      return done ? "Deleted the view" : "Delete the view";
     case "propose_calendar_draft":
       return done ? "Proposed calendar changes" : "Proposing calendar changes";
     case "get_calendar_draft":

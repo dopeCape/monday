@@ -41,7 +41,6 @@ import type {
 } from "@monday/shared";
 import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
-import { BOARDS_SCHEMA_SQL, boardUpsert } from "./boards.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import {
   PEOPLE_DROP_SQL,
@@ -69,6 +68,7 @@ import {
   signalsStatements,
 } from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
+import { VIEWS_SCHEMA_SQL, viewUpsert } from "./views.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 
@@ -367,7 +367,7 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
   await driver.exec(schemaSql);
   await driver.exec(PEOPLE_SCHEMA_SQL);
   await driver.exec(SIGNALS_SCHEMA_SQL);
-  await driver.exec(BOARDS_SCHEMA_SQL);
+  await driver.exec(VIEWS_SCHEMA_SQL);
   await driver.exec(RECOMMENDATIONS_SCHEMA_SQL);
   const signalsRows = await driver.query("select value from meta where key = ?", [
     SIGNALS_FORMAT_KEY,
@@ -759,9 +759,9 @@ export function changeStatements(change: Change): Statement[] {
       return [];
     case "template":
       return [templateUpsert(change.payload)];
-    case "board":
-      // Headers only: the Boards module reads the sealed documents through GET /boards.
-      return [boardUpsert(change.payload)];
+    case "view":
+      // Headers only: the Views module reads the sealed documents through GET /views.
+      return [viewUpsert(change.payload)];
   }
 }
 

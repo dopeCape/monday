@@ -59,7 +59,6 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useState } from "react";
-import { BoardCard } from "../../boards/BoardCard.tsx";
 import { CalendarDraftPreview } from "../../calendar/DraftCard.tsx";
 import {
   backlogLine,
@@ -68,6 +67,7 @@ import {
 } from "../../screens/routing/backlog.tsx";
 import { diffLine, flowModel } from "../../screens/workflows/flow.ts";
 import { TemplateBody } from "../../templates/Body.tsx";
+import { ViewCard } from "../../views/ViewCard.tsx";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
 import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
@@ -251,8 +251,8 @@ export function PreviewView({
       return <WorkflowPreviewView preview={preview} strings={strings} />;
     case "template":
       return <TemplatePreviewView preview={preview} strings={strings} />;
-    case "board":
-      return <BoardCard preview={preview} />;
+    case "view":
+      return <ViewCard preview={preview} />;
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }
@@ -404,11 +404,11 @@ export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
   update_action: LightningIcon,
   delete_action: LightningIcon,
   undo: ArrowCounterClockwiseIcon,
-  list_boards: KanbanIcon,
-  create_board: KanbanIcon,
-  revise_board: KanbanIcon,
-  update_board: KanbanIcon,
-  delete_board: KanbanIcon,
+  list_views: KanbanIcon,
+  create_view: KanbanIcon,
+  revise_view: KanbanIcon,
+  update_view: KanbanIcon,
+  delete_view: KanbanIcon,
 };
 
 export const toolIcon = (tool: string): IconComponent | undefined => TOOL_ICONS[tool];
@@ -572,12 +572,12 @@ export const TOOL_UIS: Readonly<Record<string, ToolCallMessagePartComponent>> = 
   update_action: MondayTool,
   delete_action: MondayTool,
   undo: MondayTool,
-  // Boards: the card with the tried Threads, Pin board or Apply.
-  list_boards: MondayTool,
-  create_board: MondayTool,
-  revise_board: MondayTool,
-  update_board: MondayTool,
-  delete_board: MondayTool,
+  // Views: the card with the tried Threads, Pin view or Apply.
+  list_views: MondayTool,
+  create_view: MondayTool,
+  revise_view: MondayTool,
+  update_view: MondayTool,
+  delete_view: MondayTool,
   // Onboarding: the Groups proposal as its own rows, the keymap as a Setting line.
   propose_groups: MondayTool,
   set_keymap: MondayTool,

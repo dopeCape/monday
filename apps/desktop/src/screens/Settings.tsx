@@ -55,7 +55,7 @@ import "./settings/panels.tsx";
 import "../templates/TemplatesPanel.tsx";
 import "./settings/RecommendedPanel.tsx";
 import "./settings/SignalsPanel.tsx";
-import "./settings/BoardsPanel.tsx";
+import "./settings/ViewsPanel.tsx";
 import "./settings/Accounts.tsx";
 import "./settings/overview.tsx";
 import { DisclosureProvider, useSessionDisclosures } from "./settings/disclosure.tsx";

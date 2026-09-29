@@ -619,7 +619,8 @@ export const PRESETS: Record<"stream" | "columns" | "agent-left", Layout> = {
   "agent-left": { nav: "rail", agent: "left", list: "split" },
 };
 
-export interface View {
+/** A Layout shortcut (CONTEXT.md): a saved Layout with a shortcut. */
+export interface LayoutShortcut {
   id: Id;
   name: string;
   shortcut: string | null;

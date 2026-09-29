@@ -22,7 +22,7 @@ export type SignalOwnerKind =
   | "section"
   | "custom_action"
   | "recommended_action"
-  | "board"
+  | "view"
   | "interruption";
 
 export interface SignalOwner {
@@ -30,7 +30,7 @@ export interface SignalOwner {
   id: string | null;
 }
 
-/** Which Threads carry a Signal: a Sort scope sentence, and a Board's exact Fact filters. */
+/** Which Threads carry a Signal: a Sort scope sentence, and a View's exact Fact filters. */
 export interface SignalScope {
   /** "last 3 months" by default; "arrival" asks only on arrival (the Interruption policy). */
   window: string;

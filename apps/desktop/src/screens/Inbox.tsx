@@ -256,12 +256,12 @@ export interface InboxProps {
    */
   folder?: FolderKey | undefined;
   /**
-   * A Board lens (docs/spec/boards.md): the Board's Threads in Lane order in
-   * the list area, rendered by the Board's component, with the Inbox's rows,
+   * A View lens (docs/spec/views.md): the View's Threads in Lane order in
+   * the list area, rendered by the View's component, with the Inbox's rows,
    * keys, reader, row actions and multi-select.
    */
-  board?: BoardLens | undefined;
-  /** Panels above the stream beside the Today panel: the `board` Panel (boards.panel). */
+  view?: ViewLens | undefined;
+  /** Panels above the stream beside the Today panel: the `view` Panel (views.panel). */
   panels?: ReactNode | undefined;
   /**
    * The judge behind the palette's typed sentences (slice 27, ADR 0012).
@@ -275,11 +275,11 @@ export interface InboxProps {
   meetings?: MeetingsSeam | null | undefined;
 }
 
-/** What the Board screen hands the Inbox: its Threads in Lane order, and how to draw them. */
-export interface BoardLens {
+/** What the View screen hands the Inbox: its Threads in Lane order, and how to draw them. */
+export interface ViewLens {
   id: string;
   name: string;
-  /** Every Thread the Board shows, in the order its component shows them (Lane by Lane). */
+  /** Every Thread the View shows, in the order its component shows them (Lane by Lane). */
   threads: readonly Thread[];
   /** The header's own controls: the menu, the count line. */
   header: ReactNode;
@@ -522,7 +522,7 @@ function InboxBody({
   folder,
   judge,
   meetings,
-  board,
+  view,
   panels,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
@@ -631,8 +631,8 @@ function InboxBody({
       : { id: section, name: section };
   }, [section, settings]);
   const threads = useMemo(() => {
-    // A Board orders its own Threads, Lane by Lane.
-    if (board) return board.threads;
+    // A View orders its own Threads, Lane by Lane.
+    if (view) return view.threads;
     const list = lens
       ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
       : sectionLens
@@ -642,10 +642,10 @@ function InboxBody({
     if (folder === "snoozed") return list.map((t) => wakeSnippet(t, settings, now));
     if (folder) return list;
     return newestFirst(list);
-  }, [allThreads, lens, sectionLens, folder, settings, now, board]);
-  const boardThreads = useMemo(
-    () => (board ? new Map(board.threads.map((th) => [th.id, th])) : null),
-    [board],
+  }, [allThreads, lens, sectionLens, folder, settings, now, view]);
+  const viewThreads = useMemo(
+    () => (view ? new Map(view.threads.map((th) => [th.id, th])) : null),
+    [view],
   );
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
@@ -1012,7 +1012,7 @@ function InboxBody({
     openSearch();
   }, [searchRequest, openSearch]);
 
-  const thread = focus ? (inbox.thread(focus) ?? boardThreads?.get(focus)) : undefined;
+  const thread = focus ? (inbox.thread(focus) ?? viewThreads?.get(focus)) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
   // The rows next to the one in hand stay warm, so j and k (or a click on a
@@ -2542,7 +2542,7 @@ function InboxBody({
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
   const listTitle =
-    board?.name ??
+    view?.name ??
     lens?.name ??
     sectionLens?.name ??
     (folder ? t(`strings.nav.${folder}`) : t("strings.inbox.title"));
@@ -2846,8 +2846,8 @@ function InboxBody({
       >
         {selectionBar ?? (
           <ColHead title={listTitle} count={headCount}>
-            {board ? board.header : null}
-            {board ? null : (
+            {view ? view.header : null}
+            {view ? null : (
               <>
                 <label className={`list-search${searching ? " on" : ""}`}>
                   <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
@@ -2959,10 +2959,10 @@ function InboxBody({
             onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {board ? (
-          <div className="board-body" role="listbox" aria-label={listTitle} tabIndex={-1}>
-            {board.above}
-            {board.render({
+        {view ? (
+          <div className="view-body" role="listbox" aria-label={listTitle} tabIndex={-1}>
+            {view.above}
+            {view.render({
               row: (th) => renderItem({ key: th.id, row: { thread: th, leaving: false } }),
               focus,
               open: openAnywhere,

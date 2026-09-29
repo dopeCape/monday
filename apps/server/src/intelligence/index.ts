@@ -31,13 +31,13 @@ import {
   scopeWordsFrom,
 } from "@monday/shared";
 import { asc, eq } from "drizzle-orm";
-import { createBoardStore } from "../boards/index.ts";
 import type { Db } from "../db/client.ts";
 import { accounts, workspaces } from "../db/schema.ts";
 import { createDrafts, type Drafts } from "../drafts/index.ts";
 import type { Jobs } from "../jobs/index.ts";
 import type { Mailstore } from "../mailstore/index.ts";
 import { readGlobalSetting, readGlobalSettings } from "../settings/read.ts";
+import { createViewStore } from "../views/index.ts";
 import {
   createHttpIntegrations,
   createSdkMcpClients,
@@ -61,7 +61,6 @@ import {
   createSessionStore,
   type ToolExtensions,
 } from "./agent/index.ts";
-import { type BoardIntelligence, createBoardIntelligence } from "./boards/index.ts";
 import { type BriefSettings, type Briefs, createBriefs } from "./brief.ts";
 import { type ComposeAssist, createComposeAssist } from "./compose-assist.ts";
 import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts";
@@ -102,6 +101,7 @@ import { createJudgeLimiter, type JudgeLimiter, type LimiterSettings } from "./s
 import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
+import { createViewIntelligence, type ViewIntelligence } from "./views/index.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
 
 export type { WorkflowSettings, Workflows } from "../workflows/index.ts";
@@ -312,8 +312,8 @@ export interface Intelligence {
   guard: GuardSeam;
   /** Templates, their Placeholders filled from a Thread, and what the judge adds (slices 36 to 38). */
   templates: TemplateIntelligence;
-  /** Boards (docs/spec/boards.md, slices 39 and 40): the store, the Agent's drafts and their tests. */
-  boards: BoardIntelligence;
+  /** Views (docs/spec/views.md, slices 39 and 40): the store, the Agent's drafts and their tests. */
+  views: ViewIntelligence;
   /** The Brief verifier (slice 27). */
   verify: BriefVerifier;
   /** The batching measurement (slice 28), Sidecar only; its route checks where it runs. */
@@ -603,7 +603,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       automatedSenders: s["briefs.automated_senders"],
     };
   };
-  const boardStore = createBoardStore({ db, mailstore, now });
+  const viewStore = createViewStore({ db, mailstore, now });
   const signals = createSignals({
     db,
     mailstore,
@@ -611,14 +611,14 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     now,
     log,
     level,
-    boardSignals: (workspaceId) => boardStore.signalsWanted(workspaceId),
+    viewSignals: (workspaceId) => viewStore.signalsWanted(workspaceId),
   });
-  const boards = createBoardIntelligence({
+  const views = createViewIntelligence({
     db,
     mailstore,
     runtime,
     signals,
-    store: boardStore,
+    store: viewStore,
     now,
     log,
   });
@@ -1017,7 +1017,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     oneClick: (url) => oneClick(url, options.fetch ?? ((u, init) => fetch(u, init))),
   };
   extensions.templates = templates;
-  extensions.boards = boards;
+  extensions.views = views;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
@@ -1110,7 +1110,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     composeAssist,
     guard,
     templates,
-    boards,
+    views,
     verify,
     intent: async (request) => judgeIntent(runtime, request, await intentSettings()),
     meetings,
