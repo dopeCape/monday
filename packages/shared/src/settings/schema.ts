@@ -1384,13 +1384,13 @@ export const settingsSchema = {
   }),
   "routing.backfill.batch_size": setting({
     type: z.int().min(1).max(500),
-    default: 50,
+    default: 1,
     scope: "global",
     section: "routing",
     group: "Sorting",
     tier: "advanced",
     label: "Threads per TypeSafe request",
-    help: "Background sorting asks TypeSafe about this many Threads in one request, one question each. Jev has no count limit, only a token budget (below), so a request is also cut short when it would not fit. Fewer per request is slower and a little more careful.",
+    help: "1 (the default) asks TypeSafe about one Thread per request, with its Group, its Sub-group and everything else monday reads about it in that one request. A larger number packs that many Threads' Group questions into one request under the token budget below: cheaper by a few cents per ten thousand Threads, and kept only if the batching measurement (docs/research/judge-batching.md) found it places mail the same way.",
   }),
   "routing.backfill.request_tokens": setting({
     type: z.int().min(1000).max(64_000),

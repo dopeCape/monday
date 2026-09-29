@@ -77,7 +77,13 @@ function countingJudge() {
       const subject = state.threads?.[id]?.subject ?? state.thread?.subject ?? "";
       subjects.push(subject);
       const names = Object.keys(question.criteria);
-      const pick = /invoice/i.test(subject) && names.includes("finance") ? "finance" : "none";
+      const invoice = /invoice/i.test(subject);
+      const pick =
+        invoice && names.includes("finance")
+          ? "finance"
+          : invoice && names.includes("due")
+            ? "due"
+            : "none";
       answers[id] = {
         type: "choice",
         choice: pick,
@@ -410,11 +416,64 @@ describe("the Backlog sort", () => {
     });
     expect(done.batches).toBe(6);
     expect(await groupOf(ids[27] as string)).toBe(finance.id);
-    // The meter recorded each request under judge.route.
+    // The preview's requests are routing's own; the background ones count as background sorting.
     const month = await intelligence.meter.month(workspaceId, "2026-09");
-    expect(month.lines.find((l) => l.task === "judge.route")?.calls).toBe(6 + 6);
+    expect(month.lines.find((l) => l.task === "judge.route")?.calls).toBe(6);
+    expect(month.lines.find((l) => l.task === "judge.backlog")?.calls).toBe(6);
     await setSetting("routing.rerun.preview_max", 500);
     await setSetting("routing.rerun.sample", 100);
+  }, 60_000);
+
+  test("by default one Thread per request, its Sub-group Choice riding in the same request", async () => {
+    await setSetting("routing.backfill.batch_size", 1);
+    try {
+      const { workspaceId, ids } = await seed("each", 9);
+      const finance = await intelligence.routing.createGroup(workspaceId, {
+        name: "Finance",
+        sentence: "Invoices",
+      });
+      const due = await intelligence.routing.createGroup(workspaceId, {
+        name: "Due",
+        sentence: "Invoices still to pay",
+        parentId: finance.id,
+      });
+      await intelligence.routing.createGroup(workspaceId, {
+        name: "Paid",
+        sentence: "Receipts",
+        parentId: finance.id,
+      });
+      await intelligence.routing.createGroup(workspaceId, {
+        name: "Other",
+        sentence: "Anything else",
+      });
+      const before = counting.requests.length;
+      await intelligence.backlog.start(workspaceId, { kind: "all" });
+      await runDue();
+      const sent = counting.requests.slice(before);
+      // One request per Thread: the Group Choice and Finance's Sub-group Choice, asked speculatively.
+      expect(sent).toHaveLength(9);
+      expect(sent.every((r) => r.questions === 2)).toBe(true);
+      expect(new Set(sent.flatMap((r) => r.subjects)).size).toBe(9);
+      // Invoices 0, 3 and 6 land in Finance under Due, each for the one request.
+      for (const i of [0, 3, 6]) {
+        const row = await db.handle.db.query.threads.findFirst({
+          where: eq(threads.id, ids[i] as string),
+        });
+        expect(row?.groupId).toBe(finance.id);
+        expect(row?.subgroupId).toBe(due.id);
+      }
+      expect(await groupOf(ids[1] as string)).toBeNull();
+      expect(await status(workspaceId)).toMatchObject({
+        status: "done",
+        done: 9,
+        moved: 3,
+        calls: 9,
+        batchSize: 1,
+        sorter: "typesafe",
+      });
+    } finally {
+      await setSetting("routing.backfill.batch_size", 4);
+    }
   }, 60_000);
 
   test("stops at a count scope's limit and leaves Threads the user placed", async () => {

@@ -34,4 +34,5 @@ export const signalsSettings = {
     help: "Lets the Sidecar run the batching measurement (scripts/judge-batching-eval.ts): it asks TypeSafe about a sample of your mail several ways and returns numbers and thread ids only. Off unless you are measuring.",
   }),
   "strings.meter.judge.eval": str("ai", "Meter line: batching measurement", "Batching measurement"),
+  "strings.meter.judge.backlog": str("ai", "Meter line: background sorting", "Background sorting"),
 } satisfies Record<string, SettingEntry>;
