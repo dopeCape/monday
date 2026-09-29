@@ -5,7 +5,7 @@
 // a StaticShell over fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { PartialSettings, Thread } from "@monday/shared";
+import type { FullSearchDone, PartialSettings, Thread } from "@monday/shared";
 import { threads as fixtureThreads } from "@monday/ui/fixtures";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
@@ -434,6 +434,108 @@ describe("the inline search", () => {
     expect(asked).toEqual(["paid"]);
     expect(rowIds()).toEqual(["e9", "e7"]);
     expect(document.querySelector(".row[data-thread=e9] .snip")?.textContent).toBe("paid in full");
+  });
+
+  test("Search older mail streams the Server's hits in with progress, Stop and Search further", async () => {
+    const byId = (id: string) => fixtureThreads.find((t) => t.id === id) as Thread;
+    const hit = (id: string, snippet = "") => ({
+      thread: byId(id),
+      tags: [],
+      workspaceId: "w",
+      account: "",
+      snippet,
+      score: 0,
+      pinned: false,
+    });
+    type Call = {
+      text: string;
+      options: Parameters<SearchModule["searchOlder"]>[1];
+      finish: (done: FullSearchDone | null) => void;
+    };
+    const calls: Call[] = [];
+    const search = {
+      search: async () => ({
+        hits: [hit("e9", "local passage")],
+        older: [{ workspaceId: "w", missing: 40_000, after: null, before: null }],
+        elapsedMs: 1,
+      }),
+      searchOlder: (text: string, options: Call["options"]) =>
+        new Promise<FullSearchDone | null>((finish) => {
+          options.signal?.addEventListener("abort", () => finish(null));
+          calls.push({ text, options, finish });
+        }),
+      remember: async () => {},
+    } as unknown as SearchModule;
+    const done = (over: Partial<FullSearchDone>): FullSearchDone => ({
+      type: "done",
+      scanned: 56_000,
+      total: 56_000,
+      hits: 0,
+      cursor: null,
+      reason: "exhausted",
+      decrypted: 0,
+      elapsedMs: 1,
+      ...over,
+    });
+    const line = () => document.querySelector<HTMLElement>(".search-older")?.textContent ?? "";
+    const button = (cls: string) =>
+      document.querySelector<HTMLButtonElement>(`.search-older .${cls}`);
+    const newestFirst = (ids: string[]) =>
+      [...ids].sort((a, b) => byId(b).lastActivity.localeCompare(byId(a).lastActivity));
+
+    await mount({ search });
+    await type(input(), "pro-rata");
+    expect(rowIds()).toEqual(["e9"]);
+    expect(line()).toContain("Search the whole mailbox on your server.");
+    await act(async () => button("older-start")?.click());
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toBe("pro-rata");
+    expect(calls[0]?.options.cursor).toBeNull();
+    expect(calls[0]?.options.limit).toBe(100);
+
+    const first = calls[0] as Call;
+    await act(async () => {
+      first.options.onProgress?.({ scanned: 0, total: 56_000, cursor: null });
+      first.options.onHit?.(hit("e7", "found in an old body"));
+      first.options.onHit?.(hit("e9", "server passage"));
+      first.options.onProgress?.({ scanned: 12_000, total: 56_000, cursor: "c12000" });
+    });
+    expect(line()).toContain("Searched 12,000 of 56,000");
+    // Merged with the local hit, each Thread once, newest first.
+    expect(rowIds()).toEqual(newestFirst(["e9", "e7"]));
+    expect(document.querySelector(".row[data-thread=e9] .snip")?.textContent).toBe("local passage");
+    expect(document.querySelector(".row[data-thread=e7] .snip")?.textContent).toBe(
+      "found in an old body",
+    );
+
+    // Stop closes the request and keeps what was found.
+    await act(async () => button("older-stop")?.click());
+    expect(first.options.signal?.aborted).toBe(true);
+    expect(line()).toContain("Searched 12,000 of 56,000. 2 found.");
+    expect(rowIds()).toEqual(newestFirst(["e9", "e7"]));
+
+    // Search further resumes below where it stopped, and the limit pauses it again.
+    await act(async () => button("older-further")?.click());
+    expect(calls).toHaveLength(2);
+    const second = calls[1] as Call;
+    expect(second.options.cursor).toBe("c12000");
+    await act(async () => {
+      second.options.onHit?.(hit("e2"));
+      second.finish(done({ scanned: 30_000, hits: 1, cursor: "c30000", reason: "limit" }));
+    });
+    expect(rowIds()).toEqual(newestFirst(["e9", "e7", "e2"]));
+    expect(line()).toContain("Searched 30,000 of 56,000. 3 found.");
+    await act(async () => button("older-further")?.click());
+    const third = calls[2] as Call;
+    expect(third.options.cursor).toBe("c30000");
+    await act(async () => third.finish(done({})));
+    expect(line()).toContain("Searched all 56,000. 3 found.");
+    expect(button("older-further")).toBeNull();
+
+    // A new query drops the run.
+    await type(input(), "pro-rata clause");
+    expect(rowIds()).toEqual(["e9"]);
+    expect(button("older-start")).not.toBeNull();
   });
 
   test("Esc puts the stream back where it was, scroll and focus", async () => {

@@ -205,11 +205,12 @@ const searchThreads: ToolDefinition<{
   before?: string | undefined;
   unread?: boolean | undefined;
   include_archived?: boolean | undefined;
+  full?: boolean | undefined;
   limit?: number | undefined;
 }> = {
   name: "search_threads",
   description:
-    "Find Threads in the current Workspace. Filters combine: free text over subject and participants, a Section (needs-reply, waiting, fyi, newsletters), a Group, only Threads older than N days, unread only. Returns ids to act on with the other tools.",
+    "Find Threads in the current Workspace. Filters combine: free text over subject and participants, a Section (needs-reply, waiting, fyi, newsletters), a Group, only Threads older than N days, unread only. With full, the query is searched over the whole mailbox on the server, message bodies and older mail included, with the search operators (from:, to:, subject:, quoted phrases, has:attachment, before:, after:, older_than:, -word); use it when asked about older mail or words inside messages. Returns ids to act on with the other tools.",
   tier: "read",
   input: z.object({
     query: z.string().max(500).optional().describe("Words from the subject or a participant"),
@@ -226,6 +227,12 @@ const searchThreads: ToolDefinition<{
       .describe("Only Threads last active before this moment"),
     unread: z.boolean().optional(),
     include_archived: z.boolean().optional().describe("Include archived Threads; off by default"),
+    full: z
+      .boolean()
+      .optional()
+      .describe(
+        "Search the whole mailbox on the server, inside message bodies and older mail, archived included. Needs a query. Slower; use it for older mail.",
+      ),
     limit: z.int().min(1).max(500).optional(),
   }),
   summarize: (i) =>
@@ -236,6 +243,7 @@ const searchThreads: ToolDefinition<{
       i.older_than_days !== undefined ? `older than ${plural(i.older_than_days, "day")}` : null,
       i.before ? `before ${i.before}` : null,
       i.unread ? "unread" : null,
+      i.full ? "whole mailbox" : null,
     ]
       .filter(Boolean)
       .join(" · ") || "everything",
@@ -252,6 +260,7 @@ const searchThreads: ToolDefinition<{
       olderThan,
       unread: input.unread,
       includeArchived: input.include_archived,
+      full: input.full,
       limit: Math.min(input.limit ?? ctx.settings.searchLimit, ctx.settings.searchLimit),
     });
     const rows = threads.map(compact);

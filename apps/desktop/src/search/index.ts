@@ -5,12 +5,22 @@
 // recency boost, and exact sender or subject matches pinned first.
 //
 // Two things reach outside the index, both explicit and both after the
-// results are already on screen: "search older mail" pulls candidate bodies
-// by date range into the Cache and re-runs the query as they land, and the
-// "all accounts" toggle runs the same query across every Workspace Cache the
+// results are already on screen: "Search older mail" runs the same query as
+// a full search on the Server over the whole mailbox (ADR 0015), streaming
+// hits in as it scans and copying no body into the Cache, and the "all
+// accounts" toggle runs the same query across every Workspace Cache the
 // module knows, labelling each hit with its account.
 
-import type { Id, MessageBodiesPage, Person, Tag, Thread } from "@monday/shared";
+import type {
+  FullSearchDone,
+  FullSearchEvent,
+  FullSearchRequest,
+  Id,
+  Person,
+  Tag,
+  Thread,
+} from "@monday/shared";
+import { excerpt, queryTerms } from "@monday/shared";
 import type { Row, SqlParam } from "../store/driver.ts";
 import { rowToTag, rowToThread, TAGS_SQL } from "../store/queries.ts";
 import type { Store } from "../store/store.ts";
@@ -48,7 +58,10 @@ export interface SearchChips {
   group?: boolean | undefined;
 }
 
-/** The "search older mail" offer: bodies the Cache lacks inside the asked range. */
+/**
+ * The "Search older mail" offer: the Cache lacks bodies inside the asked
+ * range, so the local answer may be missing Threads the Server would find.
+ */
 export interface OlderMail {
   workspaceId: Id;
   missing: number;
@@ -79,7 +92,6 @@ export interface SearchSettings {
   recencyDays: number;
   limit: number;
   recentMax: number;
-  olderBatch: number;
 }
 
 export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
@@ -87,25 +99,54 @@ export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
   recencyDays: 30,
   limit: 50,
   recentMax: 10,
-  olderBatch: 200,
 };
 
-export interface PullProgress {
-  done: number;
-  total: number;
+/**
+ * POST /search/full as a stream (platform/api.ts): every NDJSON line to
+ * `onEvent` in order, resolving when the stream ends. Aborting `signal`
+ * closes the request, which stops the Server's scan.
+ */
+export type FullSearchStream = (
+  request: FullSearchRequest,
+  onEvent: (event: FullSearchEvent) => void,
+  signal?: AbortSignal,
+) => Promise<void>;
+
+/** A full search the Server refused or broke off; `code` "locked" when it holds no root key. */
+export class FullSearchError extends Error {
+  constructor(
+    message: string,
+    readonly code: "locked" | null = null,
+  ) {
+    super(message);
+    this.name = "FullSearchError";
+  }
 }
 
-export type FetchBodies = (
-  workspaceId: Id,
-  range: { after: string | null; before: string | null; limit: number },
-) => Promise<MessageBodiesPage>;
+export interface OlderProgress {
+  scanned: number;
+  total: number;
+  /** Where a stop here would resume. */
+  cursor: string | null;
+}
+
+export interface OlderSearchOptions {
+  workspace: Id;
+  /** Resume below where an earlier stream stopped ("Search further"). */
+  cursor?: string | null | undefined;
+  limit?: number | undefined;
+  now?: Date | undefined;
+  signal?: AbortSignal | undefined;
+  onHit?: ((hit: SearchHit) => void) | undefined;
+  onProgress?: ((progress: OlderProgress) => void) | undefined;
+}
 
 export interface SearchModuleOptions {
   /** Every Workspace Cache the Store knows; the first is the current one. */
   sources: () => readonly SearchSource[];
   settings?: () => SearchSettings;
-  /** The bulk body route; absent means "search older mail" is not offered. */
-  fetchBodies?: FetchBodies | undefined;
+  /** The Server's full search; absent means "Search older mail" is not offered. */
+  fullSearch?: FullSearchStream | undefined;
   now?: () => Date;
 }
 
@@ -113,11 +154,13 @@ export interface SearchModule {
   parse(text: string, now?: Date): SearchQuery;
   search(text: string | SearchQuery, options: SearchOptions): Promise<SearchResult>;
   /**
-   * Fetches the bodies `older` names into the Cache, newest first, calling
-   * `onBatch` after every batch lands so the caller can re-run the search.
-   * Resolves with how many bodies landed; rejects on a locked Server.
+   * "Search older mail": the query as a full search on the Server over the
+   * whole mailbox, newest first. Hits arrive through `onHit` as the Server
+   * finds them and progress through `onProgress`; nothing is written to the
+   * Cache. Resolves with the stream's end, or null when it was aborted;
+   * rejects with FullSearchError when the Server refuses (locked) or fails.
    */
-  pullOlder(older: OlderMail, onBatch?: (p: PullProgress) => void): Promise<number>;
+  searchOlder(text: string, options: OlderSearchOptions): Promise<FullSearchDone | null>;
   /** Recent searches of the current Workspace, newest first. */
   recent(): Promise<string[]>;
   remember(text: string): Promise<void>;
@@ -230,35 +273,10 @@ function chipPredicates(chips: SearchChips | undefined): string[] {
 
 /* ------------------------------ Previews ------------------------------ */
 
-/**
- * A passage of `width` words around the first term that occurs in `body`:
- * the preview a term gets when it is so common that snippet() over its
- * matches would not fit the budget. Terms are matched by prefix.
- */
-export function excerpt(body: string, terms: readonly string[], width = 12): string {
-  const tokens = body.split(/\s+/).filter((t) => t !== "");
-  if (tokens.length === 0) return "";
-  const needles = terms.map((t) => t.toLowerCase()).filter((t) => t !== "");
-  let at = -1;
-  for (let i = 0; i < tokens.length && at === -1; i++) {
-    const token = (tokens[i] as string)
-      .toLowerCase()
-      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    if (needles.some((n) => token.startsWith(n))) at = i;
-  }
-  const start = Math.max(0, at === -1 ? 0 : at - Math.floor(width / 3));
-  const slice = tokens.slice(start, start + width);
-  return `${start > 0 ? "…" : ""}${slice.join(" ")}${start + width < tokens.length ? "…" : ""}`;
-}
-
-/** The query's positive text tokens, for the excerpt. */
-function queryTerms(q: SearchQuery): string[] {
-  return [
-    ...q.words.filter((w) => !w.negated),
-    ...q.phrases.filter((p) => !p.negated),
-    ...q.subject.filter((c) => !c.negated),
-  ].flatMap((c) => c.text.split(/[^\p{L}\p{N}]+/u).filter((t) => t !== ""));
-}
+// excerpt() and queryTerms() are the shared ones (packages/shared
+// search-match.ts): the passage a common term gets here is the one the
+// Server's full search sends with a hit.
+export { excerpt };
 
 /* ------------------------------ Ranking ------------------------------ */
 
@@ -347,6 +365,20 @@ export function scoreCandidates(
     });
   }
   return out;
+}
+
+/**
+ * The local hits and the full search's, as one list: each Thread once (the
+ * local hit wins, it carries the Cache's Tags and passage), newest activity
+ * first, the order the Server finds them in.
+ */
+export function mergeHits(local: readonly SearchHit[], server: readonly SearchHit[]): SearchHit[] {
+  const byId = new Map<string, SearchHit>();
+  for (const h of server) byId.set(h.thread.id, h);
+  for (const h of local) byId.set(h.thread.id, h);
+  return [...byId.values()].sort((a, b) =>
+    b.thread.lastActivity.localeCompare(a.thread.lastActivity),
+  );
 }
 
 export function sortHits(hits: SearchHit[]): SearchHit[] {
@@ -520,7 +552,7 @@ export function createSearch(options: SearchModuleOptions): SearchModule {
     }
 
     let older: OlderMail | null = null;
-    if (compiled.bodyTerms && options.fetchBodies) {
+    if (compiled.bodyTerms && options.fullSearch) {
       const where = ["body_text is null"];
       const params: SqlParam[] = [];
       if (q.after !== null) {
@@ -574,28 +606,56 @@ export function createSearch(options: SearchModuleOptions): SearchModule {
       return { query: q, hits, older, elapsedMs: performance.now() - started };
     },
 
-    async pullOlder(older, onBatch) {
-      const fetchBodies = options.fetchBodies;
-      if (!fetchBodies) return 0;
-      const source = options.sources().find((s) => s.store.workspaceId === older.workspaceId);
-      if (!source) return 0;
-      const batch = settings().olderBatch;
-      let before = older.before;
-      let landed = 0;
-      let total = older.missing;
-      for (;;) {
-        const page = await fetchBodies(older.workspaceId, {
-          after: older.after,
-          before,
-          limit: batch,
-        });
-        total = Math.max(total, page.total);
-        landed += await source.store.applyBodies(page.bodies);
-        onBatch?.({ done: Math.min(landed, total), total });
-        if (page.cursor === null || page.bodies.length === 0) break;
-        before = page.cursor;
+    async searchOlder(text, opts) {
+      const stream = options.fullSearch;
+      if (!stream) return null;
+      const source = options.sources().find((x) => x.store.workspaceId === opts.workspace);
+      const account = source?.account ?? "";
+      let done: FullSearchDone | null = null;
+      let failure: FullSearchError | null = null;
+      try {
+        await stream(
+          {
+            workspace: opts.workspace,
+            q: text,
+            ...(opts.cursor ? { cursor: opts.cursor } : {}),
+            ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+            now: (opts.now ?? now()).toISOString(),
+          },
+          (event) => {
+            if (opts.signal?.aborted) return;
+            if (event.type === "hit") {
+              opts.onHit?.({
+                thread: event.thread,
+                tags: [],
+                workspaceId: opts.workspace,
+                account,
+                snippet: event.snippet !== "" ? event.snippet : event.thread.snippet,
+                score: 0,
+                pinned: false,
+              });
+            } else if (event.type === "progress") {
+              opts.onProgress?.({
+                scanned: event.scanned,
+                total: event.total,
+                cursor: event.cursor ?? null,
+              });
+            } else if (event.type === "done") {
+              done = event;
+            } else {
+              failure = new FullSearchError(event.message, event.code ?? null);
+            }
+          },
+          opts.signal,
+        );
+      } catch (error) {
+        if (opts.signal?.aborted) return null;
+        const status = (error as { status?: number }).status;
+        if (status === 423) throw new FullSearchError(String(error), "locked");
+        throw error instanceof Error ? error : new Error(String(error));
       }
-      return landed;
+      if (failure) throw failure;
+      return opts.signal?.aborted ? null : done;
     },
 
     async recent() {

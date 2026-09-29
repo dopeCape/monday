@@ -285,7 +285,7 @@ export const messages = pgTable(
   (t) => [
     unique("messages_workspace_provider").on(t.workspaceId, t.providerMessageId),
     index("messages_thread_idx").on(t.threadId, t.date),
-    /** /messages/bodies pages a Workspace by date (the Cache pre-warm, "search older mail"). */
+    /** /messages/bodies pages a Workspace by date (the Cache pre-warm). */
     index("messages_workspace_date_idx").on(t.workspaceId, t.date, t.id),
   ],
 );

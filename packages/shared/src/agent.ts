@@ -301,6 +301,12 @@ export interface ThreadFilter {
   olderThan?: IsoDate | undefined;
   unread?: boolean | undefined;
   includeArchived?: boolean | undefined;
+  /**
+   * Search the whole mailbox on the Server (ADR 0015): `query` is read with
+   * the search operators and matched inside bodies, older mail included,
+   * archived Threads included. Slower than the default; for older mail.
+   */
+  full?: boolean | undefined;
   limit: number;
 }
 

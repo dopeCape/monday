@@ -7,13 +7,20 @@
 // clears bodies in that order until the Cache fits again.
 //
 // The Job is a loop of steps over the Store; nothing here talks to the
-// network except through `fetchBodies`, the same seam "search older mail"
-// uses, and the platform through `conditions`.
+// network except through `fetchBodies` (GET /messages/bodies), and the
+// platform through `conditions`. "Search older mail" does not fill the
+// Cache: it is a full search on the Server (ADR 0015).
 
+import type { Id, MessageBodiesPage } from "@monday/shared";
 import type { NetworkInfo, PowerInfo } from "../platform/tauri.ts";
 import type { Statement } from "../store/driver.ts";
 import type { Store } from "../store/store.ts";
-import type { FetchBodies } from "./index.ts";
+
+/** The bulk body route, one page by date range, newest first. */
+export type FetchBodies = (
+  workspaceId: Id,
+  range: { after: string | null; before: string | null; limit: number },
+) => Promise<MessageBodiesPage>;
 
 export interface PrewarmSettings {
   /** How many days back bodies are fetched. */

@@ -24,6 +24,7 @@ import type {
   ChangesPage,
   ContentRef,
   FieldWrites,
+  FullSearchEvent,
   GroupId,
   HeaderSearchPage,
   Id,
@@ -85,9 +86,11 @@ import {
   workspaces,
 } from "../db/schema.ts";
 import { type ContentStore, createContentStore } from "./content.ts";
+import { type FullSearchOptions, prepareFullSearch } from "./full-search.ts";
 
 export type { ContentStore } from "./content.ts";
 export { CONTENT_KINDS, createContentStore, isContentKind } from "./content.ts";
+export type { FullSearchOptions } from "./full-search.ts";
 
 /** How much of the subject the headers index keeps in the clear. */
 export const SUBJECT_SEARCH_CHARS = 80;
@@ -332,10 +335,17 @@ export interface Mailstore extends ContentStore {
   searchHeaders(workspaceId: Id, options: SearchHeadersOptions): Promise<HeaderSearchPage>;
   /**
    * Decrypted bodies by date range, newest first, for the client Cache
-   * ("search older mail", the pre-warm Job). Throws LockedError when the root
+   * (the pre-warm Job). Throws LockedError when the root
    * key is not in memory.
    */
   listBodies(workspaceId: Id, options: ListBodiesOptions): Promise<MessageBodiesPage>;
+  /**
+   * The full search over the whole mailbox (ADR 0015, full-search.ts): SQL
+   * filters first, then subjects and bodies decrypted in memory and matched
+   * newest first. Resolves once the scan is ready; throws LockedError before
+   * anything streams when the query needs text and no root key is in memory.
+   */
+  searchFull(workspaceId: Id, options: FullSearchOptions): Promise<AsyncGenerator<FullSearchEvent>>;
   /** New K_ws; every wrapped data key in the Workspace is re-wrapped, no ciphertext is read. */
   rotateWorkspaceKey(workspaceId: Id): Promise<{ version: number; rewrapped: number }>;
 }
@@ -657,6 +667,7 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
     storeContent: content.storeContent,
     readContent: content.readContent,
     readText: content.readText,
+    textOpener: content.textOpener,
     createContentKey: content.createContentKey,
     sealChunk: content.sealChunk,
 
@@ -1435,6 +1446,10 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
         cursor: rows.length > limit && last ? last.date.toISOString() : null,
         total: Number(count?.n ?? 0),
       };
+    },
+
+    searchFull(workspaceId, options) {
+      return prepareFullSearch({ db, content }, workspaceId, options);
     },
 
     async rotateWorkspaceKey(workspaceId) {

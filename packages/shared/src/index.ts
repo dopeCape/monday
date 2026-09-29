@@ -9,6 +9,8 @@ export * from "./intent.ts";
 export * from "./judge.ts";
 export * from "./routing/index.ts";
 export * from "./search.ts";
+export * from "./search-match.ts";
+export * from "./search-query.ts";
 export * from "./settings/index.ts";
 export * from "./sync.ts";
 export * from "./workflow/index.ts";

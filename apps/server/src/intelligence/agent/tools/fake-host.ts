@@ -100,7 +100,7 @@ export function createFakeToolHost(
       const q = filter.query?.toLowerCase();
       return [...threads.values()]
         .filter((t) => !t.deleted)
-        .filter((t) => filter.includeArchived || !t.archived)
+        .filter((t) => filter.full || filter.includeArchived || !t.archived)
         .filter((t) => filter.section === undefined || t.section === filter.section)
         .filter((t) => filter.group === undefined || t.group === filter.group)
         .filter((t) => filter.unread === undefined || t.unread === filter.unread)
@@ -109,7 +109,10 @@ export function createFakeToolHost(
           (t) =>
             !q ||
             t.subject.toLowerCase().includes(q) ||
-            t.participants.some((p) => `${p.name} ${p.email}`.toLowerCase().includes(q)),
+            t.participants.some((p) => `${p.name} ${p.email}`.toLowerCase().includes(q)) ||
+            // The full search reads inside the Messages too (ADR 0015).
+            (filter.full === true &&
+              t.messages.some((m) => (m.text ?? "").toLowerCase().includes(q))),
         )
         .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity))
         .slice(0, filter.limit)
