@@ -83,6 +83,7 @@ import { mailRoutes } from "./routes/mail.ts";
 import { MCP_CALLBACK_PATH, mcpServerRoutes } from "./routes/mcp-servers.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
+import { peopleRoutes } from "./routes/people.ts";
 import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { storageRoutes } from "./routes/storage.ts";
@@ -499,6 +500,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     }),
   );
   app.route("/", draftsRoutes(drafts, mailstore));
+  app.route("/", peopleRoutes(db, options.now ? { now: options.now } : {}));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
   app.route("/", localRuntimeRoutes(localBridge));

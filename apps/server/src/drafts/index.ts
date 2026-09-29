@@ -41,6 +41,7 @@ import {
 } from "../db/schema.ts";
 import type { Jobs } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
+import { recordSend as recordPeopleSend } from "../people/index.ts";
 import { composeMime, textFromHtml } from "../providers/mime.ts";
 import type { ProviderDraft, SyncEngine } from "../providers/sync.ts";
 import {
@@ -786,6 +787,14 @@ export function createDrafts(options: DraftsOptions): Drafts {
         const d = updated[0];
         if (d) await recordDraft(tx, d);
         await recordSend(tx, s);
+        // The people index hears of the send now, Bcc included, before the sent copy syncs back.
+        await recordPeopleSend(
+          tx,
+          row.workspaceId,
+          acct.address.trim().toLowerCase(),
+          [...draft.to, ...draft.cc, ...draft.bcc],
+          now(),
+        );
         await tx.insert(activity).values({
           id: crypto.randomUUID(),
           workspaceId: row.workspaceId,

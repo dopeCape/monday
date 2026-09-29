@@ -40,6 +40,13 @@ import type {
 import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
+import {
+  PEOPLE_DROP_SQL,
+  PEOPLE_FILL_SQL,
+  PEOPLE_FORMAT,
+  PEOPLE_FORMAT_KEY,
+  PEOPLE_SCHEMA_SQL,
+} from "./people.ts";
 import schemaSql from "./schema.sql?raw";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
 
@@ -315,8 +322,12 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
     "select name from sqlite_master where type = 'table' and name = 'threads'",
   );
   const version = Number(versionRows[0]?.value ?? 0) || 0;
-  if (existing.length > 0 && version < SCHEMA_VERSION) await driver.exec(REBUILD_SQL);
+  if (existing.length > 0 && version < SCHEMA_VERSION) {
+    await driver.exec(REBUILD_SQL);
+    await driver.exec(PEOPLE_DROP_SQL);
+  }
   await driver.exec(schemaSql);
+  await driver.exec(PEOPLE_SCHEMA_SQL);
   await addColumns(driver);
   await driver.exec(
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
@@ -335,6 +346,20 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
       {
         sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
         params: [SENDERS_KEY, String(SENDERS_FORMAT)],
+      },
+    ]);
+  }
+  const peopleRows = await driver.query("select value from meta where key = ?", [
+    PEOPLE_FORMAT_KEY,
+  ]);
+  if (Number(peopleRows[0]?.value ?? 0) < PEOPLE_FORMAT) {
+    // A Cache from before the people table: everyone on its Messages, filled
+    // once; the triggers keep it in step from here on.
+    await driver.batch([
+      ...PEOPLE_FILL_SQL.map((sql) => ({ sql })),
+      {
+        sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+        params: [PEOPLE_FORMAT_KEY, String(PEOPLE_FORMAT)],
       },
     ]);
   }

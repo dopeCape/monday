@@ -48,6 +48,7 @@ import {
 import { useCalendarDrafts, useDraftEntries } from "../calendar/DraftsContext.tsx";
 import { chordLabel, type KeyAction } from "../keyboard/keymaps.ts";
 import { type KeyContext, type KeyHandlers, useKeymap } from "../keyboard/useKeymap.ts";
+import { type PeopleSource, withList } from "../people/lookup.ts";
 import { openExternal } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
@@ -115,6 +116,8 @@ export interface CalendarProps {
   jumpTo?: { day: string; n: number; view?: CalendarView | undefined } | undefined;
   /** The people in the mail, most recent first, for the guest suggestions. */
   people?: readonly Person[] | undefined;
+  /** The people index (the composer's): guests are suggested from it, the directory folded in. */
+  peopleSource?: PeopleSource | undefined;
   /**
    * The bottom agent the App owns, so asking here opens it here without
    * leaving the page; absent, a bar that hands off to the Inbox's.
@@ -165,6 +168,7 @@ export function Calendar({
   initialView,
   jumpTo,
   people,
+  peopleSource,
   agent,
 }: CalendarProps) {
   const shell = useShell();
@@ -279,6 +283,10 @@ export function Calendar({
     for (const e of recent) for (const a of e.attendees) if (!a.self) add(a);
     return [...seen.values()];
   }, [people, events, accounts, workspace.address]);
+  const guestSource = useMemo(
+    () => (peopleSource ? withList(peopleSource, () => directory) : undefined),
+    [peopleSource, directory],
+  );
 
   /* ------------------------------ The Agent's calendar draft ------------------------------ */
 
@@ -1265,6 +1273,7 @@ export function Calendar({
             accounts={accounts}
             colors={colors}
             directory={directory}
+            guestSource={guestSource}
             s={s}
             now={now}
             busy={busy}
@@ -1292,6 +1301,7 @@ export function Calendar({
           accounts={accounts}
           colors={colors}
           directory={directory}
+          guestSource={guestSource}
           s={s}
           now={now}
           busy={busy}

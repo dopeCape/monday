@@ -234,6 +234,48 @@ describe("the quick create's own controls", () => {
       [...(form?.querySelectorAll(".cal-chip") ?? [])].map((c) => c.getAttribute("title")),
     ).toEqual(["mateus@genai-labs.io"]);
   });
+
+  test("with the people index, guests come from the whole mailbox, earlier Events folded in", async () => {
+    const source = fixtureCalendar({ calendars, events });
+    const hit = (name: string, email: string, score: number) => ({
+      name,
+      email,
+      sent: 0,
+      received: 0,
+      lastAt: null,
+      score,
+    });
+    await mount(
+      <Calendar
+        source={source}
+        now={NOW}
+        people={[]}
+        peopleSource={{
+          local: async () => [hit("Aoife Brennan", "aoife@northwind.test", 3)],
+          remote: async () => [hit("Maren Old", "maren@archive.example", 5)],
+          limit: () => 8,
+          debounceMs: () => 0,
+        }}
+      />,
+    );
+    await click(button(host?.querySelector(".col-head"), "Event"));
+    const form = document.querySelector(".cal-quick");
+    await click(button(form, "Add guests"));
+    const input = form?.querySelector<HTMLInputElement>(".cal-people-input");
+    await act(async () => {
+      input?.dispatchEvent(new FocusEvent("focus"));
+      input?.focus();
+    });
+    await typeInto(input, "ma");
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const names = [...document.querySelectorAll(".cal-suggest .cal-suggest-name")].map(
+      (n) => n.textContent,
+    );
+    // The Server's person from old mail, the index's own, then Mateus from an earlier Event.
+    expect(names).toEqual(["Maren Old", "Aoife Brennan", "Mateus Silva"]);
+  });
 });
 
 describe("the calendar list", () => {

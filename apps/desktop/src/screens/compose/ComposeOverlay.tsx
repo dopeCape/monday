@@ -179,7 +179,7 @@ export function ComposeWindow({
         label={label}
         value={content[field]}
         onChange={(people: Person[]) => editor.setRecipients(field, people)}
-        people={composer.participants()}
+        source={composer.people}
         onBlur={() => void editor.flush()}
       />
     </div>
@@ -229,7 +229,7 @@ export function ComposeWindow({
             label={strings.overlay.to}
             value={content.to}
             onChange={(people) => editor.setRecipients("to", people)}
-            people={composer.participants()}
+            source={composer.people}
             autofocus={!bare && initial.to.length === 0}
             onBlur={() => void editor.flush()}
             trailing={

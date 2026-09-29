@@ -426,18 +426,6 @@ export function rowToSend(r: Row, workspaceId: string): ScheduledSend {
 /** The reply-all choice for one Thread, or none. */
 export const REPLY_PREF_SQL = "select reply_all from reply_prefs where thread_id = ?";
 
-/**
- * Everyone the Cache has seen on a Thread, by most recent activity, for the
- * recipient autocomplete. One row per address; the first name seen wins.
- */
-export const PARTICIPANTS_SQL = `
-  select json_extract(value, '$.email') as email, json_extract(value, '$.name') as name, max(t.last_activity) as last
-  from threads t, json_each(t.participants)
-  where json_extract(value, '$.email') <> ''
-  group by lower(json_extract(value, '$.email'))
-  order by last desc
-  limit 500`;
-
 export function rowToPerson(r: Row): Person {
   return { name: text(r.name), email: text(r.email) };
 }

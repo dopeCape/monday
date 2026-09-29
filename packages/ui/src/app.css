@@ -7826,6 +7826,15 @@ button.prov {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* the typed part of a suggested name or address */
+.c-suggest mark {
+  background: none;
+  color: inherit;
+  font-weight: 600;
+}
+.c-suggest .pop-item span:last-child mark {
+  color: var(--fg-muted);
+}
 .c-status {
   color: var(--fg-faint);
   font-size: var(--fs-xs);

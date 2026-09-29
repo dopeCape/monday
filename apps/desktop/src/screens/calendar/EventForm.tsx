@@ -32,6 +32,8 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import type { PeopleSource } from "../../people/lookup.ts";
+import { usePeopleSuggestions } from "../../people/usePeople.ts";
 import { suggest } from "../compose/Recipients.tsx";
 import type { CalendarAccount } from "./calendar-data.ts";
 import { DateField, Dropdown, type DropdownOption, TimeField, ZoneField } from "./controls.tsx";
@@ -51,6 +53,11 @@ export interface PeopleFieldProps {
   onChange: (people: Person[]) => void;
   /** Who to suggest, most recent first: the people in the mail and on earlier Events. */
   directory: readonly Person[];
+  /**
+   * The people index (the Cache at once, the Server's whole mailbox merged in)
+   * with the directory folded in; absent, the directory alone is suggested.
+   */
+  source?: PeopleSource | undefined;
   limit: number;
   placeholder: string;
   label: string;
@@ -63,6 +70,7 @@ export function PeopleField({
   people,
   onChange,
   directory,
+  source,
   limit,
   placeholder,
   label,
@@ -74,10 +82,12 @@ export function PeopleField({
   const [focused, setFocused] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
   const listId = useId();
-  const suggestions = useMemo(
-    () => suggest(directory, text, people, limit),
-    [directory, text, people, limit],
+  const indexed = usePeopleSuggestions(source, text, people);
+  const listed = useMemo(
+    () => (source ? [] : suggest(directory, text, people, limit)),
+    [source, directory, text, people, limit],
   );
+  const suggestions: readonly Person[] = source ? indexed.slice(0, limit) : listed;
   const add = (found: readonly Person[]) => {
     const have = new Set(people.map((p) => p.email.toLowerCase()));
     const fresh = found.filter((p) => !have.has(p.email.toLowerCase()));
@@ -92,7 +102,10 @@ export function PeopleField({
       return true;
     }
     const typed = parsePeople(text).map(
-      (p) => directory.find((d) => d.email.toLowerCase() === p.email.toLowerCase()) ?? p,
+      (p) =>
+        [...suggestions, ...directory].find(
+          (d) => d.email.toLowerCase() === p.email.toLowerCase(),
+        ) ?? p,
     );
     if (typed.length === 0) return false;
     add(typed);
@@ -364,6 +377,8 @@ export interface QuickCreateProps {
   accounts: readonly CalendarAccount[];
   colors: ReadonlyMap<string, string>;
   directory: readonly Person[];
+  /** The people index for guest suggestions; see PeopleField. */
+  guestSource?: PeopleSource | undefined;
   s: Settings;
   now: Date;
   busy: boolean;
@@ -380,6 +395,7 @@ export function QuickCreate({
   accounts,
   colors,
   directory,
+  guestSource,
   s,
   now,
   busy,
@@ -443,6 +459,7 @@ export function QuickCreate({
             people={draft.attendees}
             onChange={(attendees) => onChange({ ...draft, attendees })}
             directory={directory}
+            source={guestSource}
             limit={s["calendar.guest_suggestions_max"]}
             placeholder={s["strings.calendar.form.guests_placeholder"]}
             label={s["strings.calendar.form.attendees"]}
@@ -489,6 +506,8 @@ export interface EventEditorProps {
   accounts: readonly CalendarAccount[];
   colors: ReadonlyMap<string, string>;
   directory: readonly Person[];
+  /** The people index for guest suggestions; see PeopleField. */
+  guestSource?: PeopleSource | undefined;
   s: Settings;
   now: Date;
   busy: boolean;
@@ -533,6 +552,7 @@ export function EventEditor({
   accounts,
   colors,
   directory,
+  guestSource,
   s,
   now,
   busy,
@@ -632,6 +652,7 @@ export function EventEditor({
                   people={draft.attendees}
                   onChange={(attendees) => onChange({ ...draft, attendees })}
                   directory={directory}
+                  source={guestSource}
                   limit={s["calendar.guest_suggestions_max"]}
                   placeholder={s["strings.calendar.form.guests_placeholder"]}
                   label={s["strings.calendar.form.attendees"]}

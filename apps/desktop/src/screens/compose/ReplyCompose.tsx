@@ -209,7 +209,7 @@ export function ReplyCompose({
                 label={strings.overlay.to}
                 value={content.to}
                 onChange={(people: Person[]) => editor.setRecipients("to", people)}
-                people={composer.participants()}
+                source={composer.people}
                 onBlur={() => void editor.flush()}
               />
               {content.cc.length > 0 || replyAll ? (
@@ -219,7 +219,7 @@ export function ReplyCompose({
                     label={strings.overlay.cc}
                     value={content.cc}
                     onChange={(people: Person[]) => editor.setRecipients("cc", people)}
-                    people={composer.participants()}
+                    source={composer.people}
                     onBlur={() => void editor.flush()}
                   />
                 </>
