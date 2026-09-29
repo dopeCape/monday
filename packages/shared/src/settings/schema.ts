@@ -2908,6 +2908,7 @@ export const settingsSchema = {
       "draft-in-voice",
       "summarize",
       "template",
+      "board",
     ],
     scope: "global",
     section: "ai",
