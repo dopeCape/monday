@@ -7,6 +7,7 @@ export * from "./domain.ts";
 export * from "./first-sync.ts";
 export * from "./intent.ts";
 export * from "./judge.ts";
+export * from "./people.ts";
 export * from "./routing/index.ts";
 export * from "./search.ts";
 export * from "./settings/index.ts";

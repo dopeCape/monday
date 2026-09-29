@@ -493,6 +493,42 @@ export const syncMessages = pgTable(
   ],
 );
 
+/**
+ * The people index: one row per address the Workspace has mail with, derived
+ * from `messages` as they are written (src/people/index.ts) and filled once
+ * for an older mailbox by migration 0022. Addresses and names are plaintext
+ * in `messages` already (research 5), so they are here too. `sent_count`
+ * counts the user's Messages with the person on To or Cc; `pending_sent`
+ * counts sends delivered but not yet seen back from the Provider (the sent
+ * copy's arrival moves one across); `received_count` counts the person's
+ * Messages. The name is the one last seen (`name_at`).
+ */
+export const PEOPLE_TERMS_SQL =
+  "array_to_tsvector(array_remove(regexp_split_to_array(lower(name), '[^[:alnum:]]+') || regexp_split_to_array(address, '[^[:alnum:]]+') || ARRAY[address, split_part(address, '@', 1), split_part(address, '@', 2)], ''))";
+
+export const people = pgTable(
+  "people",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** Lowercased. */
+    address: text("address").notNull(),
+    name: text("name").notNull().default(""),
+    nameAt: timestamp("name_at", { withTimezone: true, mode: "date" }),
+    sentCount: integer("sent_count").notNull().default(0),
+    pendingSent: integer("pending_sent").notNull().default(0),
+    receivedCount: integer("received_count").notNull().default(0),
+    lastAt: timestamp("last_at", { withTimezone: true, mode: "date" }),
+    /** The name's words, the address, its local part, domain and pieces; prefix-matched. */
+    terms: tsvector("terms").generatedAlwaysAs(sql.raw(PEOPLE_TERMS_SQL)),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.address] }),
+    index("people_terms_idx").using("gin", t.terms),
+  ],
+);
+
 /* ------------------------------ Changes feed and activity ------------------------------ */
 
 /**

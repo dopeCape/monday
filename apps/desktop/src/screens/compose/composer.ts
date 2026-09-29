@@ -13,6 +13,7 @@ import type {
   Person,
   ScheduledSend,
 } from "@monday/shared";
+import { listSource, type PeopleSource } from "../../people/lookup.ts";
 
 /** An assist request without the Workspace, which the Composer knows. */
 export type AssistRequest = Omit<DraftAssistRequest, "workspace">;
@@ -53,8 +54,15 @@ export interface Composer {
   /** Undo: cancels before run_at and reopens the Draft. */
   cancel(sendId: string): Promise<void>;
   upload(file: UploadFile, onProgress?: (fraction: number) => void): Promise<DraftAttachment>;
-  /** Everyone the Cache has seen, most recent first, for the recipient autocomplete. */
+  /**
+   * Everyone the Cache has seen, most recent first, for lists that want them
+   * all (the palette's contacts, the calendar's guests). Read on demand: the
+   * first call starts the read and answers empty, and subscribers hear when it
+   * lands; a later call after the Cache's Messages changed reads again.
+   */
   participants(): readonly Person[];
+  /** Who To, Cc and Bcc suggest as the user types: the Cache at once, the Server merged in. */
+  readonly people?: PeopleSource | undefined;
   /** The remembered reply-all choice for a Thread, or null. */
   replyAllFor(threadId: string): boolean | null;
   setReplyAllFor(threadId: string, replyAll: boolean): Promise<void>;
@@ -192,6 +200,7 @@ export function fixtureComposer(options: FixtureComposerOptions = {}): Composer 
       };
     },
     participants: () => options.participants ?? [],
+    people: listSource(() => options.participants ?? []),
     replyAllFor: (threadId) => prefs.get(threadId) ?? null,
     async setReplyAllFor(threadId, replyAll) {
       prefs.set(threadId, replyAll);

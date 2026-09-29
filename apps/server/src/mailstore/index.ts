@@ -84,6 +84,7 @@ import {
   voiceProfiles,
   workspaces,
 } from "../db/schema.ts";
+import { ownerLookup, recordMessage } from "../people/index.ts";
 import { type ContentStore, createContentStore } from "./content.ts";
 
 export type { ContentStore } from "./content.ts";
@@ -522,6 +523,7 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
   const content = createContentStore(keys);
   const log = options.log ?? (() => {});
   let intentObserver: IntentObserver | null = null;
+  const ownerOf = ownerLookup();
 
   const requireThread = async (executor: Db | Tx, threadId: string) => {
     const row = await executor.query.threads.findFirst({ where: eq(threads.id, threadId) });
@@ -940,9 +942,15 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
             target: [messages.workspaceId, messages.providerMessageId],
             set: values,
           })
-          .returning({ id: messages.id });
+          // xmax is 0 on a row this statement inserted, not on one it updated.
+          .returning({ id: messages.id, inserted: sql<boolean>`(xmax = 0)` });
         const stored = rows[0]?.id;
         if (!stored) throw new Error("upsertMessage returned no row");
+        // The people index counts a Message once, when it is first stored; a
+        // body landing later re-upserts the same row and counts nothing.
+        if (rows[0]?.inserted) {
+          await recordMessage(tx, workspaceId, await ownerOf(tx, workspaceId), input);
+        }
         await refreshThread(tx, input.threadId);
         const message = await requireMessage(tx, stored);
         await store.recordChange(tx, {

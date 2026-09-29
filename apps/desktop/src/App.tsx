@@ -1126,6 +1126,7 @@ export function App({
         now={nowProp}
         jumpTo={calendarJump ?? undefined}
         people={composer.participants()}
+        peopleSource={composer.people}
         onNavigate={navigate}
         onAsk={askHere}
         agent={bottomAgent}

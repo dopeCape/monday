@@ -55,6 +55,7 @@ import type {
   McpToolView,
   MessageBodiesPage,
   MeterMonth,
+  PeopleSearchPage,
   ProposedMove,
   Provider,
   RerunProgress,
@@ -380,6 +381,14 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
         workspaceId: Id,
         patch: Partial<Pick<VoiceProfile, "description" | "excerpts" | "enabled">>,
       ) => request<VoiceProfile>("/voice", json("PUT", { workspace: workspaceId, ...patch })),
+    },
+    people: {
+      /** The people index over the whole mailbox, best first (GET /people). Works locked. */
+      search: (workspaceId: Id, q: string, limit: number, signal?: AbortSignal) =>
+        request<PeopleSearchPage>(
+          `/people?${new URLSearchParams({ workspace: workspaceId, q, limit: String(limit) })}`,
+          signal ? { signal } : {},
+        ),
     },
     search: {
       /** The Server's headers-only index, for the Agent's lookups while a laptop is closed. */

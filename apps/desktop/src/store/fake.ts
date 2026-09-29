@@ -18,11 +18,12 @@ import type {
   Invite,
   InviteIntent,
   IsoDate,
+  PersonHit,
   ScheduledSend,
   ScheduleResult,
   ThreadChange,
 } from "@monday/shared";
-import { FIELD_GROUP_OF, resolveWrite } from "@monday/shared";
+import { FIELD_GROUP_OF, peopleQueryWords, personMatches, resolveWrite } from "@monday/shared";
 import { ApiError, type MessageHeaderResponse } from "../platform/api.ts";
 import type { SqlDriver } from "./driver.ts";
 import { fixtureSeed, type SeedData, seedStatements } from "./seed.ts";
@@ -77,6 +78,10 @@ export interface FakeServer {
   receivedDrafts: DraftIntent[];
   /** Invite answers that arrived, in order (slice 18). */
   receivedInvites: InviteIntent[];
+  /** The people index over the whole mailbox (GET /people), ranked; tests fill it. */
+  people: PersonHit[];
+  /** The people queries that reached the Server, in order. */
+  peopleRequests: string[];
   /** Invites the fake Server holds, by id, for the content route. */
   invites: Map<Id, Invite>;
   drafts: Map<Id, Draft>;
@@ -203,6 +208,8 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
     received: [],
     receivedDrafts: [],
     receivedInvites: [],
+    people: [],
+    peopleRequests: [],
     invites: new Map(),
     drafts: draftsById,
     sends: sendsById,
@@ -616,6 +623,15 @@ export function fakeContent(server: FakeServer, seed: SeedData | null): ContentT
       const blob = blobs.get(attachmentId);
       if (blob) return { bytes: blob.bytes, mediaType: blob.mediaType };
       throw new ApiError(404, "not found");
+    },
+    async people(_workspaceId, q, limit) {
+      server.peopleRequests.push(q);
+      if (server.offline) throw offline();
+      const words = peopleQueryWords(q);
+      return server.people
+        .filter((p) => personMatches(p, words))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
     },
     async uploadBlob(_workspaceId, file, onProgress) {
       if (server.offline) throw offline();

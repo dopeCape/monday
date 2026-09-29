@@ -188,7 +188,21 @@ function Root() {
             d1: { ghost: fx.draftGhost, note: fx.draftNote },
           }))
       ).then((suggestions) =>
-        createStoreComposer(store, content, { address: ws.address, suggestions }),
+        createStoreComposer(store, content, {
+          address: ws.address,
+          suggestions,
+          // Read on every lookup, so a changed Setting applies to the next keystroke.
+          people: {
+            limit: () => settingsRef.current["people.suggestions"],
+            debounceMs: () => settingsRef.current["people.server_debounce_ms"],
+            server: () => settingsRef.current["people.search_server"],
+            ranking: () => ({
+              weights: settingsRef.current["people.weights"],
+              halfLifeDays: settingsRef.current["people.recency_half_life_days"],
+            }),
+            recentMax: () => settingsRef.current["intent.contacts_max"],
+          },
+        }),
       ),
     ]).then(([routing, calendar, inbox, composer]) => {
       if (closed) {

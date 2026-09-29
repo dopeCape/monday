@@ -18,6 +18,7 @@ import type {
   IntentResult,
   Invite,
   InviteIntent,
+  PersonHit,
 } from "@monday/shared";
 import type {
   Api,
@@ -90,6 +91,8 @@ export interface ContentTransport {
   draftAssist?(request: DraftAssistRequest): Promise<DraftAssistResult>;
   /** Whether the assist can answer now. */
   draftAssistAvailable?(workspaceId: Id): Promise<boolean>;
+  /** The Server's people index over the whole mailbox (GET /people); absent without a Server. */
+  people?(workspaceId: Id, q: string, limit: number, signal?: AbortSignal): Promise<PersonHit[]>;
   uploadBlob(
     workspaceId: Id,
     file: { name: string; mediaType: string; bytes: Uint8Array },
@@ -183,6 +186,8 @@ export function apiContent(api: Api): ContentTransport {
     draftAssist: (request) => api.drafts.assist(request),
     draftAssistAvailable: async (workspaceId) =>
       (await api.drafts.assistAvailable(workspaceId)).available,
+    people: async (workspaceId, q, limit, signal) =>
+      (await api.people.search(workspaceId, q, limit, signal)).people,
     async uploadBlob(workspaceId, file, onProgress) {
       const started = await api.blobs.start(workspaceId, {
         name: file.name,

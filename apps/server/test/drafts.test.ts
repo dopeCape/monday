@@ -14,14 +14,14 @@ import type {
   ScheduledSend,
   VoiceProfile,
 } from "@monday/shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
 import { claimableNeeds } from "../src/capabilities.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
-import { activity, jobs as jobsTable } from "../src/db/schema.ts";
+import { activity, jobs as jobsTable, people } from "../src/db/schema.ts";
 import {
   createDrafts,
   DELIVER_STEP,
@@ -597,6 +597,27 @@ describe("drafts and scheduled sends", () => {
     // Running the Job twice does not send twice.
     await drafts.deliver("send-2", "send-2");
     expect(fake.calls.send).toBe(1);
+
+    // The people index heard of the send at once, and the sent copy settles it when it syncs back.
+    const aoife = async () =>
+      (
+        await db.handle.db
+          .select()
+          .from(people)
+          .where(
+            and(eq(people.workspaceId, workspaceId), eq(people.address, "aoife@northlight.dev")),
+          )
+      )[0];
+    const heard = await aoife();
+    expect(heard?.pendingSent).toBe(1);
+    const sentBefore = heard?.sentCount ?? 0;
+    let again = await engine.syncAccount(account.id, { headersOnly: true });
+    for (let i = 0; i < 50 && again.more; i++) {
+      again = await engine.syncAccount(account.id, { headersOnly: true });
+    }
+    const settled = await aoife();
+    expect(settled?.pendingSent).toBe(0);
+    expect(settled?.sentCount).toBe(sentBefore + 1);
   });
 
   test("send later is the same Job with a later time", async () => {

@@ -187,8 +187,83 @@ describe("the Store composer", () => {
       address: "tejas@genai-labs.io",
     });
     expect(reopened.replyAllFor("e1")).toBe(true);
-    expect(reopened.participants().some((p) => p.email === "aoife@northlight.dev")).toBe(true);
+    // Read on demand: the first call starts the read, subscribers hear when it lands.
+    reopened.participants();
+    await until(() => reopened.participants().some((p) => p.email === "aoife@northlight.dev"));
+    expect(reopened.participants().some((p) => p.email === "tejas@genai-labs.io")).toBe(false);
     reopened.close();
+    await store.close();
+  });
+
+  test("people: the Cache answers at once, the Server merges in, offline the Cache alone", async () => {
+    const { store, server, content: transport } = await open();
+    const composer = await createStoreComposer(store, transport, {
+      address: "tejas@genai-labs.io",
+      people: { debounceMs: () => 0 },
+    });
+    const source = composer.people;
+    if (!source) throw new Error("no people source");
+    // Only the Server knows someone from long ago.
+    server.people = [
+      {
+        name: "Aoife Brennan",
+        email: "aoife@northlight.dev",
+        sent: 12,
+        received: 30,
+        lastAt: "2026-09-16T09:00:00.000Z",
+        score: 20,
+      },
+      {
+        name: "Aoibheann Old",
+        email: "aoibheann@archive.example",
+        sent: 3,
+        received: 0,
+        lastAt: "2014-01-01T00:00:00.000Z",
+        score: 4,
+      },
+    ];
+    const local = await source.local("aoi", 8);
+    expect(local.map((p) => p.email)).toContain("aoife@northlight.dev");
+    expect(local.map((p) => p.email)).not.toContain("aoibheann@archive.example");
+    expect(await source.local("tejas", 8)).toEqual([]);
+
+    const { createPeopleLookup } = await import("../../people/lookup.ts");
+    const lookup = createPeopleLookup(source);
+    let last: { people: { email: string }[]; complete: boolean } | null = null;
+    lookup.query("aoi", [], (r) => {
+      last = r;
+    });
+    await until(() => last?.complete === true);
+    const emails = (last as unknown as { people: { email: string }[] }).people.map((p) => p.email);
+    expect(emails).toEqual(["aoife@northlight.dev", "aoibheann@archive.example"]);
+    expect(server.peopleRequests).toEqual(["aoi"]);
+
+    server.offline = true;
+    last = null;
+    lookup.query("aoif", [], (r) => {
+      last = r;
+    });
+    await until(() => last?.complete === true);
+    expect((last as unknown as { people: { email: string }[] }).people.map((p) => p.email)).toEqual(
+      ["aoife@northlight.dev"],
+    );
+
+    // The Setting off: the Server is not asked.
+    server.offline = false;
+    const quiet = await createStoreComposer(store, transport, {
+      address: "tejas@genai-labs.io",
+      people: { debounceMs: () => 0, server: () => false },
+    });
+    const asked = server.peopleRequests.length;
+    const offLookup = createPeopleLookup(quiet.people as NonNullable<typeof quiet.people>);
+    last = null;
+    offLookup.query("aoi", [], (r) => {
+      last = r;
+    });
+    await until(() => last?.complete === true);
+    expect(server.peopleRequests.length).toBe(asked);
+    composer.close();
+    quiet.close();
     await store.close();
   });
 });
