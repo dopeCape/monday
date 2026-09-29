@@ -41,9 +41,53 @@ pub fn request(
     stream
         .write_all(body.as_bytes())
         .map_err(|e| e.to_string())?;
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let raw = read_answer(&mut stream)?;
     parse_response(&raw)
+}
+
+/// Reads one answer and stops when it is complete: after Content-Length bytes,
+/// after a chunked body's last chunk, or at the end of the stream. The server
+/// may keep the connection open despite `Connection: close` (Bun does), so
+/// waiting for it to close turned every healthy probe into a timeout.
+fn read_answer(stream: &mut impl Read) -> Result<Vec<u8>, String> {
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        if let Some(done) = complete_len(&raw) {
+            raw.truncate(done);
+            return Ok(raw);
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => return Ok(raw),
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // A timeout after a complete answer was handled above; here it is real.
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// How many bytes make a complete answer, once enough has arrived to tell.
+fn complete_len(raw: &[u8]) -> Option<usize> {
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
+    let body_at = split + 4;
+    for line in head.split("\r\n") {
+        if let Some(v) = line.strip_prefix("content-length:") {
+            let len: usize = v.trim().parse().ok()?;
+            return (raw.len() >= body_at + len).then_some(body_at + len);
+        }
+        if line.starts_with("transfer-encoding:") && line.contains("chunked") {
+            let body = &raw[body_at..];
+            return body
+                .windows(5)
+                .position(|w| w == b"0\r\n\r\n")
+                .filter(|&at| at == 0 || body[..at].ends_with(b"\r\n"))
+                .map(|at| body_at + at + 5);
+        }
+    }
+    // No length and not chunked: only the end of the stream says it is done.
+    None
 }
 
 /// Splits a raw answer into its status and body, decoding a chunked body.
@@ -101,6 +145,34 @@ fn dechunk(mut data: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn an_answer_is_read_without_waiting_for_the_server_to_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = conn.read(&mut buf);
+            conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}")
+                .unwrap();
+            // Keep the connection open, as a keep-alive server does.
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let started = std::time::Instant::now();
+        let res = request(port, "GET", "/service", "t", None, Duration::from_secs(2)).unwrap();
+        assert_eq!(res.status, 200);
+        assert_eq!(res.body, "{\"ok\":true}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn chunked_answers_end_at_the_last_chunk() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+        assert_eq!(complete_len(raw), Some(raw.len()));
+        assert_eq!(complete_len(&raw[..raw.len() - 2]), None);
+    }
 
     #[test]
     fn plain_and_chunked_answers() {
