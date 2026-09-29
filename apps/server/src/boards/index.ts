@@ -56,7 +56,7 @@ export class BoardNotFoundError extends Error {
 export class BoardLimitError extends Error {
   readonly status = 409;
   constructor(
-    readonly reason: "boards" | "signals",
+    readonly reason: "boards" | "signals" | "judge" | "test",
     message: string,
   ) {
     super(message);
@@ -253,13 +253,21 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
     };
   };
 
-  const record = (executor: Db | Tx, r: BoardRow) =>
-    mailstore.recordChange(executor, {
+  /**
+   * The Signals each Workspace's Boards declare, read on every Signal request:
+   * kept a few seconds and dropped on every write here, so a new or deleted
+   * Board is seen at once on this Server and within seconds on another.
+   */
+  const wantedCache = new Map<Id, { at: number; value: BoardSignalWanted[] }>();
+  const record = (executor: Db | Tx, r: BoardRow) => {
+    wantedCache.delete(r.workspaceId);
+    return mailstore.recordChange(executor, {
       workspaceId: r.workspaceId,
       kind: "board",
       entityId: r.id,
       payload: boardHeaders(r),
     });
+  };
 
   const mustRow = async (id: Id) => {
     const r = await row(id);
@@ -572,26 +580,39 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
     },
 
     async signalsWanted(workspaceId) {
-      const rows = (await liveRows(workspaceId)).filter((r) => r.pinned);
-      if (rows.length === 0) return [];
-      const s = await settings();
-      const out: BoardSignalWanted[] = [];
-      for (const r of rows) {
-        const doc = await docAt(r, r.version);
-        if (!doc) continue;
-        for (const def of boardSignalDefs({ ...doc, id: r.id }, s["boards.examples_in_question"])) {
-          out.push({
-            id: def.id,
-            kind: def.kind,
-            question: def.question,
-            facts: doc.scope.facts,
-            boardId: r.id,
-            consumer: doc.name,
-          });
-        }
-      }
-      return out;
+      const at = Date.now();
+      const cached = wantedCache.get(workspaceId);
+      if (cached && at - cached.at >= 0 && at - cached.at < WANTED_TTL_MS) return cached.value;
+      const value = await readWanted(workspaceId);
+      wantedCache.set(workspaceId, { at, value });
+      return value;
     },
   };
+
+  async function readWanted(workspaceId: Id): Promise<BoardSignalWanted[]> {
+    const rows = (await liveRows(workspaceId)).filter((r) => r.pinned);
+    if (rows.length === 0) return [];
+    const s = await settings();
+    const out: BoardSignalWanted[] = [];
+    for (const r of rows) {
+      const doc = await docAt(r, r.version);
+      if (!doc) continue;
+      for (const def of boardSignalDefs({ ...doc, id: r.id }, s["boards.examples_in_question"])) {
+        out.push({
+          id: def.id,
+          kind: def.kind,
+          question: def.question,
+          facts: doc.scope.facts,
+          boardId: r.id,
+          consumer: doc.name,
+        });
+      }
+    }
+    return out;
+  }
+
   return store;
 }
+
+/** How long a Workspace's Board Signals are kept between reads when nothing here wrote a Board. */
+const WANTED_TTL_MS = 5_000;

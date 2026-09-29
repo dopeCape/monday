@@ -15,6 +15,7 @@ import type {
 } from "@monday/shared";
 import { boardView, scopeSince } from "@monday/shared";
 import { eq } from "drizzle-orm";
+import { createDraftStore } from "../../boards/drafts.ts";
 import { BoardNotFoundError, type BoardStore, decidingSignal } from "../../boards/index.ts";
 import { loadBoardThreads } from "../../boards/threads.ts";
 import type { Db } from "../../db/client.ts";
@@ -23,6 +24,9 @@ import type { Mailstore } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
+import { type BoardDrafting, createBoardDrafting } from "./drafting.ts";
+
+export type { BoardDrafting, DraftCorrection, UpdateProposal } from "./drafting.ts";
 
 const CONTEXT_KEYS = [
   "signals.unsure.noul_low",
@@ -67,6 +71,8 @@ export interface BoardIntelligence {
    * `lane` null takes the placement back.
    */
   moveThread(boardId: Id, threadId: Id, lane: string | null): Promise<Board>;
+  /** The Agent's drafts: propose, correct, revise, pin, update, apply, discard (slice 40). */
+  drafting: BoardDrafting;
 }
 
 export interface BoardIntelligenceOptions {
@@ -125,16 +131,31 @@ export function createBoardIntelligence(options: BoardIntelligenceOptions): Boar
     return { threads, view: boardView(doc, threads, ctx, { placements: opts.placements }) };
   };
 
+  const changed = async (workspaceId: Id) => {
+    try {
+      await signals.defs(workspaceId);
+    } catch (error) {
+      log(`boards ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const drafting = createBoardDrafting({
+    db,
+    mailstore: options.mailstore,
+    runtime: options.runtime,
+    signals,
+    store,
+    drafts: createDraftStore({ db, mailstore: options.mailstore, now }),
+    context,
+    changed,
+    log,
+  });
+
   return {
     store,
     context,
-    async changed(workspaceId) {
-      try {
-        await signals.defs(workspaceId);
-      } catch (error) {
-        log(`boards ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
+    changed,
+    drafting,
     place,
     async moveThread(boardId, threadId, lane) {
       const board = await store.get(boardId);

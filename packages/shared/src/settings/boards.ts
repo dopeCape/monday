@@ -250,6 +250,17 @@ export const BOARD_SETTINGS = {
     "Revise the board draft {draft} with my corrections",
   ),
   "strings.boards.revised": str("revised line", "Revised: {changes}"),
+  "strings.boards.change.reworded": str("revision: reworded", "rewrote the question for {signal}"),
+  "strings.boards.change.examples": str(
+    "revision: Examples",
+    "added {count} of your corrections to {signal}",
+  ),
+  "strings.boards.change.none": str("revision: nothing", "kept the questions as they were"),
+  "strings.boards.pin_needs_test": str(
+    "pin before the test",
+    "Try it on your mail first: the card shows the tried threads before Pin board.",
+  ),
+  "strings.boards.corrected": str("corrected row", "Corrected"),
   "strings.boards.over_limit": str(
     "over the thread limit",
     "{count} threads in scope, above the {max} a Board reads. Pinning reads them all.",

@@ -1006,6 +1006,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   });
   extensions.meetings = meetings;
   extensions.templates = templates;
+  extensions.boards = boards;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);

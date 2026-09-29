@@ -8,8 +8,8 @@
 // pinned without a test, and the offer to tighten a question the user keeps
 // correcting. Every word is a strings.boards.* Setting.
 
-import type { Board, BoardComponent, BoardDoc, BoardLayout as Layout } from "@monday/shared";
-import { BOARD_COMPONENTS, BOARD_ICONS } from "@monday/shared";
+import type { Board, BoardComponent, BoardDoc } from "@monday/shared";
+import { BOARD_COMPONENTS, BOARD_ICONS, layoutForComponent } from "@monday/shared";
 import { Btn, Toast } from "@monday/ui";
 import { DotsThreeIcon, XIcon } from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
@@ -21,33 +21,6 @@ import { useBoards, useBoardView } from "./useBoards.ts";
 
 const fill = (t: string, vars: Record<string, string | number>) =>
   t.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
-
-/** The props a Show as change gives a component: its own defaults, the row kept where it fits. */
-export function layoutFor(component: BoardComponent, current: Layout): Layout {
-  const row = "row" in current ? current.row : undefined;
-  const sort = "sort" in current ? current.sort : undefined;
-  switch (component) {
-    case "lanes":
-      return { component, ...(row ? { row } : {}), ...(sort ? { sort } : {}) };
-    case "list":
-      return { component, ...(row ? { row } : {}), ...(sort ? { sort } : {}) };
-    case "counts":
-      return { component };
-    case "table":
-      return {
-        component,
-        columns:
-          current.component === "table"
-            ? current.columns
-            : [
-                { label: "Received", fact: "received_at", format: "date" },
-                { label: "Messages", fact: "message_count", format: "number" },
-              ],
-      };
-    case "timeline":
-      return { component, date: "last_activity_at" };
-  }
-}
 
 /** How many Threads the user moved out of each Lane in the last week. */
 export function movesOutOf(board: Board, now: Date): Record<string, number> {
@@ -232,7 +205,7 @@ export function BoardScreen({ boardId, now, onAsk, onLeave, render }: BoardScree
           onPick={(c) => {
             setMenu(null);
             void edit(
-              (d) => ({ ...d, layout: layoutFor(c as BoardComponent, d.layout) }),
+              (d) => ({ ...d, layout: layoutForComponent(c as BoardComponent, d.layout) }),
               s[`strings.boards.show_as.${c as BoardComponent}`],
             );
           }}

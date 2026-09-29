@@ -14,6 +14,12 @@
 //   POST   /boards/:id/restore                 ->  Board                    (Undo of a delete)
 //   POST   /boards/:id/place                   {threadId, lane | null}  ->  Board   a correction on the Board
 //   POST   /boards/:id/dismiss-check           ->  Board
+// The Agent's drafts (slice 40): the card reads and acts on them; only the user's click saves.
+//   GET    /boards/drafts/:id                  BoardDraft
+//   POST   /boards/drafts/:id/corrections      {threadId, lane?} | {threadId, signal, holds}  ->  BoardDraft
+//   POST   /boards/drafts/:id/pin              {factsOnly?}  ->  {board, draft}     Pin board
+//   POST   /boards/drafts/:id/apply            ->  {board, draft, previous}         Apply an edit
+//   POST   /boards/drafts/:id/discard          ->  BoardDraft                       Not now
 
 import { type Context, Hono } from "hono";
 import { z } from "zod";
@@ -32,6 +38,13 @@ const updateBody = z.object({ doc: z.record(z.string(), z.unknown()) });
 const revertBody = z.object({ version: z.number().int().min(1) });
 const moveBody = z.object({ by: z.union([z.literal(-1), z.literal(1)]) });
 const pinBody = z.object({ pinned: z.boolean() });
+const correctionBody = z.object({
+  threadId: z.string().min(1),
+  lane: z.string().min(1).max(40).optional(),
+  signal: z.string().min(1).max(80).optional(),
+  holds: z.boolean().optional(),
+});
+const pinDraftBody = z.object({ factsOnly: z.boolean().optional() });
 const placeBody = z.object({
   threadId: z.string().min(1),
   lane: z.string().min(1).max(40).nullable(),
@@ -67,6 +80,39 @@ export function boardRoutes(boards: BoardIntelligence): Hono<AppEnv> {
       return boardRefused(c, error);
     }
   };
+
+  const drafting = boards.drafting;
+  const draftAct = async (c: Context<AppEnv>, run: () => Promise<unknown>) => {
+    try {
+      return c.json((await run()) as object);
+    } catch (error) {
+      return boardRefused(c, error);
+    }
+  };
+
+  app.get("/boards/drafts/:id", (c) => draftAct(c, () => drafting.drafts.get(c.req.param("id"))));
+
+  app.post("/boards/drafts/:id/corrections", async (c) => {
+    const body = await parseBody(c, correctionBody);
+    if (!body.ok) return body.response;
+    return draftAct(c, () => drafting.correct(c.req.param("id"), body.data));
+  });
+
+  app.post("/boards/drafts/:id/pin", async (c) => {
+    const body = await parseBody(c, pinDraftBody);
+    if (!body.ok) return body.response;
+    return draftAct(c, () =>
+      drafting.pin(c.req.param("id"), {
+        ...(body.data.factsOnly !== undefined ? { factsOnly: body.data.factsOnly } : {}),
+      }),
+    );
+  });
+
+  app.post("/boards/drafts/:id/apply", (c) => draftAct(c, () => drafting.apply(c.req.param("id"))));
+
+  app.post("/boards/drafts/:id/discard", (c) =>
+    draftAct(c, () => drafting.discard(c.req.param("id"))),
+  );
 
   app.get("/boards", async (c) => {
     const q = workspaceQuery.safeParse(c.req.query());

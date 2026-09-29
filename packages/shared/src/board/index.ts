@@ -17,9 +17,11 @@ import { questionLabel } from "../signals.ts";
 import {
   BOARD_FACTS,
   BOARD_ICONS,
+  type BoardComponent,
   type BoardDoc,
   type BoardExample,
   type BoardFact,
+  type BoardLayout,
   type BoardPlacement,
   type BoardScopeFacts,
   type BoardSignal,
@@ -1121,6 +1123,33 @@ export function lanesChanged(a: BoardDoc, b: BoardDoc): boolean {
       others: d.others,
     });
   return pick(a) !== pick(b);
+}
+
+/** The props a Show as change gives a component: its own defaults, the row kept where it fits. */
+export function layoutForComponent(component: BoardComponent, current: BoardLayout): BoardLayout {
+  const row = "row" in current ? current.row : undefined;
+  const sort = "sort" in current ? current.sort : undefined;
+  switch (component) {
+    case "lanes":
+      return { component, ...(row ? { row } : {}), ...(sort ? { sort } : {}) };
+    case "list":
+      return { component, ...(row ? { row } : {}), ...(sort ? { sort } : {}) };
+    case "counts":
+      return { component };
+    case "table":
+      return {
+        component,
+        columns:
+          current.component === "table"
+            ? current.columns
+            : [
+                { label: "Received", fact: "received_at", format: "date" },
+                { label: "Messages", fact: "message_count", format: "number" },
+              ],
+      };
+    case "timeline":
+      return { component, date: "last_activity_at" };
+  }
 }
 
 /** A Board's Signal question in words, for cards and the Signals page. */

@@ -167,7 +167,8 @@ export interface ThreadVersion {
 }
 
 /** Why a Signal request is made; each is metered on its own line. */
-export type AskReason = "arrival" | "background" | "backlog";
+/** `board` is a Board's test before it is pinned (docs/spec/boards.md): the user waits on it. */
+export type AskReason = "arrival" | "background" | "backlog" | "board";
 
 export interface AskOptions {
   reason: AskReason;
@@ -316,6 +317,7 @@ const TASK: Record<AskReason, JudgeTask> = {
   arrival: "judge.signals",
   background: "judge.backfill",
   backlog: "judge.backlog",
+  board: "judge.board",
 };
 
 const clamp = (v: number, max = 1) =>
@@ -1253,7 +1255,8 @@ export function createSignals(options: SignalsOptions): Signals {
           })) {
             const r = await runtime.judge(TASK[opts.reason], state, part, {
               workspaceId,
-              priority: opts.reason === "arrival" ? "arrival" : "background",
+              priority:
+                opts.reason === "arrival" || opts.reason === "board" ? "arrival" : "background",
               jobId: opts.jobId ?? null,
             });
             result.calls += 1;
