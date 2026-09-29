@@ -185,10 +185,23 @@ export interface NewDraftOptions {
   to?: Person[] | undefined;
 }
 
+/**
+ * A seeded opening as HTML: paragraphs split on blank lines, single line
+ * breaks kept as <br> (a meeting reply's list of times, docs/spec/meetings.md).
+ */
+export function openingParagraphs(text: string): string {
+  return text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p !== "")
+    .map((p) => `<p>${p.split("\n").map(escapeHtml).join("<br>")}</p>`)
+    .join("");
+}
+
 /** The content a fresh Draft starts with, per kind. */
 export function initialContent(o: NewDraftOptions): DraftContent {
-  const opening = o.opening?.trim() ?? "";
-  const openingHtml = opening ? `<p>${escapeHtml(opening)}</p>` : "<p></p>";
+  const opening = o.opening?.trim().replace(/\r\n?/g, "\n") ?? "";
+  const openingHtml = opening ? openingParagraphs(opening) : "<p></p>";
   const openingText = opening ? `${opening}\n` : "";
   const empty: DraftContent = {
     threadId: o.threadId,

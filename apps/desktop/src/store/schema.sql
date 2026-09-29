@@ -194,6 +194,16 @@ create table if not exists thread_judgments (
   judged_at text not null default ''
 );
 
+-- A Thread's meeting chip as the Server planned it (docs/spec/meetings.md),
+-- so a list row can show it on hover; the reader asks for fresh options on
+-- open. `chip` is JSON or null. A feed row marked deleted removes the entry.
+create table if not exists thread_meetings (
+  thread_id text primary key,
+  message_id text not null default '',
+  chip text,
+  judged_at text not null default ''
+);
+
 create table if not exists section_rules (
   id text primary key,
   name text not null,

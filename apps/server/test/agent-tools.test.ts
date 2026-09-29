@@ -121,6 +121,7 @@ describe("the tool catalog", () => {
       search_mcp_catalog: "read",
       connect_mcp: "leaves_mailbox",
       list_workflows: "read",
+      meeting_options: "read",
       create_workflow: "reversible",
       update_workflow: "reversible",
       enable_workflow: "reversible",

@@ -8,6 +8,7 @@
 import type {
   Brief,
   Group,
+  MeetingChip,
   Message,
   SectionJudged,
   Tag,
@@ -145,6 +146,8 @@ export interface ThreadReader {
    * Changes reach the stream's subscribers, not watchMessages.
    */
   judgments?(threadId: string): ThreadJudgments | undefined;
+  /** The Thread's meeting chip from the Cache (docs/spec/meetings.md), for the row's hover. */
+  meeting?(threadId: string): MeetingChip | undefined;
   /**
    * Why the last open left bodies missing: the Server did not answer
    * (offline), it is locked, or the read failed; null when nothing went

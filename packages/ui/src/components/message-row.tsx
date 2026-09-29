@@ -28,6 +28,14 @@ export interface MessageRowProps {
   className?: string | undefined;
   /** Words a search matched, marked in the sender, subject and snippet. */
   highlight?: readonly string[] | undefined;
+  /**
+   * One suggested action beside archive and snooze (docs/spec/actions.md,
+   * "at most one" in the list), such as a meeting chip. Shown on hover and
+   * on the selected row like the other actions, or always when `always`.
+   */
+  action?:
+    | { label: string; title?: string | undefined; always?: boolean | undefined; onRun: () => void }
+    | undefined;
 }
 
 /** Text with the matched words in <mark>. */
@@ -54,6 +62,7 @@ export function MessageRow({
   onDragEnd,
   className,
   highlight,
+  action,
 }: MessageRowProps) {
   const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
@@ -95,7 +104,20 @@ export function MessageRow({
         {account ? <span className="acct">{account}</span> : null}
       </span>
       <span className="time">{formatListTime(thread.lastActivity, now)}</span>
-      <span className="actions">
+      <span className={cx("actions", action?.always && "keep")}>
+        {action ? (
+          <Btn
+            sm
+            className="row-chip"
+            title={action.title ?? action.label}
+            onClick={(e: MouseEvent) => {
+              e.stopPropagation();
+              action.onRun();
+            }}
+          >
+            {action.label}
+          </Btn>
+        ) : null}
         <Btn icon title={titles?.archive ?? "Archive (E)"} onClick={act(onArchive)}>
           <Icon icon={ArchiveIcon} />
         </Btn>

@@ -53,6 +53,9 @@ import type {
   McpServerView,
   McpSignInStatus,
   McpToolView,
+  MeetingDraftRequest,
+  MeetingDraftResult,
+  MeetingOptions,
   MessageBodiesPage,
   MeterMonth,
   ProposedMove,
@@ -476,6 +479,35 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           throw error;
         }
       },
+    },
+    meetings: {
+      /**
+       * What monday knows about meeting on a Thread now (docs/spec/meetings.md):
+       * the case, proposals with free or busy, slots and chips. Null when the
+       * Server makes no model calls (409 ai_off) or has nothing for the Thread.
+       */
+      options: async (
+        workspaceId: Id,
+        threadId: Id,
+        zone?: string,
+      ): Promise<MeetingOptions | null> => {
+        const q = new URLSearchParams({ workspace: workspaceId });
+        if (zone) q.set("zone", zone);
+        try {
+          return await request<MeetingOptions>(`/meetings/${encodeURIComponent(threadId)}?${q}`);
+        } catch (error) {
+          if (error instanceof ApiError && (error.status === 409 || error.status === 404)) {
+            return null;
+          }
+          throw error;
+        }
+      },
+      /** The reply text for an offer, suggest or accept chip; never sends anything. */
+      draft: (threadId: Id, body: MeetingDraftRequest) =>
+        request<MeetingDraftResult>(
+          `/meetings/${encodeURIComponent(threadId)}/draft`,
+          json("POST", body),
+        ),
     },
     devices: {
       list: () => request<Device[]>("/devices"),

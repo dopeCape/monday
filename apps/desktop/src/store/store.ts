@@ -31,6 +31,7 @@ import type {
   InviteIntentArgs,
   IsoDate,
   JudgmentsChange,
+  MeetingChange,
   Message,
   MessageBodyRow,
   RunChange,
@@ -66,6 +67,7 @@ const THREAD_SCOPED_TABLES = new Set([
   "thread_tags",
   "thread_labels",
   "thread_judgments",
+  "thread_meetings",
   "briefs",
 ]);
 
@@ -78,6 +80,7 @@ function threadOfChange(c: Change): Id | undefined {
     case "thread_tags":
     case "thread_labels":
     case "judgments":
+    case "meeting":
     case "brief":
       return c.payload.threadId;
     default:
@@ -281,6 +284,7 @@ const REBUILD_SQL = `
   drop table if exists groups;
   drop table if exists decisions;
   drop table if exists thread_judgments;
+  drop table if exists thread_meetings;
   delete from meta where key = 'cursor';
 `;
 
@@ -652,6 +656,8 @@ export function changeStatements(change: Change): Statement[] {
       return [decisionUpsert(change.payload)];
     case "judgments":
       return [judgmentsUpsert(change.payload)];
+    case "meeting":
+      return [meetingUpsert(change.payload)];
     case "calendar":
       return [calendarUpsert(change.payload)];
     case "event":
@@ -794,6 +800,20 @@ function decisionUpsert(d: DecisionChange): Statement {
     sql: `insert into decisions (thread_id, candidates, at) values (?, ?, ?)
           on conflict (thread_id) do update set candidates = excluded.candidates, at = excluded.at`,
     params: [d.threadId, d.candidates, d.at],
+  };
+}
+
+/** A Thread's meeting chip from the feed (docs/spec/meetings.md): replaced on every re-judge; removed when deleted. */
+function meetingUpsert(m: MeetingChange): Statement {
+  if (m.deleted) {
+    return { sql: "delete from thread_meetings where thread_id = ?", params: [m.threadId] };
+  }
+  return {
+    sql: `insert into thread_meetings (thread_id, message_id, chip, judged_at)
+          values (?, ?, ?, ?)
+          on conflict (thread_id) do update set
+            message_id = excluded.message_id, chip = excluded.chip, judged_at = excluded.judged_at`,
+    params: [m.threadId, m.messageId, m.chip ?? null, m.judgedAt],
   };
 }
 

@@ -82,6 +82,7 @@ const SUMMARY_HEADER_FIELDS = [
   "x-mailer",
   "x-github-reason",
   "feedback-id",
+  "date",
 ];
 
 export interface ImapProviderOptions {

@@ -9,7 +9,7 @@
 // Setting keeps its value), and no Session is opened. Onboarding is offered
 // once per Account, after it is added, and again from "Set me up".
 
-import type { CalendarDraft, ExternalPending, Group } from "@monday/shared";
+import type { CalendarDraft, ExternalPending, Group, Person } from "@monday/shared";
 import {
   Btn,
   formatWhen,
@@ -76,6 +76,7 @@ import { windowInFront } from "./screens/first-sync/ready.ts";
 import { Inbox, type SyncProgress } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { type FolderKey, isStreamFolder } from "./screens/inbox/folders.ts";
+import { parseCalendarNewTarget } from "./screens/inbox/meetings.ts";
 import { Onboarding, WELCOME_KEY } from "./screens/Onboarding.tsx";
 import {
   ONBOARDING_FIXTURE_SENDERS,
@@ -247,6 +248,7 @@ export function App({
     day: string;
     n: number;
     view?: "day" | "week" | "month" | "agenda";
+    create?: { start: string; end: string; title: string; attendees: Person[] };
   } | null>(null);
   /** The workspace switcher under the workspace button. */
   // `?overlay=ws` opens it on the dev server, as the mock's state does.
@@ -740,7 +742,17 @@ export function App({
         setWorkflowsView((v) => ({ view: "list", n: v.n + 1, run: { workflowId, runId } }));
         setActive("workflows");
       } else if (target === "calendar") setActive("calendar");
-      else if (target.startsWith("calendar:")) {
+      else if (target.startsWith("calendar-new:")) {
+        // A meeting's Pick a time: the Calendar opens its editor on that day, prefilled.
+        const create = parseCalendarNewTarget(target);
+        if (create) {
+          const at = new Date(create.start);
+          const p = (n: number) => String(n).padStart(2, "0");
+          const day = `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}`;
+          setCalendarJump((j) => ({ day, n: (j?.n ?? 0) + 1, create }));
+        }
+        setActive("calendar");
+      } else if (target.startsWith("calendar:")) {
         // A date from the palette's "Jump to date": the Calendar opens on that day.
         setCalendarJump((j) => ({ day: target.slice("calendar:".length), n: (j?.n ?? 0) + 1 }));
         setActive("calendar");
@@ -1165,6 +1177,7 @@ export function App({
         sectionsOn={sectionsOn}
         folder={folderLens}
         judge={shell.api.judge}
+        meetings={shell.api.meetings}
       />
     ),
   );

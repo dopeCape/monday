@@ -9,7 +9,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 1. [`CONTEXT.md`](../../CONTEXT.md), the glossary. Every term in every document below is defined there.
 2. The ADRs in [`docs/adr/`](../adr/), the architecture. Each is one page.
 3. [`architecture.md`](./architecture.md), how the modules, deployments and data fit together, with the data model and API shape.
-4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md), and the Signal specs: [`signals.md`](./signals.md) (the foundation), [`actions.md`](./actions.md), [`templates.md`](./templates.md), [`boards.md`](./boards.md), [`signal-features.md`](./signal-features.md).
+4. The behavior specs: [`inbox.md`](./inbox.md), [`agent-composer.md`](./agent-composer.md), [`settings.md`](./settings.md), [`workflows.md`](./workflows.md), [`routing.md`](./routing.md), [`calendar.md`](./calendar.md), [`external-mcp.md`](./external-mcp.md), [`onboarding.md`](./onboarding.md), and the Signal specs: [`signals.md`](./signals.md) (the foundation), [`actions.md`](./actions.md), [`templates.md`](./templates.md), [`boards.md`](./boards.md), [`signal-features.md`](./signal-features.md), and meetings from mail, [`meetings.md`](./meetings.md), built ahead of the Signal store.
 5. [`slices.md`](./slices.md), the ordered implementation plan.
 6. The research under [`docs/research/`](../research/) on the `research/*` branches, for the provider and platform facts behind the decisions.
 
@@ -35,6 +35,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Judgments, the Judge, TypeSafe | ADR 0012 |
 | Signals, Facts, the one-Thread request, backfill and budget | ADR 0014, `signals.md` |
 | Recommended actions | `actions.md` |
+| Meetings from mail: Offer times, Schedule, Suggest another time, Pick a time | `meetings.md` |
 | Templates and Placeholders | `templates.md` |
 | Boards and Lanes | `boards.md` |
 | Screening on arrival, the Interruption policy, the Digest | `signal-features.md` |

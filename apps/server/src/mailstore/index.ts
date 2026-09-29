@@ -79,6 +79,7 @@ import {
   sessions,
   tags,
   threadLabels,
+  threadMeetings,
   threads,
   threadTags,
   voiceProfiles,
@@ -1527,6 +1528,12 @@ const REWRAP_SPECS: readonly RewrapSpec[] = [
     id: briefs.threadId,
     workspace: briefs.workspaceId,
     keys: [briefs.bulletsKey, briefs.actionsKey],
+  },
+  {
+    table: threadMeetings,
+    id: threadMeetings.threadId,
+    workspace: threadMeetings.workspaceId,
+    keys: [threadMeetings.readingKey],
   },
   {
     table: voiceProfiles,

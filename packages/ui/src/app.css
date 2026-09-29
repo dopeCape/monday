@@ -919,6 +919,25 @@ i.ph-bold > svg {
 .row:hover .meta {
   visibility: hidden;
 }
+/* A row's one suggested action (a meeting chip): beside archive and snooze on
+   hover, and on its own on the selected row, or on every row when kept. */
+.row .actions .row-chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+}
+.row.on .actions:has(.row-chip),
+.row .actions.keep {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+.row.on:not(:hover):not(:focus-within) .actions:has(.row-chip) > .btn:not(.row-chip),
+.row:not(:hover):not(:focus-within) .actions.keep > .btn:not(.row-chip) {
+  display: none;
+}
 
 /* split mode: narrow list, two lines per row */
 :root[data-list="split"] .row {
@@ -954,7 +973,9 @@ i.ph-bold > svg {
   transform: translate(4px, 0);
 }
 :root[data-list="split"] .row:hover .actions,
-:root[data-list="split"] .row:focus-within .actions {
+:root[data-list="split"] .row:focus-within .actions,
+:root[data-list="split"] .row.on .actions:has(.row-chip),
+:root[data-list="split"] .row .actions.keep {
   transform: translate(0, 0);
 }
 :root[data-list="split"] .row.on::before {

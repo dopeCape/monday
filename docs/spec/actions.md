@@ -82,6 +82,13 @@ Each action has a **fit** Signal (a Noul, owned by the Recommended action, shipp
 - The chip reads "Add Thu 15:00 to calendar"; without a confident hour, "Add Thu to calendar" opens the event form on that day.
 - Tool: `calendar.create_event` with its Tier (always-ask when it invites anyone; the chip never adds invitees).
 
+### Meetings
+
+Meeting requests and proposed times have their own actions, specced and built ahead of the Signal store: `meetings.md`. **Offer times** (a reply Draft with Free slots), **Schedule** and **Reply: works for me** (a proposed time the owner is free for), **Suggest another time** (busy then), and **Pick a time** (the event editor, when the reading is unsure). Their fit questions are the meeting Nouls (`asks_to_meet`, `owner_asked`, `proposes_time`), their arguments the meeting date parts; code does every date, zone, free and busy decision.
+- Where a Thread asks to meet or proposes a meeting time, the meeting chips take the place of Add to calendar: Schedule is Add to calendar with the free or busy check, the guests and the reply. Add to calendar stays for events that are not meetings with the sender (an appointment, a talk, a delivery window).
+- Tools: `schedule_event` (always-ask, its approval card) for Schedule; `compose.reply` (always-ask; opens compose with the reply text, sends nothing) for the three replies; the event editor (the user's own write) for Pick a time.
+- They count in the chip limits below, like every Recommended action: at most `meetings.max_in_reader` (2) of them in the reader, one on a row.
+
 ### Pay or file
 ```json
 { "pay_fits": { "type": "noul",
@@ -132,6 +139,7 @@ Each action has a **fit** Signal (a Noul, owned by the Recommended action, shipp
 | Forward | `…forward.threshold`, `…forward.to_confidence` | 0.8, 0.8 | A wrong recipient is embarrassing even if it asks |
 | Hand to someone | `…delegate.threshold`, same recipient floor | 0.85, 0.8 | Passes responsibility |
 | Add to calendar | `…calendar.threshold`, `…calendar.time_confidence` | 0.75, 0.7 | A wrong time is worse than no time |
+| Meetings | `meetings.offer.threshold`, `meetings.schedule.threshold`, `meetings.schedule.time_confidence`, `meetings.suggest.threshold`, `meetings.pick.threshold` | 0.7, 0.8, 0.7, 0.75, 0.5 | By risk, in `meetings.md` |
 | Pay or file | `…pay.threshold`, `…pay.amount_confidence` | 0.8, 0.8 | Money; the amount must be right |
 | Unsubscribe | code only | | No judgment |
 | Track a package | `…track.threshold` | 0.7 | Read-only |
@@ -142,7 +150,7 @@ Thresholds are tuned against the pinned model; the Signals page shows each actio
 
 ## Brief chips, judged chips and Custom actions
 
-- **Replaced:** the judged chips of slice 25 (`CHIP_NAMES`: reply, call, review link, open attachment, pay or file, snooze) and the `chip_*` questions. Reply, snooze and pay carry over; call folds into Add to calendar; review link and open attachment are dropped as chips, since the reader already shows the Thread's links and attachments (see the open question in the report).
+- **Replaced:** the judged chips of slice 25 (`CHIP_NAMES`: reply, call, review link, open attachment, pay or file, snooze) and the `chip_*` questions. Reply, snooze and pay carry over; call folds into the meeting chips (`meetings.md`), which already replace it in the reader wherever they show; review link and open attachment are dropped as chips, since the reader already shows the Thread's links and attachments (see the open question in the report).
 - **Merged:** the Brief no longer chooses actions. It keeps its bullets and writes the reply's proposed opening line, which the Reply chip uses. Brief-less Threads get the same chips, because the chips come from Signals asked on arrival.
 - **Kept:** Custom actions are the user's own and render first in the chip row and in the toolbar. A Custom action and a Recommended action with the same tool and arguments render once, as the Custom action.
 

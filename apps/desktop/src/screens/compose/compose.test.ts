@@ -301,6 +301,29 @@ describe("reply rules (ADR 0010)", () => {
     expect(escaped.bodyText).toBe("<b>hi</b>\n");
   });
 
+  test("a meeting reply seeds several paragraphs and a list of times, text kept as written", () => {
+    const opening =
+      "Happy to meet. Would one of these work for you?\n\n- Thu 1 Oct, 15:00 to 15:30\n- Fri 2 Oct, 10:00 to 10:30\n\nLet me know.";
+    const reply = initialContent({
+      threadId: "t1",
+      kind: "reply",
+      last: msg(),
+      subject: "Term sheet",
+      me,
+      replyAll: false,
+      signature: { html: "", text: "" },
+      strings: { wrote: "On {date}, {name} wrote:", forwarded: "Forwarded message" },
+      formatDate: () => "Today 09:41",
+      opening,
+    });
+    expect(
+      reply.bodyHtml.startsWith(
+        "<p>Happy to meet. Would one of these work for you?</p><p>- Thu 1 Oct, 15:00 to 15:30<br>- Fri 2 Oct, 10:00 to 10:30</p><p>Let me know.</p>",
+      ),
+    ).toBe(true);
+    expect(reply.bodyText.startsWith(`${opening}\n`)).toBe(true);
+  });
+
   test("typed recipients parse", () => {
     expect(parseRecipient("aoife@northlight.dev")).toEqual({
       name: "",

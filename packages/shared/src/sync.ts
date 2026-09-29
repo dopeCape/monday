@@ -21,6 +21,7 @@ import type {
   Thread,
 } from "./domain.ts";
 import type { ThreadJudgments } from "./judge.ts";
+import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
 
 /* ------------------------------ Intents ------------------------------ */
@@ -226,6 +227,7 @@ export type ChangeKind =
   | "group"
   | "decision"
   | "judgments"
+  | "meeting"
   | "calendar"
   | "event"
   | "invite"
@@ -443,6 +445,7 @@ export type ChangePayload =
   | { kind: "group"; payload: GroupChange }
   | { kind: "decision"; payload: DecisionChange }
   | { kind: "judgments"; payload: JudgmentsChange }
+  | { kind: "meeting"; payload: MeetingChange }
   | { kind: "calendar"; payload: CalendarChange }
   | { kind: "event"; payload: EventChange }
   | { kind: "invite"; payload: InviteChange }
