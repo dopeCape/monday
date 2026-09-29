@@ -241,6 +241,7 @@ export const BOARD_SETTINGS = {
   "strings.boards.dismiss": str("dismiss", "Dismiss"),
   "strings.boards.lane_empty": str("empty lane", "Nothing here"),
   "strings.boards.empty": str("empty board", "No threads in this board's scope yet."),
+  "strings.boards.loading": str("loading board", "Loading this board"),
   "strings.boards.tried": str("tried line", "Tried on {count} threads"),
   "strings.boards.counts_over": str("counts over the tried", "Over all {count}: {counts}"),
   "strings.boards.apply": str("apply", "Apply"),

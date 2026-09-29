@@ -701,3 +701,44 @@ describe("subscribe", () => {
     await store.close();
   });
 });
+
+describe("live queries", () => {
+  test("the same question from two screens is one query and one copy of its rows; the last close ends it", async () => {
+    const inner = bunDriver();
+    let runs = 0;
+    const driver = {
+      ...inner,
+      query: (sql: string, params?: Parameters<typeof inner.query>[1]) => {
+        if (sql === INBOX_THREADS_SQL) runs += 1;
+        return inner.query(sql, params);
+      },
+    };
+    const { store } = await createFakeStore({ driver, seed: fixtureSeed() });
+    const nav = store.live(INBOX_THREADS_SQL);
+    let navRows: unknown[] | undefined;
+    nav.subscribe((rows) => {
+      navRows = rows;
+    });
+    await until(() => navRows !== undefined);
+    expect(runs).toBe(1);
+    // A screen opened after the nav gets the rows at once, without a second query.
+    const screen = store.live(INBOX_THREADS_SQL);
+    let screenRows: unknown[] | undefined;
+    screen.subscribe((rows) => {
+      screenRows = rows;
+    });
+    expect(screenRows).toBe(navRows);
+    expect(runs).toBe(1);
+    // Closing the screen keeps the nav's query live.
+    screen.close();
+    const first = navRows?.[0] as { id: string } | undefined;
+    await store.intent({ kind: "archive", threadId: String(first?.id) });
+    await until(() => runs >= 2);
+    nav.close();
+    // With both closed, a new ask queries again.
+    const again = store.live(INBOX_THREADS_SQL);
+    await until(() => again.rows !== undefined);
+    expect(runs).toBeGreaterThanOrEqual(3);
+    again.close();
+  });
+});

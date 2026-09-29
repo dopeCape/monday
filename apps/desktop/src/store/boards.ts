@@ -141,8 +141,10 @@ export function boardThreadsSql(
     params.push(folder.slice("section:".length));
   }
   if (since) {
+    // A bound only: the Board's own scope test is exact. Rounded down to the UTC day so
+    // the nav count and the open Board ask the same query and share its rows.
     where.push("t.last_activity >= ?");
-    params.push(since.toISOString());
+    params.push(new Date(Math.floor(since.getTime() / 86_400_000) * 86_400_000).toISOString());
   }
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const sql = `select * from (${ALL_THREADS_SQL.slice(0, at).replace(

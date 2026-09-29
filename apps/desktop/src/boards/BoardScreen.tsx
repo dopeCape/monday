@@ -93,7 +93,11 @@ export function BoardScreen({ boardId, now, onAsk, onLeave, render }: BoardScree
       name: "",
       threads: [],
       header: null,
-      render: () => <div className="empty-line">{s["strings.boards.empty"]}</div>,
+      render: () => (
+        <div className="empty-line">
+          {s[boards === undefined ? "strings.boards.loading" : "strings.boards.empty"]}
+        </div>
+      ),
     });
   }
 
@@ -337,6 +341,8 @@ export function BoardScreen({ boardId, now, onAsk, onLeave, render }: BoardScree
             }
           />
         )
-      ) : null,
+      ) : (
+        <div className="empty-line">{s["strings.boards.loading"]}</div>
+      ),
   });
 }
