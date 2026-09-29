@@ -354,6 +354,38 @@ export function useNewThread(): () => void {
 
 /* ------------------------------ Bar ------------------------------ */
 
+/**
+ * The values the composer itself sent up, so their echoes coming back down are
+ * not mistaken for a change made elsewhere. The screen's copy updates in a
+ * later render than the keystroke: while typing fast its echo of "ab" can land
+ * after the composer already holds "abc", and writing it back deleted the "c"
+ * and moved the cursor. Only values the composer never sent (a recall, the
+ * clear after Send, a palette prefill) are written into the input.
+ */
+export function createEchoFilter(max = 64) {
+  const sent: string[] = [];
+  return {
+    /** The composer sent this value up. */
+    sent(value: string) {
+      sent.push(value);
+      if (sent.length > max) sent.shift();
+    },
+    /** Whether a value from the screen is news for the composer, not an echo of its own. */
+    isExternal(value: string, composerText: string): boolean {
+      if (value === composerText) {
+        // In step again: older echoes can be forgotten.
+        sent.length = 0;
+        return false;
+      }
+      const echo = sent.lastIndexOf(value);
+      if (echo < 0) return true;
+      // An echo: forget it and everything sent before it.
+      sent.splice(0, echo + 1);
+      return false;
+    },
+  };
+}
+
 /** Keeps the screen's copy of the text and the composer's in step, both ways. */
 function TextBridge({
   text,
@@ -366,11 +398,16 @@ function TextBridge({
   const composerText = useAuiState((s) => s.composer.text);
   const latest = useRef({ text, onTextChange });
   latest.current = { text, onTextChange };
+  const echoes = useRef(createEchoFilter());
   useEffect(() => {
-    if (aui.composer().getState().text !== text) aui.composer().setText(text);
+    const now = aui.composer().getState().text;
+    if (echoes.current.isExternal(text, now)) aui.composer().setText(text);
   }, [aui, text]);
   useEffect(() => {
-    if (composerText !== latest.current.text) latest.current.onTextChange(composerText);
+    if (composerText !== latest.current.text) {
+      echoes.current.sent(composerText);
+      latest.current.onTextChange(composerText);
+    }
   }, [composerText]);
   return null;
 }
