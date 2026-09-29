@@ -99,8 +99,12 @@ export interface ComposeController {
     messages: readonly Message[],
     kind: "reply" | "forward",
     forceReplyAll?: boolean,
-    /** From a Brief chip: the proposed opening line, or the forward recipient. */
-    seed?: { opening?: string | undefined; to?: Person[] | undefined },
+    /** From a chip: the proposed opening line, the forward recipient, or people copied in (a hand-off). */
+    seed?: {
+      opening?: string | undefined;
+      to?: Person[] | undefined;
+      cc?: Person[] | undefined;
+    },
   ): void;
   /** Esc, the close button, the scrim: minimizes a window with content, or closes it, by Setting. */
   closeOverlay(): void;
@@ -366,7 +370,11 @@ export function useCompose(o: UseComposeOptions): ComposeController {
       messages: readonly Message[],
       kind: "reply" | "forward",
       force?: boolean,
-      seed?: { opening?: string | undefined; to?: Person[] | undefined },
+      seed?: {
+        opening?: string | undefined;
+        to?: Person[] | undefined;
+        cc?: Person[] | undefined;
+      },
     ) => {
       // A reply already started on this Thread (by the user or the Agent) is continued, not doubled.
       const saved = composer
@@ -419,6 +427,7 @@ export function useCompose(o: UseComposeOptions): ComposeController {
         attachments,
         opening: seed?.opening,
         to: seed?.to,
+        cc: seed?.cc,
       });
       inline({
         threadId: thread.id,
@@ -427,7 +436,7 @@ export function useCompose(o: UseComposeOptions): ComposeController {
         replyAll,
         last,
         initial,
-        pristine: seed?.opening || seed?.to ? null : initial,
+        pristine: seed?.opening || seed?.to || seed?.cc ? null : initial,
       });
     },
     [composer, settings, mint, signature, strings.reply, formatDate, inline, latest],

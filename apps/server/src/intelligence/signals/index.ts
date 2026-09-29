@@ -68,6 +68,13 @@ import {
 } from "../../db/schema.ts";
 import { type Mailstore, NotFoundError } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
+import {
+  listOptions,
+  RECOMMENDED_SIGNAL_SETTING_KEYS,
+  type RecommendedSignalSettings,
+  recipientOptions,
+  recommendedSignals,
+} from "../actions/signals.ts";
 import { sectionQuestion } from "../organize.ts";
 import { estimateTokens } from "../routing/batch.ts";
 import { extractJson } from "../routing/classify.ts";
@@ -79,6 +86,7 @@ import {
   computeFacts,
   type DeadlineParts,
   type FactMessage,
+  mayStateDate,
   mayStateDeadline,
   parseAmount,
   type SealedFacts,
@@ -99,6 +107,7 @@ export { dateInWords, ownWords, signalState } from "./state.ts";
 
 const SETTING_KEYS = [
   ...SHIPPED_SETTING_KEYS,
+  ...RECOMMENDED_SIGNAL_SETTING_KEYS,
   "signals.enabled",
   "signals.candidates.max",
   "signals.stats.window",
@@ -202,6 +211,30 @@ export interface SignalsSettings {
   maxActive: number;
 }
 
+/**
+ * What code offers a Thread's per-Thread Choices besides what its text holds
+ * (docs/spec/actions.md): the people a recipient Choice may pick, each with
+ * its one line of Facts, and whom the owner forwarded this sender's mail to
+ * (the state's sender history).
+ */
+export interface SignalCandidates {
+  people: Array<{ email: string; name: string; line: string }>;
+  forwardedTo: string[];
+  /** The Workflows a Thread may be run through by hand, each with the sentence it was written from. */
+  workflows?: Array<{ id: string; name: string; sentence: string }> | undefined;
+}
+
+export type CandidateSource = (input: {
+  workspaceId: Id;
+  threadId: Id;
+  owner: string;
+  sender: string;
+  /** Addresses named in the Thread's text (a Fact, sealed). */
+  named: readonly string[];
+  /** Everyone already on the Thread. */
+  participants: readonly string[];
+}) => Promise<SignalCandidates>;
+
 export interface Signals {
   /** Syncs the Workspace's definitions with the Settings; every definition, active or not. */
   defs(workspaceId: Id): Promise<StoredDef[]>;
@@ -245,6 +278,10 @@ export interface Signals {
   setDefsListener(
     listener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null,
   ): void;
+  /** Told a Thread's answers were written (the Recommended actions read them again). */
+  setAnsweredListener(listener: ((workspaceId: Id, threadId: Id) => Promise<unknown>) | null): void;
+  /** Where the per-Thread people and history come from (the Recommended actions). */
+  setCandidateSource(source: CandidateSource | null): void;
 }
 
 /** Which Setting words each shipped Signal. */
@@ -256,10 +293,6 @@ function shippedSettingKeys(): Record<string, string> {
     automated: "judgments.questions.automated",
     brief_worth: "judgments.questions.brief_worth",
     urgency: "judgments.questions.urgency",
-    chip_reply: "judgments.questions.chip.reply",
-    chip_call: "judgments.questions.chip.call",
-    chip_pay_or_file: "judgments.questions.chip.pay_or_file",
-    chip_snooze: "judgments.questions.chip.snooze",
   };
   for (const id of [
     "waiting_on_me",
@@ -381,6 +414,17 @@ export function splitQuestions(
   return out;
 }
 
+/** A link as a Choice option's line: where it goes, "pay.stripe.com/i/2291". */
+function linkLine(url: string, domain: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.length > 40 ? `${u.pathname.slice(0, 40)}...` : u.pathname;
+    return `${domain}${path === "/" ? "" : path}`;
+  } catch {
+    return domain;
+  }
+}
+
 /** The language model's prompt for the Signals it may answer: Nouls and Scores, by id. */
 export function llmPrompt(questions: Record<string, JudgeQuestion>, state: JsonValue): string {
   const lines = Object.entries(questions).map(([id, q]) => {
@@ -471,6 +515,11 @@ export function createSignals(options: SignalsOptions): Signals {
         consumers: [r.name?.trim() || r.id],
         owner: { kind: "section", id: r.id },
       });
+    }
+    for (const w of recommendedSignals(s as unknown as RecommendedSignalSettings, window)) {
+      // "action:forward.to" is owned by the forward action; the owner id is the action's name.
+      const action = w.id.slice("action:".length).split(".")[0] ?? null;
+      out.push({ ...w, owner: { kind: "recommended_action", id: action } });
     }
     for (const a of s["actions.custom"]) {
       const statement = a.on.judge?.trim();
@@ -744,6 +793,17 @@ export function createSignals(options: SignalsOptions): Signals {
     return defs;
   };
   let defsListener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null = null;
+  let answeredListener: ((workspaceId: Id, threadId: Id) => Promise<unknown>) | null = null;
+  let candidateSource: CandidateSource | null = null;
+  /** Tells the listener a Thread's answers changed; a failing listener never fails the request. */
+  const answered = async (workspaceId: Id, threadId: Id) => {
+    if (!answeredListener) return;
+    await answeredListener(workspaceId, threadId).catch((error: unknown) =>
+      log(
+        `signals answered ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+  };
 
   const versionsOf = async (threadIds: readonly Id[]): Promise<Map<Id, ThreadVersion>> => {
     const out = new Map<Id, ThreadVersion>();
@@ -991,6 +1051,7 @@ export function createSignals(options: SignalsOptions): Signals {
       .where(eq(invites.threadId, threadId))
       .limit(1);
     const attachmentNames = headers.flatMap((h) => h.attachments.map((a) => a.name));
+    const participants = (row?.participants ?? []).map((p) => p.email.toLowerCase());
     const facts = computeFacts({
       owner: ownerAddress,
       messages: factMessages,
@@ -1003,6 +1064,17 @@ export function createSignals(options: SignalsOptions): Signals {
     // The first Message's date, not only the newest few's.
     facts.clear.received_at = headers[0]?.date ?? facts.clear.received_at;
     facts.clear.message_count = headers.length;
+    const candidates: SignalCandidates =
+      candidateSource && sender
+        ? await candidateSource({
+            workspaceId,
+            threadId,
+            owner: ownerAddress,
+            sender,
+            named: facts.sealed.addresses,
+            participants,
+          })
+        : { people: [], forwardedTo: [] };
     const ownerPerson: Person = { name: owner?.name ?? "", email: ownerAddress };
     const state = signalState(
       {
@@ -1017,7 +1089,7 @@ export function createSignals(options: SignalsOptions): Signals {
               threadsFromSender: stats.threads,
               ownerReplied: stats.ownerReplied,
               ownerArchivedUnread: stats.archivedUnread,
-              ownerForwardedTo: [],
+              ownerForwardedTo: candidates.forwardedTo,
             }
           : null,
       },
@@ -1035,6 +1107,7 @@ export function createSignals(options: SignalsOptions): Signals {
     return {
       state,
       facts,
+      candidates,
       lowTrust,
       text: factMessages.map((m) => m.text).join("\n\n"),
       written: newest?.date ?? now().toISOString(),
@@ -1064,6 +1137,12 @@ export function createSignals(options: SignalsOptions): Signals {
     if (d.gate === "amounts") return loaded.facts.sealed.amounts.length > 0;
     if (d.gate === "deadline") return mayStateDeadline(loaded.text);
     if (d.gate === "invite") return loaded.facts.clear.has_invite;
+    if (d.gate === "no_invite") return !loaded.facts.clear.has_invite;
+    if (d.gate === "event") return !loaded.facts.clear.has_invite && mayStateDate(loaded.text);
+    if (d.gate === "addresses") return loaded.candidates.people.length > 0;
+    if (d.gate === "links") return loaded.facts.sealed.links.length > 0;
+    if (d.gate === "tracking") return loaded.facts.sealed.tracking_numbers.length > 0;
+    if (d.gate === "workflows") return (loaded.candidates.workflows ?? []).length > 0;
     return true;
   };
 
@@ -1073,7 +1152,35 @@ export function createSignals(options: SignalsOptions): Signals {
     loaded: Awaited<ReturnType<typeof loadThread>>,
   ): JudgeQuestion => {
     if (d.optionsFrom === "amounts") return amountOptions(d.question, loaded.facts.sealed.amounts);
-    if (d.id === "deadline_year") return yearOptions(d.question, new Date(loaded.written));
+    if (d.optionsFrom === "addresses")
+      return recipientOptions(d.question, loaded.candidates.people);
+    // Links are numbered by code (l1, l2) with where they go; the pick maps back to the URL.
+    if (d.optionsFrom === "links")
+      return listOptions(
+        d.question,
+        loaded.facts.sealed.links.map((l, i) => ({
+          key: `l${i + 1}`,
+          line: linkLine(l.url, l.domain),
+        })),
+      );
+    if (d.optionsFrom === "tracking")
+      return listOptions(
+        d.question,
+        loaded.facts.sealed.tracking_numbers.map((t) => ({
+          key: t.number,
+          line: `${t.carrier.toUpperCase()} pattern`,
+        })),
+      );
+    if (d.optionsFrom === "workflows")
+      return listOptions(
+        d.question,
+        (loaded.candidates.workflows ?? []).map((w) => ({
+          key: w.id,
+          line: w.sentence ? `${w.name}: ${w.sentence}` : w.name,
+        })),
+      );
+    if (d.id === "deadline_year" || d.id === "action:calendar.year")
+      return yearOptions(d.question, new Date(loaded.written));
     return d.question;
   };
 
@@ -1085,6 +1192,8 @@ export function createSignals(options: SignalsOptions): Signals {
     loaded: Awaited<ReturnType<typeof loadThread>>,
     answers: Record<string, JudgeAnswer | undefined>,
     s: Settings,
+    /** The Choices whose options were built per Thread (other than amounts), by what: their picks are kept sealed. */
+    pickedFrom: ReadonlyMap<string, SignalOptionsFrom> = new Map(),
   ) => {
     const { clear, sealed } = loaded.facts;
     const previous = await db.query.threadFacts.findFirst({
@@ -1122,13 +1231,10 @@ export function createSignals(options: SignalsOptions): Signals {
       clear.deadline_at = before.deadline_at ?? null;
       clear.deadline_unclear = before.deadline_unclear ?? false;
     }
-    const picked = answers.money_amount;
-    if (picked?.type === "choice" && sealed.amounts.includes(picked.choice)) {
-      const parsed = parseAmount(picked.choice);
-      sealed.amount = parsed ? { span: picked.choice, ...parsed } : null;
-    } else if (!picked && previous?.contentEnc && previous.contentKey) {
+    let old: SealedFacts | null = null;
+    if (previous?.contentEnc && previous.contentKey) {
       try {
-        const old = JSON.parse(
+        old = JSON.parse(
           await mailstore.readText({
             workspaceId,
             kind: "facts",
@@ -1137,11 +1243,39 @@ export function createSignals(options: SignalsOptions): Signals {
             size: -1,
           }),
         ) as SealedFacts;
-        sealed.amount = old.amount ?? null;
       } catch {
-        sealed.amount = null;
+        old = null;
       }
     }
+    const picked = answers.money_amount;
+    if (picked?.type === "choice" && sealed.amounts.includes(picked.choice)) {
+      const parsed = parseAmount(picked.choice);
+      sealed.amount = parsed ? { span: picked.choice, ...parsed } : null;
+    } else if (!picked) {
+      sealed.amount = old?.amount ?? null;
+    }
+    // The picks of this request replace the ones it asked again; the rest carry over.
+    const oldPicks = old?.picks ?? null;
+    // A picked person (or link, or number) is kept verbatim, sealed; the answer row says only "picked".
+    const picks: NonNullable<SealedFacts["picks"]> = { ...(oldPicks ?? {}) };
+    for (const [id, a] of Object.entries(answers)) {
+      const from = pickedFrom.get(id);
+      if (a?.type !== "choice" || !from) continue;
+      if (a.choice === "none") {
+        delete picks[id];
+        continue;
+      }
+      const value =
+        from === "links" ? (sealed.links[Number(a.choice.slice(1)) - 1]?.url ?? null) : a.choice;
+      if (value === null) delete picks[id];
+      else
+        picks[id] = {
+          value,
+          confidence: a.confidence,
+          probability: a.probabilities[a.choice] ?? a.confidence,
+        };
+    }
+    sealed.picks = picks;
     const stored = await mailstore.storeContent(workspaceId, "facts", JSON.stringify(sealed));
     const values = {
       workspaceId,
@@ -1189,19 +1323,28 @@ export function createSignals(options: SignalsOptions): Signals {
   /** Whether the arrival request carries a Signal: the shipped ones (only the slice 25 set while Signals are off). */
   const inArrival = (d: StoredDef, s: Settings) =>
     (d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id))) ||
-    // A Section's and a Custom action's own statements ride in the same request (slice 33),
-    // and a pinned Board's, on the Threads its scope admits (docs/spec/boards.md).
+    // A Section's, a Custom action's and a Recommended action's own questions ride in the same
+    // request (slice 33), and a pinned Board's, on the Threads its scope admits (docs/spec/boards.md).
     (s["signals.enabled"] &&
-      (d.owner.kind === "section" || d.owner.kind === "custom_action" || d.owner.kind === "board"));
+      (d.owner.kind === "section" ||
+        d.owner.kind === "custom_action" ||
+        d.owner.kind === "board" ||
+        d.owner.kind === "recommended_action"));
 
   const isArrivalSignal = (id: string) =>
-    (Object.values(ARRIVAL_SIGNALS) as string[]).includes(id) ||
-    id === "waiting_on_me" ||
-    id.startsWith("chip_");
+    (Object.values(ARRIVAL_SIGNALS) as string[]).includes(id) || id === "waiting_on_me";
 
   const api: Signals = {
     setDefsListener(listener) {
       defsListener = listener;
+    },
+
+    setAnsweredListener(listener) {
+      answeredListener = listener;
+    },
+
+    setCandidateSource(source) {
+      candidateSource = source;
     },
 
     async defs(workspaceId) {
@@ -1229,20 +1372,28 @@ export function createSignals(options: SignalsOptions): Signals {
       const questions: Record<string, JudgeQuestion> = {};
       for (const d of asked) questions[d.id] = questionFor(d, loaded);
       for (const [id, q] of Object.entries(extra)) questions[id] = q;
+      // A gated Noul is answered no; a gated Choice, not stated.
       const notStated = gatedOut.map((d) => ({
         def: d,
         model: "code",
-        answer: {
-          type: "choice" as const,
-          choice: "none",
-          probabilities: { none: 1 },
-          confidence: 1,
-        },
+        answer:
+          d.kind === "noul"
+            ? ({ type: "noul", noul: 0 } as const)
+            : ({
+                type: "choice",
+                choice: "none",
+                probabilities: { none: 1 },
+                confidence: 1,
+              } as const),
       }));
+      const pickedFrom = new Map<string, SignalOptionsFrom>();
+      for (const d of asked)
+        if (d.optionsFrom && d.optionsFrom !== "amounts") pickedFrom.set(d.id, d.optionsFrom);
       if (Object.keys(questions).length === 0) {
         await write(workspaceId, threadId, version, notStated, "code", loaded.lowTrust);
         await storeFacts(workspaceId, threadId, version, loaded, {}, s);
         result.asked = notStated.map((i) => i.def.id);
+        await answered(workspaceId, threadId);
         return result;
       }
       if (await runtime.judgeAvailable()) {
@@ -1284,8 +1435,9 @@ export function createSignals(options: SignalsOptions): Signals {
           model,
           loaded.lowTrust,
         );
-        await storeFacts(workspaceId, threadId, version, loaded, answers, s);
+        await storeFacts(workspaceId, threadId, version, loaded, answers, s, pickedFrom);
         result.asked = [...items, ...notStated].map((i) => i.def.id);
+        await answered(workspaceId, threadId);
         for (const id of Object.keys(extra)) result.extra[id] = answers[id];
         result.by = "typesafe";
         return result;
@@ -1609,6 +1761,7 @@ export function createSignals(options: SignalsOptions): Signals {
       log(`signals ${threadId}: the language model answered nothing readable`);
     await write(workspaceId, threadId, version, items, model, loaded?.lowTrust ?? null);
     if (loaded) await storeFacts(workspaceId, threadId, version, loaded, {}, s);
+    await answered(workspaceId, threadId);
     return { asked: items.map((i) => i.def.id), extra: {}, calls: 1, by: "llm" };
   }
 

@@ -197,6 +197,20 @@
       "when": 1790693185118,
       "tag": "0028_boards",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790693186118,
+      "tag": "0029_recommendations",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790693187118,
+      "tag": "0030_recommendation_events",
+      "breakpoints": true
     }
   ]
 }

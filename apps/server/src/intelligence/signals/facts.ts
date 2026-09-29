@@ -74,6 +74,14 @@ export interface SealedFacts {
   tracking_numbers: Array<{ carrier: string; number: string }>;
   /** The amount the judge picked among `amounts`, parsed by code. */
   amount: { span: string; value: number; currency: string } | null;
+  /**
+   * What the judge picked in the other per-Thread Choices, by Signal id: a
+   * person's address, a link, a tracking number, verbatim, with the pick's
+   * confidence (docs/spec/actions.md).
+   */
+  picks?:
+    | Record<string, { value: string; confidence: number; probability?: number | undefined }>
+    | undefined;
 }
 
 const lower = (s: string) => s.trim().toLowerCase();
@@ -201,6 +209,16 @@ export function mayStateDeadline(text: string): boolean {
     /\b(\d{1,2}[/.-]\d{1,2}|\d{1,2}(st|nd|rd|th)?\b|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tonight|tomorrow|next week|end of|eod|eow|eom)/i.test(
       text,
     )
+  );
+}
+
+/**
+ * Whether the text may name a day or a time something happens: code's gate
+ * for an event's date parts (a weekday, a month, a clock time, tomorrow).
+ */
+export function mayStateDate(text: string): boolean {
+  return /\b(\d{1,2}[/.-]\d{1,2}|\d{1,2}(st|nd|rd|th)\b|\d{1,2}(:\d{2})?\s?(am|pm)\b|\d{1,2}:\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tonight|tomorrow|next week|noon)/i.test(
+    text,
   );
 }
 

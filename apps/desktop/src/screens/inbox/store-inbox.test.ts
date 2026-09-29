@@ -333,7 +333,7 @@ describe("storeInbox Briefs (slice 13)", () => {
       server.putBrief({
         threadId,
         bullets: [["Weekly digest, nothing to do."]],
-        actions: [{ kind: "archive", label: "Archive" }],
+        replyLine: null,
         computedAt: "2026-09-16T10:00:00.000Z",
         stale: false,
       });
@@ -535,12 +535,10 @@ describe("Section rules in the Store", () => {
     server.record({ kind: "judgments", entityId: "e7", payload: judged });
     await store.sync();
     await settled(inbox, () => inbox.thread("e7")?.section === "needs-reply");
-    // The review link and open attachment chips are dropped; the rest arrive as shipped Signals.
-    expect(inbox.judgments?.("e7")).toMatchObject({
-      ...judged,
-      model: "",
-      chips: { reply: 0.9, call: 0.2, pay_or_file: 0.05, snooze: 0.3 },
-    });
+    // The judged chips are dropped (docs/spec/actions.md); the rest arrive as shipped Signals.
+    const { chips: _chips, ...rest } = judged;
+    expect(inbox.judgments?.("e7")).toMatchObject({ ...rest, model: "" });
+    expect(inbox.judgments?.("e7")).not.toHaveProperty("chips");
     expect(
       await store.query(
         "select thread_id, noul from thread_signals where signal_id = 'needs_reply'",

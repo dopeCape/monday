@@ -4,10 +4,9 @@
 // with it ("Reply with Confirm the time"). Picking the named chip opens the
 // reply with that Template inserted.
 
-import type { BriefAction, Id } from "@monday/shared";
+import type { Id } from "@monday/shared";
 import { useEffect, useState } from "react";
 import type { TemplateLink } from "./link.ts";
-import { fillIn } from "./strings.ts";
 
 export interface ReplyTemplate {
   threadId: Id;
@@ -39,16 +38,4 @@ export function useReplyTemplate(
     };
   }, [wanted, threadId, ask]);
   return found && found.threadId === threadId && wanted ? found : null;
-}
-
-/** The chips with the Reply chip named by the Template: "Reply with Confirm the time". */
-export function nameReplyChip(
-  actions: readonly BriefAction[],
-  template: ReplyTemplate | null,
-  label: string,
-): BriefAction[] {
-  if (!template) return [...actions];
-  return actions.map((a) =>
-    a.kind === "reply" ? { ...a, label: fillIn(label, { name: template.name }) } : a,
-  );
 }

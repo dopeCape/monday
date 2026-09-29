@@ -180,15 +180,16 @@ describe("inline reply", () => {
   });
 });
 
-describe("Brief action chips (slice 13)", () => {
+describe("Recommended action chips (docs/spec/actions.md)", () => {
   const chip = (label: string) =>
     [...document.querySelectorAll<HTMLButtonElement>(".reader .brief-actions .chip")].find(
-      (b) => b.textContent === label,
+      (b) => b.textContent?.trim() === label,
     ) ?? null;
 
-  test("a reply chip opens the reply seeded with the proposed line and sends nothing", async () => {
-    const { composer } = await mount({ initialOpen: "e1" });
-    await click(chip("Reply with Thursday 15:00"));
+  test("the Reply chip opens the reply seeded with the Brief's proposed line and sends nothing", async () => {
+    // Chips need the AI level above off (docs/spec/actions.md, Edge cases).
+    const { composer } = await mount({ initialOpen: "e1" }, { "ai.level": "assist" });
+    await click(chip("Reply"));
     await until(() => document.querySelector(".reply .tiptap") !== null);
     expect(document.querySelector(".reply .tiptap")?.textContent).toContain(
       "Thursday 15:00 CET works for me.",
@@ -197,17 +198,13 @@ describe("Brief action chips (slice 13)", () => {
     expect(composer.sends()).toEqual([]);
   });
 
-  test("a forward chip opens a forward addressed to the person; a calendar chip says the calendar is not connected", async () => {
-    await mount({ initialOpen: "e1" });
+  test("Forward to Priya opens a forward addressed to her and sends nothing (acceptance 4)", async () => {
+    const { composer } = await mount({ initialOpen: "e1" }, { "ai.level": "assist" });
     await click(chip("Forward to Priya"));
     await until(() => document.querySelector(".reply .tiptap") !== null);
     expect(pills(document.querySelector(".reply") ?? undefined)).toEqual(["priya@genai-labs.io"]);
     expect(document.querySelector(".reply .quoted")).not.toBeNull();
-    await click(chip("Add to interview calendar"));
-    await until(() => document.querySelector(".toast") !== null);
-    expect(document.querySelector(".toast")?.textContent).toContain(
-      "Calendar is not connected yet",
-    );
+    expect(composer.sends()).toEqual([]);
   });
 });
 

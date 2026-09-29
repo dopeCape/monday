@@ -23,6 +23,11 @@ import type {
   ThreadJudgments,
 } from "@monday/shared";
 import type { Row, SqlParam } from "./driver.ts";
+import {
+  type CachedRecommendations,
+  RECOMMENDATIONS_COLUMNS_SQL,
+  rowToRecommendations,
+} from "./recommendations.ts";
 import { readingsToJudgments, rowToReadings, SIGNALS_COLUMN_SQL } from "./signals.ts";
 
 const json = <T>(value: unknown, fallback: T): T => {
@@ -59,7 +64,8 @@ const THREAD_LIST_COLUMNS = `t.*,
     (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id order by m.date desc, m.id desc limit 1) as last_sender,
     (select group_concat(email, ' ') from thread_senders where thread_id = t.id) as sender_emails,
     ${SIGNALS_COLUMN_SQL},
-    mt.chip as mt_chip`;
+    mt.chip as mt_chip,
+    ${RECOMMENDATIONS_COLUMNS_SQL}`;
 
 /**
  * Every Thread the Cache holds, trash included, newest first, with the
@@ -71,6 +77,7 @@ export const ALL_THREADS_SQL = `
   select ${THREAD_LIST_COLUMNS}
   from threads t
   left join thread_meetings mt on mt.thread_id = t.id
+  left join thread_recommendations rc on rc.thread_id = t.id
   order by t.last_activity desc, t.rid desc`;
 
 /** ALL_THREADS_SQL for some Threads only: the rows a write named, or Threads asked for by id. */
@@ -140,6 +147,7 @@ export function threadPageSql(
   select ${THREAD_LIST_COLUMNS}
   from threads t
   left join thread_meetings mt on mt.thread_id = t.id
+  left join thread_recommendations rc on rc.thread_id = t.id
   where t.rid in (select t.rid from threads t where (${list.where})${keyset} order by ${orderBy} limit ?)
   order by ${orderBy}`;
   return { sql, params: [...list.params, ...keyParams, limit] };
@@ -225,6 +233,8 @@ export function rowToCachedThread(
   lastSender: string | null;
   judgments: ThreadJudgments | null;
   meeting: MeetingChip | null;
+  /** The Thread's Recommended actions as the Cache holds them (docs/spec/actions.md). */
+  recommendations: CachedRecommendations | null;
   /** The Thread's Signal answers (slice 30), stale ones marked. */
   signals: Record<string, SignalReading>;
 } {
@@ -236,6 +246,7 @@ export function rowToCachedThread(
     judgments: readingsToJudgments(text(r.id), signals),
     signals,
     meeting: rowToMeetingChip(r),
+    recommendations: rowToRecommendations(r),
   };
 }
 
@@ -354,6 +365,20 @@ export const BRIEFS_TO_WARM_SQL =
  * row whose content lags its headers shows the old bullets dimmed, as a
  * stale Brief does, until the fetch replaces them.
  */
+/** The reply line the `actions` column holds, or the reply action's line in a row from before slice 34. */
+function replyLineOf(stored: unknown): string | null {
+  if (Array.isArray(stored)) {
+    for (const a of stored) {
+      const line = (a as { kind?: unknown; proposedLine?: unknown } | null)?.proposedLine;
+      if ((a as { kind?: unknown } | null)?.kind === "reply" && typeof line === "string" && line)
+        return line;
+    }
+    return null;
+  }
+  const line = (stored as { replyLine?: unknown } | null)?.replyLine;
+  return typeof line === "string" && line !== "" ? line : null;
+}
+
 export function rowToBrief(r: Row): Brief | null {
   // The bullets column holds the bullets alone, or with the judge's verdicts per bullet (slice 27).
   const stored = json<
@@ -365,7 +390,7 @@ export function rowToBrief(r: Row): Brief | null {
   return {
     threadId: text(r.thread_id),
     bullets,
-    actions: json<Brief["actions"]>(r.actions, []),
+    replyLine: replyLineOf(json<unknown>(r.actions, null)),
     computedAt: text(r.computed_at),
     stale: bool(r.stale) || bool(r.content_stale),
     ...(verified ? { verified } : {}),

@@ -263,13 +263,18 @@ describe("tuning the judgments behind routing", () => {
     expect(s["judgments.questions.needs_reply"]).toBe(ORIGINAL);
 
     // A threshold proposal nobody tested yet: the update tests it over the stored answers.
-    const chips = await call("update_judgment", { key: "chips.threshold", threshold: 0.4 });
-    expect(chips.isError).toBe(false);
-    const card = chips.activity.resultData as { test: { considered: number } | null };
+    const policy = await call("update_judgment", {
+      key: "briefs.judge.always_at_least",
+      threshold: 2.5,
+    });
+    expect(policy.isError).toBe(false);
+    const card = policy.activity.resultData as { test: { considered: number } | null };
     expect(card.test).not.toBeNull();
-    await intelligence.agent.undo(chips.activity.id, SESSION);
-    const back = await readGlobalSettings(db.handle.db, ["chips.threshold"]);
-    expect(back["chips.threshold"]).toBe(defaultSettings()["chips.threshold"]);
+    await intelligence.agent.undo(policy.activity.id, SESSION);
+    const back = await readGlobalSettings(db.handle.db, ["briefs.judge.always_at_least"]);
+    expect(back["briefs.judge.always_at_least"]).toBe(
+      defaultSettings()["briefs.judge.always_at_least"],
+    );
 
     // A judgment that reads no Thread updates with the reason it was not tested.
     const guard = await call("update_judgment", {

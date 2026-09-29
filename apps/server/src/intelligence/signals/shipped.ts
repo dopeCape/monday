@@ -4,7 +4,6 @@
 // reword any of them and the Question version follows. Pure.
 
 import type {
-  ChipName,
   JudgeQuestion,
   NoulQuestion,
   ScoreQuestion,
@@ -12,7 +11,6 @@ import type {
   SignalKind,
   SignalOptionsFrom,
 } from "@monday/shared";
-import { chipSignalId, SHIPPED_CHIP_SIGNALS } from "@monday/shared";
 
 /** A Signal as code wants it now, before its Question version is known. */
 export interface WantedSignal {
@@ -41,10 +39,6 @@ export const SHIPPED_SETTING_KEYS = [
   "judgments.questions.brief_worth_levels",
   "judgments.questions.urgency",
   "judgments.questions.urgency_levels",
-  "judgments.questions.chip.reply",
-  "judgments.questions.chip.call",
-  "judgments.questions.chip.pay_or_file",
-  "judgments.questions.chip.snooze",
   "signals.questions.personal",
   "signals.questions.personal.true",
   "signals.questions.personal.false",
@@ -166,7 +160,7 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
       true: text(s, "signals.questions.needs_reply.true"),
       false: text(s, "signals.questions.needs_reply.false"),
     }),
-    ["Needs your reply"],
+    ["Needs your reply", "Recommended action: reply"],
   );
   add(
     "waiting_on_me",
@@ -208,10 +202,6 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
     ),
     ["Sections"],
   );
-  for (const chip of SHIPPED_CHIP_SIGNALS) {
-    const key = `judgments.questions.chip.${chip}` as (typeof SHIPPED_SETTING_KEYS)[number];
-    add(chipSignalId(chip as ChipName), "noul", noul(text(s, key)), ["Suggested actions"]);
-  }
 
   /* Slice 32. */
   const withCriteria = (id: string) =>

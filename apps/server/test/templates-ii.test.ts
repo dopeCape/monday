@@ -416,7 +416,8 @@ describe("Templates II over the routes", () => {
     const before = judge.calls.length;
     expect(await onOpen()).toMatchObject({ status: "none", reason: "gate" });
     expect(judge.calls.length).toBe(before);
-    // Needs a reply, as the Signal store holds it (slice 30).
+    const latest = (await store.listMessages(deckThread)).at(-1);
+    // The Thread needs a reply: the shipped needs_reply Signal holds (the Signal store, slice 30).
     await db.handle.db.insert(signalAnswers).values({
       threadId: deckThread,
       workspaceId,
@@ -424,6 +425,8 @@ describe("Templates II over the routes", () => {
       version: 1,
       model: "jev",
       judgedAt: new Date(),
+      messageCount: 1,
+      latestMessageId: latest?.id ?? "",
       noul: 0.9,
     });
     judge.when((state) => (state as { draft?: { typed?: string } }).draft?.typed === "", {

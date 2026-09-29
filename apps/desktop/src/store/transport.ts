@@ -19,11 +19,14 @@ import type {
   Invite,
   InviteIntent,
   PersonHit,
+  RecommendationEventsRequest,
+  ThreadRecommendations,
 } from "@monday/shared";
 import type {
   Api,
   BodyResponse,
   BriefRequestResult,
+  ListExit,
   MessageHeaderResponse,
 } from "../platform/api.ts";
 
@@ -49,6 +52,12 @@ export interface StoreTransport {
    * Absent on a transport with no content routes; those rows stay unwarmed.
    */
   brief?(threadId: Id): Promise<Brief | null>;
+  /**
+   * A Thread's Recommended actions, once their feed row said they changed
+   * (docs/spec/actions.md). Null when the Server has none. Absent on a
+   * transport with no content routes.
+   */
+  recommendations?(threadId: Id): Promise<ThreadRecommendations | null>;
   /** An Invite's answer to its route (slice 18). */
   inviteIntent(intent: InviteIntent): Promise<IntentResult>;
   /** The titles of Events whose feed rows landed, in one call; absent on a transport without content routes. */
@@ -87,6 +96,27 @@ export interface ContentTransport {
     workspaceId: Id,
     threadIds: readonly Id[],
   ): Promise<Array<{ threadId: Id; rules: Record<string, number> }>>;
+  /**
+   * The reader opened a Thread: its Recommended actions worked out again
+   * (docs/spec/actions.md), asking the Signal request once for a Thread
+   * without current answers. Null at AI level off. Absent without the route.
+   */
+  openRecommendations?(
+    workspaceId: Id,
+    threadId: Id,
+    zone?: string,
+  ): Promise<ThreadRecommendations | null>;
+  /** The chips a Thread showed and what became of one (learning, docs/spec/actions.md). */
+  recommendationEvents?(body: RecommendationEventsRequest): Promise<void>;
+  /** How a Thread's list is left, and the approved request (the unsubscribe tool). */
+  listExit?(workspaceId: Id, threadId: Id): Promise<ListExit | null>;
+  unsubscribe?(
+    workspaceId: Id,
+    threadId: Id,
+    approved: { method: "one_click" | "mailto"; target: string },
+  ): Promise<{ ok: boolean; text: string }>;
+  /** A manual Run of a Workflow on a Thread; each Step keeps its own approval. */
+  runWorkflow?(workflowId: Id, threadId: Id): Promise<void>;
   /** The composer's writing assist; absent on a Server without the route. */
   draftAssist?(request: DraftAssistRequest): Promise<DraftAssistResult>;
   /** Whether the assist can answer now. */
@@ -135,6 +165,7 @@ export function apiTransport(api: Api, options: ApiTransportOptions): StoreTrans
     intent: (intent) => api.threads.intent(intent),
     draftIntent: (workspaceId, intent) => api.drafts.intent(workspaceId, intent),
     brief: (threadId) => api.briefs.get(threadId),
+    recommendations: (threadId) => api.recommendations.get(threadId),
     inviteIntent: (intent) => api.calendar.rsvp(intent),
     eventsContent: (workspaceId, ids) => api.calendar.eventsContent(workspaceId, ids),
     invite: (inviteId) => api.calendar.invite(inviteId),
@@ -181,6 +212,17 @@ export function apiContent(api: Api): ContentTransport {
     attachment: (attachmentId) => api.attachments.bytes(attachmentId),
     requestBrief: (workspaceId, threadId, trigger) =>
       api.briefs.compute(workspaceId, threadId, trigger),
+    openRecommendations: (workspaceId, threadId, zone) =>
+      api.recommendations.open(workspaceId, threadId, zone),
+    recommendationEvents: async (body) => {
+      await api.recommendations.events(body);
+    },
+    listExit: (workspaceId, threadId) => api.recommendations.listExit(workspaceId, threadId),
+    unsubscribe: (workspaceId, threadId, approved) =>
+      api.recommendations.unsubscribe(workspaceId, threadId, approved),
+    runWorkflow: async (workflowId, threadId) => {
+      await api.workflows.run(workflowId, threadId);
+    },
     sectionJudgments: (workspaceId, threadIds) =>
       api.routing.sectionJudgments(workspaceId, threadIds),
     draftAssist: (request) => api.drafts.assist(request),

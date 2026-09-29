@@ -153,6 +153,7 @@ const FEATURED_ACTIONS: readonly string[] = [
 
 const NO_SUGGESTIONS: readonly PaletteSuggestion[] = [];
 const NO_TEMPLATES: readonly { id: string; name: string }[] = [];
+const NO_CHIPS: readonly { key: string; label: string }[] = [];
 const NO_GROUPS: readonly Group[] = [];
 
 const fill = (template: string, vars: Record<string, string | number>) =>
@@ -339,6 +340,11 @@ export interface PaletteProps {
   scope?: Exclude<KeyScope, "global"> | undefined;
   /** The Template library: each is a row, "Template: Confirm the time", picked as `template:<id>`. */
   templates?: readonly { id: string; name: string }[] | undefined;
+  /**
+   * The open Thread's chips (docs/spec/actions.md): each is a row in the
+   * reader's order, "Snooze until Mon 09:00", picked as `chip:<key>`.
+   */
+  chips?: readonly { key: string; label: string }[] | undefined;
 }
 
 /** "Fri 3 Oct 2026" for the palette's date row. */
@@ -371,6 +377,7 @@ export function Palette({
   onLeft,
   scope = "mail",
   templates = NO_TEMPLATES,
+  chips = NO_CHIPS,
 }: PaletteProps) {
   const { settings } = useShell();
   const mac = isMac();
@@ -385,6 +392,13 @@ export function Palette({
   const agent = settings["ai.level"] !== "off";
   const actions = useMemo(
     () => [
+      // The open Thread's chips first: the likeliest next thing (docs/spec/actions.md).
+      ...chips.map((c) => ({
+        action: `chip:${c.key}`,
+        label: fill(settings["strings.actions.recommended.palette"], { label: c.label }),
+        icon: "reply",
+        featured: true,
+      })),
       ...paletteActions(keymap, settings, mac, scope).filter(
         (a) => agent || a.action !== "agent.focus",
       ),
@@ -395,7 +409,7 @@ export function Palette({
         icon: "template",
       })),
     ],
-    [keymap, settings, mac, agent, scope, templates],
+    [keymap, settings, mac, agent, scope, templates, chips],
   );
   // A typed date offers the Calendar on that day ("Jump to date").
   const pinned = useMemo(() => {

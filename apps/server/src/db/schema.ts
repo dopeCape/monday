@@ -932,6 +932,8 @@ export const threadRoutes = pgTable(
   (t) => [index("thread_routes_group_idx").on(t.workspaceId, t.groupId)],
 );
 
+/* Recommended actions (docs/spec/actions.md, slices 34 and 35): actions-schema.ts. */
+export * from "./actions-schema.ts";
 /* Boards (docs/spec/boards.md): boards, board_versions, board_drafts in boards-schema.ts. */
 export * from "./boards-schema.ts";
 /*

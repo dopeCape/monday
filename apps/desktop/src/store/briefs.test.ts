@@ -28,7 +28,7 @@ const cached = async (store: FakeStore["store"], threadId: string) => {
 const brief = (threadId: string, text: string, computedAt: string, stale = false): Brief => ({
   threadId,
   bullets: [[text]],
-  actions: [{ kind: "archive", label: "Archive" }],
+  replyLine: "Thanks, noted.",
   computedAt,
   stale,
 });

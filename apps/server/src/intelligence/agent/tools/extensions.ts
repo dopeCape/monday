@@ -35,6 +35,7 @@ import type { BoardsSeam } from "./boards.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
 import { MEETING_TOOLS, type MeetingsSeam } from "./meetings.ts";
+import { RECOMMENDED_TOOLS, type RecommendationsSeam } from "./recommended.ts";
 import type { TemplatesSeam } from "./templates.ts";
 
 export type { CalendarSeam } from "./calendar.ts";
@@ -118,6 +119,8 @@ export interface ToolExtensions {
   backlog?: BacklogSeam | undefined;
   /** Meetings from mail (docs/spec/meetings.md): what meeting_options reads. */
   meetings?: MeetingsSeam | undefined;
+  /** Recommended actions (docs/spec/actions.md): what recommended_actions reads. */
+  recommendations?: RecommendationsSeam | undefined;
   /** Templates (slice 37): the library, filling, drafting from examples, the duplicate check. */
   templates?: TemplatesSeam | undefined;
   /** Boards (slice 40): the stored Boards, the drafts and their tests. */
@@ -875,6 +878,7 @@ export const EXTENSION_TOOLS: readonly ToolDefinition<never>[] = [
   buildVoiceProfile,
   ...CALENDAR_TOOLS,
   ...MEETING_TOOLS,
+  ...RECOMMENDED_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 /** The tool an integration Step of a Workflow maps to. */

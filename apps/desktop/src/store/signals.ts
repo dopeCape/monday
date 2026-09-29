@@ -20,7 +20,7 @@ import type {
   SignalsChange,
   ThreadJudgments,
 } from "@monday/shared";
-import { judgmentsFromSignals, SHIPPED_CHIP_SIGNALS } from "@monday/shared";
+import { judgmentsFromSignals } from "@monday/shared";
 import type { Row, Statement } from "./driver.ts";
 
 export const SIGNALS_SCHEMA_SQL = `
@@ -94,12 +94,6 @@ export const SIGNALS_FILL_SQL: readonly string[] = [
     ([id, column, kind]) =>
       `insert or ignore into thread_signals (thread_id, signal_id, version, ${kind}, judged_at)
        select thread_id, '${id}', 1, ${column}, judged_at from thread_judgments`,
-  ),
-  ...SHIPPED_CHIP_SIGNALS.map(
-    (chip) =>
-      `insert or ignore into thread_signals (thread_id, signal_id, version, noul, judged_at)
-       select thread_id, 'chip_${chip}', 1, json_extract(chips, '$.${chip}'), judged_at
-       from thread_judgments where json_valid(chips) and json_extract(chips, '$.${chip}') is not null`,
   ),
   "drop table thread_judgments",
 ];
@@ -207,10 +201,6 @@ export function legacyJudgmentsStatements(j: JudgmentsChange): Statement[] {
     newsletter: j.newsletter,
     automated: j.automated,
   };
-  for (const chip of SHIPPED_CHIP_SIGNALS) {
-    const v = j.chips?.[chip];
-    if (typeof v === "number") nouls[`chip_${chip}`] = v;
-  }
   const answers: SignalsChange["answers"] = [
     ...Object.entries(nouls).map(([signalId, noul]) => ({
       signalId,

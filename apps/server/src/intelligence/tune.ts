@@ -23,7 +23,6 @@
 
 import type {
   BriefPolicy,
-  ChipName,
   GroupId,
   Id,
   JsonValue,
@@ -41,7 +40,6 @@ import type {
   ThreadJudgments,
 } from "@monday/shared";
 import {
-  CHIP_NAMES,
   domainOf,
   hasJudgedWhen,
   matchesPredicate,
@@ -119,13 +117,7 @@ export type JudgmentKind =
   | "group_rule";
 
 /** How a test re-runs a judgment: by asking the Judge again, or over stored answers. */
-export type TestPath =
-  | "routing"
-  | "arrival"
-  | "section"
-  | "stored_chips"
-  | "stored_sections"
-  | "stored_policy";
+export type TestPath = "routing" | "arrival" | "section" | "stored_sections" | "stored_policy";
 
 export interface JudgmentEntry {
   family: JudgmentFamily;
@@ -153,7 +145,7 @@ export interface JudgmentEntry {
 /** The arrival questions by Setting key: the question id the request asks and the field it fills. */
 const ARRIVAL: Record<
   string,
-  { id: string; field: keyof ThreadJudgments | `chip:${ChipName}`; type: "noul" | "score" }
+  { id: string; field: keyof ThreadJudgments; type: "noul" | "score" }
 > = {
   "judgments.questions.needs_reply": { id: "needs_reply", field: "needsReply", type: "noul" },
   "judgments.questions.waiting_on_others": {
@@ -171,12 +163,6 @@ const ARRIVAL: Record<
   },
   "judgments.questions.urgency": { id: "urgency", field: "urgency", type: "score" },
   "judgments.questions.urgency_levels": { id: "urgency", field: "urgency", type: "score" },
-  ...Object.fromEntries(
-    CHIP_NAMES.map((chip) => [
-      `judgments.questions.chip.${chip}`,
-      { id: `chip_${chip}`, field: `chip:${chip}` as const, type: "noul" as const },
-    ]),
-  ),
 };
 
 const label = (key: string): string =>
@@ -212,7 +198,6 @@ function staticEntries(): JudgmentEntry[] {
     entry("arrival", key as SettingKey, key.endsWith("_levels") ? "levels" : "question", {
       question: a.type,
       test: "arrival",
-      ...(a.field.startsWith("chip:") ? { threshold: "chips.threshold" as const } : {}),
     }),
   );
   const intentKeys = Object.keys(settingsSchema).filter((k) =>
@@ -233,7 +218,6 @@ function staticEntries(): JudgmentEntry[] {
     entry("routing", "routing.threshold.ask", "threshold", { test: "routing" }),
     entry("routing", "routing.threshold.tie_margin", "threshold", { test: "routing" }),
     ...arrival,
-    entry("arrival", "chips.threshold", "threshold", { test: "stored_chips" }),
     entry("sections", "sections.judge_threshold", "threshold", { test: "stored_sections" }),
     ...intentKeys.map((k) =>
       entry("palette", k, "question", {
@@ -341,7 +325,7 @@ export interface Outcome {
   answer: number | string | null;
   /** A Choice's distribution by option name. */
   probabilities?: Record<string, number> | undefined;
-  /** Where the answer puts the Thread: a Group, Needs a decision, a Section, a brief policy, the chips shown. */
+  /** Where the answer puts the Thread: a Group, Needs a decision, a Section, a brief policy. */
   placement: string;
 }
 
@@ -565,12 +549,8 @@ function withArrivalChange(
   key: string,
   value: unknown,
 ): JudgmentQuestionSettings {
-  const next: JudgmentQuestionSettings = { ...q, chips: { ...q.chips } };
+  const next: JudgmentQuestionSettings = { ...q };
   const tail = key.slice("judgments.questions.".length);
-  if (tail.startsWith("chip.")) {
-    next.chips[tail.slice(5) as ChipName] = value as string;
-    return next;
-  }
   const fields: Record<string, keyof JudgmentQuestionSettings> = {
     needs_reply: "needsReply",
     waiting_on_others: "waitingOnOthers",
@@ -588,7 +568,6 @@ function withArrivalChange(
 
 /** The value of one arrival field on a ThreadJudgments. */
 function arrivalValue(j: ThreadJudgments, field: string): number {
-  if (field.startsWith("chip:")) return j.chips[field.slice(5)] ?? 0;
   return j[field as keyof ThreadJudgments] as number;
 }
 
@@ -1022,7 +1001,6 @@ export function createTune(options: TuneOptions): TuneSeam {
             automated: stored.automated,
             briefWorth: stored.briefWorth,
             urgency: stored.urgency,
-            chips: stored.chips,
             model: stored.model,
             judgedAt: stored.judgedAt,
             fresh,
@@ -1077,17 +1055,14 @@ export function createTune(options: TuneOptions): TuneSeam {
 
     // Arrival: the stored answers over the window.
     const arrivalRows = await judgments.list(workspaceId, { since });
-    const s = await readGlobalSettings(db, ["chips.threshold", ...POLICY_KEYS]);
+    const s = await readGlobalSettings(db, POLICY_KEYS);
     const arrivalBehavior = (field: string, type: "noul" | "score"): JudgmentBehavior => {
       const distribution: Record<string, number> = {};
       let unsure = 0;
       for (const r of arrivalRows) {
-        const value = field.startsWith("chip:")
-          ? (r.chips[field.slice(5)] ?? 0)
-          : (r[field as keyof typeof r] as number);
+        const value = r[field as keyof typeof r] as number;
         let bucket: string;
-        if (field.startsWith("chip:")) bucket = value >= s["chips.threshold"] ? "shown" : "hidden";
-        else if (type === "score") bucket = `level ${Math.round(value)}`;
+        if (type === "score") bucket = `level ${Math.round(value)}`;
         else bucket = side(value);
         if (type === "noul" && side(value) === "unsure") unsure += 1;
         distribution[bucket] = (distribution[bucket] ?? 0) + 1;
@@ -1458,10 +1433,6 @@ export function createTune(options: TuneOptions): TuneSeam {
       if (w.key.startsWith("judgments.questions."))
         proposed = withArrivalChange(proposed, w.key, w.value);
     }
-    const chipsBefore = (await current("chips.threshold")) as number;
-    const chipsAfter =
-      (p.writes.find((w) => w.key === "chips.threshold")?.value as number | undefined) ??
-      chipsBefore;
     const policy = await readGlobalSettings(db, POLICY_KEYS);
     const policySettings = {
       alwaysAtLeast: policy["briefs.judge.always_at_least"],
@@ -1481,15 +1452,7 @@ export function createTune(options: TuneOptions): TuneSeam {
         judgedAt: now().toISOString(),
         levels: { briefWorth: q.briefWorthLevels.length, urgency: q.urgencyLevels.length },
       });
-    const consequence = (
-      t: Thread,
-      facts: SectionFacts,
-      j: ThreadJudgments,
-      chipAt: number,
-    ): string => {
-      if (target.field.startsWith("chip:")) {
-        return arrivalValue(j, target.field) >= chipAt ? "chip shown" : "chip hidden";
-      }
+    const consequence = (t: Thread, facts: SectionFacts, j: ThreadJudgments): string => {
       if (target.field === "briefWorth")
         return `brief ${judgedPolicy(j, policySettings) as BriefPolicy}`;
       const id = sectionOf(t, { ...facts, judgments: sectionJudgmentsOf(j) }, ctx.rules, ctx.order);
@@ -1513,8 +1476,8 @@ export function createTune(options: TuneOptions): TuneSeam {
       const ja = read(after.answers, t.id, proposed);
       const vb = round(arrivalValue(jb, target.field));
       const va = round(arrivalValue(ja, target.field));
-      const b: Outcome = { answer: vb, placement: consequence(t, facts, jb, chipsBefore) };
-      const a: Outcome = { answer: va, placement: consequence(t, facts, ja, chipsAfter) };
+      const b: Outcome = { answer: vb, placement: consequence(t, facts, jb) };
+      const a: Outcome = { answer: va, placement: consequence(t, facts, ja) };
       const sideOf = (v: number) => (target.type === "score" ? Math.round(v) : v >= 0.5 ? 1 : 0);
       c.rows.push({
         threadId: t.id,
@@ -1609,7 +1572,6 @@ export function createTune(options: TuneOptions): TuneSeam {
     const proposedValue = (key: string, fallback: number) =>
       (p.writes.find((w) => w.key === key)?.value as number | undefined) ?? fallback;
     const policy = await readGlobalSettings(db, POLICY_KEYS);
-    const chips = (await current("chips.threshold")) as number;
     for (const t of ctx.threads) {
       const facts = ctx.facts.get(t.id);
       if (!facts) continue;
@@ -1631,28 +1593,21 @@ export function createTune(options: TuneOptions): TuneSeam {
           c.skipped += 1;
           continue;
         }
-        if (path === "stored_chips") {
-          const shown = (at: number) =>
-            CHIP_NAMES.filter((n) => (j.chips[n] ?? 0) >= at).join(", ") || "no chips";
-          b = { answer: null, placement: shown(chips) };
-          a = { answer: null, placement: shown(proposedValue("chips.threshold", chips)) };
-        } else {
-          const before = {
-            alwaysAtLeast: policy["briefs.judge.always_at_least"],
-            neverBelow: policy["briefs.judge.never_below"],
-            newsletterAtLeast: policy["briefs.judge.newsletter_at_least"],
-          };
-          const after = {
-            alwaysAtLeast: proposedValue("briefs.judge.always_at_least", before.alwaysAtLeast),
-            neverBelow: proposedValue("briefs.judge.never_below", before.neverBelow),
-            newsletterAtLeast: proposedValue(
-              "briefs.judge.newsletter_at_least",
-              before.newsletterAtLeast,
-            ),
-          };
-          b = { answer: round(j.briefWorth), placement: `brief ${judgedPolicy(j, before)}` };
-          a = { answer: round(j.briefWorth), placement: `brief ${judgedPolicy(j, after)}` };
-        }
+        const before = {
+          alwaysAtLeast: policy["briefs.judge.always_at_least"],
+          neverBelow: policy["briefs.judge.never_below"],
+          newsletterAtLeast: policy["briefs.judge.newsletter_at_least"],
+        };
+        const after = {
+          alwaysAtLeast: proposedValue("briefs.judge.always_at_least", before.alwaysAtLeast),
+          neverBelow: proposedValue("briefs.judge.never_below", before.neverBelow),
+          newsletterAtLeast: proposedValue(
+            "briefs.judge.newsletter_at_least",
+            before.newsletterAtLeast,
+          ),
+        };
+        b = { answer: round(j.briefWorth), placement: `brief ${judgedPolicy(j, before)}` };
+        a = { answer: round(j.briefWorth), placement: `brief ${judgedPolicy(j, after)}` };
       }
       c.considered += 1;
       c.rows.push({

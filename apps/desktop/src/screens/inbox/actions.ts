@@ -10,6 +10,7 @@ import type {
   Group,
   MeetingChip,
   Message,
+  RecommendationEventsRequest,
   SectionJudged,
   Tag,
   Thread,
@@ -18,10 +19,13 @@ import type {
 import {
   briefOf,
   groups as fixtureGroups,
+  recommendations as fixtureRecommendations,
   tags as fixtureTags,
   threads as fixtureThreads,
   messagesOf,
 } from "@monday/ui/fixtures";
+import type { ListExit } from "../../platform/api.ts";
+import type { CachedRecommendations } from "../../store/recommendations.ts";
 import { type FolderKey, folderThreads, type ThreadListKey } from "./folders.ts";
 import type { Facet, FacetKind } from "./list-filter.ts";
 
@@ -158,6 +162,31 @@ export interface ThreadReader {
   /** The Thread's meeting chip from the Cache (docs/spec/meetings.md), for the row's hover. */
   meeting?(threadId: string): MeetingChip | undefined;
   /**
+   * The Thread's Recommended actions from the Cache (docs/spec/actions.md),
+   * for the reader's chips and the row's hover; undefined when none yet.
+   * Changes reach the stream's subscribers.
+   */
+  recommendations?(threadId: string): CachedRecommendations | undefined;
+  /**
+   * The reader opened the Thread: asks the Server to work its Recommended
+   * actions out again (a Thread without current answers is asked the Signal
+   * request once), and caches the answer. `zone` is the Device's. Never throws.
+   */
+  askRecommendations?(threadId: string, zone?: string): Promise<void>;
+  /** Tells the Server which chips showed or what became of one (learning). Never throws. */
+  recommendationEvents?(body: Omit<RecommendationEventsRequest, "workspace">): void;
+  /** How the Thread's list is left: the exact request the unsubscribe card shows. */
+  listExit?(threadId: string): Promise<ListExit | null>;
+  /** The user approved that exact request on the card. */
+  unsubscribe?(
+    threadId: string,
+    approved: { method: "one_click" | "mailto"; target: string },
+  ): Promise<{ ok: boolean; text: string }>;
+  /** A Workflow started on the Thread by hand. */
+  runWorkflow?(workflowId: string, threadId: string): Promise<void>;
+  /** The Threads of a mailing list still in the Inbox, from the Cache's Facts. */
+  listThreads?(listId: string): Promise<string[]>;
+  /**
    * Why the last open left bodies missing: the Server did not answer
    * (offline), it is locked, or the read failed; null when nothing went
    * wrong. Changes reach watchMessages listeners. The reader words it.
@@ -196,6 +225,7 @@ export function fixtureInbox(
   for (const t of seed) rows.set(t.id, { thread: structuredClone(t), deleted: false });
   const listeners = new Set<() => void>();
   const undos = new Map<UndoToken, Row[]>();
+  const recommended = new Map<string, CachedRecommendations>();
   let tokenSeq = 0;
   let cache: readonly Thread[] | null = null;
   const folderCache = new Map<FolderKey, readonly Thread[]>();
@@ -245,6 +275,18 @@ export function fixtureInbox(
     openThread: async () => {},
     brief: (threadId) => briefOf(threadId),
     judgments: () => undefined,
+    // The mock's chips as Recommended actions, so the fixture reader looks like the design.
+    recommendations: (threadId) => {
+      const r = fixtureRecommendations.find((x) => x.threadId === threadId);
+      const t = rows.get(threadId)?.thread;
+      if (!r || !t) return undefined;
+      // One object per Thread version, so a subscriber reads a stable snapshot.
+      const held = recommended.get(threadId);
+      if (held && held.messageCount === t.messageCount) return held;
+      const fresh = { actions: r.actions, messageCount: t.messageCount, fromDomain: null };
+      recommended.set(threadId, fresh);
+      return fresh;
+    },
     unavailable: () => null,
     requestBrief: async () => {},
     attachmentBytes: async (attachmentId) => ({

@@ -67,6 +67,7 @@ import {
   threadPageSql,
   threadsByIdsSql,
 } from "../../store/index.ts";
+import type { CachedRecommendations } from "../../store/recommendations.ts";
 import type { ContentTransport } from "../../store/transport.ts";
 import type { BodyUnavailable, Inbox, InboxCounts, UndoToken } from "./actions.ts";
 import { type FolderKey, type ThreadList, type ThreadListKey, threadList } from "./folders.ts";
@@ -489,6 +490,7 @@ export async function createStoreInbox(
       thread: Thread;
       judgments: ThreadJudgments | null;
       meeting: MeetingChip | null;
+      recommendations: CachedRecommendations | null;
     }
   >();
   let generation = 0;
@@ -498,6 +500,8 @@ export async function createStoreInbox(
   const judgmentsById = new Map<string, ThreadJudgments>();
   /** The meeting chip per Thread held, as the Cache holds it (docs/spec/meetings.md). */
   const meetingsById = new Map<string, MeetingChip>();
+  /** The Recommended actions per Thread held, as the Cache holds them (docs/spec/actions.md). */
+  const recommendationsById = new Map<string, CachedRecommendations>();
   const owner = options.owner ?? options.sections?.owner ?? "";
 
   /**
@@ -576,6 +580,7 @@ export async function createStoreInbox(
     deletedIds.clear();
     judgmentsById.clear();
     meetingsById.clear();
+    recommendationsById.clear();
     const live = new Set<string>();
     const one = (r: RawRow): Thread => {
       const id = String(r.id);
@@ -584,21 +589,25 @@ export async function createStoreInbox(
       let thread: Thread;
       let judgments: ThreadJudgments | null;
       let meeting: MeetingChip | null;
+      let recommendations: CachedRecommendations | null;
       if (held && held.row === r && held.generation === generation) {
         thread = held.thread;
         judgments = held.judgments;
         meeting = held.meeting;
+        recommendations = held.recommendations;
       } else {
         const entry = rowToCachedThread(r, store.workspaceId);
         thread = sectioned(entry, held?.thread.section ?? null);
         judgments = entry.judgments;
         meeting = entry.meeting;
-        projectedById.set(id, { row: r, generation, thread, judgments, meeting });
+        recommendations = entry.recommendations;
+        projectedById.set(id, { row: r, generation, thread, judgments, meeting, recommendations });
       }
       byId.set(id, thread);
       if (r.deleted === 1 || r.deleted === true) deletedIds.add(id);
       if (judgments) judgmentsById.set(id, judgments);
       if (meeting) meetingsById.set(id, meeting);
+      if (recommendations) recommendationsById.set(id, recommendations);
       return thread;
     };
     for (const h of lists.values()) {
@@ -1237,6 +1246,49 @@ export async function createStoreInbox(
     brief: (threadId) => watch(threadId).brief,
     judgments: (threadId) => judgmentsById.get(threadId),
     meeting: (threadId) => meetingsById.get(threadId),
+    recommendations: (threadId) => recommendationsById.get(threadId),
+    async askRecommendations(threadId, zone) {
+      if (options.level?.() === "off") return;
+      const content = options.content;
+      if (!content?.openRecommendations) return;
+      try {
+        const recs = await content.openRecommendations(store.workspaceId, threadId, zone);
+        if (recs) await store.cacheRecommendations(recs);
+      } catch (error) {
+        log(
+          `recommendations ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+    recommendationEvents(body) {
+      const send = options.content?.recommendationEvents;
+      if (!send || options.level?.() === "off") return;
+      void send({ workspace: store.workspaceId, ...body }).catch((error: unknown) =>
+        log(`recommendation events: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    },
+    async listExit(threadId) {
+      const get = options.content?.listExit;
+      return get ? get(store.workspaceId, threadId) : null;
+    },
+    async unsubscribe(threadId, approved) {
+      const run = options.content?.unsubscribe;
+      if (!run) return { ok: false, text: "" };
+      return run(store.workspaceId, threadId, approved);
+    },
+    async runWorkflow(workflowId, threadId) {
+      const run = options.content?.runWorkflow;
+      if (!run) throw new Error("no workflows route");
+      await run(workflowId, threadId);
+    },
+    async listThreads(listId) {
+      const rows = await store.query(
+        `select t.id from threads t join thread_facts f on f.thread_id = t.id
+         where f.list_id = ? and t.archived = 0 and t.deleted = 0`,
+        [listId],
+      );
+      return rows.map((r) => String(r.id));
+    },
     unavailable: (threadId) => watch(threadId).unavailable,
     prefetch(threadIds) {
       const keep = new Set(threadIds);

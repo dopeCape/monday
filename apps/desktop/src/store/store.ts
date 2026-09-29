@@ -37,6 +37,7 @@ import type {
   SendChange,
   TemplateChange,
   ThreadChange,
+  ThreadRecommendations,
 } from "@monday/shared";
 import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
@@ -49,6 +50,12 @@ import {
   PEOPLE_FORMAT_KEY,
   PEOPLE_SCHEMA_SQL,
 } from "./people.ts";
+import {
+  cachedRecommendationsStatements,
+  RECOMMENDATIONS_SCHEMA_SQL,
+  RECOMMENDATIONS_TO_WARM_SQL,
+  recommendationsStatements,
+} from "./recommendations.ts";
 import schemaSql from "./schema.sql?raw";
 import {
   factsStatements,
@@ -87,6 +94,7 @@ const THREAD_SCOPED_TABLES = new Set([
   "thread_labels",
   "thread_judgments",
   "thread_meetings",
+  "thread_recommendations",
   "thread_signals",
   "thread_facts",
   "briefs",
@@ -102,6 +110,7 @@ function threadOfChange(c: Change): Id | undefined {
     case "thread_labels":
     case "judgments":
     case "meeting":
+    case "recommendations":
     case "signals":
     case "facts":
     case "brief":
@@ -192,6 +201,13 @@ export interface Store {
   cacheDraft(draft: Draft): Promise<void>;
   /** A Brief fetched whole; the feed's header row (if any) is filled in. */
   cacheBrief(brief: Brief): Promise<void>;
+  /** A Thread's Recommended actions fetched whole (docs/spec/actions.md). */
+  cacheRecommendations(recs: ThreadRecommendations): Promise<void>;
+  /**
+   * Fetches the Recommended actions of every Thread whose feed row is newer
+   * than its content, through the transport. Runs after each pull. Never throws.
+   */
+  warmRecommendations(): Promise<number>;
   /**
    * Fetches the content of every Brief whose feed row is newer than its
    * bullets, through the transport. Runs after each pull; screens may call it
@@ -308,6 +324,7 @@ const REBUILD_SQL = `
   drop table if exists decisions;
   drop table if exists thread_judgments;
   drop table if exists thread_meetings;
+  drop table if exists thread_recommendations;
   delete from meta where key = 'cursor';
 `;
 
@@ -351,6 +368,7 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
   await driver.exec(PEOPLE_SCHEMA_SQL);
   await driver.exec(SIGNALS_SCHEMA_SQL);
   await driver.exec(BOARDS_SCHEMA_SQL);
+  await driver.exec(RECOMMENDATIONS_SCHEMA_SQL);
   const signalsRows = await driver.query("select value from meta where key = ?", [
     SIGNALS_FORMAT_KEY,
   ]);
@@ -719,6 +737,8 @@ export function changeStatements(change: Change): Statement[] {
       return legacyJudgmentsStatements(change.payload);
     case "meeting":
       return [meetingUpsert(change.payload)];
+    case "recommendations":
+      return recommendationsStatements(change.payload);
     case "signals":
       return signalsStatements(change.payload);
     case "signal_def":
@@ -953,7 +973,8 @@ export function cachedBriefStatements(brief: Brief): Statement[] {
       params: [
         brief.threadId,
         brief.verified ? { bullets: brief.bullets, verified: brief.verified } : brief.bullets,
-        brief.actions,
+        // The column that held a Brief's actions holds its reply line since slice 34.
+        { replyLine: brief.replyLine },
         brief.computedAt,
         brief.stale,
       ],
@@ -1389,6 +1410,50 @@ export async function createStore(options: StoreOptions): Promise<Store> {
   };
 
   /**
+   * Recommended actions follow their feed row the way a Brief's bullets do
+   * (docs/spec/actions.md): rows whose actions lag their headers are fetched
+   * through the transport, so a row's hover chip reads the Cache. A row the
+   * Server no longer has is dropped.
+   */
+  const warmRecommendations = async (): Promise<number> => {
+    const fetch = transport.recommendations;
+    if (!fetch || closed) return 0;
+    let landed = 0;
+    try {
+      const rows = await driver.query(RECOMMENDATIONS_TO_WARM_SQL, [warmLimit]);
+      for (const row of rows) {
+        if (closed) break;
+        const threadId = String(row.thread_id);
+        try {
+          const recs = await fetch.call(transport, threadId);
+          if (recs) {
+            await write(cachedRecommendationsStatements(recs), [threadId]);
+            landed += 1;
+          } else {
+            await write(
+              [
+                {
+                  sql: "delete from thread_recommendations where thread_id = ?",
+                  params: [threadId],
+                },
+              ],
+              [threadId],
+            );
+          }
+        } catch (error) {
+          log(
+            `recommendations ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          if (error instanceof ApiError && !error.permanent) break;
+        }
+      }
+    } catch (error) {
+      log(`warm recommendations: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return landed;
+  };
+
+  /**
    * Event and Invite content follows the feed rows (slice 18): titles are
    * fetched in batches through the transport so the views and the invite
    * bar read them from the Cache. Ids the Server no longer has are dropped.
@@ -1464,6 +1529,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       await drainOutbox(result);
       await pullChanges(result);
       await warmBriefs();
+      await warmRecommendations();
       await warmEvents();
       setStatus(connection ? "online" : "offline");
     } catch (error) {
@@ -1671,7 +1737,12 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       await write(cachedBriefStatements(brief), [brief.threadId]);
     },
 
+    async cacheRecommendations(recs) {
+      await write(cachedRecommendationsStatements(recs), [recs.threadId]);
+    },
+
     warmBriefs,
+    warmRecommendations,
     warmEvents,
 
     onWrite(listener) {

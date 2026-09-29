@@ -11,11 +11,13 @@ import type {
   Message,
   Person,
   Placement,
+  Recommendation,
   RichText,
   Run,
   SectionRule,
   Tag,
   Thread,
+  ThreadRecommendations,
   ToolCall,
   Workspace,
 } from "@monday/shared";
@@ -725,13 +727,32 @@ function rich(text: string): RichText {
   return runs;
 }
 
-const brief = (threadId: string, bullets: string[], actions: Brief["actions"]): Brief => ({
-  threadId,
-  bullets: bullets.map(rich),
-  actions,
-  computedAt: "2026-09-16T09:42:00",
-  stale: false,
-});
+/**
+ * The mock's chips per Thread, as the design shows them. Since slice 34 a
+ * Brief keeps only the reply's opening line; the chips are Recommended
+ * actions (docs/spec/actions.md), derived below for the ones the catalog has.
+ */
+type MockChip = { label: string } & (
+  | { kind: "reply"; proposedLine: string }
+  | { kind: "forward"; to: Person }
+  | { kind: "calendar"; eventTitle: string; start: string }
+  | { kind: "snooze"; until: string }
+  | { kind: "archive" }
+  | { kind: "open-link"; url: string }
+);
+const mockChips = new Map<string, MockChip[]>();
+
+const brief = (threadId: string, bullets: string[], chips: MockChip[]): Brief => {
+  mockChips.set(threadId, chips);
+  const reply = chips.find((c) => c.kind === "reply");
+  return {
+    threadId,
+    bullets: bullets.map(rich),
+    replyLine: reply && reply.kind === "reply" ? reply.proposedLine : null,
+    computedAt: "2026-09-16T09:42:00",
+    stale: false,
+  };
+};
 
 export const briefs: Brief[] = [
   brief(
@@ -899,6 +920,30 @@ export const briefs: Brief[] = [
     [{ kind: "open-link", url: "https://linear.app", label: "Open Linear" }],
   ),
 ];
+
+/** The mock's chips as Recommended actions, per Thread, in the design's order. */
+export const recommendations: ThreadRecommendations[] = briefs.map((b) => {
+  const actions: Recommendation[] = [];
+  const at = (i: number) => Math.round((0.95 - i * 0.05) * 100) / 100;
+  for (const c of mockChips.get(b.threadId) ?? []) {
+    const fit = at(actions.length);
+    if (c.kind === "reply" && !actions.some((a) => a.kind === "reply"))
+      actions.push({ kind: "reply", fit, rank: fit });
+    else if (c.kind === "forward")
+      actions.push({ kind: "forward", to: c.to, confidence: 0.9, fit, rank: fit });
+    else if (c.kind === "snooze")
+      actions.push({ kind: "snooze", until: c.until, anchor: "weekday", fit, rank: fit });
+    else if (c.kind === "archive") actions.push({ kind: "archive", fit, rank: fit });
+  }
+  return {
+    threadId: b.threadId,
+    messageCount: 0,
+    latestMessageId: "",
+    computedAt: b.computedAt,
+    fromDomain: null,
+    actions,
+  };
+});
 
 export function briefOf(threadId: string): Brief | undefined {
   return briefs.find((b) => b.threadId === threadId);

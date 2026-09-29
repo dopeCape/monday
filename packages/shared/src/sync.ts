@@ -2,6 +2,7 @@
 // the Changes feed the client reads from a cursor, and the last-writer-wins rule
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
+import type { RecommendationsChange } from "./actions.ts";
 import type { BoardChange } from "./board/types.ts";
 import type {
   Attendee,
@@ -231,6 +232,7 @@ export type ChangeKind =
   | "decision"
   | "judgments"
   | "meeting"
+  | "recommendations"
   | "signals"
   | "signal_def"
   | "facts"
@@ -455,6 +457,7 @@ export type ChangePayload =
   | { kind: "decision"; payload: DecisionChange }
   | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "meeting"; payload: MeetingChange }
+  | { kind: "recommendations"; payload: RecommendationsChange }
   | { kind: "signals"; payload: SignalsChange }
   | { kind: "signal_def"; payload: SignalDefChange }
   | { kind: "facts"; payload: FactsChange }

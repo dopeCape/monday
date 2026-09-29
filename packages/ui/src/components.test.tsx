@@ -259,16 +259,31 @@ describe("MessageRow", () => {
 });
 
 describe("reader", () => {
-  test("Brief lists bullets and up to three action chips", () => {
-    const html = render(<Brief brief={brief1} source="Claude Code, on this machine" />);
+  test("Brief lists bullets and the chips it is handed, and chooses none of its own", () => {
+    const html = render(
+      <Brief
+        brief={brief1}
+        source="Claude Code, on this machine"
+        chips={
+          <>
+            <button type="button" className="chip">
+              Reply
+            </button>
+            <button type="button" className="chip">
+              Forward to Priya
+            </button>
+          </>
+        }
+      />,
+    );
     expect(html).toContain('class="brief"');
     expect(html).toContain("<b>Aoife submitted the take-home</b>");
     expect(html).toContain("<i>Candidate intake</i>");
     expect(html).toContain("Claude Code, on this machine");
-    expect(html).toContain("Reply with Thursday 15:00");
     expect(html).toContain("Forward to Priya");
-    expect(html).toContain("Add to interview calendar");
-    expect((html.match(/class="chip"/g) ?? []).length).toBe(3);
+    expect((html.match(/class="chip"/g) ?? []).length).toBe(2);
+    expect(render(<Brief brief={brief1} />)).not.toContain("brief-actions");
+    expect(brief1.replyLine).toBe("Thursday 15:00 CET works for me.");
   });
 
   test("a stale Brief dims and shows the updating line in place of the source", () => {

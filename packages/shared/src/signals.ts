@@ -7,7 +7,6 @@
 
 import type { Id, IsoDate } from "./domain.ts";
 import type {
-  ChipName,
   ChoiceQuestion,
   JsonValue,
   NoulQuestion,
@@ -38,8 +37,21 @@ export interface SignalScope {
   facts?: Record<string, JsonValue> | undefined;
 }
 
-/** Ask only when code says the question can apply. */
-export type SignalGate = "amounts" | "invite" | "deadline";
+/**
+ * Ask only when code says the question can apply: amounts, addresses, links
+ * or tracking numbers found; an Invite present or absent; a date the owner
+ * acts by, or an event's day, likely stated; Workflows to offer.
+ */
+export type SignalGate =
+  | "amounts"
+  | "invite"
+  | "no_invite"
+  | "deadline"
+  | "event"
+  | "addresses"
+  | "links"
+  | "tracking"
+  | "workflows";
 
 /** Per-Thread options built by code (the amounts a pattern found), never versioned. */
 export type SignalOptionsFrom = "amounts" | "addresses" | "links" | "tracking" | "workflows";
@@ -220,9 +232,6 @@ export interface SignalsExplain {
 
 /* ------------------------------ The shipped Signals ------------------------------ */
 
-/** The chips the arrival request still asks until Recommended actions replace them (slice 34). */
-export const SHIPPED_CHIP_SIGNALS: readonly ChipName[] = ["reply", "call", "pay_or_file", "snooze"];
-
 /** Shipped Signal ids that stand in for the slice 25 arrival Judgments. */
 export const ARRIVAL_SIGNALS = {
   needsReply: "needs_reply",
@@ -232,8 +241,6 @@ export const ARRIVAL_SIGNALS = {
   briefWorth: "brief_worth",
   urgency: "urgency",
 } as const;
-
-export const chipSignalId = (chip: ChipName): string => `chip_${chip}`;
 
 /** The Signals the shipped Sections read: what the language model is asked without TypeSafe (signals.llm_fallback). */
 export const SHIPPED_SECTION_SIGNALS: readonly string[] = [
@@ -249,7 +256,7 @@ export const actionSignalId = (actionId: string) => `action:${actionId}`;
 
 /**
  * The slice 25 Judgments as the shipped Signals read them, for the brief
- * policy, the chips and the header-rule fallbacks that still read that shape.
+ * policy and the header-rule fallbacks that still read that shape.
  * Null until the Thread has at least one of them.
  */
 export function judgmentsFromSignals(
@@ -262,11 +269,6 @@ export function judgmentsFromSignals(
   if (!any) return null;
   const noul = (id: string) => read(id)?.noul ?? 0;
   const score = (id: string) => read(id)?.score ?? 0;
-  const chips: Record<string, number> = {};
-  for (const chip of SHIPPED_CHIP_SIGNALS) {
-    const r = read(chipSignalId(chip));
-    if (r?.noul !== undefined && r.noul !== null) chips[chip] = r.noul;
-  }
   return {
     threadId,
     needsReply: noul(ARRIVAL_SIGNALS.needsReply),
@@ -275,7 +277,6 @@ export function judgmentsFromSignals(
     automated: noul(ARRIVAL_SIGNALS.automated),
     briefWorth: score(ARRIVAL_SIGNALS.briefWorth),
     urgency: score(ARRIVAL_SIGNALS.urgency),
-    chips,
     model: meta.model ?? "",
     judgedAt: meta.judgedAt ?? "",
   };
