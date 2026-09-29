@@ -9,6 +9,7 @@ import {
   needsPreview,
   neighbor,
   nextFocus,
+  rangeSelect,
   targets,
   toggleSelected,
 } from "./triage.ts";
@@ -89,6 +90,16 @@ describe("multi-select", () => {
     expect(r2).toEqual({ selection: ["c", "b", "a"], focus: "a" });
     const r3 = extendSelection(order, r2.selection, r2.focus, -1);
     expect(r3.selection).toEqual(["c", "b", "a"]);
+  });
+
+  test("a shift-click selects every row from the last one toggled, either way, keeping the rest", () => {
+    expect(rangeSelect(order, ["b"], "b", "d")).toEqual(["b", "c", "d"]);
+    expect(rangeSelect(order, ["e", "d"], "d", "b")).toEqual(["e", "d", "b", "c"]);
+  });
+
+  test("a shift-click without an anchor in the list toggles the one row", () => {
+    expect(rangeSelect(order, [], null, "c")).toEqual(["c"]);
+    expect(rangeSelect(order, ["c"], "gone", "c")).toEqual([]);
   });
 });
 

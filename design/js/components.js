@@ -138,7 +138,6 @@ export function messageList(route, ui) {
       <span class="sp"></span>
       <label class="list-search">${ic("ph-magnifying-glass")}<input type="search" placeholder="Search mail" aria-label="Search mail"></label>
       ${stream ? `<button class="btn filter-btn ${filter ? "on" : ""}" data-act="filter">${ic("ph-funnel-simple")} ${filter ? filters[filter] : "Filter"}</button>` : ""}
-      <button class="btn icon" title="More">${ic(stream ? "ph-dots-three" : "ph-funnel-simple")}</button>
     </div>
     ${ui.overlay === "filter" ? `
     <div class="pop filter-pop" role="dialog" aria-label="Filter">

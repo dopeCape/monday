@@ -219,6 +219,15 @@ export function countSql(list: ThreadListQuery): { sql: string; params: SqlParam
   };
 }
 
+/** Every Thread id of a list over the whole Cache, in the list's order ("Select all"). */
+export function idsSql(list: ThreadListQuery): { sql: string; params: SqlParam[] } {
+  const orderBy = list.order.map((o) => `t.${o.column} ${o.desc ? "desc" : "asc"}`).join(", ");
+  return {
+    sql: `select t.id as id from threads t where ${list.where} order by ${orderBy}`,
+    params: [...list.params],
+  };
+}
+
 const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /**

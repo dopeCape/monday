@@ -591,7 +591,7 @@ describe("multi-select and batches", () => {
     await press("J", { shiftKey: true });
     expect(picked()).toEqual(["e1", "e2", "e3"]);
     expect(focusRow()).toBe("e3");
-    expect(document.querySelector(".col-head .count")?.textContent).toBe("3 selected");
+    expect(document.querySelector(".list .sel-bar h2")?.textContent).toBe("3 selected");
     await press("x");
     expect(picked()).toEqual(["e1", "e2"]);
     await press("Escape");
@@ -644,19 +644,303 @@ describe("multi-select and batches", () => {
     expect(document.querySelector(".batch")).toBeNull();
     expect(calls).toEqual(['archive:["e1","e2","e3"]']);
   });
+});
 
-  test("mark-all-read from the More menu is one undoable action", async () => {
+/** Clicks an element, with modifier keys. */
+async function click(el: Element | null | undefined, mods: Partial<MouseEventInit> = {}) {
+  if (!el) throw new Error("nothing to click");
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...mods }));
+  });
+}
+const check = (id: string) => document.querySelector(`.row[data-thread="${id}"] .check`);
+const bar = () => document.querySelector<HTMLElement>(".list .sel-bar");
+const barAction = (key: string) => bar()?.querySelector(`[data-action="${key}"]`);
+
+/**
+ * The fixtures behind a seam that holds only the newest `held` Inbox Threads,
+ * like the Store's over a large Cache: the total and the ids come from "the
+ * Cache" (every fixture Thread).
+ */
+function windowed(held: number) {
+  const base = fixtureInbox();
+  const { inbox, calls } = spy(base);
+  let from: readonly Thread[] | null = null;
+  let shown: readonly Thread[] = [];
+  const threads = () => {
+    const all = base.threads();
+    if (all !== from) {
+      from = all;
+      shown = all.slice(0, held);
+    }
+    return shown;
+  };
+  const data: InboxData = {
+    ...inbox,
+    threads,
+    listTotal: (key) => (key === "inbox" ? base.threads().length : null),
+    listIds: async (key) => (key === "inbox" ? base.threads().map((t) => t.id) : []),
+  };
+  return { inbox: data, calls, base };
+}
+
+describe("the selection bar", () => {
+  test("the list header has no More button and no Mark all read", async () => {
+    await mount();
+    const head = document.querySelector(".list .col-head");
+    expect(head?.querySelector(".btn[title='More']")).toBeNull();
+    expect(head?.textContent).not.toContain("Mark all read");
+    expect(Object.keys(defaultSettings)).not.toContain("strings.inbox.mark_all_read");
+  });
+
+  test("a row's checkbox toggles it without opening it; every checkbox shows while any row is selected", async () => {
+    await mount();
+    expect(document.querySelector(".list.selecting")).toBeNull();
+    expect(rows().every((r) => r.querySelector(".check"))).toBe(true);
+    await click(check("e2"));
+    expect(picked()).toEqual(["e2"]);
+    expect(check("e2")?.getAttribute("aria-pressed")).toBe("true");
+    expect(check("e3")?.getAttribute("aria-pressed")).toBe("false");
+    expect(document.querySelector(".list.selecting")).not.toBeNull();
+    expect(reader()).toBeNull();
+    expect(check("e2")?.getAttribute("title")).toBe("Select (X)");
+    await click(check("e2"));
+    expect(picked()).toEqual([]);
+    expect(document.querySelector(".list.selecting")).toBeNull();
+    expect(bar()).toBeNull();
+  });
+
+  test("a shift-click selects every row from the last one toggled", async () => {
+    await mount();
+    await click(check("e2"));
+    await click(check("e5"), { shiftKey: true });
+    expect(picked()).toEqual(["e2", "e3", "e4", "e5"]);
+    // Upwards from the last one toggled, keeping the rest.
+    await click(check("e8"));
+    await click(check("e7"), { shiftKey: true });
+    expect(picked()).toEqual(["e2", "e3", "e4", "e5", "e7", "e8"]);
+  });
+
+  test("X and Shift-J show in the checkboxes", async () => {
+    await mount();
+    await press("x");
+    await press("J", { shiftKey: true });
+    expect(check("e1")?.getAttribute("aria-pressed")).toBe("true");
+    expect(check("e2")?.getAttribute("aria-pressed")).toBe("true");
+    expect(check("e3")?.getAttribute("aria-pressed")).toBe("false");
+    // A shift-click ranges from the row X toggled last.
+    await press("j");
+    await press("x");
+    await click(check("e5"), { shiftKey: true });
+    expect(picked()).toEqual(["e1", "e2", "e3", "e4", "e5"]);
+  });
+
+  test("the bar replaces the header with the count, and each action applies to every selected Thread", async () => {
     const { inbox, calls } = spy(fixtureInbox());
     await mount({ inbox });
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".list .col-head .btn.icon")?.click(),
-    );
-    await act(async () => document.querySelector<HTMLButtonElement>(".pop .pop-item")?.click());
-    expect(calls).toEqual(['markRead:["e1","e2"]']);
-    expect(document.querySelectorAll(".row.unread").length).toBe(0);
-    expect(toast()).toBe("Marked read, 2 threadsUndo Z");
+    await click(check("e1"));
+    await click(check("e3"), { shiftKey: true });
+    expect(document.querySelector(".list-search")).toBeNull();
+    expect(bar()?.querySelector("h2")?.textContent).toBe("3 selected");
+    // Two of the three are unread: Mark read shows, Mark unread waits under More.
+    expect(barAction("read")?.getAttribute("title")).toBe("Mark read (U)");
+    expect(barAction("unread")).toBeFalsy();
+    expect(barAction("archive")?.getAttribute("title")).toBe("Archive (E)");
+    expect(barAction("delete")?.getAttribute("title")).toBe("Delete (#)");
+    await click(barAction("read"));
+    expect(calls).toEqual(['markRead:["e1","e2","e3"]']);
+    expect(toast()).toBe("Marked read, 3 threadsUndo Z");
+    // A flag keeps the selection; now all read, the bar offers Mark unread.
+    expect(picked()).toEqual(["e1", "e2", "e3"]);
+    expect(barAction("unread")).toBeTruthy();
+    await click(barAction("star"));
+    expect(calls.at(-1)).toBe('star:["e1","e2","e3"]');
+    expect(barAction("unstar")).toBeTruthy();
+    await click(barAction("snooze"));
+    expect(document.querySelector(".pop")).not.toBeNull();
+    await press("Enter", {}, document.querySelector(".pop") ?? window);
+    expect(calls.at(-1)?.startsWith('snooze:["e1","e2","e3"]')).toBe(true);
+    expect(rowIds()).not.toContain("e2");
+    expect(bar()).toBeNull();
+    expect(toast()?.startsWith("Snoozed until")).toBe(true);
+    expect(toast()).toContain(", 3 threads");
+  });
+
+  test("move, delete and the More menu go the same way", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox });
+    await click(check("e4"));
+    await click(check("e5"));
+    await click(barAction("move"));
+    const target = document.querySelector<HTMLElement>(".pop .pop-item");
+    const name = target?.textContent;
+    await click(target);
+    expect(calls.at(-1)?.startsWith('moveToGroup:["e4","e5"]')).toBe(true);
+    expect(toast()).toBe(`Moved to ${name}, 2 threadsUndo Z`);
+    await click(barAction("more"));
+    const items = [...document.querySelectorAll<HTMLElement>(".pop .pop-item")];
+    // Both read: Mark unread is on the bar, Mark read under More.
+    expect(barAction("unread")).toBeTruthy();
+    expect(items.map((i) => i.textContent)).toEqual(["Mark read", "Unstar", "LabelL"]);
+    await click(items[0]);
+    expect(calls.at(-1)).toBe('markRead:["e4","e5"]');
+    await click(barAction("delete"));
+    expect(calls.at(-1)).toBe('delete:["e4","e5"]');
+    expect(toast()).toBe("Deleted, 2 threadsUndo Z");
     await press("z");
-    expect(document.querySelectorAll(".row.unread").length).toBe(2);
+    expect(rowIds()).toContain("e4");
+  });
+
+  test("above the Setting a bar action previews first, with the same undo", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox }, { "inbox.batch_preview_above": 2 });
+    await click(check("e1"));
+    await click(check("e3"), { shiftKey: true });
+    await click(barAction("star"));
+    expect(calls).toEqual([]);
+    expect(document.querySelector(".batch .batch-h")?.textContent).toBe("Star 3 threads?");
+    await click(document.querySelector(".batch .btn.primary"));
+    expect(calls).toEqual(['star:["e1","e2","e3"]']);
+    await click(barAction("archive"));
+    expect(document.querySelector(".batch .batch-h")?.textContent).toBe("Archive 3 threads?");
+    await click(document.querySelector(".batch .btn.primary"));
+    expect(calls.at(-1)).toBe('archive:["e1","e2","e3"]');
+    expect(toast()).toBe("Archived, 3 threadsUndo Z");
+    await press("z");
+    expect(rowIds().slice(0, 3)).toEqual(["e1", "e2", "e3"]);
+  });
+
+  test("Esc and the Clear button end the selection and bring the header back", async () => {
+    await mount();
+    await click(check("e1"));
+    await click(check("e2"));
+    await press("Escape");
+    expect(picked()).toEqual([]);
+    expect(bar()).toBeNull();
+    expect(document.querySelector(".list-search")).not.toBeNull();
+    await click(check("e1"));
+    expect(barAction("clear")?.getAttribute("title")).toBe("Clear selection (Esc)");
+    await click(barAction("clear"));
+    expect(picked()).toEqual([]);
+  });
+
+  test("the bar's checkbox selects every row shown, or none once all are", async () => {
+    await mount();
+    await click(check("e3"));
+    const all = () => bar()?.querySelector(".check");
+    expect(all()?.getAttribute("aria-pressed")).toBe("mixed");
+    await click(all());
+    expect(picked()).toEqual(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11"]);
+    expect(all()?.getAttribute("aria-pressed")).toBe("true");
+    // The fixtures hold the whole list: nothing more to offer.
+    expect(bar()?.querySelector(".sel-all")).toBeNull();
+    await click(all());
+    expect(picked()).toEqual([]);
+  });
+
+  test("Select all N reaches the Threads past the rows held, counts them, and acts on them all", async () => {
+    const { inbox, calls } = windowed(5);
+    await mount({ inbox });
+    expect(rowIds()).toEqual(["e1", "e2", "e3", "e4", "e5"]);
+    await click(check("e1"));
+    await click(bar()?.querySelector(".check"));
+    expect(picked()).toEqual(["e1", "e2", "e3", "e4", "e5"]);
+    const offer = bar()?.querySelector(".sel-all");
+    expect(offer?.textContent).toBe("Select all 11 in Inbox");
+    await click(offer);
+    expect(bar()?.querySelector("h2")?.textContent).toBe("All 11 in Inbox selected");
+    expect(bar()?.querySelector(".sel-all")).toBeNull();
+    // Eleven is above the Setting's ten: the preview counts all, lists the ones held.
+    await click(barAction("archive"));
+    await act(async () => {});
+    expect(document.querySelector(".batch .batch-h")?.textContent).toBe("Archive 11 threads?");
+    expect(document.querySelectorAll(".batch .batch-row").length).toBe(5);
+    await click(document.querySelector(".batch .btn.primary"));
+    expect(calls).toEqual(['archive:["e1","e2","e3","e4","e5","e6","e7","e8","e9","e10","e11"]']);
+    expect(toast()).toBe("Archived, 11 threadsUndo Z");
+    expect(bar()).toBeNull();
+  });
+
+  test("under Select all N a key applies to the whole list too; unchecking a row falls back to the rows shown", async () => {
+    const { inbox, calls } = windowed(5);
+    await mount({ inbox }, { "inbox.batch_preview_above": 100 });
+    await click(check("e1"));
+    await click(bar()?.querySelector(".check"));
+    await click(bar()?.querySelector(".sel-all"));
+    await press("s");
+    await act(async () => {});
+    expect(calls).toEqual(['star:["e1","e2","e3","e4","e5","e6","e7","e8","e9","e10","e11"]']);
+    await click(check("e2"));
+    expect(bar()?.querySelector("h2")?.textContent).toBe("4 selected");
+    expect(picked()).toEqual(["e1", "e3", "e4", "e5"]);
+  });
+
+  test("More offers the custom actions every selected Thread carries, with their Tier and one Undo", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount(
+      { inbox },
+      {
+        "actions.custom": [
+          {
+            id: "file-it",
+            label: "File it",
+            on: { group: "hiring" },
+            tool: "archive_threads",
+            args: {},
+          },
+          {
+            id: "bin-it",
+            label: "Bin it",
+            on: { group: "hiring" },
+            tool: "trash_threads",
+            args: {},
+          },
+          { id: "pay", label: "Pay", on: { group: "finance" }, tool: "archive_threads", args: {} },
+        ],
+      },
+    );
+    const labels = () =>
+      [...document.querySelectorAll<HTMLElement>(".pop .pop-item")].map((i) => i.textContent);
+    // e1 and e3 are both in Hiring; e7 is in Finance.
+    await click(check("e1"));
+    await click(check("e7"));
+    await click(barAction("more"));
+    expect(labels()).not.toContain("File it");
+    await press("Escape", {}, document.querySelector(".pop") ?? window);
+    await click(check("e7"));
+    await click(check("e3"));
+    await click(barAction("more"));
+    expect(labels().slice(3)).toEqual(["File it", "Bin itasks first"]);
+    // Trash asks first: the first pick only asks.
+    await click([...document.querySelectorAll(".pop .pop-item")].at(4));
+    expect(calls).toEqual([]);
+    expect(toast()).toContain("Bin it");
+    await click(barAction("more"));
+    await click([...document.querySelectorAll(".pop .pop-item")].at(3));
+    expect(calls).toEqual(['archive:["e1"]', 'archive:["e3"]']);
+    expect(toast()).toBe("File it: done, 2 threadsUndo Z");
+    expect(rowIds()).not.toContain("e1");
+    await press("z");
+    expect(rowIds()).toContain("e1");
+    expect(rowIds()).toContain("e3");
+  });
+
+  test("in Archive the bar offers Unarchive instead of Archive", async () => {
+    const archived = fixtureThreads.map((th, i) => (i < 3 ? { ...th, archived: true } : th));
+    const base = fixtureInbox(archived);
+    const { inbox, calls } = spy(base);
+    await mount({
+      inbox: { ...inbox, ...(base.folder ? { folder: base.folder } : {}) },
+      folder: "archive",
+    });
+    const first = rowIds()[0] as string;
+    await click(check(first));
+    expect(barAction("archive")).toBeFalsy();
+    expect(barAction("unarchive")?.getAttribute("title")).toBe("Unarchive");
+    await click(barAction("unarchive"));
+    expect(calls).toEqual([`unarchive:["${first}"]`]);
+    expect(toast()).toBe("Back in InboxUndo Z");
+    expect(rowIds()).not.toContain(first);
   });
 });
 

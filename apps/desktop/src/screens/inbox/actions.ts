@@ -94,8 +94,17 @@ export interface InboxSource {
    * holds instead.
    */
   list?(key: ThreadListKey): readonly Thread[];
-  /** How many Threads a narrowed list holds over the whole Cache; null until counted. */
+  /**
+   * How many Threads a list holds over the whole Cache; null until counted.
+   * A narrowed list is counted as soon as it is read; any other list once
+   * someone asks (the selection bar's "Select all").
+   */
   listTotal?(key: ThreadListKey): number | null;
+  /**
+   * Every Thread id of a list over the whole Cache, in the list's order, not
+   * only the ones held in memory: "Select all" acts on these.
+   */
+  listIds?(key: ThreadListKey): Promise<string[]>;
   /** The Filter menu's choices over a list, with how many of its Threads carry each. */
   facets?(
     key: ThreadListKey,

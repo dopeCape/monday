@@ -7020,6 +7020,91 @@ button.prov {
   background: var(--fg);
 }
 
+/* The multi-select checkbox: a small square, filled when on, a dash when
+   only some are (the selection bar's). On a row it sits over the dot and
+   shows on hover and while any row is selected; rows stay calm at rest. */
+.check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--bg);
+  transition:
+    opacity var(--t-fast),
+    background var(--t-fast),
+    border-color var(--t-fast);
+}
+.check:hover {
+  border-color: var(--fg-muted);
+}
+.check.on,
+.check.some {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+.check > svg {
+  width: 10px;
+  height: 10px;
+}
+.check:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.row .check {
+  position: absolute;
+  left: var(--pad);
+  top: 50%;
+  margin-top: -7px;
+  opacity: 0;
+  pointer-events: none;
+}
+.row:hover .check,
+.list.selecting .row .check {
+  opacity: 1;
+  pointer-events: auto;
+}
+.row:hover .dot,
+.list.selecting .row .dot {
+  visibility: hidden;
+}
+:root[data-list="split"] .row .check {
+  top: calc(var(--list-row-py) + 2px);
+  margin-top: 0;
+}
+
+/* the selection bar: replaces the list header while a selection exists */
+.sel-bar {
+  gap: 2px;
+}
+.sel-bar > .check {
+  margin-right: 8px;
+}
+.sel-bar h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sel-bar .count .btn {
+  margin-left: 4px;
+}
+.sel-bar .vr {
+  margin: 0 4px;
+}
+
 /* a row on its way out after archive, snooze or delete */
 .row.leaving {
   max-height: 96px;
@@ -7168,9 +7253,9 @@ button.prov {
 .pop-item:focus {
   outline: 0;
 }
-/* the Filter menu sits under its button, left of the More button */
+/* the Filter menu sits under its button, the last one in the header */
 .filter-pop {
-  right: calc(var(--pad) + 34px);
+  right: var(--pad);
   width: 280px;
 }
 .pop-item .when {
