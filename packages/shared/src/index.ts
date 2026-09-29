@@ -1,5 +1,6 @@
 export * from "./agent.ts";
 export * from "./calendar.ts";
+export * from "./coming-soon.ts";
 export * from "./config/index.ts";
 export * from "./deployment.ts";
 export * from "./domain.ts";

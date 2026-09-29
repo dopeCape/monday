@@ -9,7 +9,7 @@
 // it alone until an Account exists), so it welcomes rather than lists. The
 // settings shared by every Account live in the groups below this one.
 
-import { describeSetting, settingsSchema } from "@monday/shared";
+import { COMING_SOON, describeSetting, settingsSchema } from "@monday/shared";
 import { Btn, formatWhen, Tag } from "@monday/ui";
 import {
   EnvelopeSimpleIcon,
@@ -372,24 +372,33 @@ function Connect({ first, onPick }: { first: boolean; onPick: (view: AddAccountV
         <p>{s["strings.accounts.connect.intro"]}</p>
       </div>
       <div className="providers">
-        {cards.map((c) => (
-          <button
-            type="button"
-            className="prov big"
-            key={c.view}
-            data-provider={c.view}
-            onClick={() => onPick(c.view)}
-          >
-            <span className="lg">{c.logo}</span>
-            <div>
-              <b>{c.title}</b>
-              <span>{c.needs}</span>
-            </div>
-            <span className="st">
-              <PlusIcon />
-            </span>
-          </button>
-        ))}
+        {cards.map((c) => {
+          const soon = c.view === "microsoft" && COMING_SOON.microsoft;
+          return (
+            <button
+              type="button"
+              className={soon ? "prov big soon" : "prov big"}
+              key={c.view}
+              data-provider={c.view}
+              disabled={soon}
+              aria-disabled={soon}
+              onClick={soon ? undefined : () => onPick(c.view)}
+            >
+              <span className="lg">{c.logo}</span>
+              <div>
+                <b>{c.title}</b>
+                <span>{c.needs}</span>
+              </div>
+              {soon ? (
+                <Tag className="soon-tag">{s["strings.settings.coming_soon"]}</Tag>
+              ) : (
+                <span className="st">
+                  <PlusIcon />
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

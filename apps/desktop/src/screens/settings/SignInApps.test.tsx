@@ -6,6 +6,7 @@
 // scripted Api that keeps the saved app as the real one does.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { COMING_SOON } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -162,23 +163,42 @@ describe("Sign-in apps", () => {
     window.removeEventListener(OAUTH_APP_CHANGED, onChange);
   });
 
-  test("Microsoft: account type and tenant, saved on the check", async () => {
-    const { api, calls } = fakeApi();
-    await mount(api);
-    await clickIn(card("microsoft"), "Set up");
-    await clickIn(card("microsoft"), "Work or school account, this organization only");
-    const inputs = () => [
-      ...(card("microsoft")?.querySelectorAll<HTMLInputElement>("input") ?? []),
-    ];
-    await type(inputs()[0], "12345678-1234-1234-1234-123456789abc");
-    expect(calls).toHaveLength(0);
-    await type(inputs()[1], "contoso");
-    expect(calls.at(-1)?.args).toEqual([
-      "microsoft",
-      { clientId: "12345678-1234-1234-1234-123456789abc", tenant: "contoso", accountType: "work" },
-    ]);
-    expect(card("microsoft")?.dataset.state).toBe("ready");
-  });
+  test.if(COMING_SOON.microsoft)(
+    "Microsoft with no app yet says Coming soon and offers no Set up",
+    async () => {
+      const { api } = fakeApi();
+      await mount(api);
+      expect(card("microsoft")?.textContent).toContain("Coming soon");
+      expect(
+        [...(card("microsoft")?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
+      ).not.toContain("Set up");
+    },
+  );
+
+  test.skipIf(COMING_SOON.microsoft)(
+    "Microsoft: account type and tenant, saved on the check",
+    async () => {
+      const { api, calls } = fakeApi();
+      await mount(api);
+      await clickIn(card("microsoft"), "Set up");
+      await clickIn(card("microsoft"), "Work or school account, this organization only");
+      const inputs = () => [
+        ...(card("microsoft")?.querySelectorAll<HTMLInputElement>("input") ?? []),
+      ];
+      await type(inputs()[0], "12345678-1234-1234-1234-123456789abc");
+      expect(calls).toHaveLength(0);
+      await type(inputs()[1], "contoso");
+      expect(calls.at(-1)?.args).toEqual([
+        "microsoft",
+        {
+          clientId: "12345678-1234-1234-1234-123456789abc",
+          tenant: "contoso",
+          accountType: "work",
+        },
+      ]);
+      expect(card("microsoft")?.dataset.state).toBe("ready");
+    },
+  );
 
   test("Remove asks first and forgets the app", async () => {
     const { api, saved } = fakeApi({

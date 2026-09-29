@@ -11293,3 +11293,31 @@ button.appr-link:focus-visible {
 .onb-scope .scope-pick {
   align-items: center;
 }
+
+/* Options that are not ready yet: shown, marked Coming soon, and not usable. */
+.prov.soon {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.prov.soon:hover {
+  background: inherit;
+  border-color: var(--border);
+}
+.soon-tag {
+  align-self: center;
+  white-space: nowrap;
+}
+.soon-block {
+  position: relative;
+  display: grid;
+  gap: 10px;
+}
+.soon-block > .soon-tag {
+  justify-self: start;
+}
+.soon-block > [inert] {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+  pointer-events: none;
+  user-select: none;
+}

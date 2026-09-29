@@ -9,7 +9,8 @@
 // reads the app again; the wizard's own saves raise it too, and this block
 // re-reads on it.
 
-import { Btn, Input, Seg } from "@monday/ui";
+import { COMING_SOON } from "@monday/shared";
+import { Btn, Input, Seg, Tag } from "@monday/ui";
 import {
   CheckCircleIcon,
   GoogleLogoIcon,
@@ -131,7 +132,11 @@ function AppCard({
           onSaved={changed}
           onCancel={() => setEditing(false)}
         />
-      ) : loading ? null : (
+      ) : loading ? null : provider === "microsoft" && !app && COMING_SOON.microsoft ? (
+        <span className="key-row">
+          <Tag className="soon-tag">{s["strings.settings.coming_soon"]}</Tag>
+        </span>
+      ) : (
         <span className="key-row">
           <Btn sm primary={!app} onClick={() => setEditing(true)}>
             {app ? s["strings.oauth_apps.replace"] : s["strings.oauth_apps.set_up"]}

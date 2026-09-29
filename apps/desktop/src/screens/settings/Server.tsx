@@ -10,6 +10,7 @@
 import {
   type Capabilities,
   type CloudPlatform,
+  COMING_SOON,
   DEPLOYMENT_FEATURES,
   deployLink,
   type EnvVar,
@@ -116,6 +117,21 @@ export function Server({
 
   const showServer = part !== "cloud";
   const showCloud = part !== "server";
+  // Cloud servers are not ready: shown, marked Coming soon and inert. A Cloud already paired stays usable.
+  const cloudSoon = COMING_SOON.cloud && !shell.cloud;
+  const cloudParts = showCloud ? (
+    <>
+      {topology === "sidecar" && !shell.cloud ? (
+        <UpgradeCards
+          openExternal={
+            openExternal ?? ((url) => platform().then((host) => host.openExternal(url)))
+          }
+        />
+      ) : null}
+      {shell.sidecar?.running ? <Move upgrade={upgrade} onDone={refresh} /> : null}
+      <Connect pairFetch={pairFetch} deviceName={deviceName} onDone={refresh} />
+    </>
+  ) : null;
   return (
     <div className="stack" data-panel={part ?? "server"}>
       {showServer ? (
@@ -144,19 +160,16 @@ export function Server({
         </Card>
       ) : null}
 
-      {showCloud && topology === "sidecar" && !shell.cloud ? (
-        <UpgradeCards
-          openExternal={
-            openExternal ?? ((url) => platform().then((host) => host.openExternal(url)))
-          }
-        />
-      ) : null}
-
-      {showCloud && shell.sidecar?.running ? <Move upgrade={upgrade} onDone={refresh} /> : null}
-
-      {showCloud ? (
-        <Connect pairFetch={pairFetch} deviceName={deviceName} onDone={refresh} />
-      ) : null}
+      {cloudSoon && cloudParts ? (
+        <div className="soon-block" data-soon="cloud">
+          <Tag className="soon-tag">{s["strings.settings.coming_soon"]}</Tag>
+          <div className="stack" inert aria-disabled="true">
+            {cloudParts}
+          </div>
+        </div>
+      ) : (
+        cloudParts
+      )}
     </div>
   );
 }

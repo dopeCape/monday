@@ -6,6 +6,7 @@
 // does; the browser opener is a spy.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { COMING_SOON } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -242,8 +243,17 @@ describe("Add account: the picker", () => {
     expect(step()).toBe("project");
     await clickText("Back");
     expect(text()).toContain("Add an account");
-    await click(".prov:nth-child(4)");
-    expect(text()).toContain("Connect Microsoft");
+    const microsoft = document.querySelector<HTMLButtonElement>(".prov:nth-child(4)");
+    if (COMING_SOON.microsoft) {
+      // Not ready yet: the card says so and cannot be picked.
+      expect(microsoft?.disabled).toBe(true);
+      expect(microsoft?.textContent).toContain("Coming soon");
+      await click(".prov:nth-child(4)");
+      expect(text()).toContain("Add an account");
+    } else {
+      await click(".prov:nth-child(4)");
+      expect(text()).toContain("Connect Microsoft");
+    }
   });
 });
 

@@ -7717,6 +7717,11 @@ export const settingsSchema = {
     "Picker: Google needs",
     "Needs a Google Cloud project with OAuth credentials",
   ),
+  "strings.settings.coming_soon": str(
+    "appearance",
+    "An option that is not ready yet",
+    "Coming soon",
+  ),
   "strings.accounts.pick.microsoft_needs": str(
     "accounts",
     "Picker: Microsoft needs",

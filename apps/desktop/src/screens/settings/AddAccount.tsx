@@ -9,6 +9,7 @@
 // registration is app level: the paste step saves it on the Server as it
 // validates, and a wizard opened with one saved is the sign-in alone.
 
+import { COMING_SOON } from "@monday/shared";
 import { Btn, Input, Tag } from "@monday/ui";
 import {
   ArrowSquareOutIcon,
@@ -195,6 +196,7 @@ export function AddAccount(props: AddAccountProps) {
             logo={<WindowsLogoIcon />}
             title={s["strings.accounts.pick.microsoft"]}
             sub={s["strings.accounts.pick.microsoft_sub"]}
+            soon={COMING_SOON.microsoft ? s["strings.settings.coming_soon"] : null}
             onClick={() => setView("microsoft")}
           />
         </div>
@@ -255,21 +257,30 @@ function ProviderCard({
   logo,
   title,
   sub,
+  soon = null,
   onClick,
 }: {
   logo: ReactNode;
   title: string;
   sub: string;
+  /** "Coming soon": the card shows it and cannot be picked. */
+  soon?: string | null;
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="prov" onClick={onClick}>
+    <button
+      type="button"
+      className={soon ? "prov soon" : "prov"}
+      disabled={soon !== null}
+      aria-disabled={soon !== null}
+      onClick={soon ? undefined : onClick}
+    >
       <div className="lg">{logo}</div>
       <div>
         <b>{title}</b>
         <span>{sub}</span>
       </div>
-      <span />
+      {soon ? <Tag className="soon-tag">{soon}</Tag> : <span />}
     </button>
   );
 }

@@ -8,7 +8,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Capabilities, Device, HostedState } from "@monday/shared";
-import { defaultSettings, HOSTED_PROVIDERS, rolesFor } from "@monday/shared";
+import { COMING_SOON, defaultSettings, HOSTED_PROVIDERS, rolesFor } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -210,6 +210,19 @@ function cloudFetch(script: Record<string, Array<{ status: number; body?: unknow
 }
 
 describe("Settings › Server on a Sidecar-only install", () => {
+  test.if(COMING_SOON.cloud)("the Cloud options show as Coming soon and are inert", async () => {
+    await mount();
+    const block = document.querySelector(".soon-block[data-soon=cloud]");
+    expect(block?.querySelector(".soon-tag")?.textContent).toBe("Coming soon");
+    const inert = block?.querySelector("[inert]");
+    // Deploy, copy the database and connect all sit inside the inert part.
+    expect(inert?.querySelector(".upgrade-card")).not.toBeNull();
+    expect(inert?.getAttribute("aria-disabled")).toBe("true");
+    const cards = [...document.querySelectorAll(".upgrade-card")];
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.every((c) => inert?.contains(c))).toBe(true);
+  });
+
   test("shows the mode, the three cards with their env vars, and opens the Deploy links", async () => {
     const m = await mount();
     expect(text()).toContain("Sidecar only");
