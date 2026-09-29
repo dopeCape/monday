@@ -48,7 +48,14 @@ export function useViews(): View[] | undefined {
       setViews(store ? [] : undefined);
       return;
     }
-    if (shell.server) ensureViewSync(store, (workspaceId) => shell.api.views.list(workspaceId));
+    if (shell.server) {
+      const api = shell.api.views;
+      ensureViewSync(store, {
+        list: (workspaceId) => api.list(workspaceId),
+        values: (viewId) => api.values(viewId),
+        valuesFor: (workspaceId, threadIds) => api.valuesFor(workspaceId, threadIds),
+      });
+    }
     const live = store.live<Record<string, unknown>>(VIEWS_SQL, []);
     const off = live.subscribe((rows) =>
       setViews(rows.flatMap((r) => rowToView(r, store.workspaceId) ?? [])),

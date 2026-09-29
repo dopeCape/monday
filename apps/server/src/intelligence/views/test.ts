@@ -1,19 +1,25 @@
 // The test a View must pass before it is saved (docs/spec/views.md,
-// "Making a View: the Agent must test it", step 2 and 3). Code takes the
+// "Making a View: the Agent must test it", steps 3 and 4). Code takes the
 // newest views.test.pool Threads in scope; when the scope holds fewer (a
 // quiet "today"), only its date part widens to the last
-// views.test.widen_days and the card says so. Those Threads are asked the
-// View's Signals in the ordinary Signal request (one Thread each; the
-// View's own questions ride as extra questions, the shipped ones it uses
-// are stored as usual), the Lanes are evaluated, and the card gets
-// views.test.shown of them spread across the Lanes, least confident first,
-// with the answers behind each, plus the counts over all of them.
+// views.test.widen_days and the card says so. Each Thread is asked in its
+// one ordinary Signal request, the Threads concurrently: the View's own
+// Signals and its Extractions ride as extra questions (an Extraction's
+// options are the candidates code finds in that Thread, and code copies the
+// pick), the shipped ones it uses and lacks are stored as usual. Then the
+// Lanes are evaluated, every Block is computed over the tried Threads and
+// drawn small for the card, and the card gets views.test.shown of them
+// spread across the Lanes, least confident first, with the answers and
+// values behind each, plus the counts over all of them.
 
 import type {
+  ExtractedValue,
   Id,
   JudgeAnswer,
   JudgeQuestion,
+  SignalOptionsFrom,
   SignalReading,
+  ValueWords,
   ViewContext,
   ViewDoc,
   ViewTest,
@@ -21,17 +27,23 @@ import type {
   ViewTriedThread,
 } from "@monday/shared";
 import {
+  actionShows,
+  computeBlocks,
   correctionAgreement,
-  laneView,
+  DEFAULT_VALUE_WORDS,
   OTHERS_LANE,
   pickShown,
   placementCertainty,
   placementReasons,
+  previewBlock,
+  readExtraction,
   readingOf,
   scopeAdmits,
   scopeSince,
   signalName,
   UNSURE_LANE,
+  viewBase,
+  viewExtractionDefs,
   viewReadsSignals,
   viewSignalDefs,
   widenScope,
@@ -52,6 +64,12 @@ export interface TestSettings {
   notRead: string;
   /** How many Threads are asked at once. */
   concurrency: number;
+  /** "None of these" for an Extraction that names none (views.extract.none). */
+  extractNone?: string | undefined;
+  /** How values are written on the card (Unsure, Not read yet, today). */
+  words?: ValueWords | undefined;
+  maxRows?: number | undefined;
+  maxGroups?: number | undefined;
 }
 
 export interface TestRun {
@@ -96,6 +114,7 @@ export async function runViewTest(
     (
       await loadViewThreads(db, {
         workspaceId,
+        owner: ctx.owner,
         since: scopeSince(f, ctx.now, ctx.zone),
         limit: Math.max(limit * 4, 200),
       })
@@ -108,9 +127,9 @@ export async function runViewTest(
   let widened: ViewTest["widened"] = null;
   if (options.threadIds) {
     const ids = new Set(options.threadIds);
-    pool = (await loadViewThreads(db, { workspaceId, ids: [...ids], limit: ids.size })).filter(
-      (t) => !t.deleted,
-    );
+    pool = (
+      await loadViewThreads(db, { workspaceId, owner: ctx.owner, ids: [...ids], limit: ids.size })
+    ).filter((t) => !t.deleted);
   } else if (inScopeList.length >= settings.pool || !(facts.received || facts.active)) {
     pool = inScopeList.slice(0, settings.pool);
   } else {
@@ -130,14 +149,26 @@ export async function runViewTest(
     }
   }
 
-  // Ask: the View's own questions ride as extras; the shipped ones it uses and lacks are stored as usual.
+  // Ask: the View's own questions and Extractions ride as extras in each Thread's one request;
+  // the shipped ones it uses and lacks are stored as usual.
   const own = viewSignalDefs(doc, settings.examplesMax);
-  const extra: Record<string, JudgeQuestion> = Object.fromEntries(
-    own.map((d) => [d.id, d.question as JudgeQuestion]),
+  const pulls = viewExtractionDefs(doc, {
+    ...(settings.extractNone ? { none: settings.extractNone } : {}),
+    examplesMax: settings.examplesMax,
+  });
+  const extra: Record<string, JudgeQuestion> = Object.fromEntries([
+    ...own.map((d) => [d.id, d.question as JudgeQuestion]),
+    ...pulls.map((d) => [d.id, d.question as JudgeQuestion]),
+  ]);
+  const extraOptions: Record<string, SignalOptionsFrom> = Object.fromEntries(
+    pulls.map((d) => [d.id, `extract:${d.find}` as SignalOptionsFrom]),
   );
+  const asksOwn = own.length + pulls.length > 0;
   const stored = await deps.signals.readings(pool.map((t) => t.id));
   const judge = await deps.runtime.judgeAvailable();
   const extras = new Map<Id, Record<string, SignalReading>>();
+  const values = new Map<Id, Record<string, ExtractedValue>>();
+  const candidates = new Map<Id, Record<string, string[]>>();
   let unanswered = false;
   if (judge) {
     // The definitions settle once before the parallel requests read them.
@@ -145,16 +176,38 @@ export async function runViewTest(
     await inBatches(pool, settings.concurrency, async (t) => {
       const have = stored.get(t.id) ?? {};
       const missing = doc.uses.filter((u) => !have[u]);
-      if (own.length === 0 && missing.length === 0) return;
+      if (!asksOwn && missing.length === 0) return;
       try {
         const r = await deps.signals.ask(workspaceId, t.id, {
           reason: "view",
           only: missing,
-          ...(own.length ? { extra } : {}),
+          ...(asksOwn ? { extra } : {}),
+          ...(pulls.length ? { extraOptions } : {}),
         });
         const got: Record<string, SignalReading> = {};
-        for (const [id, a] of Object.entries(r.extra)) if (a) got[id] = readingFrom(a);
+        const picked: Record<string, ExtractedValue> = {};
+        for (const [id, a] of Object.entries(r.extra)) {
+          if (!a || extraOptions[id]) continue;
+          got[id] = readingFrom(a);
+        }
+        // An Extraction reads as "picked" with its value beside it, or "none" (code found nothing: sure).
+        for (const d of pulls) {
+          const p = r.picks[d.id];
+          const a = r.extra[d.id];
+          if (p) {
+            got[d.id] = { choice: "picked", confidence: p.confidence, version: 0 };
+            picked[d.id] = { text: p.text, value: p.value, confidence: p.confidence };
+          } else if (d.id in r.picks) {
+            got[d.id] = {
+              choice: "none",
+              confidence: a?.type === "choice" ? a.confidence : 1,
+              version: 0,
+            };
+          }
+        }
         extras.set(t.id, got);
+        values.set(t.id, picked);
+        candidates.set(t.id, r.candidates);
       } catch (error) {
         unanswered = true;
         deps.log(`view test ${t.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -162,9 +215,22 @@ export async function runViewTest(
     });
   }
   const after = judge ? await deps.signals.readings(pool.map((t) => t.id)) : stored;
+  const subjects = new Map<Id, string>(
+    await Promise.all(
+      pool.map(async (t): Promise<[Id, string]> => {
+        try {
+          return [t.id, await deps.mailstore.readThreadSubject(t.id)];
+        } catch {
+          return [t.id, ""];
+        }
+      }),
+    ),
+  );
   const threads: ViewThread[] = pool.map((t) => ({
     ...t,
+    subject: subjects.get(t.id) ?? "",
     readings: { ...(after.get(t.id) ?? {}), ...(extras.get(t.id) ?? {}) },
+    values: values.get(t.id) ?? {},
   }));
 
   // Evaluate over the tried Threads as they are (they already passed the scope, perhaps widened).
@@ -172,7 +238,13 @@ export async function runViewTest(
     ...doc,
     scope: { facts: { folder: "any" }, limit: threads.length || 1 },
   };
-  const lanes = laneView(evalDoc, threads, ctx);
+  const base = viewBase(evalDoc, threads, ctx);
+  const lanes = base.lanes;
+  const words = settings.words ?? DEFAULT_VALUE_WORDS;
+  const blocks = computeBlocks(base, {
+    maxRows: settings.maxRows,
+    maxGroups: settings.maxGroups,
+  }).map((b) => previewBlock(b, ctx, words));
   const byId = new Map(threads.map((t) => [t.id, t]));
   const tried = lanes.lanes.flatMap((l) =>
     l.rows.map((r) => ({
@@ -196,18 +268,23 @@ export async function runViewTest(
   }
   const order = [...doc.lanes.map((l) => l.id), UNSURE_LANE, OTHERS_LANE];
   const picked = pickShown(tried, settings.shown, order);
+  const blockActions = [...new Set(doc.blocks.flatMap((b) => b.actions ?? []))].flatMap(
+    (id) => doc.actions.find((a) => a.id === id) ?? [],
+  );
   const shown: ViewTriedThread[] = [];
   for (const p of picked) {
     const t = byId.get(p.id);
     if (!t) continue;
-    let subject = "";
-    try {
-      subject = await deps.mailstore.readThreadSubject(t.id);
-    } catch {}
+    const row = {
+      thread: t,
+      threads: [t],
+      lane: doc.lanes.length ? p.lane : null,
+      placement: p.placement,
+    };
     shown.push({
       threadId: t.id,
       from: t.from ?? "",
-      subject,
+      subject: t.subject ?? "",
       lastActivity: t.lastActivity,
       lane: p.lane,
       notRead: p.placement.notRead,
@@ -220,6 +297,19 @@ export async function runViewTest(
           label: signalName(doc, s.id),
           noul: readingOf(doc, t, s.id)?.noul ?? null,
         })),
+      values: doc.extractions.map((x) => {
+        const read = readExtraction(doc, t, x.id, ctx);
+        const stored = pulls.find((d) => d.local === x.id)?.id ?? "";
+        return {
+          extraction: x.id,
+          label: x.label?.trim() || x.id.replaceAll("_", " "),
+          state: read.state,
+          text: read.state === "value" || read.state === "unsure" ? read.text : null,
+          confidence: read.state === "value" || read.state === "unsure" ? read.confidence : null,
+          candidates: candidates.get(t.id)?.[stored] ?? [],
+        };
+      }),
+      actions: blockActions.filter((a) => actionShows(base, a, row)).map((a) => a.label),
     });
   }
   const examples = Object.values(doc.examples).flat().length;
@@ -233,9 +323,9 @@ export async function runViewTest(
       inScope,
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
       changes: [],
-      needsJudge:
-        viewReadsSignals(doc) && (!judge || unanswered) && own.length + doc.uses.length > 0,
+      needsJudge: viewReadsSignals(doc) && (!judge || unanswered),
       moves: null,
+      blocks,
     },
     threadIds: threads.map((t) => t.id),
     lanesOf: lanes.lanesOf,

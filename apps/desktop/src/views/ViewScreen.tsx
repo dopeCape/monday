@@ -9,7 +9,7 @@
 // correcting. Every word is a strings.views.* Setting.
 
 import type { LaneComponent, View, ViewDoc } from "@monday/shared";
-import { LANE_COMPONENTS, layoutForComponent, VIEW_ICONS } from "@monday/shared";
+import { LANE_COMPONENTS, showAs, VIEW_ICONS } from "@monday/shared";
 import { Btn, Toast } from "@monday/ui";
 import { DotsThreeIcon, XIcon } from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
@@ -17,7 +17,7 @@ import type { ViewLens } from "../screens/Inbox.tsx";
 import { Picker } from "../screens/inbox/Picker.tsx";
 import { useShell } from "../shell/Shell.tsx";
 import { useLaneView, useViews } from "./useViews.ts";
-import { orderedThreads, ViewBlocks } from "./ViewBlocks.tsx";
+import { layoutOf, orderedThreads, ViewBlocks } from "./ViewBlocks.tsx";
 
 const fill = (t: string, vars: Record<string, string | number>) =>
   t.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
@@ -200,12 +200,12 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
           items={LANE_COMPONENTS.map((c) => ({
             key: c,
             label: s[`strings.views.show_as.${c}`],
-            ...(c === view.doc.layout.component ? { detail: "✓" } : {}),
+            ...(c === layoutOf(view.doc).component ? { detail: "✓" } : {}),
           }))}
           onPick={(c) => {
             setMenu(null);
             void edit(
-              (d) => ({ ...d, layout: layoutForComponent(c as LaneComponent, d.layout) }),
+              (d) => showAs(d, c as LaneComponent),
               s[`strings.views.show_as.${c as LaneComponent}`],
             );
           }}
@@ -315,7 +315,7 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
     above,
     render: (ctx) =>
       lanes ? (
-        lanes.total === 0 && view.doc.layout.component !== "lanes" ? (
+        lanes.total === 0 && layoutOf(view.doc).component !== "lanes" ? (
           <div className="empty-line">{s["strings.views.empty"]}</div>
         ) : (
           <ViewBlocks

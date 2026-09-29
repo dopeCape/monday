@@ -61,7 +61,7 @@ describe("the Agent makes a View and must test it", () => {
   const judge = createFakeJudge();
   const chat = createFakeChat();
   let intelligence: Intelligence;
-  const SUPPORT = (id: string) => viewSignalId("b_show_today_s_support_requests", id);
+  const SUPPORT = (id: string) => viewSignalId("v_show_today_s_support_requests", id);
 
   const setSetting = async (key: string, value: unknown) => {
     await db.handle.db

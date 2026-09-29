@@ -164,7 +164,7 @@ A fixed catalog, like Panels: the Agent picks a Block and fills its typed props;
 | `chart` | `bar`, `stacked_bar`, `line`, `area` or `donut` over a `group_by` (plain SVG) | `chart`, `title`, `query` (with `group_by`), `series` (a second grouping, stacked bars) |
 | `timeline` | Threads placed by a date Field, Lanes as colours | `date`, `range`, `query` |
 | `calendar` | a month grid with each Thread on the day of a date Field | `date`, `title`, `query` |
-| `cards` | a gallery, one card per row: a title, a subtitle, badges, a value | `title`, `subtitle`, `badges`, `value`, `query`, `actions` |
+| `cards` | a gallery, one card per row: a title, a subtitle, badges, a value | `card_title`, `subtitle`, `badges`, `value`, `value_format`, `query`, `actions` |
 | `people` | people or companies with their Thread count and last activity | `by` (`person` or `company`), `query` |
 | `checklist` | one checkable item per Thread (an Extraction or the subject); checked items fold away | `item`, `query`, `actions` |
 | `heatmap` | counts in a grid: weekday by hour, or week by weekday | `date`, `grid`, `query` |

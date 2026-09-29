@@ -80,7 +80,16 @@ export interface SealedFacts {
    * confidence (docs/spec/actions.md).
    */
   picks?:
-    | Record<string, { value: string; confidence: number; probability?: number | undefined }>
+    | Record<
+        string,
+        {
+          value: string;
+          confidence: number;
+          probability?: number | undefined;
+          /** A View's Extraction: the value normalized by code (money, a date, a link). */
+          normalized?: unknown;
+        }
+      >
     | undefined;
 }
 

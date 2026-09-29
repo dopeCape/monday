@@ -14,6 +14,9 @@
 //   POST   /views/:id/restore                 ->  View                    (Undo of a delete)
 //   POST   /views/:id/place                   {threadId, lane | null}  ->  View   a correction on the View
 //   POST   /views/:id/dismiss-check           ->  View
+//   POST   /views/:id/done                    {threadId, done, messageCount}  ->  View   a checklist item
+//   GET    /views/:id/values                  {values}   every value the View's Extractions picked, by Thread
+//   POST   /views/values                      {workspace, threadIds}  ->  {values}   the values on these Threads
 // The Agent's drafts (slice 40): the card reads and acts on them; only the user's click saves.
 //   GET    /views/drafts/:id                  ViewDraft
 //   POST   /views/drafts/:id/corrections      {threadId, lane?} | {threadId, signal, holds}  ->  ViewDraft
@@ -45,6 +48,15 @@ const correctionBody = z.object({
   holds: z.boolean().optional(),
 });
 const pinDraftBody = z.object({ factsOnly: z.boolean().optional() });
+const valuesBody = z.object({
+  workspace: z.string().min(1),
+  threadIds: z.array(z.string().min(1)).min(1).max(1000),
+});
+const doneBody = z.object({
+  threadId: z.string().min(1),
+  done: z.boolean(),
+  messageCount: z.number().int().min(0),
+});
 const placeBody = z.object({
   threadId: z.string().min(1),
   lane: z.string().min(1).max(40).nullable(),
@@ -113,6 +125,38 @@ export function viewRoutes(views: ViewIntelligence): Hono<AppEnv> {
   app.post("/views/drafts/:id/discard", (c) =>
     draftAct(c, () => drafting.discard(c.req.param("id"))),
   );
+
+  // The picked values, decrypted for the owner's Device (docs/spec/views.md, "Data and sync").
+  app.post("/views/values", async (c) => {
+    const body = await parseBody(c, valuesBody);
+    if (!body.ok) return body.response;
+    return c.json({ values: await views.valuesFor(body.data.workspace, body.data.threadIds) });
+  });
+
+  app.get("/views/:id/values", async (c) => {
+    try {
+      return c.json({ values: await views.values(c.req.param("id")) });
+    } catch (error) {
+      return viewRefused(c, error);
+    }
+  });
+
+  app.post("/views/:id/done", async (c) => {
+    const body = await parseBody(c, doneBody);
+    if (!body.ok) return body.response;
+    try {
+      return c.json(
+        await store.setDone(
+          c.req.param("id"),
+          body.data.threadId,
+          body.data.done,
+          body.data.messageCount,
+        ),
+      );
+    } catch (error) {
+      return viewRefused(c, error);
+    }
+  });
 
   app.get("/views", async (c) => {
     const q = workspaceQuery.safeParse(c.req.query());

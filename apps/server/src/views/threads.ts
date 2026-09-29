@@ -11,6 +11,8 @@ export interface ViewThreadQuery {
   workspaceId: Id;
   /** Only Threads active since this moment. */
   since?: Date | null | undefined;
+  /** The owner's address, lowercased: the correspondent is the newest sender who is not the owner. */
+  owner?: string | undefined;
   /** Only these Threads. */
   ids?: readonly Id[] | undefined;
   limit: number;
@@ -33,6 +35,7 @@ interface Row {
   first_from: string | null;
   recipients: string[] | null;
   facts: Record<string, unknown> | null;
+  correspondent: { name?: string; email?: string } | null;
 }
 
 const iso = (v: Date | string | null) =>
@@ -60,6 +63,7 @@ export async function loadViewThreads(
       (select lower(m."from"->>'email') from messages m where m.thread_id = t.id order by m.date asc, m.id asc limit 1) as first_from,
       (select coalesce(jsonb_agg(distinct lower(r->>'email')), '[]'::jsonb)
          from messages m, jsonb_array_elements(m."to" || m.cc) r where m.thread_id = t.id) as recipients,
+      (select m."from" from messages m where m.thread_id = t.id and lower(m."from"->>'email') <> ${(query.owner ?? "").toLowerCase()} order by m.date desc, m.id desc limit 1) as correspondent,
       f.facts
     from threads t left join thread_facts f on f.thread_id = t.id
     where ${sql.join(where, sql` and `)}
@@ -84,6 +88,9 @@ export async function loadViewThreads(
       ? r.recipients.filter((x) => typeof x === "string")
       : [],
     facts: r.facts ?? null,
+    correspondent: r.correspondent?.email
+      ? { name: r.correspondent.name ?? "", email: r.correspondent.email.toLowerCase() }
+      : null,
     readings: {},
   }));
 }

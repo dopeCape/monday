@@ -68,7 +68,7 @@ import {
   signalsStatements,
 } from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
-import { VIEWS_SCHEMA_SQL, viewUpsert } from "./views.ts";
+import { VIEWS_SCHEMA_SQL, viewUpsert, viewValuesStale } from "./views.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 
@@ -762,6 +762,9 @@ export function changeStatements(change: Change): Statement[] {
     case "view":
       // Headers only: the Views module reads the sealed documents through GET /views.
       return [viewUpsert(change.payload)];
+    case "view_values":
+      // Headers only: the Views module reads the picked values through POST /views/values.
+      return [viewValuesStale(change.payload.threadId)];
   }
 }
 

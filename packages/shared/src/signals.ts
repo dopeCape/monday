@@ -13,6 +13,7 @@ import type {
   ScoreQuestion,
   ThreadJudgments,
 } from "./judge.ts";
+import type { ExtractKind } from "./view/types.ts";
 
 export type SignalKind = "noul" | "choice" | "score";
 
@@ -51,10 +52,18 @@ export type SignalGate =
   | "addresses"
   | "links"
   | "tracking"
-  | "workflows";
+  | "workflows"
+  /** A View's Extraction: candidates of its kind found in the text (docs/spec/views.md). */
+  | `extract:${ExtractKind}`;
 
 /** Per-Thread options built by code (the amounts a pattern found), never versioned. */
-export type SignalOptionsFrom = "amounts" | "addresses" | "links" | "tracking" | "workflows";
+export type SignalOptionsFrom =
+  | "amounts"
+  | "addresses"
+  | "links"
+  | "tracking"
+  | "workflows"
+  | `extract:${ExtractKind}`;
 
 export type SignalQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 

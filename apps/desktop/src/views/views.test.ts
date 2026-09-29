@@ -38,6 +38,7 @@ const VIEW: View = {
   doc: SUPPORT_TODAY_VIEW,
   placements: {},
   checkBar: false,
+  done: {},
 };
 
 function answers(threadId: string, support: number, severity: number): SignalsChange {

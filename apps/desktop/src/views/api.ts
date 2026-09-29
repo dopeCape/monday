@@ -2,7 +2,7 @@
 // Built from the API client's own request helper, so the target, the token
 // and the error handling are the same as every other route.
 
-import type { Id, View, ViewDoc, ViewDraft } from "@monday/shared";
+import type { ExtractedValue, Id, View, ViewDoc, ViewDraft } from "@monday/shared";
 
 export type Requester = <T>(path: string, init?: RequestInit) => Promise<T>;
 
@@ -37,6 +37,20 @@ export function viewsApi(request: Requester) {
     place: (id: Id, threadId: Id, lane: string | null) =>
       request<View>(`${at(id)}/place`, body("POST", { threadId, lane })),
     dismissCheck: (id: Id) => request<View>(`${at(id)}/dismiss-check`, { method: "POST" }),
+    /** A checklist item checked or unchecked, for the Thread version it was checked at. */
+    done: (id: Id, threadId: Id, done: boolean, messageCount: number) =>
+      request<View>(`${at(id)}/done`, body("POST", { threadId, done, messageCount })),
+    /** Every value the View's Extractions picked, by Thread (decrypted; 423 when locked). */
+    values: (id: Id) =>
+      request<{ values: Record<Id, Record<string, ExtractedValue>> }>(`${at(id)}/values`).then(
+        (r) => r.values,
+      ),
+    /** The values every View picked on these Threads (the feed named them). */
+    valuesFor: (workspaceId: Id, threadIds: readonly Id[]) =>
+      request<{ values: Record<Id, Record<string, ExtractedValue>> }>(
+        "/views/values",
+        body("POST", { workspace: workspaceId, threadIds }),
+      ).then((r) => r.values),
     /** The Agent's draft (slice 40): read, correct, revise, pin or discard. */
     draft: (draftId: Id) => request<ViewDraft>(`/views/drafts/${encodeURIComponent(draftId)}`),
     correct: (

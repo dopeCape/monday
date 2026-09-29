@@ -324,7 +324,7 @@ describe("the lanes, the test card and moves", () => {
       thread({ id: "c", readings: readings(0.5, 0) }),
       thread({ id: "d", readings: readings(0.9, 0) }),
     ];
-    const lanes = laneView(SUPPORT_TODAY_VIEW, threads, ctx);
+    const lanes = laneView(SUPPORT_TODAY_VIEW, threads, ctx, { sort: "oldest_first" });
     expect(lanes.lanes.map((l) => l.id)).toEqual(["red", "yellow", "green", "unsure"]);
     expect(lanes.lanes[0]?.rows.map((r) => r.thread.id)).toEqual(["b", "a"]);
     expect(lanes.navCount).toBe(2);

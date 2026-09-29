@@ -18,22 +18,34 @@
 import type {
   Id,
   LaneCondition,
+  SignalGate,
+  SignalOptionsFrom,
   SignalQuestion,
   View,
   ViewChange,
   ViewDoc,
+  ViewDone,
   ViewExample,
   ViewPlacement,
   ViewScopeFacts,
 } from "@monday/shared";
-import { validateView, viewIdFor, viewSignalDefs } from "@monday/shared";
+import {
+  normalizeView,
+  validateView,
+  viewExtractionDefs,
+  viewExtractionId,
+  viewIdFor,
+  viewSignalDefs,
+  viewSignalId,
+} from "@monday/shared";
 import { and, asc, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Db, Tx } from "../db/client.ts";
 import { signalDefs, views as viewsTable, viewVersions } from "../db/schema.ts";
 import type { Mailstore } from "../mailstore/index.ts";
 import { readGlobalSettings } from "../settings/read.ts";
+import { viewRefs } from "./refs.ts";
 
-type LaneRow = typeof viewsTable.$inferSelect;
+type StoredRow = typeof viewsTable.$inferSelect;
 
 /** The document would not save: the schema or a limit refused it. */
 export class ViewInvalidError extends Error {
@@ -70,6 +82,10 @@ const SETTING_KEYS = [
   "views.max_signals",
   "views.scope.max_threads",
   "views.examples_in_question",
+  "views.max_extractions",
+  "views.max_blocks",
+  "views.max_actions",
+  "views.extract.none",
   "signals.max_active",
   "signals.keep_inactive_days",
   "signals.backfill.scope",
@@ -80,11 +96,13 @@ interface Extras {
   placements: Record<Id, ViewPlacement>;
   /** Corrections made on the View, not yet folded into its questions, by Signal. */
   examples: Record<string, ViewExample[]>;
+  /** Checklist items checked. */
+  done?: Record<Id, ViewDone> | undefined;
 }
 
-const NO_EXTRAS: Extras = { placements: {}, examples: {} };
+const NO_EXTRAS: Extras = { placements: {}, examples: {}, done: {} };
 
-/** A View's Signal as the Signal store takes it. */
+/** A View's Signal (or Extraction) as the Signal store takes it. */
 export interface ViewSignalWanted {
   id: string;
   kind: "noul" | "choice" | "score";
@@ -93,6 +111,9 @@ export interface ViewSignalWanted {
   viewId: Id;
   /** The View's name, who uses it. */
   consumer: string;
+  /** An Extraction's: asked only when code finds candidates of its kind, which are its options. */
+  gate?: SignalGate | undefined;
+  optionsFrom?: SignalOptionsFrom | undefined;
 }
 
 export interface ViewStore {
@@ -137,6 +158,8 @@ export interface ViewStore {
       subject?: string | undefined;
     }>,
   ): Promise<View>;
+  /** A checklist item checked (for this Thread version) or unchecked. */
+  setDone(id: Id, threadId: Id, done: boolean, messageCount: number): Promise<View>;
   /** The corrections made on the View, not yet folded into its questions. */
   corrections(id: Id): Promise<Record<string, ViewExample[]>>;
   /** Forgets the corrections once they were folded into a new version. */
@@ -153,7 +176,7 @@ export interface ViewStoreOptions {
 }
 
 /** The feed's headers for a row. */
-export function viewHeaders(r: LaneRow): ViewChange {
+export function viewHeaders(r: StoredRow): ViewChange {
   return {
     id: r.id,
     version: r.version,
@@ -166,7 +189,10 @@ export function viewHeaders(r: LaneRow): ViewChange {
 
 /** How many own Signals a document adds to the active set. */
 function ownSignals(doc: ViewDoc): string[] {
-  return doc.signals.map((s) => `board:${doc.id}:${s.id}`);
+  return [
+    ...doc.signals.map((s) => viewSignalId(doc.id, s.id)),
+    ...doc.extractions.map((x) => viewExtractionId(doc.id, x.id)),
+  ];
 }
 
 /** The own Nouls a Lane requires to hold (inside its `all`s), in order. */
@@ -220,21 +246,22 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
       await mailstore.readText({ workspaceId, kind: "board", key, chunks: [enc], size: -1 }),
     ) as T;
 
-  const row = async (id: Id): Promise<LaneRow | null> =>
+  const row = async (id: Id): Promise<StoredRow | null> =>
     (await db.query.views.findFirst({ where: eq(viewsTable.id, id) })) ?? null;
 
-  const docAt = async (r: Pick<LaneRow, "id" | "workspaceId">, version: number) => {
+  const docAt = async (r: Pick<StoredRow, "id" | "workspaceId">, version: number) => {
     const [v] = await db
       .select()
       .from(viewVersions)
       .where(and(eq(viewVersions.viewId, r.id), eq(viewVersions.version, version)));
-    return v ? open<ViewDoc>(r.workspaceId, v.contentEnc, v.contentKey) : null;
+    // A Board's document reads as a View with one Block (ADR 0016).
+    return v ? normalizeView(await open<unknown>(r.workspaceId, v.contentEnc, v.contentKey)) : null;
   };
 
-  const extrasOf = async (r: LaneRow): Promise<Extras> =>
+  const extrasOf = async (r: StoredRow): Promise<Extras> =>
     r.extrasEnc && r.extrasKey ? open<Extras>(r.workspaceId, r.extrasEnc, r.extrasKey) : NO_EXTRAS;
 
-  const toView = async (r: LaneRow): Promise<View> => {
+  const toView = async (r: StoredRow): Promise<View> => {
     const doc = await docAt(r, r.version);
     if (!doc) throw new ViewNotFoundError(r.id);
     const extras = await extrasOf(r);
@@ -250,6 +277,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
       doc: { ...doc, version: r.version },
       placements: extras.placements,
       checkBar: r.checkBar,
+      done: extras.done ?? {},
     };
   };
 
@@ -259,7 +287,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
    * View is seen at once on this Server and within seconds on another.
    */
   const wantedCache = new Map<Id, { at: number; value: ViewSignalWanted[] }>();
-  const record = (executor: Db | Tx, r: LaneRow) => {
+  const record = (executor: Db | Tx, r: StoredRow) => {
     wantedCache.delete(r.workspaceId);
     return mailstore.recordChange(executor, {
       workspaceId: r.workspaceId,
@@ -275,13 +303,21 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
     return r;
   };
 
-  const validated = async (input: unknown): Promise<ViewDoc> => {
+  const validated = async (workspaceId: Id, input: unknown): Promise<ViewDoc> => {
     const s = await settings();
-    const r = validateView(input, {
-      maxLanes: s["views.max_lanes"],
-      maxSignals: s["views.max_signals"],
-      maxThreads: s["views.scope.max_threads"],
-    });
+    const r = validateView(
+      input,
+      {
+        maxLanes: s["views.max_lanes"],
+        maxSignals: s["views.max_signals"],
+        maxThreads: s["views.scope.max_threads"],
+        maxExtractions: s["views.max_extractions"],
+        maxBlocks: s["views.max_blocks"],
+        maxActions: s["views.max_actions"],
+      },
+      undefined,
+      await viewRefs(db, workspaceId),
+    );
     if (!r.ok) throw new ViewInvalidError(r.errors);
     return r.doc;
   };
@@ -327,7 +363,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
       );
   };
 
-  const saveExtras = async (r: LaneRow, extras: Extras) => {
+  const saveExtras = async (r: StoredRow, extras: Extras) => {
     const sealed = await seal(r.workspaceId, extras);
     const [updated] = await db
       .update(viewsTable)
@@ -374,7 +410,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
         wantedId && !taken.has(wantedId)
           ? wantedId
           : viewIdFor(typeof raw.name === "string" ? raw.name : "view", taken);
-      const doc = await validated({ ...raw, id, version: 1 });
+      const doc = await validated(workspaceId, { ...raw, id, version: 1 });
       await checkActive(workspaceId, doc, null);
       const at = now();
       const sealed = await seal(workspaceId, doc);
@@ -417,7 +453,11 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
         .from(viewVersions)
         .where(eq(viewVersions.viewId, id));
       const version = Number(max?.v ?? r.version) + 1;
-      const doc = await validated({ ...(input as Record<string, unknown>), id, version });
+      const doc = await validated(r.workspaceId, {
+        ...(input as Record<string, unknown>),
+        id,
+        version,
+      });
       await checkActive(r.workspaceId, doc, current);
       const sealed = await seal(r.workspaceId, doc);
       const at = now();
@@ -554,7 +594,16 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
         });
         examples[example.signal] = list.slice(-200);
       }
-      return toView(await saveExtras(r, { placements, examples }));
+      return toView(await saveExtras(r, { ...extras, placements, examples }));
+    },
+
+    async setDone(id, threadId, done, messageCount) {
+      const r = await mustRow(id);
+      const extras = await extrasOf(r);
+      const marks = { ...(extras.done ?? {}) };
+      if (done) marks[threadId] = { messageCount, at: now().toISOString() };
+      else delete marks[threadId];
+      return toView(await saveExtras(r, { ...extras, done: marks }));
     },
 
     async corrections(id) {
@@ -564,7 +613,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
     async clearCorrections(id) {
       const r = await mustRow(id);
       const extras = await extrasOf(r);
-      await saveExtras(r, { placements: extras.placements, examples: {} });
+      await saveExtras(r, { ...extras, examples: {} });
     },
 
     async dismissCheck(id) {
@@ -605,6 +654,22 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
           facts: doc.scope.facts,
           viewId: r.id,
           consumer: doc.name,
+        });
+      }
+      // Each Extraction: a Choice over the candidates code finds, asked only when it finds some.
+      for (const def of viewExtractionDefs(
+        { ...doc, id: r.id },
+        { none: s["views.extract.none"], examplesMax: s["views.examples_in_question"] },
+      )) {
+        out.push({
+          id: def.id,
+          kind: "choice",
+          question: def.question,
+          facts: doc.scope.facts,
+          viewId: r.id,
+          consumer: doc.name,
+          gate: `extract:${def.find}`,
+          optionsFrom: `extract:${def.find}`,
         });
       }
     }

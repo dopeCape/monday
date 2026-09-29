@@ -7,8 +7,18 @@
 // the Inbox's own Thread rows, so every row action, key and the multi-select
 // work on them; a row can be dragged to another Lane or moved with Move to.
 
-import type { LaneColumn, LaneView, Settings, TableColumn, Thread, ViewDoc } from "@monday/shared";
-import { readingOf, UNSURE_LANE, VIEW_FACTS } from "@monday/shared";
+import type {
+  LaneColumn,
+  LaneLayout,
+  LaneView,
+  RowField,
+  Settings,
+  TableColumn,
+  Thread,
+  ViewDoc,
+  ViewFact,
+} from "@monday/shared";
+import { laneBlockOf, readingOf, UNSURE_LANE, VIEW_FACTS } from "@monday/shared";
 import { cx, formatListTime } from "@monday/ui";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react";
 import { type DragEvent, type ReactNode, useState } from "react";
@@ -33,24 +43,67 @@ export interface ViewBlocksProps {
 }
 
 /** The Threads the component shows, in its order: what the keyboard walks. */
+/** The View's Lane Block as the old layout shape these components draw. */
+export function layoutOf(doc: ViewDoc): LaneLayout {
+  const b = laneBlockOf(doc);
+  switch (b?.type) {
+    case "list":
+      return {
+        component: "list",
+        ...(b.row ? { row: b.row as { fields: RowField[] } } : {}),
+        ...(b.sort ? { sort: b.sort } : {}),
+      };
+    case "counts":
+      return { component: "counts", ...(b.lanes ? { lanes: b.lanes } : {}) };
+    case "table":
+      return {
+        component: "table",
+        columns: b.columns.map((c) =>
+          c.field.startsWith("signal:")
+            ? { label: c.label, signal: c.field.slice("signal:".length) }
+            : c.field in VIEW_FACTS
+              ? { label: c.label, fact: c.field as ViewFact }
+              : { label: c.label, field: c.field as RowField },
+        ),
+      };
+    case "timeline":
+      return {
+        component: "timeline",
+        date: (["deadline_at", "received_at"].includes(b.date) ? b.date : "last_activity_at") as
+          | "deadline_at"
+          | "received_at"
+          | "last_activity_at",
+      };
+    case "lanes":
+      return {
+        component: "lanes",
+        ...(b.row ? { row: b.row as { fields: RowField[] } } : {}),
+        ...(b.sort ? { sort: b.sort } : {}),
+        ...(b.collapse_empty !== undefined ? { collapse_empty: b.collapse_empty } : {}),
+      };
+    default:
+      return { component: "list" };
+  }
+}
+
 export function orderedThreads(
   doc: ViewDoc,
   result: LaneView<CachedViewThread>,
   countsLane?: string,
 ): Thread[] {
   const lanes = result.lanes;
-  if (doc.layout.component === "counts") {
+  if (layoutOf(doc).component === "counts") {
     const lane = lanes.find((l) => l.id === (countsLane ?? lanes[0]?.id)) ?? lanes[0];
     return (lane?.rows ?? []).map((r) => r.thread.thread);
   }
-  if (doc.layout.component === "timeline") {
+  if (layoutOf(doc).component === "timeline") {
     return timelineRows(doc, result).map((r) => r.thread.thread);
   }
   return lanes.flatMap((l) => l.rows.map((r) => r.thread.thread));
 }
 
 function timelineRows(doc: ViewDoc, result: LaneView<CachedViewThread>) {
-  const layout = doc.layout;
+  const layout = layoutOf(doc);
   const field = layout.component === "timeline" ? layout.date : "last_activity_at";
   const dateOf = (t: CachedViewThread) => {
     const v =
@@ -235,7 +288,7 @@ function cell(props: ViewBlocksProps, thread: CachedViewThread, col: TableColumn
 /** One View, drawn by its component. */
 export function ViewBlocks(props: ViewBlocksProps) {
   const { doc, result, settings: s } = props;
-  const layout = doc.layout;
+  const layout = layoutOf(doc);
   if (layout.component === "lanes") {
     return (
       <div className="view-lanes" data-component="lanes">

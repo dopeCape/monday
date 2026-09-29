@@ -8,9 +8,10 @@
 import type { Id, View, ViewDoc, ViewDraft, ViewExample, ViewTest } from "@monday/shared";
 import {
   factLanesOnly,
+  type LaneComponent,
   lanesChanged,
   laneView,
-  layoutForComponent,
+  showAs,
   signalName,
   viewIdFor,
   viewMoves,
@@ -46,6 +47,20 @@ const KEYS = [
   "views.draft.retries",
   "views.prompt",
   "views.revise_prompt",
+  "views.max_extractions",
+  "views.max_blocks",
+  "views.max_actions",
+  "views.query.max_rows",
+  "views.chart.max_groups",
+  "views.extract.none",
+  "strings.views.unsure",
+  "strings.views.value.yes",
+  "strings.views.value.no",
+  "strings.views.value.today",
+  "strings.views.value.tomorrow",
+  "strings.views.value.yesterday",
+  "strings.views.value.in_days",
+  "strings.views.value.days_ago",
   "signals.backfill.concurrency",
   "sections.rules",
   "strings.views.not_read",
@@ -92,7 +107,7 @@ export interface ViewDrafting {
       instruction?: string | undefined;
       name?: string | undefined;
       icon?: string | undefined;
-      component?: ViewDoc["layout"]["component"] | undefined;
+      component?: LaneComponent | undefined;
       foldCorrections?: boolean | undefined;
     },
   ): Promise<UpdateProposal>;
@@ -124,6 +139,9 @@ export function createViewDrafting(deps: {
       maxLanes: s["views.max_lanes"],
       maxSignals: s["views.max_signals"],
       maxThreads: s["views.scope.max_threads"],
+      maxExtractions: s["views.max_extractions"],
+      maxBlocks: s["views.max_blocks"],
+      maxActions: s["views.max_actions"],
     },
   });
 
@@ -135,6 +153,20 @@ export function createViewDrafting(deps: {
     examplesMax: s["views.examples_in_question"],
     notRead: s["strings.views.not_read"].toLowerCase(),
     concurrency: Math.max(1, s["signals.backfill.concurrency"]),
+    extractNone: s["views.extract.none"],
+    maxRows: s["views.query.max_rows"],
+    maxGroups: s["views.chart.max_groups"],
+    words: {
+      unsure: s["strings.views.unsure"],
+      notRead: s["strings.views.not_read"],
+      yes: s["strings.views.value.yes"],
+      no: s["strings.views.value.no"],
+      today: s["strings.views.value.today"],
+      tomorrow: s["strings.views.value.tomorrow"],
+      yesterday: s["strings.views.value.yesterday"],
+      inDays: s["strings.views.value.in_days"],
+      daysAgo: s["strings.views.value.days_ago"],
+    },
   });
 
   const authorContext = async (
@@ -351,10 +383,8 @@ export function createViewDrafting(deps: {
         ...view.doc,
         ...(change.name ? { name: change.name } : {}),
         ...(change.icon ? { nav: { ...view.doc.nav, icon: change.icon } } : {}),
-        ...(change.component
-          ? { layout: layoutForComponent(change.component, view.doc.layout) }
-          : {}),
       };
+      if (change.component) next = showAs(next, change.component);
       if (change.foldCorrections) {
         const folded = await store.corrections(viewId);
         const examples = { ...next.examples };

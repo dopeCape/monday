@@ -13,7 +13,7 @@ import type {
   ViewPlacement,
   ViewThread,
 } from "@monday/shared";
-import { laneView, scopeSince } from "@monday/shared";
+import { laneView, scopeSince, viewExtractionId } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import { accounts, workspaces } from "../../db/schema.ts";
@@ -22,6 +22,7 @@ import { readGlobalSettings } from "../../settings/read.ts";
 import { createDraftStore } from "../../views/drafts.ts";
 import { decidingSignal, ViewNotFoundError, type ViewStore } from "../../views/index.ts";
 import { loadViewThreads } from "../../views/threads.ts";
+import { readValues, type ValuesByThread } from "../../views/values.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import { createViewDrafting, type ViewDrafting } from "./drafting.ts";
@@ -35,6 +36,7 @@ const CONTEXT_KEYS = [
   "signals.stale_answers",
   "signals.hysteresis",
   "calendar.time_zone",
+  "views.extract.min_confidence",
 ] as const;
 
 export interface ViewPlaced {
@@ -73,6 +75,10 @@ export interface ViewIntelligence {
   moveThread(viewId: Id, threadId: Id, lane: string | null): Promise<View>;
   /** The Agent's drafts: propose, correct, revise, pin, update, apply, discard (slice 40). */
   drafting: ViewDrafting;
+  /** Every value a View's Extractions picked, by Thread (decrypted for the owner's Device). */
+  values(viewId: Id): Promise<ValuesByThread>;
+  /** The values every View of the Workspace picked on these Threads (the feed named them). */
+  valuesFor(workspaceId: Id, threadIds: readonly Id[]): Promise<ValuesByThread>;
 }
 
 export interface ViewIntelligenceOptions {
@@ -108,20 +114,37 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
       now: now(),
       zone: s["calendar.time_zone"],
       owner: (owner?.address ?? "").toLowerCase(),
+      extractFloor: s["views.extract.min_confidence"],
     };
   };
 
-  /** Threads with their answers: the Server's readings, by stored Signal id. */
-  const withReadings = async (threads: ViewThread[]): Promise<ViewThread[]> => {
-    const readings = await signals.readings(threads.map((t) => t.id));
-    return threads.map((t) => ({ ...t, readings: readings.get(t.id) ?? {} }));
+  /** Threads with their answers (the Server's readings, by stored Signal id) and the View's picked values. */
+  const withReadings = async (
+    workspaceId: Id,
+    doc: ViewDoc,
+    threads: ViewThread[],
+  ): Promise<ViewThread[]> => {
+    const ids = threads.map((t) => t.id);
+    const readings = await signals.readings(ids);
+    const pulls = doc.extractions.map((x) => viewExtractionId(doc.id, x.id));
+    const values = pulls.length
+      ? await readValues(db, options.mailstore, workspaceId, pulls, ids)
+      : {};
+    return threads.map((t) => ({
+      ...t,
+      readings: readings.get(t.id) ?? {},
+      values: values[t.id] ?? {},
+    }));
   };
 
   const place: ViewIntelligence["place"] = async (workspaceId, doc, opts = {}) => {
     const ctx = await context(workspaceId);
     const threads = await withReadings(
+      workspaceId,
+      doc,
       await loadViewThreads(db, {
         workspaceId,
+        owner: ctx.owner,
         ...(opts.threadIds
           ? { ids: opts.threadIds }
           : { since: scopeSince(doc.scope.facts, ctx.now, ctx.zone) }),
@@ -157,6 +180,19 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     changed,
     drafting,
     place,
+    async values(viewId) {
+      const view = await store.get(viewId);
+      if (!view) throw new ViewNotFoundError(viewId);
+      const pulls = view.doc.extractions.map((x) => viewExtractionId(view.id, x.id));
+      return readValues(db, options.mailstore, view.workspaceId, pulls);
+    },
+    async valuesFor(workspaceId, threadIds) {
+      const views = await store.list(workspaceId);
+      const pulls = views.flatMap((v) =>
+        v.doc.extractions.map((x) => viewExtractionId(v.id, x.id)),
+      );
+      return readValues(db, options.mailstore, workspaceId, pulls, threadIds);
+    },
     async moveThread(viewId, threadId, lane) {
       const view = await store.get(viewId);
       if (!view) throw new ViewNotFoundError(viewId);

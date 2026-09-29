@@ -19,6 +19,7 @@
 
 import type {
   AiLevel,
+  ExtractKind,
   FactsChange,
   Id,
   JsonValue,
@@ -80,6 +81,7 @@ import { estimateTokens } from "../routing/batch.ts";
 import { extractJson } from "../routing/classify.ts";
 import { countInScope, resolveScope } from "../routing/scope-query.ts";
 import { type HostedRuntime, NoJudgeError, NoProviderKeyError } from "../runtime/index.ts";
+import { type Candidate, extractKindOf, findCandidates } from "./candidates.ts";
 import {
   assembleDeadline,
   type ClearFacts,
@@ -110,6 +112,8 @@ const SETTING_KEYS = [
   ...RECOMMENDED_SIGNAL_SETTING_KEYS,
   "signals.enabled",
   "signals.candidates.max",
+  "views.extract.candidates_max",
+  "views.extract.date_order",
   "signals.stats.window",
   "signals.stats.broad_above",
   "signals.stats.min_answers",
@@ -189,7 +193,22 @@ export interface AskOptions {
   llm?: boolean | undefined;
   /** Questions riding in the same request that are not Signals (routing's Group Choices). */
   extra?: Record<string, JudgeQuestion> | undefined;
+  /**
+   * Extra questions whose options code builds for this Thread (a View draft's
+   * Extractions): asked only when code found candidates, their picks copied
+   * and normalized into the result's `picks`.
+   */
+  extraOptions?: Record<string, SignalOptionsFrom> | undefined;
   jobId?: string | null | undefined;
+}
+
+/** A value an Extraction picked: the span as written, normalized by code, with the pick's confidence. */
+export interface ExtractPick {
+  text: string;
+  value: JsonValue;
+  confidence: number;
+  /** The other spans code found, for "Wrong value". */
+  candidates: string[];
 }
 
 export interface AskResult {
@@ -197,6 +216,10 @@ export interface AskResult {
   asked: string[];
   /** The answers to `extra`, by their ids. */
   extra: Record<string, JudgeAnswer | undefined>;
+  /** For `extraOptions`: the value picked, or null when none was (or none could be). */
+  picks: Record<string, ExtractPick | null>;
+  /** For `extraOptions`: every span code found, the pick among them. */
+  candidates: Record<string, string[]>;
   /** Requests made. */
   calls: number;
   /** Who answered: TypeSafe, the language model, or nobody. */
@@ -321,6 +344,9 @@ export interface OwnedSignal {
   facts: ViewScopeFacts;
   viewId: string;
   consumer: string;
+  /** An Extraction's: asked only when code found candidates of its kind, with them as the options. */
+  gate?: SignalGate | undefined;
+  optionsFrom?: SignalOptionsFrom | undefined;
 }
 
 export interface SignalsOptions {
@@ -423,6 +449,17 @@ function linkLine(url: string, domain: string): string {
   } catch {
     return domain;
   }
+}
+
+/** An Extraction's options for one Thread: the candidates code found, each with its context, then none. */
+export function candidateOptions(
+  template: JudgeQuestion,
+  found: readonly Candidate[],
+): JudgeQuestion {
+  return listOptions(
+    template,
+    found.map((c) => ({ key: c.key, line: c.line })),
+  );
 }
 
 /** The language model's prompt for the Signals it may answer: Nouls and Scores, by id. */
@@ -621,6 +658,8 @@ export function createSignals(options: SignalsOptions): Signals {
         facts: b.facts,
         consumers: [b.consumer],
         owner: { kind: "view" as const, id: b.viewId },
+        ...(b.gate ? { gate: b.gate } : {}),
+        ...(b.optionsFrom ? { optionsFrom: b.optionsFrom } : {}),
       })),
     ];
     const key = canonicalJson({ model, want });
@@ -695,7 +734,8 @@ export function createSignals(options: SignalsOptions): Signals {
         !row.active ||
         canonicalJson(row.scope) !== canonicalJson(scope) ||
         canonicalJson(row.consumers) !== canonicalJson(w.consumers) ||
-        (row.gate ?? null) !== (w.gate ?? null);
+        (row.gate ?? null) !== (w.gate ?? null) ||
+        (row.optionsFrom ?? null) !== (w.optionsFrom ?? null);
       if (!changedWords && !changedMeta) continue;
       const version = changedWords ? row.version + 1 : row.version;
       const [updated] = await db
@@ -1110,7 +1150,31 @@ export function createSignals(options: SignalsOptions): Signals {
       lowTrust,
       text: factMessages.map((m) => m.text).join("\n\n"),
       written: newest?.date ?? now().toISOString(),
+      messages: factMessages,
+      owner: ownerAddress,
     };
+  };
+
+  type Loaded = Awaited<ReturnType<typeof loadThread>>;
+  /** What a View's Extraction may pick from on this Thread, found once per kind per request. */
+  const found = new WeakMap<Loaded, Map<ExtractKind, Candidate[]>>();
+  const extractCandidates = (loaded: Loaded, kind: ExtractKind, s: Settings): Candidate[] => {
+    const byKind = found.get(loaded) ?? new Map<ExtractKind, Candidate[]>();
+    found.set(loaded, byKind);
+    const hit = byKind.get(kind);
+    if (hit) return hit;
+    const list = findCandidates(
+      kind,
+      {
+        messages: loaded.messages,
+        owner: loaded.owner,
+        written: loaded.written,
+        dateOrder: s["views.extract.date_order"],
+      },
+      s["views.extract.candidates_max"],
+    );
+    byKind.set(kind, list);
+    return list;
   };
 
   /** The View Signals among `need` whose View's scope does not admit this Thread. */
@@ -1132,7 +1196,7 @@ export function createSignals(options: SignalsOptions): Signals {
   };
 
   /** Whether code lets a gated Signal be asked of this Thread. */
-  const gateHolds = (d: StoredDef, loaded: Awaited<ReturnType<typeof loadThread>>) => {
+  const gateHolds = (d: StoredDef, loaded: Loaded, s: Settings) => {
     if (d.gate === "amounts") return loaded.facts.sealed.amounts.length > 0;
     if (d.gate === "deadline") return mayStateDeadline(loaded.text);
     if (d.gate === "invite") return loaded.facts.clear.has_invite;
@@ -1142,14 +1206,15 @@ export function createSignals(options: SignalsOptions): Signals {
     if (d.gate === "links") return loaded.facts.sealed.links.length > 0;
     if (d.gate === "tracking") return loaded.facts.sealed.tracking_numbers.length > 0;
     if (d.gate === "workflows") return (loaded.candidates.workflows ?? []).length > 0;
+    const kind = extractKindOf(d.gate);
+    if (kind) return extractCandidates(loaded, kind, s).length > 0;
     return true;
   };
 
   /** A Signal's question for one Thread: per-Thread options built by code. */
-  const questionFor = (
-    d: StoredDef,
-    loaded: Awaited<ReturnType<typeof loadThread>>,
-  ): JudgeQuestion => {
+  const questionFor = (d: StoredDef, loaded: Loaded, s: Settings): JudgeQuestion => {
+    const kind = extractKindOf(d.optionsFrom);
+    if (kind) return candidateOptions(d.question, extractCandidates(loaded, kind, s));
     if (d.optionsFrom === "amounts") return amountOptions(d.question, loaded.facts.sealed.amounts);
     if (d.optionsFrom === "addresses")
       return recipientOptions(d.question, loaded.candidates.people);
@@ -1264,6 +1329,20 @@ export function createSignals(options: SignalsOptions): Signals {
         delete picks[id];
         continue;
       }
+      const kind = extractKindOf(from);
+      if (kind) {
+        // A View's Extraction: code copies the span it found and keeps it normalized beside it.
+        const c = extractCandidates(loaded, kind, s).find((x) => x.key === a.choice);
+        if (!c) delete picks[id];
+        else
+          picks[id] = {
+            value: c.span,
+            normalized: c.value,
+            confidence: a.confidence,
+            probability: a.probabilities[a.choice] ?? a.confidence,
+          };
+        continue;
+      }
       const value =
         from === "links" ? (sealed.links[Number(a.choice.slice(1)) - 1]?.url ?? null) : a.choice;
       if (value === null) delete picks[id];
@@ -1359,18 +1438,36 @@ export function createSignals(options: SignalsOptions): Signals {
       if (!thread) throw new NotFoundError("thread", threadId);
       const { need, version } = await needed(workspaceId, threadId, s, opts);
       const extra = opts.extra ?? {};
-      const result: AskResult = { asked: [], extra: {}, calls: 0, by: null };
+      const result: AskResult = {
+        asked: [],
+        extra: {},
+        picks: {},
+        candidates: {},
+        calls: 0,
+        by: null,
+      };
       if (need.length === 0 && Object.keys(extra).length === 0) return result;
       const loaded = await loadThread(workspaceId, threadId, s);
       const state = loaded.state;
       // A View's Signal is asked only of the Threads its scope's Facts admit; code decides.
       const outOfScope = await scopedOut(workspaceId, threadId, need, s);
       // Code decides what applies: a gated Signal whose gate fails is answered by code as not stated.
-      const gatedOut = need.filter((d) => !outOfScope.has(d.id) && !gateHolds(d, loaded));
-      const asked = need.filter((d) => !outOfScope.has(d.id) && gateHolds(d, loaded));
+      const gatedOut = need.filter((d) => !outOfScope.has(d.id) && !gateHolds(d, loaded, s));
+      const asked = need.filter((d) => !outOfScope.has(d.id) && gateHolds(d, loaded, s));
       const questions: Record<string, JudgeQuestion> = {};
-      for (const d of asked) questions[d.id] = questionFor(d, loaded);
-      for (const [id, q] of Object.entries(extra)) questions[id] = q;
+      for (const d of asked) questions[d.id] = questionFor(d, loaded, s);
+      for (const [id, q] of Object.entries(extra)) {
+        const kind = extractKindOf(opts.extraOptions?.[id]);
+        if (!kind) {
+          questions[id] = q;
+          continue;
+        }
+        // A draft's Extraction: asked only when code found candidates, with them as the options.
+        const found = extractCandidates(loaded, kind, s);
+        result.picks[id] = null;
+        result.candidates[id] = found.map((c) => c.span);
+        if (found.length > 0) questions[id] = candidateOptions(q, found);
+      }
       // A gated Noul is answered no; a gated Choice, not stated.
       const notStated = gatedOut.map((d) => ({
         def: d,
@@ -1435,9 +1532,33 @@ export function createSignals(options: SignalsOptions): Signals {
           loaded.lowTrust,
         );
         await storeFacts(workspaceId, threadId, version, loaded, answers, s, pickedFrom);
+        if ([...pickedFrom.values()].some((f) => extractKindOf(f) !== null)) {
+          // A View's picked values changed: the Device reads them again (they stay sealed here).
+          await mailstore.recordChange(db, {
+            workspaceId,
+            kind: "view_values",
+            entityId: threadId,
+            payload: { threadId },
+          });
+        }
         result.asked = [...items, ...notStated].map((i) => i.def.id);
         await answered(workspaceId, threadId);
         for (const id of Object.keys(extra)) result.extra[id] = answers[id];
+        for (const id of Object.keys(result.picks)) {
+          const kind = extractKindOf(opts.extraOptions?.[id]);
+          const a = answers[id];
+          if (!kind || a?.type !== "choice" || a.choice === "none") continue;
+          const found = extractCandidates(loaded, kind, s);
+          const c = found.find((x) => x.key === a.choice);
+          if (c) {
+            result.picks[id] = {
+              text: c.span,
+              value: c.value,
+              confidence: a.confidence,
+              candidates: found.map((x) => x.span),
+            };
+          }
+        }
         result.by = "typesafe";
         return result;
       }
@@ -1761,7 +1882,14 @@ export function createSignals(options: SignalsOptions): Signals {
     await write(workspaceId, threadId, version, items, model, loaded?.lowTrust ?? null);
     if (loaded) await storeFacts(workspaceId, threadId, version, loaded, {}, s);
     await answered(workspaceId, threadId);
-    return { asked: items.map((i) => i.def.id), extra: {}, calls: 1, by: "llm" };
+    return {
+      asked: items.map((i) => i.def.id),
+      extra: {},
+      picks: {},
+      candidates: {},
+      calls: 1,
+      by: "llm",
+    };
   }
 
   return api;

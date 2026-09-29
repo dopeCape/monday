@@ -41,6 +41,8 @@ const tried = (i: number, lane: string, reasons: string[]) => ({
   certainty: 0.8,
   reasons,
   nouls: [{ signal: "is_support_request", label: "support request", noul: 0.9 }],
+  values: [],
+  actions: [],
 });
 
 const TEST: ViewTest = {
@@ -57,6 +59,7 @@ const TEST: ViewTest = {
   changes: [],
   needsJudge: false,
   moves: null,
+  blocks: [],
 };
 
 const DRAFT: ViewDraft = {

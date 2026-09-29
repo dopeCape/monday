@@ -66,7 +66,7 @@ function draftText(d: ViewDraft): string {
 const describe = async (seam: ViewsSeam, b: View) => {
   const placed = await seam.place(b.workspaceId, b.doc, { placements: b.placements });
   const counts = placed.lanes.lanes.map((l) => `${l.label} ${l.rows.length}`).join(", ");
-  return `${b.id}: ${b.doc.name} (version ${b.version}${b.pinned ? "" : ", unpinned"}, ${b.doc.layout.component}): ${counts}. Scope: ${JSON.stringify(b.doc.scope.facts)}. Signals: ${
+  return `${b.id}: ${b.doc.name} (version ${b.version}${b.pinned ? "" : ", unpinned"}, blocks: ${b.doc.blocks.map((x) => x.type).join(", ")}): ${counts}. Scope: ${JSON.stringify(b.doc.scope.facts)}. Signals: ${
     [...b.doc.signals.map((s) => s.id), ...b.doc.uses].join(", ") || "none"
   }.`;
 };
@@ -241,7 +241,7 @@ const updateView: ToolDefinition<UpdateInput> = {
           previous: r.previous,
         };
         return {
-          text: `View ${view.id} is now version ${r.view.version}: ${next.name}, shown as ${next.layout.component}.`,
+          text: `View ${view.id} is now version ${r.view.version}: ${next.name}, with ${next.blocks.map((x) => x.type).join(", ")}.`,
           data: { viewId: view.id, version: r.view.version },
           undo,
         };
