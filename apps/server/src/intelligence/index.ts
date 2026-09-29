@@ -62,6 +62,7 @@ import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts"
 import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
+import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
@@ -270,6 +271,8 @@ export interface Intelligence {
   guard: GuardSeam;
   /** The Brief verifier (slice 27). */
   verify: BriefVerifier;
+  /** The batching measurement (slice 28), Sidecar only; its route checks where it runs. */
+  batchingEval: BatchingEval;
   /** The palette's typed sentence as one Judgment (slice 27). Throws NoJudgeError without a judge. */
   intent(request: IntentRequest): Promise<IntentReading>;
   /**
@@ -870,7 +873,10 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     cancel: (workspaceId) => backlog.cancel(workspaceId),
   };
 
+  const batchingEval = createBatchingEval({ db, routing, runtime, now, log });
+
   return {
+    batchingEval,
     attachCalendar(seam) {
       extensions.calendar = seam;
     },

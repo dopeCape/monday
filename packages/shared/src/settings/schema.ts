@@ -25,6 +25,7 @@ import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
+import { signalsSettings } from "./signals.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -9170,6 +9171,8 @@ export const settingsSchema = {
     "Consent page expired",
     "This request expired. Start again from the client.",
   ),
+  /* Signals (ADR 0014, slices 28 to 33): their own file. */
+  ...signalsSettings,
 } satisfies Record<string, SettingEntry>;
 
 /* ------------------------------ Derived types and helpers ------------------------------ */

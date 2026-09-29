@@ -24,7 +24,9 @@ export type JudgeTask =
   | "judge.guard"
   | "judge.verify"
   | "judge.rerank"
-  | "judge.condition";
+  | "judge.condition"
+  /** The batching measurement (slice 28), Sidecar only. */
+  | "judge.eval";
 
 export type JsonValue =
   | string

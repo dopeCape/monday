@@ -316,7 +316,23 @@ export interface Routing {
     groupId: GroupId,
     previous: { positive: boolean } | null,
   ): Promise<boolean>;
+  /**
+   * What a judgment over these Threads reads, exactly as routing builds it:
+   * the owner, the routing Settings, every Group with its Examples, and the
+   * facts per Thread (a Thread that cannot be read is left out). For the
+   * batching measurement and the Signal request. Decrypts, so it needs the root key.
+   */
+  judgeInputs(workspaceId: Id, threadIds: readonly Id[]): Promise<JudgeInputs>;
   registerSteps(jobs: Jobs): void;
+}
+
+/** What judgeInputs returns. */
+export interface JudgeInputs {
+  owner: string;
+  settings: RoutingSettings;
+  /** Every Group, top-level first, with its parent and its own threshold. */
+  groups: Array<GroupText & { parentId: GroupId | null; threshold: Confidence | null }>;
+  facts: Map<Id, ThreadFacts>;
 }
 
 /** A Sub-group under a Sub-group, or a parent that does not exist. */
@@ -1511,6 +1527,39 @@ export function createRouting(options: RoutingOptions): Routing {
         byTarget[target] = (byTarget[target] ?? 0) + 1;
       }
       return { workspaceId, considered: todo.length, moves, calls, ...scoped, byTarget };
+    },
+
+    async judgeInputs(workspaceId, threadIds) {
+      const settings = await options.settings();
+      const all = await groupTexts(workspaceId);
+      const owner = await ownerOf(workspaceId);
+      const facts = new Map<Id, ThreadFacts>();
+      if (threadIds.length > 0) {
+        const rows = await db
+          .select()
+          .from(threads)
+          .where(and(eq(threads.workspaceId, workspaceId), inArray(threads.id, [...threadIds])));
+        for (const row of rows) {
+          try {
+            facts.set(row.id, await readFacts(row));
+          } catch (error) {
+            if (error instanceof LockedError) throw error;
+            log(
+              `judge inputs ${row.id}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      }
+      return {
+        owner,
+        settings,
+        groups: all.map(({ row, ...g }) => ({
+          ...g,
+          parentId: row.parentId,
+          threshold: row.threshold,
+        })),
+        facts,
+      };
     },
 
     async routeMany(workspaceId, threadIds, opts = {}) {
