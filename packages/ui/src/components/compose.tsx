@@ -128,6 +128,10 @@ export interface ComposeProps {
   laterOpen?: boolean | undefined;
   /** Without a recipient the Send button is disabled. */
   canSend?: boolean | undefined;
+  /** Why Send is refused ("Fill invoice number first"): the button is disabled and the line says so. */
+  sendBlocked?: string | null | undefined;
+  /** One quiet line above the editor: a Template suggestion. */
+  above?: ReactNode | undefined;
   strings?: Partial<ComposeStrings> | undefined;
   className?: string | undefined;
   /** Sheet (default), docked or full screen. */
@@ -188,6 +192,8 @@ export function Compose({
   laterRef,
   laterOpen,
   canSend = true,
+  sendBlocked,
+  above,
   strings: stringOverrides,
   className,
   windowStyle = "sheet",
@@ -269,6 +275,7 @@ export function Compose({
         />
       </div>
       {tools === undefined ? <MockTools strings={strings} /> : tools}
+      {above}
       {editor ?? (
         <div className="c-body">
           {body.map((p) => (
@@ -300,13 +307,23 @@ export function Compose({
       ) : null}
       {extra}
       <div className="c-foot">
-        <Btn primary onClick={onSend} disabled={!canSend}>
+        <Btn
+          primary
+          onClick={onSend}
+          disabled={!canSend || Boolean(sendBlocked)}
+          title={sendBlocked || undefined}
+        >
           {strings.send}
         </Btn>
         <Btn ref={laterRef} onClick={onLater} on={laterOpen} aria-haspopup="menu">
           <Icon icon={ClockIcon} /> {strings.later} <Icon icon={CaretDownIcon} />
         </Btn>
         {status ?? (editor ? null : <span className="c-status">Saved</span>)}
+        {sendBlocked ? (
+          <span className="c-status c-blocked" role="status">
+            {sendBlocked}
+          </span>
+        ) : null}
         <span className="sp" />
         <Btn icon title={strings.attach} onClick={onAttach}>
           <Icon icon={PaperclipIcon} />

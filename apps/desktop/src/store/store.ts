@@ -36,6 +36,7 @@ import type {
   MessageBodyRow,
   RunChange,
   SendChange,
+  TemplateChange,
   ThreadChange,
 } from "@monday/shared";
 import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
@@ -695,7 +696,36 @@ export function changeStatements(change: Change): Statement[] {
     case "run":
       // Nothing to store: the Run's screens ask the Workflow routes again (Store.onRuns).
       return [];
+    case "template":
+      return [templateUpsert(change.payload)];
   }
+}
+
+/**
+ * A Template's headers from the feed (slice 36). A newer row marks the
+ * content stale, and the Templates module reads it through GET /templates.
+ */
+function templateUpsert(t: TemplateChange): Statement {
+  return {
+    sql: `insert into templates (id, kind, built_in, share_group_id, created_by, updated_at, deleted, content_stale)
+          values (?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict (id) do update set
+            kind = excluded.kind, built_in = excluded.built_in, share_group_id = excluded.share_group_id,
+            created_by = excluded.created_by, deleted = excluded.deleted,
+            content_stale = case when excluded.deleted = 1 then 0
+              when excluded.updated_at > templates.updated_at then 1 else templates.content_stale end,
+            updated_at = max(templates.updated_at, excluded.updated_at)`,
+    params: [
+      t.id,
+      t.kind,
+      t.builtIn,
+      t.shareGroupId,
+      t.createdBy,
+      t.updatedAt,
+      t.deleted ? 1 : 0,
+      t.deleted ? 0 : 1,
+    ],
+  };
 }
 
 /** A calendar row from the feed, or its removal with its Events. */

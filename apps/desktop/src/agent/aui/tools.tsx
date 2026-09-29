@@ -19,7 +19,7 @@ import {
   useAssistantToolUI,
   useAuiState,
 } from "@assistant-ui/react";
-import type { ToolCall, ToolPreview, WorkflowPreview } from "@monday/shared";
+import type { TemplatePreview, ToolCall, ToolPreview, WorkflowPreview } from "@monday/shared";
 import { diffWorkflow } from "@monday/shared";
 import {
   AgentSteps,
@@ -65,6 +65,7 @@ import {
   useBacklogShown,
 } from "../../screens/routing/backlog.tsx";
 import { diffLine, flowModel } from "../../screens/workflows/flow.ts";
+import { TemplateBody } from "../../templates/Body.tsx";
 import { type ComposerStrings, fill } from "../composerStrings.ts";
 import { cardActions, statusLabel, toolTitle } from "../transcript.ts";
 import { useComposerEnv, useElapsedSeconds, workingLabel } from "./context.tsx";
@@ -246,9 +247,49 @@ export function PreviewView({
       );
     case "workflow":
       return <WorkflowPreviewView preview={preview} strings={strings} />;
+    case "template":
+      return <TemplatePreviewView preview={preview} strings={strings} />;
     default:
       return <div className="agent-preview">{preview.text}</div>;
   }
+}
+
+/**
+ * The Template card (slice 37): what the Template says, its Placeholders as
+ * chips, and the existing one it duplicates, if the judge found one.
+ */
+function TemplatePreviewView({
+  preview,
+  strings,
+}: {
+  preview: TemplatePreview;
+  strings: ComposerStrings;
+}) {
+  const t = preview.template;
+  const lead = fill(strings[`strings.agent.preview_template.${preview.action}`], { name: t.name });
+  return (
+    <div className="agent-preview agent-template" data-template-action={preview.action}>
+      <div className="count">{lead}</div>
+      {t.fitsWhen ? <div className="more">{t.fitsWhen}</div> : null}
+      {t.subject ? <div className="tpl-subject">{t.subject}</div> : null}
+      <TemplateBody body={t.body} placeholders={t.placeholders} />
+      {preview.scope === "everywhere" ? (
+        <div className="more">{strings["strings.agent.preview_template.everywhere"]}</div>
+      ) : null}
+      {preview.duplicate ? (
+        <div className="more tpl-duplicate" data-level={preview.duplicate.level}>
+          {fill(
+            strings[
+              preview.duplicate.level === "same"
+                ? "strings.templates.duplicate.same"
+                : "strings.templates.duplicate.related"
+            ],
+            { name: preview.duplicate.name },
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**

@@ -165,6 +165,11 @@ describe("the tool catalog", () => {
       test_judgment: "read",
       update_judgment: "reversible",
       add_example: "reversible",
+      list_templates: "read",
+      use_template: "reversible",
+      create_template: "reversible",
+      update_template: "reversible",
+      delete_template: "reversible",
       // The composer: read, edit and open Drafts; sending stays send_draft.
       list_drafts: "read",
       read_draft: "read",

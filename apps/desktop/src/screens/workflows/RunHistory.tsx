@@ -20,6 +20,7 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
+import { badgeStrings } from "../../templates/badges.ts";
 import { fill } from "../inbox/triage.ts";
 import { flowModel, flowStrings } from "./flow.ts";
 import {
@@ -246,7 +247,9 @@ export function RunHistory({
           {doc ? (
             <WorkflowFlow
               label={nameOf(open)}
-              cards={flowModel(doc, fs, { groupName, run: open }).cards}
+              cards={
+                flowModel(doc, fs, { groupName, run: open, badges: badgeStrings(settings) }).cards
+              }
               fields={settings["workflows.page.step_details"]}
             />
           ) : (

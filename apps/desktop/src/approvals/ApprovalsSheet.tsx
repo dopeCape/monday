@@ -8,7 +8,7 @@
 // click outside. Every word is a strings.approvals.* Setting.
 
 import type { Settings } from "@monday/shared";
-import { Btn, formatWhen, Icon, RunApprovalCard, Scrim, ToolCard } from "@monday/ui";
+import { Btn, CheckBadges, formatWhen, Icon, RunApprovalCard, Scrim, ToolCard } from "@monday/ui";
 import {
   ArrowSquareOutIcon,
   ChatCircleDotsIcon,
@@ -19,27 +19,29 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type BadgeSettings, previewBadges } from "../templates/badges.ts";
 import type { ApprovalItem } from "./queue.ts";
 
-export type ApprovalsSheetStrings = Pick<
-  Settings,
-  | "strings.approvals.title"
-  | "strings.approvals.lede"
-  | "strings.approvals.label"
-  | "strings.approvals.empty"
-  | "strings.approvals.empty_body"
-  | "strings.approvals.close"
-  | "strings.approvals.approve"
-  | "strings.approvals.standing"
-  | "strings.approvals.decline"
-  | "strings.approvals.open_run"
-  | "strings.approvals.open_thread"
-  | "strings.approvals.open_session"
-  | "strings.approvals.waiting_since"
-  | "strings.approvals.failed"
-  | "strings.approvals.approved"
-  | "strings.approvals.declined"
->;
+export type ApprovalsSheetStrings = BadgeSettings &
+  Pick<
+    Settings,
+    | "strings.approvals.title"
+    | "strings.approvals.lede"
+    | "strings.approvals.label"
+    | "strings.approvals.empty"
+    | "strings.approvals.empty_body"
+    | "strings.approvals.close"
+    | "strings.approvals.approve"
+    | "strings.approvals.standing"
+    | "strings.approvals.decline"
+    | "strings.approvals.open_run"
+    | "strings.approvals.open_thread"
+    | "strings.approvals.open_session"
+    | "strings.approvals.waiting_since"
+    | "strings.approvals.failed"
+    | "strings.approvals.approved"
+    | "strings.approvals.declined"
+  >;
 
 export type Decision = "approved" | "declined";
 
@@ -129,6 +131,7 @@ export function ApprovalsSheet({
           declineLabel={s["strings.approvals.decline"]}
           onDecide={(decision, standing) => void decide(item, decision, standing)}
           busy={waiting}
+          badges={previewBadges(item.preview, s)}
         />
       );
     }
@@ -139,7 +142,10 @@ export function ApprovalsSheet({
           item.preview?.kind === "text" ? (
             <pre className="appr-pre">{item.preview.text}</pre>
           ) : item.preview?.kind === "send" ? (
-            <pre className="appr-pre">{`${item.preview.to.map((p) => p.email).join(", ")}: ${item.preview.subject}\n${item.preview.text}`}</pre>
+            <>
+              <pre className="appr-pre">{`${item.preview.to.map((p) => p.email).join(", ")}: ${item.preview.subject}\n${item.preview.text}`}</pre>
+              <CheckBadges badges={previewBadges(item.preview, s)} />
+            </>
           ) : undefined
         }
         actions={[s["strings.approvals.approve"], s["strings.approvals.decline"]]}

@@ -65,6 +65,7 @@ describe("migrations", () => {
       "sync_messages",
       "sync_state",
       "tags",
+      "templates",
       "thread_judgments",
       "thread_labels",
       "thread_meetings",

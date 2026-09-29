@@ -4,6 +4,12 @@
 
 import type { DraftContent, Person } from "@monday/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  finalizeForSend,
+  hasTemplateMarkup,
+  UnfilledPlaceholderError,
+  unfilledInHtml,
+} from "../../templates/placeholders.ts";
 import type { Upload } from "./Attachments.tsx";
 import { fileToUpload } from "./Attachments.tsx";
 import { type Autosave, createAutosave } from "./autosave.ts";
@@ -138,6 +144,13 @@ export function useDraftEditor(o: DraftEditorOptions): DraftEditor {
         0
       ) {
         throw new Error("no_recipients");
+      }
+      // A required Placeholder still unfilled refuses Send, Later and the send key alike.
+      const missing = unfilledInHtml(contentRef.current.bodyHtml);
+      if (missing.length > 0) throw new UnfilledPlaceholderError(missing);
+      // A Template's leftovers go before the Draft leaves: optional chips and the filled marks.
+      if (hasTemplateMarkup(contentRef.current.bodyHtml)) {
+        update(finalizeForSend(contentRef.current));
       }
       await autosave.flush();
       if (autosave.count === 0) await composer.save(draftId, contentRef.current);

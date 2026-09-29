@@ -72,6 +72,8 @@ import {
 } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { queueTemplate, useTemplateLink } from "../templates/link.ts";
+import { nameReplyChip, useReplyTemplate } from "../templates/reply.ts";
 import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
@@ -1510,9 +1512,43 @@ function InboxBody({
     ],
   );
 
+  // Templates (slice 37): the Reply chip named by the Template that fits, and the palette's rows.
+  const templateLink = useTemplateLink(composer);
+  const replyTemplate = useReplyTemplate(
+    templateLink,
+    shownThreadId,
+    judgments?.needsReply ?? null,
+  );
+  const replyWith = t("strings.templates.reply_with");
+  const namedChips = useMemo(
+    () => nameReplyChip(readerChips, replyTemplate, replyWith),
+    [readerChips, replyTemplate, replyWith],
+  );
+  const namedBrief = useMemo(
+    () =>
+      brief && replyTemplate
+        ? { ...brief, actions: nameReplyChip(brief.actions, replyTemplate, replyWith) }
+        : brief,
+    [brief, replyTemplate, replyWith],
+  );
+  const ownSent = messages.filter((m) => m.from.email.toLowerCase() === ws.address.toLowerCase());
+  const makeTemplate =
+    templateLink?.enabled && ownSent.length > 0
+      ? {
+          label: t("strings.templates.from_message"),
+          run: () => {
+            const last = ownSent[ownSent.length - 1];
+            if (last) templateLink.draftFrom({ messageIds: [last.id] });
+          },
+        }
+      : undefined;
   const runBriefAction = useCallback(
     async (action: BriefAction) => {
       if (!thread) return;
+      // A Reply chip named by a Template opens the reply with that Template in it.
+      if (action.kind === "reply" && replyTemplate?.threadId === thread.id) {
+        queueTemplate(composer, replyTemplate.templateId);
+      }
       const outcome = await actionRunner.run(action, thread.id);
       if (!outcome.ok) {
         showToast(
@@ -1543,7 +1579,7 @@ function InboxBody({
         );
       }
     },
-    [thread, actionRunner, advanceAfter, showToast, t, now],
+    [thread, actionRunner, advanceAfter, showToast, t, now, replyTemplate, composer],
   );
 
   // Custom actions (CONTEXT.md "Custom action"): the buttons defined for this
@@ -1800,7 +1836,14 @@ function InboxBody({
     switch (command.type) {
       case "action":
         if (isKeyAction(command.action)) pendingAction.current = command.action;
-        else if (command.action === "workflow.from_thread") {
+        else if (command.action.startsWith("template:")) {
+          // A Template from the palette: a reply on the open Thread, else a new Message.
+          const picked = templateLink?.library.find((x) => `template:${x.id}` === command.action);
+          if (!picked) break;
+          queueTemplate(composer, picked.id);
+          if (picked.kind === "reply" && thread) startReply("reply");
+          else compose.openNew();
+        } else if (command.action === "workflow.from_thread") {
           askAgent(t("strings.palette.workflow_from_thread"));
         }
         break;
@@ -2549,8 +2592,9 @@ function InboxBody({
           }
           thread={shownThread}
           messages={messages}
-          brief={brief}
-          chips={readerChips}
+          brief={namedBrief}
+          chips={namedChips}
+          makeTemplate={makeTemplate}
           meetingChips={meetingChipViews}
           onMeetingChip={(i) => {
             const view = meetingChipViews[i];
@@ -2792,6 +2836,7 @@ function InboxBody({
           contacts={contacts}
           sections={sectionOptions}
           describeIntent={describe}
+          templates={templateLink?.library}
         />
       ) : null}
       {viewing ? (

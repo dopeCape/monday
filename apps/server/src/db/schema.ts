@@ -44,6 +44,7 @@ import type {
   SendError,
   StepContext,
   StepKind,
+  TemplateKind,
   Tier,
   ToolCall,
   ToolPreview,
@@ -1438,3 +1439,38 @@ export const mcpCatalogSync = pgTable("mcp_catalog_sync", {
   count: integer("count").notNull().default(0),
   lastError: text("last_error"),
 });
+
+/* ------------------------------ Templates (docs/spec/templates.md, slices 36 to 38) ------------------------------ */
+
+/**
+ * The user's Templates, one row per Template per Workspace (the built-ins are
+ * data in @monday/shared, never rows). Name, fits-when, subject, body and the
+ * Placeholders are content: one JSON envelope under the Workspace key. A
+ * Template used in every account is one row per Workspace, each sealed under
+ * its own key, linked by share_group_id. Deletes are soft so Undo and the
+ * Changes feed can follow them.
+ */
+export const templates = pgTable(
+  "templates",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    shareGroupId: text("share_group_id"),
+    kind: text("kind").$type<TemplateKind>().notNull(),
+    /** The built-in this row is an edited copy of, or null. */
+    builtIn: text("built_in"),
+    createdBy: text("created_by").$type<"user" | "agent">().notNull().default("user"),
+    /** JSON {name, fitsWhen, subject, body, placeholders} under one envelope. */
+    contentEnc: bytea("content_enc").notNull(),
+    contentKey: bytea("content_key").notNull(),
+    deleted: boolean("deleted").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("templates_workspace_idx").on(t.workspaceId, t.deleted),
+    index("templates_share_group_idx").on(t.shareGroupId),
+  ],
+);

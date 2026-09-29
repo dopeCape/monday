@@ -34,6 +34,7 @@ import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
 import { MEETING_TOOLS, type MeetingsSeam } from "./meetings.ts";
+import type { TemplatesSeam } from "./templates.ts";
 
 export type { CalendarSeam } from "./calendar.ts";
 
@@ -116,6 +117,8 @@ export interface ToolExtensions {
   backlog?: BacklogSeam | undefined;
   /** Meetings from mail (docs/spec/meetings.md): what meeting_options reads. */
   meetings?: MeetingsSeam | undefined;
+  /** Templates (slice 37): the library, filling, drafting from examples, the duplicate check. */
+  templates?: TemplatesSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });

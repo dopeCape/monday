@@ -237,7 +237,9 @@ export type ContentKind =
   /** A Workflow integration's token or webhook URL, one sealed row per integration. */
   | "integration"
   /** A meeting reading: the times and zones a Message proposes, read from its text (docs/spec/meetings.md). */
-  | "meeting";
+  | "meeting"
+  /** A Template's name, fits-when, subject, body and Placeholders (docs/spec/templates.md). */
+  | "template";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read
@@ -389,7 +391,9 @@ export type Task =
   | "section"
   | "tag"
   | "draft-in-voice"
-  | "summarize";
+  | "summarize"
+  /** Drafting a Template from example Messages (docs/spec/templates.md). */
+  | "template";
 
 export type Tier = "always-ask" | "reversible" | "read-only";
 

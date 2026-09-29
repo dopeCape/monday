@@ -21,6 +21,10 @@ function inline(node: DocNode): string {
     return text;
   }
   if (node.type === "hardBreak") return "\n";
+  // A Template Placeholder still to fill reads as its name (templates/placeholders.ts).
+  if (node.type === "templatePlaceholder") {
+    return `{${String(node.attrs?.name ?? "")}${node.attrs?.optional ? "?" : ""}}`;
+  }
   return (node.content ?? []).map(inline).join("");
 }
 

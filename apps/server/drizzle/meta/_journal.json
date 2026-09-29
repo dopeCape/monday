@@ -162,6 +162,13 @@
       "when": 1790680527750,
       "tag": "0023_thread_meetings",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790688023084,
+      "tag": "0024_templates",
+      "breakpoints": true
     }
   ]
 }

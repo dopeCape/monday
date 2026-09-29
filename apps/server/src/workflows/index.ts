@@ -28,6 +28,7 @@ import type {
   RunView,
   Step,
   StepContext,
+  TemplateChecks,
   TemplateContext,
   ThreadEvent,
   Trigger,
@@ -35,13 +36,17 @@ import type {
   WorkflowView,
 } from "@monday/shared";
 import {
+  checksClean,
   evaluateCondition,
+  firstFlag,
   matchesPredicate,
   nextCronRun,
   parseCron,
+  placeholderLabel,
   renderTemplate,
   settingsSchema,
   stepMutates,
+  unfilledRequired,
 } from "@monday/shared";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { ChangeBus } from "../changes/bus.ts";
@@ -75,6 +80,7 @@ import {
   NoProviderKeyError,
 } from "../intelligence/runtime/index.ts";
 import { LocalRuntimeTimeoutError } from "../intelligence/runtime/local.ts";
+import type { TemplateStepSeam } from "../intelligence/templates/step.ts";
 import type { Job, StepContext as JobContext, Jobs, StepResult } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import type { Integrations } from "./integrations.ts";
@@ -151,6 +157,8 @@ export interface WorkflowsOptions {
    * come back when the level rises. Absent means `automate`.
    */
   level?: () => Promise<AiLevel>;
+  /** What the draft_from_template Step asks of Templates (slice 38); absent, that Step fails and says why. */
+  templates?: TemplateStepSeam | undefined;
 }
 
 export interface Workflows extends WorkflowsSeam {
@@ -203,7 +211,7 @@ type ThreadRow = typeof threads.$inferSelect;
 /** What one Step's execution came to. */
 type StepOutcome =
   | { kind: "done"; detail: string; output?: StepContext; activityId?: string | null }
-  | { kind: "paused"; activityId: string; detail: string }
+  | { kind: "paused"; activityId: string; detail: string; result?: unknown }
   | { kind: "declined"; detail: string; activityId: string | null }
   | { kind: "failed"; detail: string; activityId?: string | null }
   | { kind: "stop"; detail: string }
@@ -339,6 +347,14 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     detail: s.detail,
     activityId: s.activityId,
     at: s.at.toISOString(),
+    // A draft_from_template Step keeps its checks in its result, for the badges.
+    ...(s.kind === "draft_from_template" &&
+    s.result &&
+    typeof s.result === "object" &&
+    "checks" in s.result &&
+    (s.result as { checks?: unknown }).checks
+      ? { checks: (s.result as { checks: TemplateChecks }).checks }
+      : {}),
   });
 
   const runView = async (r: RunRow): Promise<RunView> => {
@@ -639,6 +655,8 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     name: string,
     args: Record<string, unknown>,
     would: string,
+    /** Several tool calls in one Step each need their own ledger key. */
+    part?: string,
   ): Promise<StepOutcome> => {
     if (env.dry) {
       const preview = await env.tools.preview({ name, args });
@@ -659,12 +677,20 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
                     ? `create ${preview.preview.groups.map((g) => g.name).join(", ")}`
                     : preview.preview.kind === "workflow"
                       ? `${preview.preview.action} workflow "${preview.preview.workflow.name}"`
-                      : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
+                      : preview.preview.kind === "template"
+                        ? `${preview.preview.action} template "${preview.preview.template.name}"`
+                        : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }
     try {
       const outcome = await env.tools.call(
-        { name, args, callId: `step-${env.index}`, sessionId: null, runId: env.runId },
+        {
+          name,
+          args,
+          callId: part ? `step-${env.index}:${part}` : `step-${env.index}`,
+          sessionId: null,
+          runId: env.runId,
+        },
         {
           ask: async (waiting) => {
             if (env.standing) return "standing";
@@ -918,7 +944,178 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
         );
       case "agentic":
         return agenticStep(env);
+      case "draft_from_template":
+        return templateStep(env);
     }
+  };
+
+  /**
+   * draft_from_template (slice 38, docs/spec/templates.md): fill the Template
+   * from the Thread by selection; with a required Placeholder left, save the
+   * Draft with its chips and wait for the user ("Could not fill …"); else
+   * write the Message around it, save the Draft, check it, and for a Step
+   * that sends, ask through send_draft. A Standing approval sends
+   * unattended only when every check is clean
+   * (templates.verify.standing_requires_clean); the approval card carries
+   * the checks as badges. Verification never rewrites the draft.
+   */
+  const templateStep = async (env: StepEnv): Promise<StepOutcome> => {
+    const { step } = env;
+    if (step.kind !== "draft_from_template")
+      return { kind: "failed", detail: "not a template step" };
+    const seam = options.templates;
+    if (!seam) return { kind: "failed", detail: "Templates are not available on this Server." };
+    const missing = needThread(env);
+    if (missing || !env.thread) return missing ?? { kind: "failed", detail: "no thread" };
+    const threadId = env.thread.id;
+    const jobId = null;
+    const { standingRequiresClean, strings } = await seam.settings();
+    type State = {
+      phase: "fill" | "send";
+      draftId: string;
+      name: string;
+      filled: string;
+      checks: TemplateChecks | null;
+    };
+    const prev =
+      env.existing?.status === "waiting" && env.existing.result
+        ? (env.existing.result as State)
+        : null;
+
+    if (env.dry) {
+      const template = await seam.template(env.workspaceId, threadId, step.template, jobId);
+      if (!template) {
+        return { kind: "failed", detail: strings.gone.replaceAll("{name}", step.template) };
+      }
+      return {
+        kind: "would",
+        detail: `Draft from ${template.name}${step.send === "send" ? " and send it" : ""}`,
+        asks: step.send === "send" && !env.standing,
+      };
+    }
+
+    let draftId: string;
+    let name: string;
+    let filled: string;
+    let checks: TemplateChecks | null;
+    if (prev?.phase === "send") {
+      ({ draftId, name, filled, checks } = prev);
+    } else {
+      if (prev?.phase === "fill") {
+        // The user was asked to fill what the Thread did not say, in the Draft.
+        if (env.decision === "declined") {
+          return {
+            kind: "declined",
+            detail: "Declined",
+            activityId: env.existing?.activityId ?? null,
+          };
+        }
+        const draft = await seam.readDraft(prev.draftId);
+        if (!draft) return { kind: "failed", detail: "The Draft this step saved is gone." };
+        const left = unfilledRequired(draft.bodyText);
+        if (left[0]) {
+          const detail = strings.couldNotFill.replaceAll(
+            "{placeholder}",
+            placeholderLabel(left[0]),
+          );
+          const activityId = await note(env, "workflow.template_fill", detail, "waiting", detail);
+          return { kind: "paused", activityId, detail, result: prev };
+        }
+        draftId = prev.draftId;
+        name = prev.name;
+        filled = prev.filled;
+        checks = await seam.verify(env.workspaceId, threadId, filled, draft.bodyText, jobId);
+      } else {
+        const template = await seam.template(env.workspaceId, threadId, step.template, jobId);
+        if (!template) {
+          return { kind: "failed", detail: strings.gone.replaceAll("{name}", step.template) };
+        }
+        name = template.name;
+        const fill = await seam.fill(env.workspaceId, template, threadId, jobId);
+        const byName = new Map(fill.fills.map((f) => [f.name, f]));
+        const unfilled = template.placeholders.filter(
+          (p) => !p.optional && !byName.get(p.name)?.value,
+        );
+        filled = seam.filledText(template, fill.fills);
+        if (unfilled[0]) {
+          // The Draft is saved with its chips; the Run waits for the user to fill them.
+          const saved = await callTool(
+            env,
+            "use_template",
+            { template_id: template.id, thread_id: threadId },
+            "Draft from a template",
+            "draft",
+          );
+          if (saved.kind !== "done") return saved;
+          const id = saved.output?.draftId;
+          if (typeof id !== "string") return { kind: "failed", detail: "No Draft was saved." };
+          const detail = strings.couldNotFill.replaceAll(
+            "{placeholder}",
+            placeholderLabel(unfilled[0].name),
+          );
+          const activityId = await note(env, "workflow.template_fill", detail, "waiting", detail);
+          return {
+            kind: "paused",
+            activityId,
+            detail,
+            result: { phase: "fill", draftId: id, name, filled, checks: null } satisfies State,
+          };
+        }
+        const text = await seam.write(env.workspaceId, filled, threadId, step.instructions, jobId);
+        const saved = await callTool(
+          env,
+          "draft_message",
+          { kind: "reply", thread_id: threadId, body: text },
+          "Draft a reply",
+          "draft",
+        );
+        if (saved.kind !== "done") return saved;
+        const id = saved.output?.draftId;
+        if (typeof id !== "string") return { kind: "failed", detail: "No Draft was saved." };
+        draftId = id;
+        checks = await seam.verify(env.workspaceId, threadId, filled, text, jobId);
+      }
+      if (step.send === "draft") {
+        return {
+          kind: "done",
+          detail: `Drafted from ${name}`,
+          output: { draftId, template: name, ...(checks ? { checks } : {}) },
+        };
+      }
+    }
+
+    // Send: a Standing approval applies only when every badge is clean.
+    const clean = checks === null || checksClean(checks);
+    const unattended = env.standing && (clean || !standingRequiresClean);
+    const sent = await callTool(
+      { ...env, standing: unattended },
+      "send_draft",
+      { draft_id: draftId },
+      "Send",
+      "send",
+    );
+    if (sent.kind === "paused") {
+      const row = await activity.get(sent.activityId);
+      if (row?.preview?.kind === "send" && checks) {
+        await activity.update(sent.activityId, { preview: { ...row.preview, checks } });
+      }
+      const flag = checks ? firstFlag(checks, strings) : null;
+      return {
+        ...sent,
+        detail:
+          env.standing && !unattended && flag
+            ? strings.waitingCheck.replaceAll("{badge}", flag)
+            : sent.detail,
+        result: { phase: "send", draftId, name, filled, checks } satisfies State,
+      };
+    }
+    if (sent.kind === "done") {
+      return {
+        ...sent,
+        output: { ...(sent.output ?? {}), draftId, template: name, ...(checks ? { checks } : {}) },
+      };
+    }
+    return sent;
   };
 
   const agenticStep = async (env: StepEnv): Promise<StepOutcome> => {
@@ -1089,6 +1286,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       case "paused":
         await writeStep(run.id, index, step, "waiting", outcome.detail, {
           activityId: outcome.activityId,
+          result: outcome.result ?? null,
         });
         await patchRun(run.id, {
           status: "paused",

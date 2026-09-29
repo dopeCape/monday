@@ -88,6 +88,7 @@ import {
   localLanguageModel,
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
+import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
@@ -286,6 +287,8 @@ export interface Intelligence {
   composeAssist: ComposeAssist;
   /** The guardrail on Thread text entering a turn (slice 27). */
   guard: GuardSeam;
+  /** Templates, their Placeholders filled from a Thread, and what the judge adds (slices 36 to 38). */
+  templates: TemplateIntelligence;
   /** The Brief verifier (slice 27). */
   verify: BriefVerifier;
   /** The palette's typed sentence as one Judgment (slice 27). Throws NoJudgeError without a judge. */
@@ -789,6 +792,19 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       };
     },
   });
+  const templates = createTemplateIntelligence({
+    db,
+    mailstore,
+    runtime,
+    now,
+    log,
+    voice: async (workspaceId) => {
+      const v = await voice.get(workspaceId);
+      return v.enabled && v.description ? v.description : null;
+    },
+    needsReply: async (threadId) => (await judgments.get(threadId))?.needsReply ?? null,
+    readDraft: async (draftId) => drafts.get(draftId).catch(() => null),
+  });
   // Filled once the Workflows module exists; the tool server reads it per call.
   const extensions: ToolExtensions = { integrations, mcp, voice, guard };
   const agent = createAgentHost({
@@ -841,6 +857,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     now,
     log,
     level,
+    templates: templates.step,
     settings: async (): Promise<WorkflowSettings> => {
       const s = await readGlobalSettings(db, WORKFLOW_SETTING_KEYS);
       return {
@@ -891,6 +908,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     log,
   });
   extensions.meetings = meetings;
+  extensions.templates = templates;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
@@ -929,6 +947,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     voice,
     composeAssist,
     guard,
+    templates,
     verify,
     intent: async (request) => judgeIntent(runtime, request, await intentSettings()),
     meetings,

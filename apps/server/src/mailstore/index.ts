@@ -79,6 +79,7 @@ import {
   sessionEvents,
   sessions,
   tags,
+  templates,
   threadLabels,
   threadMeetings,
   threads,
@@ -1571,6 +1572,13 @@ const REWRAP_SPECS: readonly RewrapSpec[] = [
     id: invites.id,
     workspace: invites.workspaceId,
     keys: [invites.titleKey, invites.icalKey],
+  },
+  // Templates (slice 36): name, fits-when, subject, body and Placeholders under one data key.
+  {
+    table: templates,
+    id: templates.id,
+    workspace: templates.workspaceId,
+    keys: [templates.contentKey],
   },
 ];
 

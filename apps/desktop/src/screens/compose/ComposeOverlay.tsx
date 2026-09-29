@@ -7,7 +7,7 @@
 // renders windows kept open beside it through ComposeWindow, bare.
 
 import type { DraftContent, Person } from "@monday/shared";
-import { Compose, formatWhen } from "@monday/ui";
+import { Btn, Compose, formatWhen } from "@monday/ui";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import {
   type DragEvent,
@@ -18,6 +18,9 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTemplateCompose } from "../../templates/compose.tsx";
+import { useTemplateLink } from "../../templates/link.ts";
+import { UnfilledPlaceholderError } from "../../templates/placeholders.ts";
 import { AssistMenu, SuggestionPanel, useAssist } from "./Assist.tsx";
 import { Attachments } from "./Attachments.tsx";
 import { useAgentEdits } from "./agent-edits.ts";
@@ -116,8 +119,25 @@ export function ComposeWindow({
     strings: strings.assist,
   });
 
+  const templateLink = useTemplateLink(composer);
+  const templates = useTemplateCompose({
+    composer,
+    link: templateLink,
+    editor: tiptap,
+    threadId: content.threadId,
+    to: content.to,
+    subject: content.subject,
+    setSubject: editor.setSubject,
+    bodyHtml: content.bodyHtml,
+  });
+  const blocked = templates.blocked;
+
   const send = useCallback(
     async (options?: SendOptions) => {
+      if (blocked) {
+        onError(blocked);
+        return;
+      }
       try {
         const result = await editor.send(options ?? { delaySeconds });
         onSent({ ...result, draftId, later: options?.runAt !== undefined });
@@ -125,11 +145,13 @@ export function ComposeWindow({
         onError(
           error instanceof Error && error.message === "no_recipients"
             ? strings.noRecipients
-            : String(error),
+            : error instanceof UnfilledPlaceholderError
+              ? (blocked ?? error.message)
+              : String(error),
         );
       }
     },
-    [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients],
+    [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients, blocked],
   );
 
   const minimize = link
@@ -208,6 +230,7 @@ export function ComposeWindow({
         strings={strings.overlay}
         note={suggestion?.note ? { text: suggestion.note } : undefined}
         canSend={editor.canSend}
+        sendBlocked={blocked}
         leaving={leaving}
         onLeft={onLeft}
         bare={bare}
@@ -306,8 +329,22 @@ export function ComposeWindow({
           <>
             <span className="c-status">{editor.saving ? strings.saving : strings.saved}</span>
             {byline}
+            {templateLink?.enabled && content.bodyText.trim() ? (
+              <Btn
+                sm
+                className="tpl-save-as"
+                onClick={() =>
+                  templateLink.draftFrom({
+                    texts: [{ subject: content.subject, text: content.bodyText }],
+                  })
+                }
+              >
+                {templateLink.strings.saveAs}
+              </Btn>
+            ) : null}
           </>
         }
+        above={templates.suggestionLine}
       />
       {later ? (
         <AnchoredMenu
@@ -328,6 +365,7 @@ export function ComposeWindow({
           onClose={() => setLater(false)}
         />
       ) : null}
+      {templates.overlay}
       <input
         ref={fileInput}
         type="file"

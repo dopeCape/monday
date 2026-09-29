@@ -14,6 +14,7 @@ import { Plugin } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
+import { TemplateFilled, TemplatePlaceholder } from "../../templates/placeholders.ts";
 import { Quoted } from "./quoted.ts";
 import { type DocNode, docToText } from "./text.ts";
 
@@ -46,6 +47,9 @@ export function editorExtensions(placeholder = "", quotedLabel = "Quoted text"):
     }),
     Quoted.configure({ label: quotedLabel }),
     placeholderExtension(placeholder),
+    // Template Placeholders: chips until filled, then marked values (templates/placeholders.ts).
+    TemplatePlaceholder,
+    TemplateFilled,
   ];
 }
 

@@ -82,7 +82,10 @@ export function approvalNotices(input: {
       body: fill(s["strings.notifications.workflow_approval.body"], {
         n: step.index + 1,
         step: step.name,
-        what: whatOf(activity, step.detail || step.name),
+        // A Template Step held back by its checks says which badge (templates.md).
+        what: run.steps.find((r) => r.index === step.index)?.checks
+          ? step.detail || whatOf(activity, step.name)
+          : whatOf(activity, step.detail || step.name),
         subject: run.subject,
       }),
     });

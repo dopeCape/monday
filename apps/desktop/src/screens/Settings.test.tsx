@@ -159,6 +159,15 @@ function scriptedApi(
         calls.push({ name: "mcp.remove", args: [name] });
       },
     },
+    // Settings › Templates lists the Workspace's own Templates; none yet.
+    templates: {
+      ...base.templates,
+      list: async () => [],
+      remove: async (id: string) => {
+        calls.push({ name: "templates.remove", args: [id] });
+        return [];
+      },
+    },
     // Each Account's card asks whether its calendar is a CalDAV link.
     calendar: {
       ...base.calendar,
@@ -516,7 +525,8 @@ describe("Settings pages come from the schema", () => {
       const control = (settingsSchema[key] as SettingEntry).control;
       if (control) expect(controlKinds[control], `${key}: ${control}`).toBeDefined();
     }
-  });
+    // It mounts every page once per choice a key depends on: the whole schema, so it takes a while.
+  }, 30_000);
 
   test("a fresh page shows only what the current choices make relevant, folded behind disclosures that remember their state", async () => {
     await mount({ initialSection: "ai" }, { api: scriptedApi().api });
@@ -583,6 +593,18 @@ describe("Settings pages come from the schema", () => {
     await click(q('[data-setting="routing.on_arrival"] .switch'));
     expect(q('[data-setting="routing.threshold.route"]')).toBeNull();
     expect(q('[data-group="Confidence"]')).toBeNull();
+  });
+
+  test("Settings › Templates lists the built-ins with Hide, and search finds the panel", async () => {
+    await mountOpen({ initialSection: "accounts" }, { api: scriptedApi().api });
+    await settle();
+    const panel = q('[data-panel="templates"]');
+    expect(panel?.querySelectorAll("[data-template]").length).toBe(21);
+    expect(panel?.textContent).toContain("No templates of your own yet.");
+    await clickText("Hide", q('[data-template="t_thank_you"]') ?? document);
+    expect(captured?.settings["templates.builtin.hidden"]).toEqual(["t_thank_you"]);
+    await type(q<HTMLInputElement>(".settings-search input"), "placeholders");
+    expect(q("[data-result-key]")).not.toBeNull();
   });
 
   test("search finds a card a choice keeps off the page, says which choice, and one click makes it", async () => {
@@ -952,8 +974,8 @@ describe("Settings › AI and agent", () => {
     });
     await mountOpen({ initialSection: "ai" }, { api: scripted.api }, HOSTED);
 
-    // Every Task has a row; promoting draft_message to always-ask writes the Setting.
-    expect(qa('[data-setting^="ai.task."]')).toHaveLength(9);
+    // Every Task has a row (ten with the template Task); promoting draft_message to always-ask writes the Setting.
+    expect(qa('[data-setting^="ai.task."]')).toHaveLength(10);
     await clickText("Fast", q('[data-setting="ai.task.composer"]') ?? document);
     expect(captured?.settings["ai.task.composer"].role).toBe("fast");
     await click(q('[data-tool="draft_message"] .switch'));

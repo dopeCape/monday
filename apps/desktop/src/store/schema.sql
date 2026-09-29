@@ -538,3 +538,24 @@ when old.subject is not new.subject begin
   select c.rid, new.subject, c.sender, c.recipients, c.body
   from messages m join messages_content c on c.rid = m.rid where m.thread_id = new.id;
 end;
+
+-- Templates (docs/spec/templates.md, slice 36): the Workspace's own
+-- Templates, mirrored for the picker, the palette and search. The feed row
+-- carries the headers and marks the content stale; the Templates module then
+-- reads GET /templates and fills name, fits-when, subject, body and the
+-- Placeholders (JSON). The built-ins are data in @monday/shared, never rows.
+create table if not exists templates (
+  id text primary key,
+  kind text not null default 'reply',
+  built_in text,
+  share_group_id text,
+  created_by text not null default 'user',
+  name text not null default '',
+  fits_when text not null default '',
+  subject text,
+  body text not null default '',
+  placeholders text not null default '[]',
+  updated_at text not null default '',
+  deleted integer not null default 0,
+  content_stale integer not null default 1
+);

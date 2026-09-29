@@ -25,7 +25,9 @@ export type JudgeTask =
   | "judge.verify"
   | "judge.rerank"
   | "judge.condition"
-  | "judge.meeting";
+  | "judge.meeting"
+  /** Filling Placeholders, suggesting Templates, the duplicate check and a drafted Message's checks (docs/spec/templates.md). */
+  | "judge.template";
 
 export type JsonValue =
   | string

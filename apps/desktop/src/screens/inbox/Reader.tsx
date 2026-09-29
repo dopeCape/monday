@@ -128,6 +128,8 @@ export interface ReaderProps {
   actions?: readonly ReaderAction[] | undefined;
   /** A custom action was clicked; the screen runs it with its Tier. */
   onAction?: ((actionId: string) => void) | undefined;
+  /** "Make a template from this" in the More menu, on a Thread the owner wrote in (docs/spec/templates.md). */
+  makeTemplate?: { label: string; run: () => void } | undefined;
   onOpenAttachment?: ((attachmentId: string) => void) | undefined;
   onOpenLink?: ((href: string) => void) | undefined;
   attachmentSrc?: ((attachmentId: string) => Promise<string>) | undefined;
@@ -166,6 +168,7 @@ export function Reader({
   onMeetingChip,
   actions,
   onAction,
+  makeTemplate,
   onOpenAttachment,
   onOpenLink,
   attachmentSrc,
@@ -303,10 +306,14 @@ export function Reader({
       {moreExit.mounted ? (
         <Picker
           label={strings.more}
-          items={[{ key: "star", label: thread.starred ? strings.unstar : strings.star }]}
-          onPick={() => {
+          items={[
+            { key: "star", label: thread.starred ? strings.unstar : strings.star },
+            ...(makeTemplate ? [{ key: "template", label: makeTemplate.label }] : []),
+          ]}
+          onPick={(key) => {
             setMore(false);
-            onStar();
+            if (key === "template") makeTemplate?.run();
+            else onStar();
           }}
           onClose={() => setMore(false)}
           leaving={moreExit.leaving}

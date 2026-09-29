@@ -34,6 +34,7 @@ import {
 import type { CSSProperties, ReactNode } from "react";
 import { cx } from "../format.ts";
 import { ToolCard } from "./agent.tsx";
+import { type CheckBadge, CheckBadges } from "./check-badges.tsx";
 import { FlowChain, type FlowNodeData } from "./flow-chain.tsx";
 import { Icon, type IconComponent } from "./icon.tsx";
 import { Btn, Switch, Tag } from "./primitives.tsx";
@@ -273,6 +274,8 @@ export interface RunApprovalCardProps {
   onDecide: (decision: "approved" | "declined", standing: boolean) => void;
   busy?: boolean | undefined;
   className?: string | undefined;
+  /** A draft_from_template Step's checks, worded, shown under the message (slice 38). */
+  badges?: readonly CheckBadge[] | undefined;
 }
 
 const PRE_STYLE: CSSProperties = { whiteSpace: "pre-wrap", margin: 0, font: "inherit" };
@@ -288,6 +291,7 @@ export function RunApprovalCard({
   onDecide,
   busy,
   className,
+  badges,
 }: RunApprovalCardProps) {
   const node =
     previewNode ??
@@ -301,7 +305,16 @@ export function RunApprovalCard({
   return (
     <ToolCard
       call={call}
-      preview={node}
+      preview={
+        badges?.length ? (
+          <>
+            {node}
+            <CheckBadges badges={badges} />
+          </>
+        ) : (
+          node
+        )
+      }
       actions={[approveLabel, standingLabel, declineLabel]}
       onAction={(action) => {
         if (busy) return;

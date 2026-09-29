@@ -15,4 +15,5 @@ export * from "./search-match.ts";
 export * from "./search-query.ts";
 export * from "./settings/index.ts";
 export * from "./sync.ts";
+export * from "./templates/index.ts";
 export * from "./workflow/index.ts";
