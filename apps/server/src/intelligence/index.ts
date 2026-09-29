@@ -64,10 +64,10 @@ import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts"
 import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
+import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createDbMeetingSource, createDbMeetingStore, recordMeeting } from "./meetings/db.ts";
 import { createMeetings, type Meetings } from "./meetings/index.ts";
 import { MEETING_SETTING_KEYS, meetingSettingsFrom } from "./meetings/settings.ts";
-import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
@@ -91,11 +91,11 @@ import {
   localLanguageModel,
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
-import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createSignalBackfills, type SignalBackfills } from "./signals/backfill.ts";
 import { backgroundBudget } from "./signals/budget.ts";
 import { createSignals, type Signals } from "./signals/index.ts";
 import { createJudgeLimiter, type JudgeLimiter, type LimiterSettings } from "./signals/limiter.ts";
+import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";

@@ -19,7 +19,7 @@ import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
-import { settings as settingsTable, threadJudgments } from "../src/db/schema.ts";
+import { settings as settingsTable, signalAnswers } from "../src/db/schema.ts";
 import {
   createMemoryActivityLog,
   createToolServer,
@@ -416,22 +416,16 @@ describe("Templates II over the routes", () => {
     const before = judge.calls.length;
     expect(await onOpen()).toMatchObject({ status: "none", reason: "gate" });
     expect(judge.calls.length).toBe(before);
-    const latest = (await store.listMessages(deckThread)).at(-1);
-    await db.handle.db.insert(threadJudgments).values({
+    // Needs a reply, as the Signal store holds it (slice 30).
+    await db.handle.db.insert(signalAnswers).values({
       threadId: deckThread,
       workspaceId,
-      needsReply: 0.9,
-      waitingOnOthers: 0.1,
-      newsletter: 0,
-      automated: 0,
-      briefWorth: 1,
-      urgency: 1,
-      chips: {},
+      signalId: "needs_reply",
+      version: 1,
       model: "jev",
-      messageCount: 1,
-      latestMessageId: latest?.id ?? "",
       judgedAt: new Date(),
-    } as never);
+      noul: 0.9,
+    });
     judge.when((state) => (state as { draft?: { typed?: string } }).draft?.typed === "", {
       gate_standard: 0.9,
       gate_purpose: 0.9,
