@@ -79,7 +79,9 @@ export interface SealedFacts {
    * person's address, a link, a tracking number, verbatim, with the pick's
    * confidence (docs/spec/actions.md).
    */
-  picks?: Record<string, { value: string; confidence: number }> | undefined;
+  picks?:
+    | Record<string, { value: string; confidence: number; probability?: number | undefined }>
+    | undefined;
 }
 
 const lower = (s: string) => s.trim().toLowerCase();

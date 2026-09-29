@@ -10,6 +10,7 @@ import type {
   Group,
   MeetingChip,
   Message,
+  RecommendationEventsRequest,
   SectionJudged,
   Tag,
   Thread,
@@ -23,6 +24,7 @@ import {
   threads as fixtureThreads,
   messagesOf,
 } from "@monday/ui/fixtures";
+import type { ListExit } from "../../platform/api.ts";
 import type { CachedRecommendations } from "../../store/recommendations.ts";
 import { type FolderKey, folderThreads, type ThreadListKey } from "./folders.ts";
 import type { Facet, FacetKind } from "./list-filter.ts";
@@ -171,6 +173,19 @@ export interface ThreadReader {
    * request once), and caches the answer. `zone` is the Device's. Never throws.
    */
   askRecommendations?(threadId: string, zone?: string): Promise<void>;
+  /** Tells the Server which chips showed or what became of one (learning). Never throws. */
+  recommendationEvents?(body: Omit<RecommendationEventsRequest, "workspace">): void;
+  /** How the Thread's list is left: the exact request the unsubscribe card shows. */
+  listExit?(threadId: string): Promise<ListExit | null>;
+  /** The user approved that exact request on the card. */
+  unsubscribe?(
+    threadId: string,
+    approved: { method: "one_click" | "mailto"; target: string },
+  ): Promise<{ ok: boolean; text: string }>;
+  /** A Workflow started on the Thread by hand. */
+  runWorkflow?(workflowId: string, threadId: string): Promise<void>;
+  /** The Threads of a mailing list still in the Inbox, from the Cache's Facts. */
+  listThreads?(listId: string): Promise<string[]>;
   /**
    * Why the last open left bodies missing: the Server did not answer
    * (offline), it is locked, or the read failed; null when nothing went

@@ -142,3 +142,60 @@ describe("what became of a chip", () => {
     ).toBe("other_used");
   });
 });
+
+describe("the slice 35 chips' words and floors", () => {
+  const words = recommendationWords(defaultSettings());
+  const now = new Date("2026-09-29T10:00:00Z");
+  const pay = {
+    kind: "pay" as const,
+    amount: "$1,315.50",
+    value: 1315.5,
+    currency: "USD",
+    amountConfidence: 0.9,
+    due: "2026-10-03T23:59:00.000Z",
+    link: { url: "https://pay.hetzner.com/i/1", domain: "pay.hetzner.com" },
+    remindAt: null,
+  };
+  test("Pay $1,315.50 by Oct 3; Remind me to pay without a safe page; Add Thu 15:00 to calendar or the day only", () => {
+    expect(recommendationLabel(pay, words, now, "UTC")).toBe("Pay $1,315.50 by Oct 3");
+    expect(recommendationLabel({ ...pay, link: null }, words, now, "UTC")).toBe("Remind me to pay");
+    const event = {
+      kind: "calendar" as const,
+      day: "2026-10-01",
+      start: "2026-10-01T15:00:00.000Z",
+      end: "2026-10-01T15:30:00.000Z",
+      timeConfidence: 0.9,
+      title: "Podcast",
+    };
+    expect(recommendationLabel(event, words, now, "UTC")).toBe("Add Thu 15:00 to calendar");
+    expect(recommendationLabel({ ...event, timeConfidence: 0.4 }, words, now, "UTC")).toBe(
+      "Add Thu to calendar",
+    );
+    expect(
+      recommendationLabel(
+        { kind: "workflow", workflowId: "w", name: "Candidate intake", confidence: 0.9 },
+        words,
+        now,
+      ),
+    ).toBe("Run Candidate intake");
+  });
+  test("a pay chip needs the amount at its floor; a Workflow its pick's confidence", () => {
+    const rules = recommendationRules(defaultSettings());
+    const recs: Recommendation[] = [
+      { ...pay, amountConfidence: 0.7, fit: 0.95, rank: 0.95 },
+      { kind: "workflow", workflowId: "w", name: "W", confidence: 0.5, fit: 0.95, rank: 0.95 },
+      {
+        kind: "track",
+        url: "u",
+        carrier: "ups",
+        number: "1",
+        deliveryDay: null,
+        fit: 0.75,
+        rank: 0.75,
+      },
+    ];
+    expect(chooseRecommended(recs, rules, { fromDomain: null }).map((r) => r.kind)).toEqual([
+      "track",
+    ]);
+  });
+});

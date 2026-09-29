@@ -58,6 +58,7 @@ describe("migrations", () => {
       "pairing_codes",
       "people",
       "provider_keys",
+      "recommendation_events",
       "routing_backlogs",
       "routing_decisions",
       "scheduled_sends",

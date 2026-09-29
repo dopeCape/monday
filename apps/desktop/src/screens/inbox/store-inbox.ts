@@ -1260,6 +1260,35 @@ export async function createStoreInbox(
         );
       }
     },
+    recommendationEvents(body) {
+      const send = options.content?.recommendationEvents;
+      if (!send || options.level?.() === "off") return;
+      void send({ workspace: store.workspaceId, ...body }).catch((error: unknown) =>
+        log(`recommendation events: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    },
+    async listExit(threadId) {
+      const get = options.content?.listExit;
+      return get ? get(store.workspaceId, threadId) : null;
+    },
+    async unsubscribe(threadId, approved) {
+      const run = options.content?.unsubscribe;
+      if (!run) return { ok: false, text: "" };
+      return run(store.workspaceId, threadId, approved);
+    },
+    async runWorkflow(workflowId, threadId) {
+      const run = options.content?.runWorkflow;
+      if (!run) throw new Error("no workflows route");
+      await run(workflowId, threadId);
+    },
+    async listThreads(listId) {
+      const rows = await store.query(
+        `select t.id from threads t join thread_facts f on f.thread_id = t.id
+         where f.list_id = ? and t.archived = 0 and t.deleted = 0`,
+        [listId],
+      );
+      return rows.map((r) => String(r.id));
+    },
     unavailable: (threadId) => watch(threadId).unavailable,
     prefetch(threadIds) {
       const keep = new Set(threadIds);

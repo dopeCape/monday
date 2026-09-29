@@ -66,6 +66,7 @@ import {
 import { type Mailstore, NotFoundError } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
 import {
+  listOptions,
   RECOMMENDED_SIGNAL_SETTING_KEYS,
   type RecommendedSignalSettings,
   recipientOptions,
@@ -213,6 +214,8 @@ export interface SignalsSettings {
 export interface SignalCandidates {
   people: Array<{ email: string; name: string; line: string }>;
   forwardedTo: string[];
+  /** The Workflows a Thread may be run through by hand, each with the sentence it was written from. */
+  workflows?: Array<{ id: string; name: string; sentence: string }> | undefined;
 }
 
 export type CandidateSource = (input: {
@@ -390,6 +393,17 @@ export function splitQuestions(
   }
   if (Object.keys(current).length > 0) out.push(current);
   return out;
+}
+
+/** A link as a Choice option's line: where it goes, "pay.stripe.com/i/2291". */
+function linkLine(url: string, domain: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.length > 40 ? `${u.pathname.slice(0, 40)}...` : u.pathname;
+    return `${domain}${path === "/" ? "" : path}`;
+  } catch {
+    return domain;
+  }
 }
 
 /** The language model's prompt for the Signals it may answer: Nouls and Scores, by id. */
@@ -1070,6 +1084,7 @@ export function createSignals(options: SignalsOptions): Signals {
     if (d.gate === "addresses") return loaded.candidates.people.length > 0;
     if (d.gate === "links") return loaded.facts.sealed.links.length > 0;
     if (d.gate === "tracking") return loaded.facts.sealed.tracking_numbers.length > 0;
+    if (d.gate === "workflows") return (loaded.candidates.workflows ?? []).length > 0;
     return true;
   };
 
@@ -1081,7 +1096,33 @@ export function createSignals(options: SignalsOptions): Signals {
     if (d.optionsFrom === "amounts") return amountOptions(d.question, loaded.facts.sealed.amounts);
     if (d.optionsFrom === "addresses")
       return recipientOptions(d.question, loaded.candidates.people);
-    if (d.id === "deadline_year") return yearOptions(d.question, new Date(loaded.written));
+    // Links are numbered by code (l1, l2) with where they go; the pick maps back to the URL.
+    if (d.optionsFrom === "links")
+      return listOptions(
+        d.question,
+        loaded.facts.sealed.links.map((l, i) => ({
+          key: `l${i + 1}`,
+          line: linkLine(l.url, l.domain),
+        })),
+      );
+    if (d.optionsFrom === "tracking")
+      return listOptions(
+        d.question,
+        loaded.facts.sealed.tracking_numbers.map((t) => ({
+          key: t.number,
+          line: `${t.carrier.toUpperCase()} pattern`,
+        })),
+      );
+    if (d.optionsFrom === "workflows")
+      return listOptions(
+        d.question,
+        (loaded.candidates.workflows ?? []).map((w) => ({
+          key: w.id,
+          line: w.sentence ? `${w.name}: ${w.sentence}` : w.name,
+        })),
+      );
+    if (d.id === "deadline_year" || d.id === "action:calendar.year")
+      return yearOptions(d.question, new Date(loaded.written));
     return d.question;
   };
 
@@ -1093,8 +1134,8 @@ export function createSignals(options: SignalsOptions): Signals {
     loaded: Awaited<ReturnType<typeof loadThread>>,
     answers: Record<string, JudgeAnswer | undefined>,
     s: Settings,
-    /** The Choices whose options were built per Thread (other than amounts): their picks are kept sealed. */
-    pickedFrom: ReadonlySet<string> = new Set(),
+    /** The Choices whose options were built per Thread (other than amounts), by what: their picks are kept sealed. */
+    pickedFrom: ReadonlyMap<string, SignalOptionsFrom> = new Map(),
   ) => {
     const { clear, sealed } = loaded.facts;
     const previous = await db.query.threadFacts.findFirst({
@@ -1160,9 +1201,21 @@ export function createSignals(options: SignalsOptions): Signals {
     // A picked person (or link, or number) is kept verbatim, sealed; the answer row says only "picked".
     const picks: NonNullable<SealedFacts["picks"]> = { ...(oldPicks ?? {}) };
     for (const [id, a] of Object.entries(answers)) {
-      if (a?.type !== "choice" || !pickedFrom.has(id)) continue;
-      if (a.choice === "none") delete picks[id];
-      else picks[id] = { value: a.choice, confidence: a.confidence };
+      const from = pickedFrom.get(id);
+      if (a?.type !== "choice" || !from) continue;
+      if (a.choice === "none") {
+        delete picks[id];
+        continue;
+      }
+      const value =
+        from === "links" ? (sealed.links[Number(a.choice.slice(1)) - 1]?.url ?? null) : a.choice;
+      if (value === null) delete picks[id];
+      else
+        picks[id] = {
+          value,
+          confidence: a.confidence,
+          probability: a.probabilities[a.choice] ?? a.confidence,
+        };
     }
     sealed.picks = picks;
     const stored = await mailstore.storeContent(workspaceId, "facts", JSON.stringify(sealed));
@@ -1271,9 +1324,9 @@ export function createSignals(options: SignalsOptions): Signals {
                 confidence: 1,
               } as const),
       }));
-      const pickedFrom = new Set(
-        asked.filter((d) => d.optionsFrom && d.optionsFrom !== "amounts").map((d) => d.id),
-      );
+      const pickedFrom = new Map<string, SignalOptionsFrom>();
+      for (const d of asked)
+        if (d.optionsFrom && d.optionsFrom !== "amounts") pickedFrom.set(d.id, d.optionsFrom);
       if (Object.keys(questions).length === 0) {
         await write(workspaceId, threadId, version, notStated, "code", loaded.lowTrust);
         await storeFacts(workspaceId, threadId, version, loaded, {}, s);

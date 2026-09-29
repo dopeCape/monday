@@ -127,6 +127,8 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   meeting_options: "read",
   // Recommended actions (docs/spec/actions.md): the chips a Thread shows, read only.
   recommended_actions: "read",
+  // It reaches the list (RFC 8058 or a mailto Message): always asks.
+  unsubscribe: "leaves_mailbox",
   // Organizing mail by talking (slice 26, docs/spec/agent-composer.md): Sections,
   // Groups and custom actions from a sentence, every one reversible; Undo puts
   // the previous Setting or Group back. Routing existing mail previews above

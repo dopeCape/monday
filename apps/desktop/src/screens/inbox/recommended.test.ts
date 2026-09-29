@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import type { Person, Recommendation } from "@monday/shared";
 import { defaultSettings, recommendationWords } from "@monday/shared";
 import {
+  chipMenu,
   createRecommendationRunner,
   followUpUntil,
   listMode,
@@ -99,6 +100,20 @@ describe("running a chip", () => {
       },
       pickSnooze: (t) => calls.push(`picker ${t}`),
       replyLine: () => "Thursday works for me.",
+      openLink: (url) => {
+        calls.push(`open ${url}`);
+      },
+      rsvp: async (id, response) => {
+        calls.push(`rsvp ${id} ${response}`);
+      },
+      createEvent: async (e) => {
+        calls.push(`event ${e.title} ${e.start}`);
+      },
+      openEditor: (e) => calls.push(`editor ${e.day}`),
+      unsubscribe: (t, rec) => calls.push(`card ${t} ${rec.method}`),
+      runWorkflow: async (id, t) => {
+        calls.push(`workflow ${id} ${t}`);
+      },
     });
     return { calls, runner };
   };
@@ -157,5 +172,182 @@ describe("the chip keys", () => {
     expect(press("1", "Digit1")).toBe(-1);
     expect(press("1", "Digit1", { alt: true, ctrl: true })).toBe(-1);
     expect(press("4", "Digit4", { alt: true })).toBe(-1);
+  });
+});
+
+describe("the slice 35 chips", () => {
+  const make = () => {
+    const calls: string[] = [];
+    const runner = createRecommendationRunner({
+      reply: () => calls.push("reply"),
+      forward: () => calls.push("forward"),
+      handOff: () => calls.push("handoff"),
+      archive: async () => null,
+      snooze: async (t, until) => {
+        calls.push(`snooze ${t} ${until.toISOString()}`);
+        return "u";
+      },
+      pickSnooze: (t) => calls.push(`picker ${t}`),
+      replyLine: () => null,
+      openLink: (url) => {
+        calls.push(`open ${url}`);
+      },
+      rsvp: async (id, response) => {
+        calls.push(`rsvp ${id} ${response}`);
+      },
+      createEvent: async (e) => {
+        calls.push(`event ${e.title} ${e.start}`);
+      },
+      openEditor: (e) => calls.push(`editor ${e.day}`),
+      unsubscribe: (t, rec) => calls.push(`card ${t} ${rec.method}`),
+      runWorkflow: async (id, t) => {
+        calls.push(`workflow ${id} ${t}`);
+      },
+      timeConfidence: 0.7,
+    });
+    return { calls, runner };
+  };
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  test("an RSVP needs the user's answer; a timed event goes on the calendar, an unsure one opens the editor", async () => {
+    const { calls, runner } = make();
+    const rsvp: Recommendation = {
+      kind: "rsvp",
+      fit: 1,
+      rank: 1,
+      inviteId: "inv1",
+      title: "Design review",
+      start: later,
+      clash: null,
+    };
+    expect(await runner.run(rsvp, "t1")).toEqual({ ok: false, reason: "unavailable" });
+    await runner.run(rsvp, "t1", "tentative");
+    const event = {
+      kind: "calendar" as const,
+      fit: 0.9,
+      rank: 0.9,
+      day: "2026-10-01",
+      start: "2026-10-01T15:00:00.000Z",
+      end: "2026-10-01T15:30:00.000Z",
+      title: "Podcast recording",
+    };
+    await runner.run({ ...event, timeConfidence: 0.9 }, "t1");
+    await runner.run({ ...event, timeConfidence: 0.4 }, "t1");
+    expect(calls).toEqual([
+      "rsvp inv1 tentative",
+      "event Podcast recording 2026-10-01T15:00:00.000Z",
+      "editor 2026-10-01",
+    ]);
+  });
+  test("pay opens the page read-only, or reminds; track opens the carrier; unsubscribe shows its card; a Workflow runs", async () => {
+    const { calls, runner } = make();
+    const pay = {
+      kind: "pay" as const,
+      fit: 0.9,
+      rank: 0.9,
+      amount: "$1,315.50",
+      value: 1315.5,
+      currency: "USD",
+      amountConfidence: 0.9,
+      due: later,
+      remindAt: later,
+    };
+    await runner.run(
+      { ...pay, link: { url: "https://pay.hetzner.com/i/1", domain: "pay.hetzner.com" } },
+      "t1",
+    );
+    await runner.run({ ...pay, link: null }, "t1");
+    await runner.run({ ...pay, link: null, remindAt: null }, "t1");
+    await runner.run(
+      {
+        kind: "track",
+        fit: 0.9,
+        rank: 0.9,
+        url: "https://carrier.test/1Z",
+        carrier: "ups",
+        number: "1Z",
+        deliveryDay: null,
+      },
+      "t1",
+    );
+    await runner.run(
+      {
+        kind: "unsubscribe",
+        fit: 1,
+        rank: 1,
+        listId: "l",
+        listName: "Weekly",
+        method: "one_click",
+        target: "https://list.test/u",
+        issues: 3,
+      },
+      "t1",
+    );
+    await runner.run(
+      { kind: "workflow", fit: 0.9, rank: 0.9, workflowId: "wf1", name: "Intake", confidence: 0.8 },
+      "t1",
+    );
+    expect(calls).toEqual([
+      "open https://pay.hetzner.com/i/1",
+      `snooze t1 ${later}`,
+      "picker t1",
+      "open https://carrier.test/1Z",
+      "card t1 one_click",
+      "workflow wf1 t1",
+    ]);
+  });
+  test("an RSVP is one grouped chip with its three answers; each chip's menu", () => {
+    const row = readerChips({
+      custom: [],
+      meetings: [],
+      meetingMax: 2,
+      recommended: [
+        {
+          kind: "rsvp",
+          fit: 1,
+          rank: 1,
+          inviteId: "i",
+          title: "Sync",
+          start: later,
+          clash: "Planning",
+        },
+      ],
+      max: 3,
+      words,
+      now,
+    });
+    expect(row).toHaveLength(1);
+    expect(row[0]).toMatchObject({
+      label: "Accept · Maybe · Decline",
+      options: [
+        { key: "accepted", label: "Accept" },
+        { key: "tentative", label: "Maybe" },
+        { key: "declined", label: "Decline" },
+      ],
+    });
+    const menuWords = {
+      notThis: "Not this",
+      notFor: "Not for mail from {domain}",
+      remindPay: "Remind me to pay",
+      file: "File",
+      trackSnooze: "Snooze until the delivery day",
+    };
+    const pay: Recommendation = {
+      kind: "pay",
+      fit: 0.9,
+      rank: 0.9,
+      amount: "$1",
+      value: 1,
+      currency: "USD",
+      amountConfidence: 0.9,
+      due: null,
+      link: { url: "https://pay.stripe.com/x", domain: "pay.stripe.com" },
+      remindAt: null,
+    };
+    expect(
+      chipMenu(pay, "stripe.com", menuWords, { fileAction: true }).map((m) => m.label),
+    ).toEqual(["Remind me to pay", "File", "Not this", "Not for mail from stripe.com"]);
+    expect(chipMenu(recs[0] as Recommendation, null, menuWords).map((m) => m.key)).toEqual([
+      "not_this",
+    ]);
   });
 });

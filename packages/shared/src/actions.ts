@@ -12,7 +12,19 @@ import { utcToZoned } from "./calendar.ts";
 import type { Id, IsoDate, Person } from "./domain.ts";
 
 /** The catalog, in the order the Settings page lists it. */
-export const RECOMMENDED_ACTIONS = ["reply", "archive", "snooze", "forward", "delegate"] as const;
+export const RECOMMENDED_ACTIONS = [
+  "reply",
+  "archive",
+  "snooze",
+  "forward",
+  "delegate",
+  "rsvp",
+  "calendar",
+  "pay",
+  "unsubscribe",
+  "track",
+  "workflow",
+] as const;
 export type RecommendedActionKind = (typeof RECOMMENDED_ACTIONS)[number];
 
 export function isRecommendedAction(value: unknown): value is RecommendedActionKind {
@@ -26,6 +38,10 @@ export const JUDGED_ACTIONS: readonly RecommendedActionKind[] = [
   "snooze",
   "forward",
   "delegate",
+  "calendar",
+  "pay",
+  "track",
+  "workflow",
 ];
 
 /** The arguments each action carries, code-assembled from the Signal answers and Facts. */
@@ -43,6 +59,68 @@ export type RecommendationArgs =
       kind: "forward" | "delegate";
       to: Person;
       /** The recipient Choice's confidence; the chip needs actions.recommended.forward.to_confidence. */
+      confidence: number;
+    }
+  | {
+      /** An Invite not answered yet: monday does not guess the answer, the chip offers all three. */
+      kind: "rsvp";
+      inviteId: Id;
+      title: string;
+      start: IsoDate;
+      /** The busy Event it clashes with, by title; null when the owner is free then. */
+      clash: string | null;
+    }
+  | {
+      kind: "calendar";
+      /** The day the event happens, in the Workspace's zone: "2026-10-01". */
+      day: string;
+      /** The start, when a time was read; the chip names it only above actions.recommended.calendar.time_confidence. */
+      start: IsoDate | null;
+      end: IsoDate | null;
+      /** The lowest confidence among the time's parts. */
+      timeConfidence: number;
+      /** The subject without Re: and Fwd:. */
+      title: string;
+    }
+  | {
+      kind: "pay";
+      /** The amount span as the Thread writes it ("$1,315.50") and parsed by code. */
+      amount: string;
+      value: number;
+      currency: string;
+      /** The amount Choice's confidence; the chip needs actions.recommended.pay.amount_confidence. */
+      amountConfidence: number;
+      /** When it is due (deadline_at), or null. */
+      due: IsoDate | null;
+      /** The payment page, only when its domain is the sender's or a trusted processor's. */
+      link: { url: string; domain: string } | null;
+      /** When "Remind me to pay" brings it back: before the due date; null opens the picker. */
+      remindAt: IsoDate | null;
+    }
+  | {
+      kind: "unsubscribe";
+      listId: string;
+      listName: string;
+      /** RFC 8058 one-click POST, a mailto Message, or the page in the browser. */
+      method: "one_click" | "mailto" | "browser";
+      /** The URL or the address, exactly as the card shows it. */
+      target: string;
+      /** Issues from this list still in the Inbox, for "Archive the 23 issues from this list". */
+      issues: number;
+    }
+  | {
+      kind: "track";
+      url: string;
+      carrier: string;
+      number: string;
+      /** The delivery day, when the Thread names one. */
+      deliveryDay: IsoDate | null;
+    }
+  | {
+      kind: "workflow";
+      workflowId: Id;
+      name: string;
+      /** The Workflow Choice's confidence; the chip needs actions.recommended.workflow.confidence. */
       confidence: number;
     };
 
@@ -100,6 +178,12 @@ export interface RecommendationRules {
   >;
   /** actions.recommended.forward.to_confidence: the recipient floor for Forward and Hand to. */
   recipientConfidence: number;
+  /** actions.recommended.calendar.time_confidence: below it Add to calendar names only the day. */
+  timeConfidence: number;
+  /** actions.recommended.pay.amount_confidence: the amount must be right. */
+  amountConfidence: number;
+  /** actions.recommended.workflow.confidence: the Workflow pick's floor. */
+  workflowConfidence: number;
 }
 
 /** The rules as the Settings hold them (actions.recommended.*). */
@@ -121,6 +205,9 @@ export function recommendationRules(s: Readonly<Record<string, unknown>>): Recom
     enabled: s["actions.recommended.enabled"] !== false,
     actions,
     recipientConfidence: num("actions.recommended.forward.to_confidence", 0.8),
+    timeConfidence: num("actions.recommended.calendar.time_confidence", 0.7),
+    amountConfidence: num("actions.recommended.pay.amount_confidence", 0.8),
+    workflowConfidence: num("actions.recommended.workflow.confidence", 0.6),
   };
 }
 
@@ -165,6 +252,8 @@ export function chooseRecommended(
     if (rule.threshold !== undefined && r.fit < rule.threshold) return false;
     if ((r.kind === "forward" || r.kind === "delegate") && r.confidence < rules.recipientConfidence)
       return false;
+    if (r.kind === "pay" && r.amountConfidence < rules.amountConfidence) return false;
+    if (r.kind === "workflow" && r.confidence < rules.workflowConfidence) return false;
     if (r.kind === "archive" && ctx.customArchives) return false;
     if (ctx.customCovers?.(r)) return false;
     return true;
@@ -193,6 +282,16 @@ export interface RecommendationWords {
   snoozeUntil: string;
   forwardTo: string;
   handTo: string;
+  accept: string;
+  maybe: string;
+  decline: string;
+  calendar: string;
+  payBy: string;
+  pay: string;
+  remindPay: string;
+  unsubscribe: string;
+  track: string;
+  runWorkflow: string;
 }
 
 export function recommendationWords(s: Readonly<Record<string, unknown>>): RecommendationWords {
@@ -207,6 +306,16 @@ export function recommendationWords(s: Readonly<Record<string, unknown>>): Recom
     snoozeUntil: w("snooze_until", "Snooze until {when}"),
     forwardTo: w("forward_to", "Forward to {name}"),
     handTo: w("hand_to", "Hand to {name}"),
+    accept: w("accept", "Accept"),
+    maybe: w("maybe", "Maybe"),
+    decline: w("decline", "Decline"),
+    calendar: w("calendar", "Add {when} to calendar"),
+    payBy: w("pay_by", "Pay {amount} by {date}"),
+    pay: w("pay", "Pay {amount}"),
+    remindPay: w("remind_pay", "Remind me to pay"),
+    unsubscribe: w("unsubscribe", "Unsubscribe"),
+    track: w("track", "Track package"),
+    runWorkflow: w("run_workflow", "Run {workflow}"),
   };
 }
 
@@ -294,6 +403,8 @@ export function recommendationLabel(
   words: RecommendationWords,
   now: Date,
   zone: string | null = null,
+  /** actions.recommended.calendar.time_confidence: below it the calendar chip names the day only. */
+  timeConfidence = 0.7,
 ): string {
   switch (rec.kind) {
     case "reply":
@@ -308,6 +419,26 @@ export function recommendationLabel(
       return fillWords(words.forwardTo, { name: shortName(rec.to) });
     case "delegate":
       return fillWords(words.handTo, { name: shortName(rec.to) });
+    case "rsvp":
+      return [words.accept, words.maybe, words.decline].join(" \u00b7 ");
+    case "calendar": {
+      const timed = rec.start !== null && rec.timeConfidence >= timeConfidence;
+      const when = timed
+        ? formatWhen(rec.start as string, now, { zone })
+        : formatWhen(`${rec.day}T12:00:00.000Z`, now, { zone: "UTC", time: false });
+      return fillWords(words.calendar, { when });
+    }
+    case "pay":
+      if (!rec.link) return words.remindPay;
+      return rec.due
+        ? fillWords(words.payBy, { amount: rec.amount, date: formatDay(rec.due, zone) })
+        : fillWords(words.pay, { amount: rec.amount });
+    case "unsubscribe":
+      return words.unsubscribe;
+    case "track":
+      return words.track;
+    case "workflow":
+      return fillWords(words.runWorkflow, { workflow: rec.name });
   }
 }
 
@@ -324,6 +455,10 @@ export function sameArguments(a: RecommendationArgs, b: RecommendationArgs): boo
     case "forward":
     case "delegate":
       return a.to.email.toLowerCase() === (b as typeof a).to.email.toLowerCase();
+    case "calendar":
+      return a.start === (b as typeof a).start && a.day === (b as typeof a).day;
+    case "workflow":
+      return a.workflowId === (b as typeof a).workflowId;
     default:
       return true;
   }
@@ -344,4 +479,59 @@ export function outcomeOf(
   return sameArguments(shown, { ...done, kind: shown.kind } as RecommendationArgs)
     ? "used"
     : "other_used";
+}
+
+/* ------------------------------ Outcomes on the wire ------------------------------ */
+
+/**
+ * What a chip's outcome keeps of its arguments: header-level facts only (a
+ * recipient's address, a time, a Workflow), never text from the Thread.
+ */
+export interface OutcomeArgs {
+  to?: string | undefined;
+  until?: string | null | undefined;
+  start?: string | null | undefined;
+  workflowId?: string | undefined;
+}
+
+export function outcomeArgs(rec: RecommendationArgs): OutcomeArgs {
+  switch (rec.kind) {
+    case "forward":
+    case "delegate":
+      return { to: rec.to.email.toLowerCase() };
+    case "snooze":
+      return { until: rec.until };
+    case "calendar":
+      return { start: rec.start };
+    case "workflow":
+      return { workflowId: rec.workflowId };
+    default:
+      return {};
+  }
+}
+
+/** POST /recommendations/events: the chips a Thread showed, and what became of one. */
+export interface RecommendationEventsRequest {
+  workspace: Id;
+  threadId: Id;
+  shown?:
+    | Array<{ kind: RecommendedActionKind; fit: number; args?: OutcomeArgs | undefined }>
+    | undefined;
+  outcome?:
+    | {
+        kind: RecommendedActionKind;
+        outcome: RecommendationOutcome;
+        args?: OutcomeArgs | undefined;
+      }
+    | undefined;
+}
+
+/** GET /recommendations/stats: per action, how often shown and used since its threshold was set. */
+export interface RecommendationStat {
+  action: RecommendedActionKind;
+  shown: number;
+  used: number;
+  /** The threshold now and the shipped one; null for an action resting on Facts. */
+  threshold: number | null;
+  shipped: number | null;
 }

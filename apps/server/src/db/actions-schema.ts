@@ -8,8 +8,17 @@
 // time, a subject), so they are sealed like a Brief; which kinds a Thread
 // holds is in the clear for the feed.
 
-import type { RecommendedActionKind } from "@monday/shared";
-import { customType, index, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import type { OutcomeArgs, RecommendationOutcome, RecommendedActionKind } from "@monday/shared";
+import {
+  customType,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  real,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 import { threads, workspaces } from "./schema.ts";
 
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
@@ -38,4 +47,38 @@ export const threadRecommendations = pgTable(
     computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
   },
   (t) => [index("thread_recommendations_workspace_idx").on(t.workspaceId, t.computedAt)],
+);
+
+/**
+ * Every chip shown, and what became of it (docs/spec/actions.md, "Learning
+ * from what the user does"): used, dismissed ("Not this"), ignored (the
+ * Thread was dealt with some other way) or other_used (the same action with
+ * other arguments). The arguments kept are header-level only (a recipient's
+ * address, a time, a Workflow id), like the sender's address beside them.
+ */
+export const recommendationEvents = pgTable(
+  "recommendation_events",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    action: text("action").$type<RecommendedActionKind>().notNull(),
+    fit: real("fit").notNull().default(0),
+    args: jsonb("args").$type<OutcomeArgs>().notNull().default({}),
+    /** The newest sender's address, for sender history ("forwarded 9 threads from billing@"). */
+    sender: text("sender"),
+    messageCount: integer("message_count").notNull().default(0),
+    shownAt: timestamp("shown_at", { withTimezone: true, mode: "date" }).notNull(),
+    outcome: text("outcome").$type<RecommendationOutcome>(),
+    outcomeAt: timestamp("outcome_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    index("recommendation_events_thread_idx").on(t.threadId, t.action),
+    index("recommendation_events_action_idx").on(t.workspaceId, t.action, t.outcomeAt),
+    index("recommendation_events_sender_idx").on(t.workspaceId, t.sender),
+  ],
 );

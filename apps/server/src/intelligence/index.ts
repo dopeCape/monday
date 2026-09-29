@@ -48,6 +48,7 @@ import {
 } from "../workflows/index.ts";
 import { createIntegrationSecretStore, type IntegrationSecretStore } from "../workflows/secrets.ts";
 import { createRecommendations, type Recommendations } from "./actions/recommend.ts";
+import { type Fetch, oneClick } from "./actions/unsubscribe.ts";
 import {
   type ActivityLog,
   type AgentHost,
@@ -265,6 +266,8 @@ export interface IntelligenceOptions {
    * and calls carrying it answered by the script instead of a model.
    */
   demo?: { provider: HostedProvider } | undefined;
+  /** The network for an unsubscribe's RFC 8058 POST; tests pass a fake list server. */
+  fetch?: Fetch | undefined;
 }
 
 export interface Intelligence {
@@ -598,7 +601,20 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   };
   const signals = createSignals({ db, mailstore, runtime, now, log, level });
   // Recommended actions follow every Signal request (docs/spec/actions.md).
-  const recommendations = createRecommendations({ db, mailstore, signals, now, log, level });
+  const recommendations = createRecommendations({
+    db,
+    mailstore,
+    signals,
+    now,
+    log,
+    level,
+    // The calendar, the Workflows and the Activity log are made below; read them when asked.
+    calendar: () => extensions.calendar ?? null,
+    workflows: () => extensions.workflows ?? null,
+    activity: () => activity,
+    writeSetting: (workspaceId, key, value) =>
+      createServerToolHost({ db, mailstore, drafts, workspaceId, now }).writeSetting(key, value),
+  });
   signals.setCandidateSource(recommendations.candidates);
   signals.setAnsweredListener((workspaceId, threadId) =>
     recommendations.refresh(workspaceId, threadId),
@@ -973,7 +989,11 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     log,
   });
   extensions.meetings = meetings;
-  extensions.recommendations = recommendations;
+  extensions.recommendations = {
+    view: (workspaceId, threadId) => recommendations.view(workspaceId, threadId),
+    listExit: (workspaceId, threadId) => recommendations.listExit(workspaceId, threadId),
+    oneClick: (url) => oneClick(url, options.fetch ?? ((u, init) => fetch(u, init))),
+  };
   extensions.templates = templates;
   extensions.backlog = {
     async settings() {

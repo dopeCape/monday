@@ -63,6 +63,8 @@ import type {
   PeopleSearchPage,
   ProposedMove,
   Provider,
+  RecommendationEventsRequest,
+  RecommendationStat,
   RerunProgress,
   RoutingApplied,
   RoutingBacklog,
@@ -86,6 +88,16 @@ import type {
   WorkflowView,
 } from "@monday/shared";
 import { templatesApi } from "../templates/api.ts";
+
+/** How a Thread's list is left, as GET /threads/:id/unsubscribe answers (docs/spec/actions.md). */
+export interface ListExit {
+  method: "one_click" | "mailto" | "browser";
+  target: string;
+  subject?: string | undefined;
+  listId: string;
+  listName: string;
+  issues: number;
+}
 
 export interface ServerTarget {
   baseUrl: string;
@@ -567,6 +579,45 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           );
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) return null;
+          throw error;
+        }
+      },
+      /** The chips a Thread showed, and what became of one; answers the threshold learning moved. */
+      events: (body: RecommendationEventsRequest) =>
+        request<{ learned: { action: string; to: number; text: string } | null }>(
+          "/recommendations/events",
+          json("POST", body),
+        ),
+      /** Per action, shown and used since its threshold was set. */
+      stats: (workspaceId: Id) =>
+        request<{ stats: RecommendationStat[] }>(
+          `/recommendations/stats?${new URLSearchParams({ workspace: workspaceId })}`,
+        ).then((r) => r.stats),
+      /** How the Thread's list is left: the exact request the card shows; null when none. */
+      listExit: async (workspaceId: Id, threadId: Id): Promise<ListExit | null> => {
+        try {
+          return await request<ListExit>(
+            `/threads/${encodeURIComponent(threadId)}/unsubscribe?${new URLSearchParams({ workspace: workspaceId })}`,
+          );
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+      /** The user approved that exact request on the card; the unsubscribe tool runs with it. */
+      unsubscribe: async (
+        workspaceId: Id,
+        threadId: Id,
+        approved: { method: "one_click" | "mailto"; target: string },
+      ): Promise<{ ok: boolean; text: string }> => {
+        try {
+          return await request<{ ok: boolean; text: string }>(
+            `/threads/${encodeURIComponent(threadId)}/unsubscribe`,
+            json("POST", { workspace: workspaceId, ...approved }),
+          );
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409)
+            return { ok: false, text: error.message };
           throw error;
         }
       },

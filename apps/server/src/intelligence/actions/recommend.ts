@@ -16,6 +16,9 @@ import type {
   Person,
   Recommendation,
   RecommendationArgs,
+  RecommendationEventsRequest,
+  RecommendationOutcome,
+  RecommendationStat,
   RecommendationsChange,
   RecommendedActionKind,
   SignalReading,
@@ -25,6 +28,8 @@ import {
   actionable,
   chooseRecommended,
   isIanaZone,
+  isSettingKey,
+  RECOMMENDED_ACTIONS,
   recommendationLabel,
   recommendationRules,
   recommendationWords,
@@ -33,15 +38,26 @@ import {
   utcToZoned,
   zonedToUtc,
 } from "@monday/shared";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
-import { threadFacts, threadRecommendations, threads } from "../../db/schema.ts";
+import {
+  recommendationEvents,
+  settings as settingsTable,
+  threadFacts,
+  threadRecommendations,
+  threads,
+} from "../../db/schema.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
+import type { ActivityLog } from "../agent/activity.ts";
+import type { CalendarSeam } from "../agent/tools/calendar.ts";
+import type { WorkflowsSeam } from "../agent/tools/extensions.ts";
 import { ACTION_TOOL, type RecommendationView } from "../agent/tools/recommended.ts";
-import type { SealedFacts } from "../signals/facts.ts";
+import { assembleDeadline, type DeadlineParts, type SealedFacts } from "../signals/facts.ts";
 import type { CandidateSource, SignalCandidates, Signals } from "../signals/index.ts";
-import { ACTION_SIGNAL } from "./signals.ts";
+import { learnThreshold, useRate } from "./learning.ts";
+import { ACTION_SIGNAL, CALENDAR_PARTS, type CalendarPart, calendarPartId } from "./signals.ts";
+import { listName, type UnsubscribePlan, unsubscribePlan } from "./unsubscribe.ts";
 
 /* ------------------------------ The pure core ------------------------------ */
 
@@ -73,6 +89,74 @@ export interface RecommendInput {
   settings: RecommendSettings;
   /** The action's recent use rate, 0 to 1; 1 before it has a history. */
   useRate?: ((kind: RecommendedActionKind) => number) | undefined;
+  /** What code found beyond the answers, for the actions of slice 35. */
+  context?: RecommendContext | undefined;
+}
+
+/** What code found about a Thread beyond its answers (slice 35): the Invite, the list, the subject, the rules. */
+export interface RecommendContext {
+  /** The Invite on the Thread, with whether the owner answered and what it clashes with. */
+  invite?: {
+    id: string;
+    title: string;
+    start: string;
+    answered: boolean;
+    clash: string | null;
+  } | null;
+  /** The subject, for an event's title. */
+  subject?: string | undefined;
+  /** The amount the judge picked, parsed by code (sealed Facts). */
+  amount?: { span: string; value: number; currency: string } | null;
+  /** The sender's domain and the payment sites a link may be on besides it. */
+  senderDomain?: string | null;
+  trustedDomains?: readonly string[];
+  remindDaysBefore?: number;
+  eventMinutes?: number;
+  /** The list and how to leave it, when the owner left its latest issues unread. */
+  unsubscribe?: {
+    listId: string;
+    listName: string;
+    method: "one_click" | "mailto" | "browser";
+    target: string;
+    issues: number;
+    streak: boolean;
+  } | null;
+  /** The carriers' tracking pages, {number} in each. */
+  carrierUrls?: Readonly<Record<string, string>>;
+  /** The Workflows offered, for the picked one's name. */
+  workflows?: ReadonlyArray<{ id: string; name: string }>;
+  /** Actions the user dismissed on this Thread version ("Not this"). */
+  dismissed?: ReadonlySet<RecommendedActionKind>;
+  /** The carrier a tracking number was found under (sealed Facts). */
+  trackingCarrier?: ((number: string) => string | null) | undefined;
+}
+
+/** The registrable part of a domain, roughly: the last two labels, three under a short second level (co.uk). */
+export function baseDomain(domain: string): string {
+  const labels = domain.toLowerCase().replace(/\.$/, "").split(".");
+  if (labels.length <= 2) return labels.join(".");
+  const second = labels[labels.length - 2] ?? "";
+  const take = second.length <= 3 && (labels[labels.length - 1] ?? "").length === 2 ? 3 : 2;
+  return labels.slice(-take).join(".");
+}
+
+/**
+ * Whether a payment link may be offered (docs/spec/actions.md, Pay or file):
+ * on the sender's own domain (or one under the same registrable domain), or
+ * on a trusted payment processor's. Anything else is never offered.
+ */
+export function payLinkAllowed(
+  linkDomain: string,
+  senderDomain: string | null,
+  trusted: readonly string[],
+): boolean {
+  const d = linkDomain.toLowerCase();
+  const under = (base: string) => d === base || d.endsWith(`.${base}`);
+  if (senderDomain && under(baseDomain(senderDomain))) return true;
+  return trusted.some((t) => {
+    const x = t.trim().toLowerCase();
+    return x !== "" && under(x);
+  });
 }
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -173,14 +257,47 @@ export function recommendFor(input: RecommendInput): Recommendation[] {
         (r.lowTrust === "not_english" && s.nonEnglish === "unsure")),
   );
   const screened = (noul("hidden_instructions") ?? 0) >= s.noulHigh;
-  if (lowTrust || screened) return [];
   const rate = input.useRate ?? (() => 1);
+  const ctx = input.context ?? {};
   const out: Recommendation[] = [];
   const push = (rec: RecommendationArgs & { fit: number }) => {
     if (rec.fit < s.noulLow) return;
+    if (ctx.dismissed?.has(rec.kind)) return;
     out.push({ ...rec, rank: Math.round(rec.fit * rate(rec.kind) * 1000) / 1000 });
   };
   const facts = input.facts;
+
+  /* RSVP and Unsubscribe rest on headers and the Invite alone, so low trust does not stop them. */
+  const invite = ctx.invite;
+  if (invite && !invite.answered && Date.parse(invite.start) > input.now.getTime()) {
+    push({
+      kind: "rsvp",
+      fit: 1,
+      inviteId: invite.id,
+      title: invite.title,
+      start: invite.start,
+      clash: invite.clash,
+    });
+  }
+  const list = ctx.unsubscribe;
+  if (list?.streak) {
+    const newsletter = input.answers.newsletter;
+    const isNewsletter =
+      (newsletter && !newsletter.stale && (newsletter.noul ?? 0) >= s.noulHigh) ||
+      facts.precedence_bulk === true;
+    if (isNewsletter) {
+      push({
+        kind: "unsubscribe",
+        fit: 1,
+        listId: list.listId,
+        listName: list.listName,
+        method: list.method,
+        target: list.target,
+        issues: list.issues,
+      });
+    }
+  }
+  if (lowTrust || screened) return out.sort((a, b) => b.rank - a.rank);
   const deadlineAt = typeof facts.deadline_at === "string" ? facts.deadline_at : null;
   const written =
     typeof facts.last_activity_at === "string" ? new Date(facts.last_activity_at) : input.now;
@@ -233,7 +350,159 @@ export function recommendFor(input: RecommendInput): Recommendation[] {
     if (delegate !== null)
       push({ kind: "delegate", fit: delegate, to: person, confidence: to.confidence });
   }
+
+  /* Add to calendar: the event's day and time from their parts, put together by code. */
+  const calendar = noul(ACTION_SIGNAL.calendarFits);
+  if (calendar !== null && facts.has_invite !== true) {
+    const when = eventTime({
+      part: (p) => choice(calendarPartId(p)),
+      minute: choice(ACTION_SIGNAL.calendarMinute),
+      written,
+      now: input.now,
+      settings: s,
+      minutes: ctx.eventMinutes ?? 30,
+    });
+    if (when) {
+      push({
+        kind: "calendar",
+        fit: calendar,
+        ...when,
+        title: eventTitle(ctx.subject ?? ""),
+      });
+    }
+  }
+
+  /* Pay or file: money the owner pays, an amount picked, and a link only on a safe domain. */
+  const pay = noul(ACTION_SIGNAL.payFits);
+  const involved = noul("money_involved");
+  const direction = choice("money_direction");
+  const amount = ctx.amount;
+  const amountRead = read("money_amount");
+  if (
+    pay !== null &&
+    involved !== null &&
+    involved >= s.noulHigh &&
+    direction?.choice === "owner_pays" &&
+    direction.confidence >= s.confidenceBelow &&
+    amount &&
+    amountRead
+  ) {
+    const picked = input.picks?.[ACTION_SIGNAL.payLink];
+    let link: { url: string; domain: string } | null = null;
+    if (picked) {
+      try {
+        const domain = new URL(picked.value).hostname.toLowerCase();
+        if (
+          picked.confidence >= s.confidenceBelow &&
+          /^https:/i.test(picked.value) &&
+          payLinkAllowed(domain, ctx.senderDomain ?? null, ctx.trustedDomains ?? [])
+        ) {
+          link = { url: picked.value, domain };
+        }
+      } catch {
+        link = null;
+      }
+    }
+    const due = deadlineAt;
+    const remind =
+      due !== null ? new Date(Date.parse(due) - (ctx.remindDaysBefore ?? 2) * 86_400_000) : null;
+    push({
+      kind: "pay",
+      fit: pay,
+      amount: amount.span,
+      value: amount.value,
+      currency: amount.currency,
+      amountConfidence: amountRead.confidence ?? 0,
+      due,
+      link,
+      remindAt: remind && remind.getTime() > input.now.getTime() ? remind.toISOString() : null,
+    });
+  }
+
+  /* Track a package: the number the judge picked among the ones code found, on its carrier's page. */
+  const track = noul(ACTION_SIGNAL.trackFits);
+  const number = input.picks?.[ACTION_SIGNAL.trackNumber];
+  if (track !== null && number && number.confidence >= s.confidenceBelow) {
+    const carrier = ctx.trackingCarrier?.(number.value) ?? null;
+    const template = carrier ? ctx.carrierUrls?.[carrier] : undefined;
+    if (carrier && template) {
+      push({
+        kind: "track",
+        fit: track,
+        url: template.replace("{number}", encodeURIComponent(number.value)),
+        carrier,
+        number: number.value,
+        deliveryDay: deadlineAt,
+      });
+    }
+  }
+
+  /* Run a Workflow: the pick's probability is its fit; its confidence has its own floor. */
+  const workflow = input.picks?.[ACTION_SIGNAL.workflowPick];
+  const workflowRead = read(ACTION_SIGNAL.workflowPick);
+  if (workflow && workflowRead) {
+    const known = ctx.workflows?.find((w) => w.id === workflow.value);
+    if (known) {
+      push({
+        kind: "workflow",
+        fit: workflow.probability ?? workflow.confidence,
+        workflowId: known.id,
+        name: known.name,
+        confidence: workflow.confidence,
+      });
+    }
+  }
   return out.sort((a, b) => b.rank - a.rank);
+}
+
+/** "Re: Fwd: Lunch on Thursday" as an event's title: "Lunch on Thursday". */
+export function eventTitle(subject: string): string {
+  return subject.replace(/^\s*((re|fwd?|aw|wg)\s*:\s*)+/i, "").trim() || subject.trim();
+}
+
+/**
+ * The event's day and start from its parts (docs/spec/actions.md, Add to
+ * calendar): the day as the deadline parts are put together, in the
+ * Workspace's zone, counted from the day the newest Message was written; the
+ * hour and minute only when stated, with the lowest of their confidences.
+ * A day already past gives nothing.
+ */
+export function eventTime(input: {
+  part: (p: CalendarPart) => { choice: string; confidence: number } | null;
+  minute: { choice: string; confidence: number } | null;
+  written: Date;
+  now: Date;
+  settings: RecommendSettings;
+  minutes: number;
+}): { day: string; start: string | null; end: string | null; timeConfidence: number } | null {
+  const s = input.settings;
+  const parts: DeadlineParts = {};
+  for (const p of CALENDAR_PARTS) {
+    if (p === "hour") continue;
+    const v = input.part(p);
+    if (v) parts[p] = v;
+  }
+  const dated = assembleDeadline(parts, input.written.toISOString(), s.zone, s.confidenceBelow);
+  if (!dated.at) return null;
+  const at = utcToZoned(s.zone, new Date(dated.at));
+  const day = `${at.y}-${String(at.mo).padStart(2, "0")}-${String(at.d).padStart(2, "0")}`;
+  const today = utcToZoned(s.zone, input.now);
+  const todayKey = `${today.y}-${String(today.mo).padStart(2, "0")}-${String(today.d).padStart(2, "0")}`;
+  if (day < todayKey) return null;
+  const hour = input.part("hour");
+  if (!hour || hour.choice === "none" || !/^\d+$/.test(hour.choice)) {
+    return { day, start: null, end: null, timeConfidence: 0 };
+  }
+  const m = input.minute;
+  const minute = m && /^\d+$/.test(m.choice) ? Number(m.choice) : 0;
+  const timeConfidence = Math.min(
+    hour.confidence,
+    m && m.choice !== "none" ? (m.choice === "other" ? 0 : m.confidence) : 1,
+  );
+  const start = zonedToUtc(s.zone, at.y, at.mo, at.d, Number(hour.choice), minute, 0);
+  if (start.getTime() <= input.now.getTime()) return null;
+  const end = new Date(start.getTime() + input.minutes * 60_000);
+  return { day, start: start.toISOString(), end: end.toISOString(), timeConfidence };
 }
 
 /* ------------------------------ Candidates ------------------------------ */
@@ -308,18 +577,56 @@ const SETTING_KEYS = [
   "actions.snooze.evening_hour",
   "actions.snooze.before_deadline_hours",
   "actions.delegate.people",
+  "actions.calendar.default_minutes",
+  "actions.pay.remind_days_before",
+  "actions.pay.trusted_domains",
+  "actions.unsubscribe.unread_streak",
+  "actions.track.carrier_urls",
+  "actions.learning.enabled",
+  "actions.learning.window",
+  "actions.learning.min_use_rate",
+  "actions.learning.high_use_rate",
+  "actions.learning.step",
+  "actions.learning.max_threshold",
   "strings.actions.recommended.candidate.named",
   "strings.actions.recommended.candidate.handoff",
   "strings.actions.recommended.candidate.forwarded",
+  "strings.actions.recommended.learned",
 ] as const;
 
+/** What the Recommended actions read beyond the Signal store: the calendar, the Workflows, the Activity log. */
 export interface RecommendationsOptions {
   db: Db;
   mailstore: Mailstore;
   signals: Signals;
+  /** The calendar module, once it exists: the Invite on a Thread and what it clashes with. */
+  calendar?: (() => CalendarSeam | null) | undefined;
+  /** The Workflows module, once it exists: the ones a Thread can be run through by hand. */
+  workflows?: (() => WorkflowsSeam | null) | undefined;
+  /** Where learning records a threshold it moved, undoable (docs/spec/actions.md). */
+  activity?: (() => ActivityLog | null) | undefined;
+  /** Writes a Setting as the Agent's change_setting does, telling the clients. */
+  writeSetting?: ((workspaceId: Id, key: string, value: unknown) => Promise<void>) | undefined;
   level?: () => Promise<AiLevel>;
   now?: () => Date;
   log?: (message: string) => void;
+}
+
+/** A threshold learning moved: the Activity row that shows it, with its Undo. */
+export interface LearnedChange {
+  action: RecommendedActionKind;
+  key: string;
+  from: number;
+  to: number;
+  activityId: string | null;
+  text: string;
+}
+
+/** How to leave a Thread's list, and what the card names. */
+export interface ListExit extends UnsubscribePlan {
+  listId: string;
+  listName: string;
+  issues: number;
 }
 
 export interface Recommendations {
@@ -337,16 +644,28 @@ export interface Recommendations {
     threadId: Id,
     options?: { zone?: string },
   ): Promise<ThreadRecommendations | null>;
-  /** The people a recipient Choice offers (the Signal request's candidate source). */
+  /** The people and Workflows a per-Thread Choice offers (the Signal request's candidate source). */
   candidates: CandidateSource;
   /** The Agent's view (recommended_actions): what the reader shows and what is held back, in words. */
   view(workspaceId: Id, threadId: Id): Promise<RecommendationView | null>;
+  /**
+   * The chips a Thread showed, and what became of one (used, dismissed,
+   * ignored, other_used). A dismissal takes the action off the Thread; every
+   * outcome may move the action's threshold (learning).
+   */
+  record(request: RecommendationEventsRequest): Promise<{ learned: LearnedChange | null }>;
+  /** Per action, how often shown and used since its threshold was last set, with the threshold. */
+  stats(workspaceId: Id): Promise<RecommendationStat[]>;
+  /** How the Thread's list is left (RFC 8058 one-click, mailto, or the browser), or null. */
+  listExit(workspaceId: Id, threadId: Id): Promise<ListExit | null>;
 }
 
 /** Every Setting the chips are chosen and worded by: the switches, thresholds, mutes and words. */
 const CHOOSE_KEYS = Object.keys(settingsSchema).filter(
   (k) => k.startsWith("actions.recommended.") || k.startsWith("strings.actions.recommended."),
 ) as Array<keyof typeof settingsSchema>;
+
+const newId = () => crypto.randomUUID();
 
 export function createRecommendations(options: RecommendationsOptions): Recommendations {
   const { db, mailstore, signals } = options;
@@ -358,15 +677,56 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
 
   const settings = () => readGlobalSettings(db, SETTING_KEYS);
 
+  /** The Workflows a Thread can be run through by hand: enabled, with a manual or a Thread trigger. */
+  const manualWorkflows = async (workspaceId: Id, max: number) => {
+    const seam = options.workflows?.() ?? null;
+    if (!seam) return [];
+    try {
+      return (await seam.list(workspaceId))
+        .filter(
+          (w) => w.enabled && (w.trigger.kind === "manual" || w.trigger.kind === "thread_event"),
+        )
+        .slice(0, max)
+        .map((w) => ({ id: w.id, name: w.name, sentence: w.sentence ?? "" }));
+    } catch {
+      return [];
+    }
+  };
+
+  /** Whom the owner forwarded or handed this sender's mail to, from the chips' outcomes. */
+  const forwardedFor = async (workspaceId: Id, sender: string) => {
+    if (!sender) return [];
+    const rows = await db
+      .select({
+        to: sql<string>`${recommendationEvents.args}->>'to'`,
+        n: sql<number>`count(*)::int`,
+      })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.workspaceId, workspaceId),
+          eq(recommendationEvents.sender, sender.toLowerCase()),
+          inArray(recommendationEvents.action, ["forward", "delegate"]),
+          inArray(recommendationEvents.outcome, ["used", "other_used"]),
+        ),
+      )
+      .groupBy(sql`${recommendationEvents.args}->>'to'`);
+    return rows
+      .filter((r) => typeof r.to === "string" && r.to !== "")
+      .sort((a, b) => Number(b.n) - Number(a.n))
+      .map((r) => ({ email: r.to, name: "", count: Number(r.n) }));
+  };
+
   const candidates: CandidateSource = async (input) => {
     const s = await settings();
+    const forwarded = await forwardedFor(input.workspaceId, input.sender);
     const people = candidatePeople({
       owner: input.owner,
       sender: input.sender,
       named: input.named,
       participants: input.participants,
       handoff: s["actions.delegate.people"],
-      forwarded: [],
+      forwarded,
       max: s["signals.candidates.max"],
       words: {
         named: s["strings.actions.recommended.candidate.named"],
@@ -374,7 +734,11 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
         forwarded: s["strings.actions.recommended.candidate.forwarded"],
       },
     });
-    return { people, forwardedTo: [] };
+    return {
+      people,
+      forwardedTo: forwarded.map((f) => f.email),
+      workflows: await manualWorkflows(input.workspaceId, s["signals.candidates.max"]),
+    };
   };
 
   const readSealed = async (workspaceId: Id, row: typeof threadFacts.$inferSelect) => {
@@ -402,6 +766,98 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
       payload,
     });
 
+  const zoneOf = (workspaceId: Id, setting: string) =>
+    setting && isIanaZone(setting) ? setting : (deviceZones.get(workspaceId) ?? "UTC");
+
+  /** The Invite on a Thread, whether it is answered, and the busy Event it clashes with. */
+  const inviteOf = async (workspaceId: Id, threadId: Id) => {
+    const seam = options.calendar?.() ?? null;
+    if (!seam) return null;
+    try {
+      const invite = (await seam.invitesOfThread(threadId))
+        .filter((i) => i.method === "REQUEST")
+        .at(-1);
+      if (!invite) return null;
+      const busy = invite.allDay
+        ? []
+        : (await seam.busy(workspaceId, invite.start, invite.end)).filter(
+            (b) => b.eventId !== invite.eventId,
+          );
+      return {
+        id: invite.id,
+        title: invite.title,
+        start: invite.start,
+        answered: invite.response !== "needs-action",
+        clash: busy[0]?.title ?? null,
+      };
+    } catch (error) {
+      log(
+        `recommendations invite ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  };
+
+  /** The list a Thread came from, how to leave it, and whether its newest issues went unread. */
+  const listExitOf = async (
+    workspaceId: Id,
+    threadId: Id,
+    facts: Record<string, unknown>,
+    streakOf: number,
+  ): Promise<(ListExit & { streak: boolean }) | null> => {
+    const listId = typeof facts.list_id === "string" ? facts.list_id : null;
+    const unsub = facts.list_unsubscribe as { mailto?: boolean; https?: boolean } | undefined;
+    if (!listId || !(unsub?.mailto || unsub?.https)) return null;
+    const headers = (await mailstore.listMessages(threadId)).at(-1);
+    if (!headers) return null;
+    const plan = unsubscribePlan(headers.headers);
+    if (!plan) return null;
+    const issues = await db
+      .select({ id: threads.id, unread: threads.unread, archived: threads.archived })
+      .from(threads)
+      .innerJoin(threadFacts, eq(threadFacts.threadId, threads.id))
+      .where(
+        and(
+          eq(threads.workspaceId, workspaceId),
+          eq(threads.deleted, false),
+          sql`${threadFacts.facts}->>'list_id' = ${listId}`,
+        ),
+      )
+      .orderBy(desc(threads.lastActivity))
+      .limit(1000);
+    const newest = issues.slice(0, Math.max(1, streakOf));
+    return {
+      ...plan,
+      listId,
+      listName: listName(headers.headers, headers.from.name || headers.from.email),
+      issues: issues.filter((i) => !i.archived).length,
+      streak: newest.length >= streakOf && newest.every((i) => i.unread),
+    };
+  };
+
+  /** Per action, its outcomes newest first over the last few months, for the order of the chips. */
+  const recentOutcomes = async (workspaceId: Id) => {
+    const rows = await db
+      .select({ action: recommendationEvents.action, outcome: recommendationEvents.outcome })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.workspaceId, workspaceId),
+          isNotNull(recommendationEvents.outcome),
+          gte(recommendationEvents.outcomeAt, new Date(now().getTime() - 90 * 86_400_000)),
+        ),
+      )
+      .orderBy(desc(recommendationEvents.outcomeAt))
+      .limit(2000);
+    const out = new Map<RecommendedActionKind, RecommendationOutcome[]>();
+    for (const r of rows) {
+      const list = out.get(r.action) ?? [];
+      list.push(r.outcome as RecommendationOutcome);
+      out.set(r.action, list);
+    }
+    return out;
+  };
+
   const refresh = async (workspaceId: Id, threadId: Id): Promise<ThreadRecommendations | null> => {
     if ((await level()) === "off") return null;
     const s = await settings();
@@ -416,33 +872,42 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
     });
     const facts = (factsRow?.facts ?? {}) as Record<string, unknown>;
     const sealed = factsRow ? await readSealed(workspaceId, factsRow) : null;
-    const zoneSetting = s["calendar.time_zone"];
-    const zone =
-      zoneSetting && isIanaZone(zoneSetting)
-        ? zoneSetting
-        : (deviceZones.get(workspaceId) ?? "UTC");
+    const zone = zoneOf(workspaceId, s["calendar.time_zone"]);
     const version = await signals.version(threadId);
-    // The names of the people a recipient may be: the ones code offered this Thread.
-    const people =
-      sealed?.picks?.[ACTION_SIGNAL.forwardTo] !== undefined
-        ? (
-            await candidates({
-              workspaceId,
-              threadId,
-              owner: "",
-              sender: typeof facts.from_address === "string" ? facts.from_address : "",
-              named: sealed.addresses ?? [],
-              participants: [],
-            })
-          ).people
-        : [];
+    const sender = typeof facts.from_address === "string" ? facts.from_address : "";
+    const picks = sealed?.picks;
+    // The names of the people a recipient may be, and the Workflows, as code offered them.
+    const offered =
+      picks?.[ACTION_SIGNAL.forwardTo] !== undefined || picks?.[ACTION_SIGNAL.workflowPick]
+        ? await candidates({
+            workspaceId,
+            threadId,
+            owner: "",
+            sender,
+            named: sealed?.addresses ?? [],
+            participants: [],
+          })
+        : { people: [], forwardedTo: [], workflows: [] };
+    const dismissedRows = await db
+      .select({ action: recommendationEvents.action })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.threadId, threadId),
+          eq(recommendationEvents.outcome, "dismissed"),
+          eq(recommendationEvents.messageCount, version.messageCount),
+        ),
+      );
+    const outcomes = await recentOutcomes(workspaceId);
+    const subject = await mailstore.readThreadSubject(threadId).catch(() => "");
     const actions = s["actions.recommended.enabled"]
       ? recommendFor({
           now: now(),
           answers,
           facts,
-          picks: sealed?.picks,
-          people,
+          picks,
+          people: offered.people,
+          useRate: (kind) => useRate(outcomes.get(kind) ?? []),
           settings: {
             noulLow: s["signals.unsure.noul_low"],
             noulHigh: s["signals.unsure.noul_high"],
@@ -454,6 +919,26 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
             eveningHour: s["actions.snooze.evening_hour"],
             weekStart: s["inbox.snooze.week_start"],
             beforeDeadlineHours: s["actions.snooze.before_deadline_hours"],
+          },
+          context: {
+            invite: facts.has_invite === true ? await inviteOf(workspaceId, threadId) : null,
+            subject,
+            amount: sealed?.amount ?? null,
+            senderDomain: typeof facts.from_domain === "string" ? facts.from_domain : null,
+            trustedDomains: s["actions.pay.trusted_domains"],
+            remindDaysBefore: s["actions.pay.remind_days_before"],
+            eventMinutes: s["actions.calendar.default_minutes"],
+            unsubscribe: await listExitOf(
+              workspaceId,
+              threadId,
+              facts,
+              s["actions.unsubscribe.unread_streak"],
+            ),
+            carrierUrls: s["actions.track.carrier_urls"],
+            workflows: offered.workflows ?? [],
+            dismissed: new Set(dismissedRows.map((r) => r.action)),
+            trackingCarrier: (number) =>
+              sealed?.tracking_numbers.find((t) => t.number === number)?.carrier ?? null,
           },
         })
       : [];
@@ -534,7 +1019,8 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
       zoneSetting && isIanaZone(zoneSetting) ? zoneSetting : (deviceZones.get(workspaceId) ?? null);
     const rules = recommendationRules(s);
     const words = recommendationWords(s);
-    const label = (r: Recommendation) => recommendationLabel(r, words, now(), zone);
+    const label = (r: Recommendation) =>
+      recommendationLabel(r, words, now(), zone, rules.timeConfidence);
     const chosen = chooseRecommended(recs.actions, rules, { fromDomain: recs.fromDomain });
     const max =
       typeof s["actions.recommended.max_in_reader"] === "number"
@@ -554,6 +1040,10 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
         r.confidence < rules.recipientConfidence
       )
         return "not sure enough of the person";
+      if (r.kind === "pay" && r.amountConfidence < rules.amountConfidence)
+        return "not sure enough of the amount";
+      if (r.kind === "workflow" && r.confidence < rules.workflowConfidence)
+        return "not sure enough which Workflow";
       if (chosen.includes(r)) return "past the reader's limit of chips";
       return "another chip asks the same";
     };
@@ -574,11 +1064,244 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
     };
   };
 
+  /** When a Setting was last written (by learning or the user); outcomes before it no longer count. */
+  const settingSetAt = async (key: string): Promise<Date | null> => {
+    const rows = await db
+      .select({ at: settingsTable.updatedAt })
+      .from(settingsTable)
+      .where(
+        and(
+          eq(settingsTable.scope, "global"),
+          isNull(settingsTable.deviceId),
+          eq(settingsTable.key, key),
+        ),
+      );
+    return rows[0]?.at ?? null;
+  };
+
+  const actionName = (s: Record<string, unknown>, action: RecommendedActionKind) => {
+    const v = s[`strings.actions.recommended.name.${action}`];
+    return typeof v === "string" ? v : action;
+  };
+
+  /** Moves an action's threshold when its outcomes say so; a Setting write the Activity log shows, undoable. */
+  const learn = async (
+    workspaceId: Id,
+    action: RecommendedActionKind,
+  ): Promise<LearnedChange | null> => {
+    const key = `actions.recommended.${action}.threshold`;
+    if (!isSettingKey(key) || !options.writeSetting) return null;
+    const s = await settings();
+    const setAt = await settingSetAt(key);
+    const rows = await db
+      .select({ outcome: recommendationEvents.outcome })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.workspaceId, workspaceId),
+          eq(recommendationEvents.action, action),
+          isNotNull(recommendationEvents.outcome),
+          ...(setAt ? [gt(recommendationEvents.outcomeAt, setAt)] : []),
+        ),
+      )
+      .orderBy(desc(recommendationEvents.outcomeAt))
+      .limit(s["actions.learning.window"]);
+    const current = (await readGlobalSettings(db, [key]))[key] as number;
+    const shipped = settingsSchema[key].default as number;
+    const step = learnThreshold({
+      outcomes: rows.map((r) => r.outcome as RecommendationOutcome),
+      current,
+      shipped,
+      settings: {
+        enabled: s["actions.learning.enabled"],
+        window: s["actions.learning.window"],
+        minUseRate: s["actions.learning.min_use_rate"],
+        highUseRate: s["actions.learning.high_use_rate"],
+        step: s["actions.learning.step"],
+        maxThreshold: s["actions.learning.max_threshold"],
+      },
+    });
+    if (!step) return null;
+    const words = (await readGlobalSettings(db, CHOOSE_KEYS)) as Record<string, unknown>;
+    const text = s["strings.actions.recommended.learned"]
+      .replace("{action}", actionName(words, action))
+      .replace("{shown}", String(step.shown))
+      .replace("{used}", String(step.used))
+      .replace("{percent}", `${Math.round(step.next * 100)}%`);
+    await options.writeSetting(workspaceId, key, step.next);
+    let activityId: string | null = null;
+    const activity = options.activity?.() ?? null;
+    if (activity) {
+      const row = await activity.start({
+        workspaceId,
+        sessionId: null,
+        callId: null,
+        tool: "change_setting",
+        tier: "reversible",
+        input: { key, value: step.next },
+        summary: text,
+        preview: { kind: "setting", key, from: current, to: step.next },
+        status: "done",
+        decision: "auto",
+      });
+      await activity.update(row.id, {
+        resultText: text,
+        undo: { kind: "settings", entries: [{ key, previous: current }] },
+      });
+      activityId = row.id;
+    }
+    return { action, key, from: current, to: step.next, activityId, text };
+  };
+
+  const recordEvents = async (
+    request: RecommendationEventsRequest,
+  ): Promise<{ learned: LearnedChange | null }> => {
+    const { workspace: workspaceId, threadId } = request;
+    const thread = await db.query.threads.findFirst({
+      where: eq(threads.id, threadId),
+      columns: { id: true, workspaceId: true },
+    });
+    if (!thread || thread.workspaceId !== workspaceId) return { learned: null };
+    const version = await signals.version(threadId);
+    const facts = await db.query.threadFacts.findFirst({
+      where: eq(threadFacts.threadId, threadId),
+      columns: { facts: true },
+    });
+    const from = (facts?.facts as { from_address?: unknown } | undefined)?.from_address;
+    const sender = typeof from === "string" ? from.toLowerCase() : null;
+    const at = now();
+    for (const shown of request.shown ?? []) {
+      // One pending row per action and Thread version: showing it again adds nothing.
+      const pending = await db
+        .select({ id: recommendationEvents.id })
+        .from(recommendationEvents)
+        .where(
+          and(
+            eq(recommendationEvents.threadId, threadId),
+            eq(recommendationEvents.action, shown.kind),
+            eq(recommendationEvents.messageCount, version.messageCount),
+            isNull(recommendationEvents.outcome),
+          ),
+        )
+        .limit(1);
+      if (pending.length > 0) continue;
+      await db.insert(recommendationEvents).values({
+        id: newId(),
+        workspaceId,
+        threadId,
+        action: shown.kind,
+        fit: shown.fit,
+        args: shown.args ?? {},
+        sender,
+        messageCount: version.messageCount,
+        shownAt: at,
+      });
+    }
+    const outcome = request.outcome;
+    if (!outcome) return { learned: null };
+    const [pending] = await db
+      .select({ id: recommendationEvents.id })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.threadId, threadId),
+          eq(recommendationEvents.action, outcome.kind),
+          isNull(recommendationEvents.outcome),
+        ),
+      )
+      .orderBy(desc(recommendationEvents.shownAt))
+      .limit(1);
+    // The arguments of what the user did (another recipient) replace the offered ones.
+    const args = outcome.args ?? {};
+    if (pending) {
+      await db
+        .update(recommendationEvents)
+        .set({
+          outcome: outcome.outcome,
+          outcomeAt: at,
+          ...(outcome.outcome === "other_used" || outcome.outcome === "used" ? { args } : {}),
+        })
+        .where(eq(recommendationEvents.id, pending.id));
+    } else if (outcome.outcome === "ignored" || outcome.outcome === "other_used") {
+      // A chip that was never shown cannot have been ignored: nothing to learn from.
+      return { learned: null };
+    } else {
+      await db.insert(recommendationEvents).values({
+        id: newId(),
+        workspaceId,
+        threadId,
+        action: outcome.kind,
+        fit: 0,
+        args,
+        sender,
+        messageCount: version.messageCount,
+        shownAt: at,
+        outcome: outcome.outcome,
+        outcomeAt: at,
+      });
+    }
+    // "Not this" takes the action off this Thread at once.
+    if (outcome.outcome === "dismissed") await refresh(workspaceId, threadId);
+    const learned = await learn(workspaceId, outcome.kind).catch((error: unknown) => {
+      log(`learning ${outcome.kind}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    return { learned };
+  };
+
+  const stats = async (workspaceId: Id): Promise<RecommendationStat[]> => {
+    const out: RecommendationStat[] = [];
+    for (const action of RECOMMENDED_ACTIONS) {
+      const key = `actions.recommended.${action}.threshold`;
+      const known = isSettingKey(key);
+      const setAt = known ? await settingSetAt(key) : null;
+      const rows = await db
+        .select({ outcome: recommendationEvents.outcome })
+        .from(recommendationEvents)
+        .where(
+          and(
+            eq(recommendationEvents.workspaceId, workspaceId),
+            eq(recommendationEvents.action, action),
+            ...(setAt ? [gt(recommendationEvents.shownAt, setAt)] : []),
+          ),
+        );
+      const threshold = known ? ((await readGlobalSettings(db, [key]))[key] as number) : null;
+      out.push({
+        action,
+        shown: rows.length,
+        used: rows.filter((r) => r.outcome === "used").length,
+        threshold,
+        shipped: known ? (settingsSchema[key].default as number) : null,
+      });
+    }
+    return out;
+  };
+
+  const listExit = async (workspaceId: Id, threadId: Id): Promise<ListExit | null> => {
+    const s = await settings();
+    const row = await db.query.threadFacts.findFirst({
+      where: eq(threadFacts.threadId, threadId),
+    });
+    if (!row || row.workspaceId !== workspaceId) return null;
+    const exit = await listExitOf(
+      workspaceId,
+      threadId,
+      row.facts as Record<string, unknown>,
+      s["actions.unsubscribe.unread_streak"],
+    );
+    if (!exit) return null;
+    const { streak: _streak, ...rest } = exit;
+    return rest;
+  };
+
   return {
     refresh,
     get,
     candidates,
     view,
+    record: recordEvents,
+    stats,
+    listExit,
     async open(workspaceId, threadId, opts = {}) {
       if (opts.zone && isIanaZone(opts.zone)) deviceZones.set(workspaceId, opts.zone);
       if ((await level()) === "off") return null;

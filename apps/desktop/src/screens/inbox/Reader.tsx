@@ -27,13 +27,19 @@ import {
   ArchiveIcon,
   ArrowBendUpLeftIcon,
   ArrowBendUpRightIcon,
+  BellSlashIcon,
+  CalendarCheckIcon,
   CalendarPlusIcon,
+  CaretDownIcon,
   ClockIcon,
+  CreditCardIcon,
   DotsThreeIcon,
   EnvelopeSimpleIcon,
   EnvelopeSimpleOpenIcon,
+  FlowArrowIcon,
   FolderSimpleIcon,
   LightningIcon,
+  PackageIcon,
   StarIcon,
   TrashIcon,
   XIcon,
@@ -70,6 +76,8 @@ export interface ReaderStrings {
   forward: string;
   /** The tooltip suffix on a custom action that asks before it runs. */
   asksFirst: string;
+  /** The name of a chip's menu button. */
+  chipMenu?: string | undefined;
 }
 
 /** A meeting chip as the reader shows it (docs/spec/meetings.md): its words and what kind it is. */
@@ -101,6 +109,18 @@ function chipIcon(c: ReaderChip): ReactNode {
       return <ArchiveIcon />;
     case "snooze":
       return <ClockIcon />;
+    case "rsvp":
+      return <CalendarCheckIcon />;
+    case "calendar":
+      return <CalendarPlusIcon />;
+    case "pay":
+      return <CreditCardIcon />;
+    case "unsubscribe":
+      return <BellSlashIcon />;
+    case "track":
+      return <PackageIcon />;
+    case "workflow":
+      return <FlowArrowIcon />;
   }
 }
 
@@ -139,8 +159,12 @@ export interface ReaderProps {
   onToggleRead: () => void;
   /** The user wants to answer: focus in the reply box, R, A or F, the reply-all or forward buttons. */
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
-  /** A chip was clicked (or its key pressed); the screen runs it as its tool call with its Tier. */
-  onChip?: ((chip: ReaderChip) => void) | undefined;
+  /** A chip was clicked (or its key pressed); the screen runs it as its tool call with its Tier. `option` is an RSVP's answer. */
+  onChip?: ((chip: ReaderChip, option?: string) => void) | undefined;
+  /** An item of a chip's menu was picked. */
+  onChipMenu?: ((chip: ReaderChip, item: string) => void) | undefined;
+  /** Rendered under the chips: the unsubscribe card, with the exact request it asks about. */
+  chipCard?: ReactNode | undefined;
   /** The custom actions that apply to this Thread, in the toolbar after the built-in buttons and as chips. */
   actions?: readonly ReaderAction[] | undefined;
   /** A custom action was clicked; the screen runs it with its Tier. */
@@ -182,6 +206,8 @@ export function Reader({
   onToggleRead,
   onReply,
   onChip,
+  onChipMenu,
+  chipCard,
   actions,
   onAction,
   makeTemplate,
@@ -197,12 +223,15 @@ export function Reader({
   useShownThread(leaving ? null : thread.id);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [more, setMore] = useState(false);
+  /** The chip whose menu is open, by its key. */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const moreExit = useExit(more, "--t-fast");
   // A new Thread in the same reader (J and K in the split list) starts with its menu closed.
   const [menuThread, setMenuThread] = useState(thread.id);
   if (menuThread !== thread.id) {
     setMenuThread(thread.id);
     setMore(false);
+    setMenuFor(null);
   }
   const onAnimationEnd = (e: AnimationEvent<HTMLElement>) => {
     if (leaving && e.target === e.currentTarget) onLeft?.();
@@ -215,6 +244,21 @@ export function Reader({
   const title = (label: string, key: string) => `${label} (${key})`;
   const recipient = personName(last?.from ?? thread.participants[0]);
 
+  /** The small button that opens a chip's menu ("Not this", "Not for mail from ..."). */
+  const menuButton = (c: ReaderChip) => (
+    <Btn
+      icon
+      sm
+      className="chip-menu"
+      title={strings.chipMenu ?? ""}
+      aria-label={strings.chipMenu ?? ""}
+      aria-expanded={menuFor === c.key}
+      onClick={() => setMenuFor((m) => (m === c.key ? null : c.key))}
+    >
+      <CaretDownIcon />
+    </Btn>
+  );
+
   // One row: each chip with its Tier's affordance and, for the first few, its key.
   const chipNodes = chips?.length
     ? chips.map((c, i) => {
@@ -223,7 +267,29 @@ export function Reader({
         const asks = tier === "always-ask" ? ` (${strings.asksFirst})` : "";
         const base = c.title ?? c.label;
         const title = key ? `${base}${asks} (${key})` : `${base}${asks}`;
-        return (
+        // An RSVP is one grouped control: the three answers, and the clash when there is one.
+        if (c.kind === "recommended" && c.options?.length) {
+          return (
+            <fieldset
+              key={c.key}
+              className="chip-group recommended-chip"
+              data-chip={c.rec.kind}
+              data-tier={c.tier}
+              aria-label={c.label}
+              title={title}
+            >
+              <CalendarCheckIcon />
+              {c.options.map((o) => (
+                <Chip key={o.key} data-option={o.key} onClick={() => onChip?.(c, o.key)}>
+                  {o.label}
+                </Chip>
+              ))}
+              {c.title ? <span className="chip-note">{c.title}</span> : null}
+              {c.menu?.length ? menuButton(c) : null}
+            </fieldset>
+          );
+        }
+        const chip = (
           <Chip
             key={c.key}
             className={
@@ -245,8 +311,16 @@ export function Reader({
             {c.label}
           </Chip>
         );
+        if (c.kind !== "recommended" || !c.menu?.length) return chip;
+        return (
+          <span key={c.key} className="chip-group">
+            {chip}
+            {menuButton(c)}
+          </span>
+        );
       })
     : null;
+  const openMenu = chips?.find((c) => c.key === menuFor);
 
   return (
     <section
@@ -352,6 +426,18 @@ export function Reader({
           ) : (
             <ActionChips chips={chipNodes} />
           )}
+          {openMenu && openMenu.kind === "recommended" && openMenu.menu?.length ? (
+            <Picker
+              label={strings.chipMenu ?? openMenu.label}
+              items={openMenu.menu}
+              onPick={(item) => {
+                setMenuFor(null);
+                onChipMenu?.(openMenu, item);
+              }}
+              onClose={() => setMenuFor(null)}
+            />
+          ) : null}
+          {chipCard}
           {banner}
           {messages.map((m, i) => (
             <Message

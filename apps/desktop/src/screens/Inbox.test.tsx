@@ -1302,3 +1302,107 @@ describe("strings", () => {
     expect(document.body.textContent).not.toContain(String.fromCharCode(0x2014));
   });
 });
+
+describe("Recommended actions II in the reader (docs/spec/actions.md)", () => {
+  const later = "2026-10-01T10:00:00.000Z";
+  test("Unsubscribe asks first with the exact request; approving sends exactly that, then offers to archive the list", async () => {
+    const base = fixtureInbox();
+    const events: unknown[] = [];
+    const approved: unknown[] = [];
+    const held = {
+      actions: [
+        {
+          kind: "unsubscribe",
+          fit: 1,
+          rank: 1,
+          listId: "<weekly.rust.test>",
+          listName: "Weekly Rust",
+          method: "one_click",
+          target: "https://rust.test/u/abc",
+          issues: 3,
+        },
+      ] satisfies Recommendation[],
+      messageCount: 1,
+      fromDomain: "rust.test",
+    };
+    const inbox: InboxData = {
+      ...base,
+      recommendations: (id) => (id === "e11" ? held : undefined),
+      recommendationEvents: (body) => events.push(body),
+      listExit: async () => ({
+        method: "one_click",
+        target: "https://rust.test/u/abc",
+        listId: "<weekly.rust.test>",
+        listName: "Weekly Rust",
+        issues: 3,
+      }),
+      unsubscribe: async (threadId, request) => {
+        approved.push({ threadId, ...request });
+        return { ok: true, text: "done" };
+      },
+    };
+    await mount({ inbox, initialOpen: "e11" }, { "ai.level": "assist" });
+    const chip = document.querySelector<HTMLButtonElement>(
+      '.reader .chip[data-chip="unsubscribe"]',
+    );
+    expect(chip?.textContent?.trim()).toBe("Unsubscribe");
+    await act(async () => chip?.click());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    const card = document.querySelector(".reader [data-card='unsubscribe']");
+    expect(card?.textContent).toContain("Leave Weekly Rust?");
+    expect(card?.textContent).toContain("https://rust.test/u/abc");
+    // Nothing reaches the list before the user approves.
+    expect(approved).toEqual([]);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-approve='unsubscribe']")?.click(),
+    );
+    expect(approved).toEqual([
+      { threadId: "e11", method: "one_click", target: "https://rust.test/u/abc" },
+    ]);
+    expect(card?.textContent).toContain("Archive the 3 issues from this list");
+    expect(events).toContainEqual({
+      threadId: "e11",
+      outcome: { kind: "unsubscribe", outcome: "used" },
+    });
+  });
+
+  test("Not this hides a chip on the Thread; Not for mail from a domain mutes the action for the sender", async () => {
+    const base = fixtureInbox();
+    const events: unknown[] = [];
+    const held = {
+      actions: [
+        { kind: "reply", fit: 0.9, rank: 0.9 },
+        { kind: "snooze", fit: 0.8, rank: 0.8, until: later, anchor: "weekday" },
+      ] satisfies Recommendation[],
+      messageCount: 3,
+      fromDomain: "northlight.dev",
+    };
+    const inbox: InboxData = {
+      ...base,
+      recommendations: (id) => (id === "e1" ? held : undefined),
+      recommendationEvents: (body) => events.push(body),
+    };
+    await mount({ inbox, initialOpen: "e1" }, { "ai.level": "assist" });
+    const labels = () =>
+      [...document.querySelectorAll<HTMLElement>(".reader .brief-actions .recommended-chip")].map(
+        (c) => c.textContent?.trim(),
+      );
+    expect(labels()).toEqual(["Reply", "Snooze until Oct 1 10:00"]);
+    const menu = () =>
+      document.querySelector<HTMLButtonElement>('.reader .chip[data-chip="snooze"] + .chip-menu');
+    await act(async () => menu()?.click());
+    const items = [...document.querySelectorAll<HTMLButtonElement>(".reader .pop .pop-item")];
+    expect(items.map((b) => b.textContent)).toEqual([
+      "Not this",
+      "Not for mail from northlight.dev",
+    ]);
+    await act(async () => items[0]?.click());
+    expect(labels()).toEqual(["Reply"]);
+    expect(events).toContainEqual({
+      threadId: "e1",
+      outcome: { kind: "snooze", outcome: "dismissed", args: { until: later } },
+    });
+  });
+});

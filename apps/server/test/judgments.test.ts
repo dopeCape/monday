@@ -867,9 +867,10 @@ describe("judgments over the fixture mailbox", () => {
       (c) => c.entityId === threadOf("Weekly digest").id,
     )?.payload;
     const answer = (id: string) => digestChange?.answers.find((a) => a.signalId === id);
-    // Every shipped Signal and the Recommended actions' own (slice 34), the gated ones answered
-    // by code as not stated: 23 shipped, 8 for archive, snooze, forward and hand to someone.
-    expect(digestChange?.answers).toHaveLength(31);
+    // Every shipped Signal and the Recommended actions' own, the gated ones answered by code as
+    // not stated: 23 shipped; 8 for archive, snooze, forward and hand to someone (slice 34); 15 for
+    // add to calendar (the fit, 8 date parts, the minute), pay, track and run a Workflow (slice 35).
+    expect(digestChange?.answers).toHaveLength(46);
     expect(answer("action:forward.to")).toMatchObject({ choice: "none" });
     expect(answer("newsletter")).toMatchObject({ version: 1, noul: 0.93, stale: false });
     expect(answer("urgency")).toMatchObject({ score: 1, noul: null });

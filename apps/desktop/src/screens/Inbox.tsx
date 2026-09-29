@@ -12,12 +12,20 @@ import type {
   MeetingOptions,
   Person,
   Recommendation,
+  RecommendationArgs,
   Settings,
   Tag,
   Thread,
   TypedIntent,
 } from "@monday/shared";
-import { customActionsFor, isSettingKey, orderedSectionRules, sectionLabel } from "@monday/shared";
+import {
+  customActionsFor,
+  isSettingKey,
+  orderedSectionRules,
+  outcomeArgs,
+  outcomeOf,
+  sectionLabel,
+} from "@monday/shared";
 import {
   Btn,
   ColHead,
@@ -64,6 +72,7 @@ import {
   useActiveKeymap,
   useKeymap,
 } from "../keyboard/useKeymap.ts";
+import type { ListExit } from "../platform/api.ts";
 import { openExternal, saveDownload } from "../platform/open.ts";
 import {
   FullSearchError,
@@ -125,6 +134,7 @@ import { Reader, type ReaderAction } from "./inbox/Reader.tsx";
 import {
   readerChips as buildReaderChips,
   type ComposeSeed,
+  chipMenu,
   createRecommendationRunner,
   followUpUntil,
   listMode,
@@ -149,6 +159,7 @@ import {
   targets,
   toggleSelected,
 } from "./inbox/triage.ts";
+import { UnsubscribeCard } from "./inbox/UnsubscribeCard.tsx";
 import { useClock } from "./inbox/useClock.ts";
 import { useExit, useExitValue } from "./inbox/useExit.ts";
 import { type DisplayRow, reducedMotion, useLeavingRows } from "./inbox/useLeaving.ts";
@@ -892,6 +903,8 @@ function InboxBody({
   /** Threads whose Schedule chip was approved: the chip goes, the reply chip stays. */
   const [meetingDone, setMeetingDone] = useState<Readonly<Record<string, true>>>({});
   const [toast, setToast] = useState<ToastState | null>(null);
+  /** Reports what became of a Thread's chips when it was dealt with some other way; set below. */
+  const doneRef = useRef<((threadId: string, done: RecommendationArgs) => void) | null>(null);
   const lastToken = useRef<UndoToken | null>(null);
   /** A token that stands for several (a custom action run on each selected Thread). */
   const multiUndo = useRef(new Map<UndoToken, UndoToken[]>());
@@ -1178,6 +1191,17 @@ function InboxBody({
       extra: { group?: string | null; action?: string } = {},
     ) => {
       if (ids.length === 0) return;
+      // The Threads were dealt with some other way than their chips: what became of those.
+      if (kind === "archive" || kind === "snooze") {
+        for (const id of ids) {
+          doneRef.current?.(
+            id,
+            kind === "archive"
+              ? { kind: "archive" }
+              : { kind: "snooze", until: until?.toISOString() ?? null, anchor: "none" },
+          );
+        }
+      }
       const b: Batch = {
         kind,
         ids: [...ids],
@@ -1260,6 +1284,12 @@ function InboxBody({
   const startReply = useCallback(
     (kind: "reply" | "forward", replyAll?: boolean, seed?: ComposeSeed) => {
       if (!thread) return;
+      doneRef.current?.(
+        thread.id,
+        kind === "reply"
+          ? { kind: "reply" }
+          : { kind: "forward", to: { name: "", email: "" }, confidence: 0 },
+      );
       setReaderOpen(true);
       compose.startReply(thread, inbox.messages(thread.id), kind, replyAll, seed);
     },
@@ -1560,8 +1590,18 @@ function InboxBody({
     if (!s["actions.recommended.enabled"]) return;
     void inbox.askRecommendations?.(shownThreadId, deviceZone ?? undefined);
   }, [inbox, recsKey, shownThreadId, deviceZone, s]);
-  /** "Not this" per Thread, until the Thread changes (slice 35 remembers it on the Server). */
-  const [dismissed] = useState<Readonly<Record<string, readonly string[]>>>({});
+  /** "Not this" per Thread, at once; the Server remembers it for the Thread version too. */
+  const [dismissed, setDismissed] = useState<Readonly<Record<string, readonly string[]>>>({});
+  /** The unsubscribe card on show: the list and the exact request it asks about. */
+  const [unsubCard, setUnsubCard] = useState<{
+    threadId: string;
+    rec: Extract<Recommendation, { kind: "unsubscribe" }>;
+    exit: ListExit | null;
+    status: "asking" | "running" | "done" | "failed";
+    text?: string | undefined;
+  } | null>(null);
+  /** A pay chip armed by its first click (the page's domain shown); the second opens it. */
+  const armed = useRef<string | null>(null);
   /** A hand-off's offered follow-up snooze, per Thread. */
   const [followUps, setFollowUps] = useState<Readonly<Record<string, string>>>({});
   /** A chip clicked on a Thread that changed since it was worked out: the second click runs it. */
@@ -1577,8 +1617,10 @@ function InboxBody({
             dismissed: new Set(dismissed[shownThread.id] ?? []),
             customArchives,
           }).filter(
-            // A Custom action that forwards to the same person renders once, as the Custom action.
+            // A Custom action that forwards to the same person renders once, as the Custom action;
+            // where the meeting chips show, they take the place of Add to calendar.
             (r) =>
+              !(r.kind === "calendar" && meetingChipViews.length > 0) &&
               !(
                 (r.kind === "forward" || r.kind === "delegate") &&
                 threadActions.some(
@@ -1589,7 +1631,7 @@ function InboxBody({
               ),
           )
         : [],
-    [shownThread, shownRecs, s, dismissed, customArchives, threadActions],
+    [shownThread, shownRecs, s, dismissed, customArchives, threadActions, meetingChipViews],
   );
   const followUpHere =
     shownThread && followUps[shownThread.id]
@@ -1600,6 +1642,18 @@ function InboxBody({
           until: followUps[shownThread.id] as string,
         }
       : null;
+  const menuWords = useMemo(
+    () => ({
+      notThis: t("strings.actions.recommended.not_this"),
+      notFor: t("strings.actions.recommended.not_for"),
+      remindPay: t("strings.actions.recommended.remind_pay"),
+      file: t("strings.actions.recommended.file"),
+      trackSnooze: t("strings.actions.recommended.track_snooze"),
+    }),
+    [t],
+  );
+  const payFileAction = s["actions.pay.file_action"];
+  const clashWords = t("strings.actions.recommended.clashes");
   const chipRow = useMemo<ReaderChip[]>(
     () =>
       buildReaderChips({
@@ -1617,7 +1671,17 @@ function InboxBody({
         now,
         replyTemplate: replyTemplate?.name ?? null,
         replyWith,
-      }),
+        timeConfidence: s["actions.recommended.calendar.time_confidence"],
+        menu: (rec) =>
+          chipMenu(rec, shownRecs?.fromDomain ?? null, menuWords, {
+            fileAction: payFileAction !== "" && customActions.some((a) => a.id === payFileAction),
+          }),
+      }).map((c) =>
+        // An Invite that clashes says with what ("Clashes with Design review").
+        c.kind === "recommended" && c.rec.kind === "rsvp" && c.rec.clash
+          ? { ...c, title: fill(clashWords, { event: c.rec.clash }) }
+          : c,
+      ),
     [
       threadActions,
       meetingChipViews,
@@ -1628,8 +1692,48 @@ function InboxBody({
       now,
       replyTemplate,
       replyWith,
+      shownRecs,
+      menuWords,
+      payFileAction,
+      customActions,
+      clashWords,
     ],
   );
+  // Every chip shown is a row the Server learns from, once per Thread version.
+  const shownReported = useRef<string | null>(null);
+  const shownKinds = chipRow.flatMap((c) => (c.kind === "recommended" ? [c.rec] : []));
+  const shownKey = shownThreadId
+    ? `${shownThreadId}:${newestMessageId}:${shownKinds.map((r) => r.kind).join(",")}`
+    : null;
+  useEffect(() => {
+    if (!shownKey || !shownThreadId || shownKey === shownReported.current) return;
+    shownReported.current = shownKey;
+    if (shownKinds.length === 0) return;
+    inbox.recommendationEvents?.({
+      threadId: shownThreadId,
+      shown: shownKinds.map((r) => ({ kind: r.kind, fit: r.fit, args: outcomeArgs(r) })),
+    });
+  });
+  /** What the user did with a Thread some other way: each chip it showed was used, other_used or ignored. */
+  const reportDone = useCallback(
+    (threadId: string, done: RecommendationArgs) => {
+      const held = inbox.recommendations?.(threadId);
+      if (!held) return;
+      for (const rec of held.actions) {
+        const outcome = outcomeOf(rec, done);
+        inbox.recommendationEvents?.({
+          threadId,
+          outcome: {
+            kind: rec.kind,
+            outcome,
+            args: outcome === "ignored" ? outcomeArgs(rec) : outcomeArgs(done),
+          },
+        });
+      }
+    },
+    [inbox],
+  );
+  doneRef.current = reportDone;
   const chipKeys = s["actions.recommended.keys"];
 
   /** Opens compose on a Thread (the reader's or a row's) with a seed; nothing is sent (ADR 0002). */
@@ -1672,6 +1776,48 @@ function InboxBody({
         replyLine: (threadId) =>
           (threadId === shownThreadId ? brief?.replyLine : inbox.brief(threadId)?.replyLine) ??
           null,
+        openLink: (url) => openExternal(url),
+        timeConfidence: s["actions.recommended.calendar.time_confidence"],
+        ...(calendar
+          ? {
+              rsvp: (inviteId: string, response: "accepted" | "tentative" | "declined") =>
+                calendar.rsvp(inviteId, response),
+              // The chip is the user's own click and invites nobody: the Event goes on their calendar.
+              createEvent: async (event: { title: string; start: string; end: string }) => {
+                await calendar.create({
+                  ...event,
+                  timeZone: deviceZone ?? "UTC",
+                });
+              },
+            }
+          : {}),
+        openEditor: ({ day, title }: { day: string; title: string }) => {
+          const start = new Date(`${day}T09:00:00`);
+          const end = new Date(start.getTime() + s["actions.calendar.default_minutes"] * 60_000);
+          onNavigate?.(
+            calendarNewTarget({
+              start: start.toISOString(),
+              end: end.toISOString(),
+              title,
+              attendees: [],
+            }),
+          );
+        },
+        unsubscribe: (threadId, rec) => {
+          // A list with only a page opens in the browser; monday never fetches it.
+          if (rec.method === "browser") {
+            void openExternal(rec.target);
+            return;
+          }
+          setUnsubCard({ threadId, rec, exit: null, status: "asking" });
+          void inbox
+            .listExit?.(threadId)
+            .then((exit) =>
+              setUnsubCard((c) => (c && c.threadId === threadId ? { ...c, exit } : c)),
+            );
+        },
+        runWorkflow: (workflowId, threadId) =>
+          inbox.runWorkflow ? inbox.runWorkflow(workflowId, threadId) : Promise.reject(),
       }),
     [
       composeOn,
@@ -1684,11 +1830,14 @@ function InboxBody({
       openPicker,
       shownThreadId,
       brief,
+      calendar,
+      deviceZone,
+      onNavigate,
     ],
   );
   /** Runs a Recommended action as its tool call; a Thread that changed since is checked again first. */
   const runRecommended = useCallback(
-    async (threadId: string, rec: Recommendation) => {
+    async (threadId: string, rec: Recommendation, option?: string) => {
       const held = inbox.recommendations?.(threadId);
       const current = inbox.thread(threadId);
       const key = `${threadId}:${rec.kind}`;
@@ -1709,10 +1858,45 @@ function InboxBody({
         return;
       }
       recheck.current = null;
-      const outcome = await recRunner.run(rec, threadId);
-      if (!outcome.ok) {
-        showToast(t("strings.reader.brief_action.unavailable"), null);
+      // A payment page opens only after its domain was shown: the first click arms, the second opens.
+      if (rec.kind === "pay" && rec.link && armed.current !== key) {
+        armed.current = key;
+        showToast(
+          fill(t("strings.actions.recommended.pay_opens"), { domain: rec.link.domain }),
+          null,
+        );
         return;
+      }
+      armed.current = null;
+      const outcome = await recRunner.run(rec, threadId, option);
+      if (!outcome.ok) {
+        showToast(
+          t(
+            outcome.reason === "calendar_unavailable"
+              ? "strings.reader.brief_action.calendar_unavailable"
+              : "strings.reader.brief_action.unavailable",
+          ),
+          null,
+        );
+        return;
+      }
+      // The card asks first; the chip is used once the user approves it there.
+      if (outcome.applied !== "card") {
+        inbox.recommendationEvents?.({
+          threadId,
+          outcome: { kind: rec.kind, outcome: "used", args: outcomeArgs(rec) },
+        });
+      }
+      if (outcome.applied === "calendar" && rec.kind === "calendar") {
+        showToast(
+          fill(t("strings.actions.recommended.calendar_added"), { title: rec.title }),
+          null,
+        );
+      } else if (outcome.applied === "workflow" && rec.kind === "workflow") {
+        showToast(
+          fill(t("strings.actions.recommended.workflow_started"), { workflow: rec.name }),
+          null,
+        );
       }
       if (outcome.applied === "archive") {
         advanceAfter([threadId]);
@@ -1729,6 +1913,85 @@ function InboxBody({
     },
     [inbox, deviceZone, showToast, t, recWords, now, recRunner, advanceAfter],
   );
+  /** A chip's menu: "Not this", "Not for mail from X", and the action's own items. */
+  const runChipMenu = useCallback(
+    (threadId: string, rec: Recommendation, item: string, fromDomain: string | null) => {
+      if (item === "not_this" || item === "not_for") {
+        setDismissed((d) => ({ ...d, [threadId]: [...(d[threadId] ?? []), rec.kind] }));
+        inbox.recommendationEvents?.({
+          threadId,
+          outcome: { kind: rec.kind, outcome: "dismissed", args: outcomeArgs(rec) },
+        });
+        if (item === "not_for" && fromDomain) {
+          const key = `actions.recommended.${rec.kind}.muted_senders` as const;
+          const muted = s[key];
+          if (!muted.includes(fromDomain)) void shell.set(key, [...muted, fromDomain]);
+        }
+        return;
+      }
+      if (item === "remind" && rec.kind === "pay") {
+        void runRecommended(threadId, { ...rec, link: null });
+        return;
+      }
+      if (item === "file") {
+        void runCustomAction(payFileAction);
+        return;
+      }
+      if (item === "delivery" && rec.kind === "track" && rec.deliveryDay) {
+        const day = new Date(rec.deliveryDay);
+        day.setHours(s["inbox.snooze.morning_hour"], 0, 0, 0);
+        void runRecommended(threadId, {
+          kind: "snooze",
+          until: day.toISOString(),
+          anchor: "date",
+          fit: rec.fit,
+          rank: rec.rank,
+        });
+      }
+    },
+    [inbox, s, shell, runRecommended, runCustomAction, payFileAction],
+  );
+  /** The unsubscribe card's answer: approved, the exact request goes through the tool; else nothing. */
+  const answerUnsubscribe = useCallback(
+    async (approve: boolean) => {
+      const card = unsubCard;
+      if (!card) return;
+      if (!approve || !card.exit || card.exit.method === "browser") {
+        setUnsubCard(null);
+        return;
+      }
+      if (card.status !== "asking") return;
+      setUnsubCard({ ...card, status: "running" });
+      const result = (await inbox.unsubscribe?.(card.threadId, {
+        method: card.exit.method,
+        target: card.exit.target,
+      })) ?? { ok: false, text: "" };
+      if (result.ok) {
+        inbox.recommendationEvents?.({
+          threadId: card.threadId,
+          outcome: { kind: "unsubscribe", outcome: "used" },
+        });
+        showToast(
+          fill(t("strings.actions.recommended.unsubscribed"), { list: card.exit.listName }),
+          null,
+        );
+      }
+      setUnsubCard({
+        ...card,
+        status: result.ok ? "done" : "failed",
+        text: result.ok ? undefined : t("strings.actions.recommended.unsubscribe_failed"),
+      });
+    },
+    [unsubCard, inbox, showToast, t],
+  );
+  /** After leaving a list: its issues still in the Inbox, archived together with Undo. */
+  const archiveIssues = useCallback(async () => {
+    const card = unsubCard;
+    if (!card?.exit || !inbox.listThreads) return;
+    const ids = await inbox.listThreads(card.exit.listId);
+    setUnsubCard(null);
+    if (ids.length > 0) request("archive", ids);
+  }, [unsubCard, inbox, request]);
   const runFollowUp = useCallback(
     async (threadId: string, until: string) => {
       setFollowUps(({ [threadId]: _gone, ...rest }) => rest);
@@ -1741,16 +2004,19 @@ function InboxBody({
     },
     [inbox, advanceAfter, showToast, t, now],
   );
-  /** One chip of the reader's row, by its kind. */
+  /** One chip of the reader's row, by its kind; `option` is an RSVP's answer. */
   const runChip = useCallback(
-    (chip: ReaderChip) => {
+    (chip: ReaderChip, option?: string) => {
       if (!shownThread) return;
       if (chip.kind === "custom") void runCustomAction(chip.id);
       else if (chip.kind === "meeting") {
         const view = meetingChipViews[chip.index];
         if (view && shownMeeting) void runMeeting(shownThread.id, view.chip, shownMeeting);
-      } else if (chip.kind === "recommended") void runRecommended(shownThread.id, chip.rec);
-      else void runFollowUp(shownThread.id, chip.until);
+      } else if (chip.kind === "recommended") {
+        // An RSVP's key or plain click opens nothing by itself: the user picks the answer.
+        if (chip.rec.kind === "rsvp" && !option) return;
+        void runRecommended(shownThread.id, chip.rec, option);
+      } else void runFollowUp(shownThread.id, chip.until);
     },
     [
       shownThread,
@@ -1771,7 +2037,8 @@ function InboxBody({
       return (
         shownRecommendations({
           settings: s,
-          recommendations: held.actions,
+          // A row cannot hold the RSVP's three answers, and monday does not pick one.
+          recommendations: held.actions.filter((r) => r.kind !== "rsvp"),
           fromDomain: held.fromDomain,
           dismissed: new Set(dismissed[th.id] ?? []),
         })[0] ?? null
@@ -2787,6 +3054,27 @@ function InboxBody({
           messages={messages}
           brief={brief}
           chips={chipRow}
+          onChipMenu={(chip, item) => {
+            if (chip.kind === "recommended")
+              runChipMenu(shownThread.id, chip.rec, item, shownRecs?.fromDomain ?? null);
+          }}
+          chipCard={
+            unsubCard && unsubCard.threadId === shownThread.id ? (
+              <UnsubscribeCard
+                card={unsubCard}
+                strings={{
+                  title: t("strings.actions.recommended.unsubscribe_card"),
+                  post: t("strings.actions.recommended.unsubscribe_post"),
+                  mail: t("strings.actions.recommended.unsubscribe_mail"),
+                  approve: t("strings.actions.recommended.unsubscribe_approve"),
+                  cancel: t("strings.actions.recommended.unsubscribe_cancel"),
+                  archiveIssues: t("strings.actions.recommended.archive_issues"),
+                }}
+                onAnswer={(yes) => void answerUnsubscribe(yes)}
+                onArchiveIssues={() => void archiveIssues()}
+              />
+            ) : null
+          }
           chipKeys={chipKeys
             .slice(0, chipRow.length)
             .map((k) => chordLabel(normalizeChord(k), mac))}
