@@ -300,7 +300,7 @@ describe("the Signal backfill", () => {
   test("a running Backlog sort carries the missing Signals in its one request per Thread", async () => {
     await setSetting("signals.budget.background_monthly_usd", 100);
     await setSetting(
-      "judgments.questions.chip.snooze",
+      "actions.recommended.snooze.question",
       "The owner will want to come back to this later.",
     );
     await intelligence.signalBackfills.cancel(workspaceId);
@@ -313,7 +313,7 @@ describe("the Signal backfill", () => {
     const sorted = requests.filter((r) => r.questions.includes("group"));
     expect(sorted).toHaveLength(6);
     // The Group Choice and every Signal the Thread lacked, in the same request.
-    expect(sorted.every((r) => r.questions.includes("chip_snooze"))).toBe(true);
+    expect(sorted.every((r) => r.questions.includes("action:snooze.fits"))).toBe(true);
     // brief_worth was reworded while the budget was spent: every Thread but the one new mail re-read lacks it.
     expect(sorted.filter((r) => r.questions.includes("brief_worth"))).toHaveLength(5);
     expect(requests).toHaveLength(6);

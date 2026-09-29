@@ -62,6 +62,7 @@ import { createStore, type Store } from "../../store/store.ts";
 import type { ContentTransport, StoreTransport } from "../../store/transport.ts";
 import { customActionTier, renderActionArgs } from "./custom-actions.ts";
 import { Reader } from "./Reader.tsx";
+import { readerChips, wordsOf } from "./recommended.ts";
 import { createStoreInbox, type StoreInbox } from "./store-inbox.ts";
 
 const TOKEN = "per-launch-token";
@@ -507,6 +508,15 @@ describe("organizing mail by talking, end to end", () => {
             label: a.label,
             tier: customActionTier(a),
           }))}
+          chips={readerChips({
+            custom: actions.map((a) => ({ id: a.id, label: a.label, tier: customActionTier(a) })),
+            meetings: [],
+            meetingMax: 2,
+            recommended: [],
+            max: 3,
+            words: wordsOf(defaultSettings()),
+            now: NOW,
+          })}
           onAction={(id) => clicked.push(id)}
         />,
       ),

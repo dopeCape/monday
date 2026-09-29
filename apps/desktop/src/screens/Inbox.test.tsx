@@ -3,7 +3,7 @@
 // DOM out. Mounted under a StaticShell over the fixtures with happy-dom.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import type { Message, PartialSettings, Thread } from "@monday/shared";
+import type { Message, PartialSettings, Recommendation, Thread } from "@monday/shared";
 import { defaultSettings } from "@monday/shared";
 import { NavSidebar } from "@monday/ui";
 import { threads as fixtureThreads } from "@monday/ui/fixtures";
@@ -51,6 +51,7 @@ function spy(inbox: InboxData): { inbox: InboxData; calls: string[] } {
       watchMessages: inbox.watchMessages,
       openThread: inbox.openThread,
       brief: inbox.brief,
+      ...(inbox.recommendations ? { recommendations: inbox.recommendations } : {}),
       unavailable: inbox.unavailable,
       requestBrief: inbox.requestBrief,
       attachmentBytes: inbox.attachmentBytes,
@@ -486,10 +487,10 @@ describe("keyboard triage", () => {
     expect(calls).toEqual(['archive:["e1"]']);
     await press("b");
     expect(document.querySelector(".pop")).not.toBeNull();
-    // The row's hover actions name the same keys.
+    // The row's hover actions name the same keys; its one suggestion names the chip key.
     expect(
       [...(rows()[0]?.querySelectorAll<HTMLElement>(".actions .btn") ?? [])].map((b) => b.title),
-    ).toEqual(["Archive (Y)", "Snooze (B)", "Ask"]);
+    ).toEqual(["Reply (Alt+1)", "Archive (Y)", "Snooze (B)", "Ask"]);
   });
 
   test("Cmd-K toggles the palette and Cmd-N applies a saved View", async () => {
@@ -1037,11 +1038,11 @@ describe("the reader", () => {
 
   test("a Brief chip that archives advances the reader like the toolbar does", async () => {
     const { inbox, calls } = spy(fixtureInbox());
-    await mount({ inbox, initialOpen: "e10" });
-    // e10's Brief carries an archive chip; a click applies it with Undo and moves on.
+    await mount({ inbox, initialOpen: "e10" }, { "ai.level": "assist" });
+    // e10 carries a Recommended archive; a click applies it with Undo and moves on.
     const chip = [
       ...document.querySelectorAll<HTMLButtonElement>(".reader .brief-actions .chip"),
-    ].find((b) => b.textContent === "Archive");
+    ].find((b) => b.textContent?.trim() === "Archive");
     expect(chip).not.toBeUndefined();
     await act(async () => chip?.click());
     expect(calls).toContain('archive:["e10"]');
@@ -1050,64 +1051,113 @@ describe("the reader", () => {
     expect(focusRow()).toBe("e11");
   });
 
-  test("judged chips show before a Brief exists, likeliest first; a call chip hands the agent bar its sentence; the Brief's own chips win once it arrives", async () => {
+  test("Recommended chips show before a Brief exists, likeliest first, never more than three with the Custom actions first; the Brief chooses none (acceptance 7, 8)", async () => {
     const base = fixtureInbox();
     let brief = base.brief;
-    // One object, so the seam hands out a stable snapshot like the Store does.
-    const judged = {
-      threadId: "e1",
-      needsReply: 0.64,
-      waitingOnOthers: 0.2,
-      newsletter: 0.07,
-      automated: 0.05,
-      briefWorth: 1,
-      urgency: 1.2,
-      chips: {
-        reply: 0.84,
-        call: 0.86,
-        review_link: 0.1,
-        open_attachment: 0.2,
-        pay_or_file: 0.05,
-        snooze: 0.3,
-      },
-      model: "jev-1.13.0",
-      judgedAt: "2026-09-16T09:00:00.000Z",
+    const priya = { name: "Priya Raman", email: "priya@genai-labs.io" };
+    // One object per Thread, so the seam hands out a stable snapshot like the Store does.
+    const held = {
+      actions: [
+        { kind: "reply", fit: 0.74, rank: 0.74 },
+        {
+          kind: "snooze",
+          fit: 0.9,
+          rank: 0.9,
+          until: "2026-09-21T08:00:00.000Z",
+          anchor: "weekday",
+        },
+        { kind: "forward", fit: 0.88, rank: 0.88, to: priya, confidence: 0.86 },
+        { kind: "archive", fit: 0.8, rank: 0.8 },
+        {
+          kind: "delegate",
+          fit: 0.86,
+          rank: 0.86,
+          to: { name: "Ravi", email: "ravi@x.test" },
+          confidence: 0.5,
+        },
+      ] satisfies Recommendation[],
+      messageCount: 3,
+      fromDomain: "northlight.dev",
     };
     const inbox: InboxData = {
       ...base,
       brief: (id) => brief(id),
-      judgments: (id) => (id === "e1" ? judged : undefined),
+      recommendations: (id) => (id === "e1" ? held : undefined),
     };
     const has = (selector: string) => document.querySelector(selector) !== null;
-    const remount = async (open: string) => {
+    const remount = async (open: string, settings: PartialSettings = {}) => {
       if (root) await act(async () => root?.unmount());
       host?.remove();
-      await mount({ inbox, initialOpen: open });
+      await mount({ inbox, initialOpen: open }, { "ai.level": "assist", ...settings });
     };
-    // No Brief yet: the judged chips sit where the Brief will, above the threshold, likeliest first.
+    const chips = (selector: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(`${selector} .chip`)].map((b) =>
+        b.textContent?.trim(),
+      );
+    // No Brief yet: the chips sit where the Brief will. Archive (0.85) and the unsure hand-off
+    // (recipient 0.5 under 0.8) are held back; the rest likeliest first.
     brief = () => undefined;
     await remount("e1");
     expect(has(".reader .brief ul")).toBe(false);
-    const chips = () =>
-      [...document.querySelectorAll<HTMLButtonElement>(".reader .brief.chips .chip")].map(
-        (b) => b.textContent,
-      );
-    expect(chips()).toEqual(["Set up a call", "Reply"]);
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>(".reader .brief.chips .chip")?.click(),
-    );
-    expect(document.querySelector<HTMLTextAreaElement>(".agent-bar textarea")?.value).toBe(
-      "Set up a call with the sender of this thread",
-    );
-    // The Brief arrives: its own chips replace the judged ones.
+    expect(chips(".reader .brief.chips")).toEqual([
+      "Snooze until Mon 08:00",
+      "Forward to Priya",
+      "Reply",
+    ]);
+    expect(
+      document.querySelector<HTMLButtonElement>(".reader .brief.chips .chip")?.title,
+    ).toContain("(Alt+1)");
+    // The Brief arrives: it keeps its bullets and the same chips sit under them.
     brief = base.brief;
     await remount("e1");
     expect(has(".reader .brief ul")).toBe(true);
     expect(has(".reader .brief.chips")).toBe(false);
-    // A Thread with no Judgments and no Brief shows nothing there.
+    expect(chips(".reader .brief .brief-actions")).toHaveLength(3);
+    // A Custom action comes first and the row still holds three.
+    await remount("e1", {
+      "actions.custom": [
+        {
+          id: "file-it",
+          label: "File it",
+          on: { group: "hiring" },
+          tool: "archive_threads",
+          args: {},
+        },
+      ],
+    });
+    expect(chips(".reader .brief .brief-actions")).toEqual([
+      "File it",
+      "Snooze until Mon 08:00",
+      "Forward to Priya",
+    ]);
+    // The Setting caps the row.
+    await remount("e1", { "actions.recommended.max_in_reader": 1 });
+    expect(chips(".reader .brief .brief-actions")).toEqual(["Snooze until Mon 08:00"]);
+    // A row shows one suggestion, on hover only by default; always keeps it; off shows none.
+    const rowChip = () => document.querySelector('.row[data-thread="e1"] .row-chip');
+    expect(rowChip()?.textContent?.trim()).toBe("Snooze until Mon 08:00");
+    expect(document.querySelectorAll('.row[data-thread="e1"] .row-chip')).toHaveLength(1);
+    expect(document.querySelector('.row[data-thread="e1"] .actions.keep')).toBeNull();
+    await remount("e1", { "actions.recommended.in_list": "always" });
+    expect(document.querySelector('.row[data-thread="e1"] .actions.keep')).not.toBeNull();
+    await remount("e1", { "actions.recommended.in_list": "off" });
+    expect(rowChip()).toBeNull();
+    // A Thread with no Recommended actions and no Brief shows nothing there.
     brief = () => undefined;
     await remount("e2");
     expect(has(".reader .brief")).toBe(false);
+  });
+
+  test("Alt+1 runs the reader's first chip; in the list it runs the selected row's chip", async () => {
+    const { inbox, calls } = spy(fixtureInbox());
+    await mount({ inbox, initialOpen: "e10" }, { "ai.level": "assist" });
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "¡", code: "Digit1", altKey: true, bubbles: true }),
+      );
+    });
+    expect(calls).toContain('archive:["e10"]');
+    expect(toast()).toBe("ArchivedUndo Z");
   });
 
   test("a custom action on the open Thread's Group runs with its Tier: archive with Undo, trash asks first", async () => {

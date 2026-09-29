@@ -75,7 +75,6 @@ function explanationText(e: PlacementExplanation): string {
           automated: e.judgments.automated,
           briefWorth: e.judgments.briefWorth,
           urgency: e.judgments.urgency,
-          chips: e.judgments.chips,
           fresh: e.judgments.fresh,
         }
       : null,
@@ -100,7 +99,7 @@ function explanationText(e: PlacementExplanation): string {
 const explainPlacement: ToolDefinition<{ thread_id: string }> = {
   name: "explain_placement",
   description:
-    "Why a Thread is where it is: its Group and how routing got there (the routing judgment's distribution, the route threshold and ask band it crossed, a Group's Predicate, Examples from the same sender, or the user's own placement), its arrival Judgments (needs a reply, waiting, newsletter, automated, Brief worth, urgency, chips), and the Section rule that claims it with the judged value that decided. Call it first when the user says a thread is in the wrong place.",
+    "Why a Thread is where it is: its Group and how routing got there (the routing judgment's distribution, the route threshold and ask band it crossed, a Group's Predicate, Examples from the same sender, or the user's own placement), its arrival Judgments (needs a reply, waiting, newsletter, automated, Brief worth, urgency), and the Section rule that claims it with the judged value that decided. Call it first when the user says a thread is in the wrong place.",
   tier: "read",
   input: z.object({ thread_id: z.string().min(1) }),
   summarize: (i) => i.thread_id,
@@ -197,7 +196,7 @@ function listingText(listing: PinnedListing): string {
 const listJudgments: ToolDefinition<{ family?: (typeof FAMILIES)[number] | undefined }> = {
   name: "list_judgments",
   description:
-    "Every judgment monday asks the judge, grouped: routing into Groups, the questions asked on arrival (needs a reply, waiting, newsletter, automated, Brief worth, urgency, the action chips), each Section's judge statement, the brief policy thresholds, the palette, screening and Brief verification. Each has its Setting key (or sections.rules[<id>].judge), its current wording or threshold, the default, whether monday.toml pins it, whether test_judgment can re-run it, and how it answered over the last week: how many threads, the split of answers, how many went to Needs a decision or were unsure, and how many the user corrected.",
+    "Every judgment monday asks the judge, grouped: routing into Groups, the questions asked on arrival (needs a reply, waiting, newsletter, automated, Brief worth, urgency), each Section's judge statement, the brief policy thresholds, the palette, screening and Brief verification. Each has its Setting key (or sections.rules[<id>].judge), its current wording or threshold, the default, whether monday.toml pins it, whether test_judgment can re-run it, and how it answered over the last week: how many threads, the split of answers, how many went to Needs a decision or were unsure, and how many the user corrected.",
   tier: "read",
   input: z.object({
     family: z.enum(FAMILIES).optional().describe("Only this group of judgments"),
@@ -245,7 +244,7 @@ const proposalInput = {
     .string()
     .min(1)
     .describe(
-      'The Setting key from list_judgments (judgments.questions.needs_reply, routing.judge.instructions, routing.threshold.route, chips.threshold, ...), or "sections.rules[<id>].judge" for a Section\'s judge statement',
+      'The Setting key from list_judgments (judgments.questions.needs_reply, routing.judge.instructions, routing.threshold.route, sections.judge_threshold, ...), or "sections.rules[<id>].judge" for a Section\'s judge statement',
     ),
   section: z.string().min(1).optional().describe('A Section id or name, with key "sections.rules"'),
   text: z.string().min(1).max(2000).optional().describe("The proposed wording of the question"),

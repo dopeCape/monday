@@ -242,6 +242,7 @@ describe("the external MCP server", () => {
       [
         "search_threads",
         "read_thread",
+        "recommended_actions",
         "list_groups_and_sections",
         "undo",
         "list_workflows",

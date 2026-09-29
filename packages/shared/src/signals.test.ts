@@ -155,9 +155,8 @@ describe("reading a Signal", () => {
       judgmentsFromSignals("t", {
         needs_reply: { noul: 0.8 },
         urgency: { score: 2 },
-        chip_reply: { noul: 0.9 },
       }),
-    ).toMatchObject({ needsReply: 0.8, urgency: 2, newsletter: 0, chips: { reply: 0.9 } });
+    ).toMatchObject({ needsReply: 0.8, urgency: 2, newsletter: 0 });
     expect(canonicalJson({ b: 1, a: [{ d: 2, c: 3 }] })).toBe(
       canonicalJson({ a: [{ c: 3, d: 2 }], b: 1 }),
     );

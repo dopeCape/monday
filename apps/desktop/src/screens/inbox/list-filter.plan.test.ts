@@ -7,6 +7,7 @@
 import { Database } from "bun:sqlite";
 import { beforeAll, describe, expect, test } from "bun:test";
 import { threadPageSql } from "../../store/queries.ts";
+import { RECOMMENDATIONS_SCHEMA_SQL } from "../../store/recommendations.ts";
 import schemaSql from "../../store/schema.sql?raw";
 import { SIGNALS_SCHEMA_SQL } from "../../store/signals.ts";
 import { threadList } from "./folders.ts";
@@ -27,6 +28,7 @@ beforeAll(() => {
   db = new Database(":memory:");
   db.exec(schemaSql);
   db.exec(SIGNALS_SCHEMA_SQL);
+  db.exec(RECOMMENDATIONS_SCHEMA_SQL);
   // The search index is not what this test measures; its triggers only slow the seed.
   for (const t of [
     "threads_fts_ai",

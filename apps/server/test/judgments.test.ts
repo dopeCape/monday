@@ -162,9 +162,6 @@ const ARRIVAL: Record<string, Record<string, FakeJudgeAnswer>> = {
     automated: 0.05,
     brief_worth: 1.0,
     urgency: 1.2,
-    chip_reply: 0.84,
-    chip_call: 0.86,
-    chip_open_attachment: 0.1,
   },
   "Draft contract for review": {
     needs_reply: 0.58,
@@ -173,9 +170,6 @@ const ARRIVAL: Record<string, Record<string, FakeJudgeAnswer>> = {
     automated: 0.03,
     brief_worth: 1.9,
     urgency: 1.8,
-    chip_reply: 0.4,
-    chip_open_attachment: 0.74,
-    chip_review_link: 0.3,
   },
   "Weekly digest": {
     needs_reply: 0.07,
@@ -184,7 +178,6 @@ const ARRIVAL: Record<string, Record<string, FakeJudgeAnswer>> = {
     automated: 0.6,
     brief_worth: 0,
     urgency: 1.0,
-    chip_snooze: 0.7,
   },
   "Invoice 2041 for August": {
     needs_reply: 0.03,
@@ -193,7 +186,6 @@ const ARRIVAL: Record<string, Record<string, FakeJudgeAnswer>> = {
     automated: 0.9,
     brief_worth: 0,
     urgency: 0.5,
-    chip_pay_or_file: 0.9,
   },
   "Podcast recording slot": {
     needs_reply: 0.91,
@@ -202,8 +194,6 @@ const ARRIVAL: Record<string, Record<string, FakeJudgeAnswer>> = {
     automated: 0.05,
     brief_worth: 0.5,
     urgency: 0.5,
-    chip_reply: 0.7,
-    chip_call: 0.93,
   },
 };
 const ARRIVAL_DEFAULT: Record<string, FakeJudgeAnswer> = {
@@ -430,14 +420,6 @@ describe("the arrival request", () => {
       briefWorthLevels: d["judgments.questions.brief_worth_levels"],
       urgency: d["judgments.questions.urgency"],
       urgencyLevels: d["judgments.questions.urgency_levels"],
-      chips: {
-        reply: d["judgments.questions.chip.reply"],
-        call: d["judgments.questions.chip.call"],
-        review_link: d["judgments.questions.chip.review_link"],
-        open_attachment: d["judgments.questions.chip.open_attachment"],
-        pay_or_file: d["judgments.questions.chip.pay_or_file"],
-        snooze: d["judgments.questions.chip.snooze"],
-      },
     });
     expect(Object.keys(questions)).toEqual([
       "needs_reply",
@@ -446,12 +428,6 @@ describe("the arrival request", () => {
       "automated",
       "brief_worth",
       "urgency",
-      "chip_reply",
-      "chip_call",
-      "chip_review_link",
-      "chip_open_attachment",
-      "chip_pay_or_file",
-      "chip_snooze",
     ]);
     expect(questions.needs_reply).toEqual({
       type: "noul",
@@ -501,12 +477,6 @@ describe("the arrival request", () => {
         automated: { type: "noul", noul: 0.07 },
         brief_worth: { type: "score", score: 1.9, probabilities: [], confidence: 0.5 },
         urgency: { type: "score", score: 7, probabilities: [], confidence: 0.5 },
-        chip_reply: { type: "noul", noul: 0.4 },
-        chip_call: { type: "noul", noul: 0.1 },
-        chip_review_link: { type: "noul", noul: 0.3 },
-        chip_open_attachment: { type: "noul", noul: 0.74 },
-        chip_pay_or_file: { type: "noul", noul: 0.05 },
-        chip_snooze: { type: "noul", noul: 0.02 },
       },
       {
         threadId: "t1",
@@ -523,14 +493,6 @@ describe("the arrival request", () => {
       automated: 0.07,
       briefWorth: 1.9,
       urgency: 3,
-      chips: {
-        reply: 0.4,
-        call: 0.1,
-        review_link: 0.3,
-        open_attachment: 0.74,
-        pay_or_file: 0.05,
-        snooze: 0.02,
-      },
       model: "jev-1.13.0",
       judgedAt: "2026-09-21T09:00:00.000Z",
     });
@@ -854,19 +816,26 @@ describe("judgments over the fixture mailbox", () => {
       newsletter: 0.07,
       briefWorth: 1.9,
       urgency: 1.8,
-      chips: { reply: 0.4 },
       model: "jev-1.13.0",
     });
-    // The review link and open attachment chips are no longer asked (docs/spec/actions.md).
-    expect(contract?.chips).not.toHaveProperty("open_attachment");
+    // The judged chips are no longer asked (docs/spec/actions.md): the Recommended actions' Signals are.
+    expect(contract).not.toHaveProperty("chips");
     const sectionCall = judge.calls.find(
       (c) =>
         c.questions.includes("brief_worth") && subjectOf(c.state) === "Draft contract for review",
     );
     // The shipped Signals in one request: the slice 25 set, waiting_on_me, and slice 32's.
     expect(sectionCall?.questions).toEqual(
-      expect.arrayContaining(["needs_reply", "brief_worth", "chip_reply", "money_involved"]),
+      expect.arrayContaining([
+        "needs_reply",
+        "brief_worth",
+        "money_involved",
+        "action:archive.fits",
+        "action:snooze.fits",
+        "action:snooze.anchor",
+      ]),
     );
+    expect(sectionCall?.questions.some((q) => q.startsWith("chip_"))).toBe(false);
     expect(sectionCall?.questions).toContain("waiting_on_me");
     expect(sectionCall?.state).toMatchObject({
       owner: { address: fixture.address },
@@ -898,11 +867,13 @@ describe("judgments over the fixture mailbox", () => {
       (c) => c.entityId === threadOf("Weekly digest").id,
     )?.payload;
     const answer = (id: string) => digestChange?.answers.find((a) => a.signalId === id);
-    // Every shipped Signal, the gated ones answered by code as not stated.
-    expect(digestChange?.answers).toHaveLength(27);
+    // Every shipped Signal and the Recommended actions' own (slice 34), the gated ones answered
+    // by code as not stated: 23 shipped, 8 for archive, snooze, forward and hand to someone.
+    expect(digestChange?.answers).toHaveLength(31);
+    expect(answer("action:forward.to")).toMatchObject({ choice: "none" });
     expect(answer("newsletter")).toMatchObject({ version: 1, noul: 0.93, stale: false });
     expect(answer("urgency")).toMatchObject({ score: 1, noul: null });
-    expect(answer("chip_snooze")?.noul).toBe(0.7);
+    expect(answer("chip_snooze")).toBeUndefined();
     expect(JSON.stringify(digestChange)).not.toContain("Weekly digest");
     expect(await judged.judgments.get(threadOf("Weekly digest").id)).toEqual({
       threadId: threadOf("Weekly digest").id,
@@ -912,7 +883,6 @@ describe("judgments over the fixture mailbox", () => {
       automated: 0.6,
       briefWorth: 0,
       urgency: 1,
-      chips: { reply: 0.5, call: 0.5, pay_or_file: 0.5, snooze: 0.7 },
       model: "jev-1.13.0",
       judgedAt: NOW.toISOString(),
     } satisfies ThreadJudgments);
@@ -938,7 +908,7 @@ describe("judgments over the fixture mailbox", () => {
       "open",
     );
     expect(opened).toEqual({ status: "fresh" });
-  });
+  }, 30_000);
 
   test("the language model path gives the same placements", async () => {
     const before = chat.calls.length;

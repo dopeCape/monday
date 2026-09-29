@@ -83,6 +83,7 @@ import {
   threadFacts,
   threadLabels,
   threadMeetings,
+  threadRecommendations,
   threads,
   threadTags,
   voiceProfiles,
@@ -1516,6 +1517,12 @@ const REWRAP_SPECS: readonly RewrapSpec[] = [
     id: threadFacts.threadId,
     workspace: threadFacts.workspaceId,
     keys: [threadFacts.contentKey],
+  },
+  {
+    table: threadRecommendations,
+    id: threadRecommendations.threadId,
+    workspace: threadRecommendations.workspaceId,
+    keys: [threadRecommendations.contentKey],
   },
   {
     table: messages,

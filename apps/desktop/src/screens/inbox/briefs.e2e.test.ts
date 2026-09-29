@@ -75,7 +75,7 @@ const account: Account = {
 const answers = {
   reply: JSON.stringify({
     bullets: ["**Aoife** asks for a decision on the take-home by **Friday**."],
-    actions: [{ kind: "reply", label: "Say yes", proposedLine: "Let's go ahead." }],
+    reply_line: "Let's go ahead.",
   }),
   newsletter: JSON.stringify({
     bullets: ["This week's digest: three articles on sync engines."],
@@ -334,7 +334,8 @@ describe("Briefs end to end: the policy, the Job, the feed and the Cache", () =>
       { b: "Friday" },
       ".",
     ]);
-    expect(inbox.brief(replyThreadId)?.actions[0]).toMatchObject({ kind: "reply" });
+    // The Brief keeps only the reply's opening line; the Recommended actions choose the chips.
+    expect(inbox.brief(replyThreadId)?.replyLine).toBeTruthy();
     await inbox.openThread(replyThreadId);
     expect(await runJobs()).toEqual([]);
     expect(chat.calls.length).toBe(asksBefore);

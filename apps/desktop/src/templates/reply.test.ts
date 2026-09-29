@@ -1,21 +1,33 @@
-// The Reply chip named by the on-open suggestion: only the reply chip changes.
+// The Reply chip named by the on-open suggestion (docs/spec/templates.md, "On
+// open"): the Recommended Reply chip reads "Reply with Confirm the time";
+// only the reply chip changes.
 
 import { describe, expect, test } from "bun:test";
-import type { BriefAction } from "@monday/shared";
-import { nameReplyChip } from "./reply.ts";
+import type { Recommendation } from "@monday/shared";
+import { recommendationWords } from "@monday/shared";
+import { readerChips } from "../screens/inbox/recommended.ts";
 
-describe("nameReplyChip", () => {
-  const chips: BriefAction[] = [
-    { kind: "reply", label: "Reply", proposedLine: "" },
-    { kind: "archive", label: "Archive" },
+describe("the Reply chip named by a Template", () => {
+  const recs: Recommendation[] = [
+    { kind: "reply", fit: 0.9, rank: 0.9 },
+    { kind: "archive", fit: 0.88, rank: 0.88 },
   ];
+  const base = {
+    custom: [],
+    meetings: [],
+    meetingMax: 2,
+    recommended: recs,
+    max: 3,
+    words: recommendationWords({}),
+    now: new Date("2026-09-29T10:00:00Z"),
+    replyWith: "Reply with {name}",
+  };
   test("names the Reply chip with the Template, leaves the rest", () => {
-    const named = nameReplyChip(
-      chips,
-      { threadId: "t1", templateId: "t_confirm_time", name: "Confirm the time" },
-      "Reply with {name}",
-    );
+    const named = readerChips({ ...base, replyTemplate: "Confirm the time" });
     expect(named.map((c) => c.label)).toEqual(["Reply with Confirm the time", "Archive"]);
-    expect(nameReplyChip(chips, null, "Reply with {name}")).toEqual(chips);
+    expect(readerChips({ ...base, replyTemplate: null }).map((c) => c.label)).toEqual([
+      "Reply",
+      "Archive",
+    ]);
   });
 });

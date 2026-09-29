@@ -241,7 +241,9 @@ export type ContentKind =
   /** A Template's name, fits-when, subject, body and Placeholders (docs/spec/templates.md). */
   | "template"
   /** A Thread's Facts drawn from its text (amounts, addresses, links) and the picked amount (slice 32). */
-  | "facts";
+  | "facts"
+  /** A Thread's Recommended actions with their arguments (docs/spec/actions.md). */
+  | "recommendation";
 
 /**
  * What the Mailstore persists for one encrypted object and hands back to read
@@ -323,7 +325,13 @@ export interface Brief {
   threadId: Id;
   /** At most three; the first says what happened, the second what is asked, the third context. */
   bullets: RichText[];
-  actions: BriefAction[];
+  /**
+   * The reply's proposed opening line, which the Reply chip places in the
+   * draft (docs/spec/actions.md): the only thing a Brief still writes for the
+   * chips; the Recommended actions choose the actions. Null when the Thread
+   * expects no reply.
+   */
+  replyLine: string | null;
   computedAt: IsoDate;
   stale: boolean;
   /** Per bullet, by index, once the judge checked them against the Thread (ADR 0012); the reader dims `partly`. */
@@ -339,24 +347,6 @@ export type BriefPolicyMode = "rule" | "model" | "judge";
 
 /** What asked for a Brief: the sync engine on arrival, the reader on open, or the user by hand. */
 export type BriefTrigger = "sync" | "open" | "user";
-
-/**
- * An action chip: the label is the Agent's wording; the payload is what
- * runs. The first six come from a Brief; `call`, `open-attachment` and
- * `pay-or-file` are judged chips the reader shows before a Brief exists
- * (slice 25), each an ordinary tool call with its Tier.
- */
-export type BriefAction = { label: string } & (
-  | { kind: "reply"; proposedLine: string }
-  | { kind: "forward"; to: Person }
-  | { kind: "calendar"; eventTitle: string; start: IsoDate }
-  | { kind: "snooze"; until: IsoDate }
-  | { kind: "archive" }
-  | { kind: "open-link"; url: string }
-  | { kind: "call" }
-  | { kind: "open-attachment"; attachmentId: Id }
-  | { kind: "pay-or-file" }
-);
 
 /* ------------------------------ The agent ------------------------------ */
 

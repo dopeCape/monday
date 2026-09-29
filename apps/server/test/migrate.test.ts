@@ -76,6 +76,7 @@ describe("migrations", () => {
       "thread_facts",
       "thread_labels",
       "thread_meetings",
+      "thread_recommendations",
       "thread_routes",
       "thread_tags",
       "threads",
@@ -102,7 +103,7 @@ describe("migrations", () => {
     const journal = JSON.parse(await readFile(join(source, "meta", "_journal.json"), "utf8")) as {
       entries: Array<{ tag: string }>;
     };
-    const cut = journal.entries.findIndex((e) => e.tag === "0024_signals");
+    const cut = journal.entries.findIndex((e) => e.tag === "0025_signals");
     expect(cut).toBeGreaterThan(0);
     const before = journal.entries.slice(0, cut);
     await mkdir(join(folder, "meta"));

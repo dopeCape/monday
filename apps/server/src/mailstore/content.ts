@@ -40,6 +40,7 @@ export const CONTENT_KINDS: readonly ContentKind[] = [
   "meeting",
   "template",
   "facts",
+  "recommendation",
 ];
 
 export function isContentKind(value: unknown): value is ContentKind {

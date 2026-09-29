@@ -22,6 +22,7 @@ import type {
   ScheduledSend,
   ScheduleResult,
   ThreadChange,
+  ThreadRecommendations,
 } from "@monday/shared";
 import { FIELD_GROUP_OF, peopleQueryWords, personMatches, resolveWrite } from "@monday/shared";
 import { ApiError, type MessageHeaderResponse } from "../platform/api.ts";
@@ -72,6 +73,12 @@ export interface FakeServer {
   /** Marks a Brief stale, as a new Message would, and records the feed row. */
   staleBrief(threadId: Id): void;
   removeBrief(threadId: Id): void;
+  /** Recommended actions per Thread (docs/spec/actions.md), for the content routes. */
+  recommendations: Map<Id, ThreadRecommendations>;
+  /** Stores a Thread's Recommended actions and records the feed's headers-only row. */
+  putRecommendations(recs: ThreadRecommendations): void;
+  /** The reader's opens that asked for them, in order. */
+  recommendationOpens: Id[];
   /** How many intents arrived, in order, for assertions on replay order. */
   received: Intent[];
   /** Draft and send intents that arrived, in order. */
@@ -231,6 +238,22 @@ export function createFakeServer(workspaceId: Id, seed?: SeedData): FakeServer {
       const stale: ServerBrief = { ...existing, stale: true };
       briefsById.set(threadId, stale);
       recordBrief(stale);
+    },
+
+    recommendations: new Map(),
+    recommendationOpens: [],
+    putRecommendations(recs) {
+      server.recommendations.set(recs.threadId, recs);
+      record({
+        kind: "recommendations",
+        entityId: recs.threadId,
+        payload: {
+          threadId: recs.threadId,
+          messageCount: recs.messageCount,
+          computedAt: recs.computedAt,
+          kinds: recs.actions.map((a) => a.kind),
+        },
+      });
     },
 
     removeBrief(threadId) {
@@ -511,6 +534,10 @@ export function fakeTransport(server: FakeServer): StoreTransport {
       if (server.offline) throw offline();
       return server.invites.get(inviteId) ?? null;
     },
+    async recommendations(threadId) {
+      if (server.offline) throw offline();
+      return server.recommendations.get(threadId) ?? null;
+    },
     async brief(threadId) {
       if (server.offline) throw offline();
       const b = server.briefs.get(threadId);
@@ -597,6 +624,11 @@ export function fakeContent(server: FakeServer, seed: SeedData | null): ContentT
       const d = server.drafts.get(draftId);
       if (!d) throw new ApiError(404, "not found");
       return d;
+    },
+    async openRecommendations(_workspaceId, threadId) {
+      if (server.offline) throw offline();
+      server.recommendationOpens.push(threadId);
+      return server.recommendations.get(threadId) ?? null;
     },
     async requestBrief(_workspaceId, threadId, trigger) {
       if (server.offline) throw offline();

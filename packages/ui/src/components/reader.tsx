@@ -2,7 +2,6 @@
 // Attachment pill, and the reply box at the bottom.
 import type {
   Attachment as AttachmentData,
-  BriefAction,
   Brief as BriefData,
   Message as MessageData,
   RichText,
@@ -29,14 +28,9 @@ import {
 } from "../format.ts";
 import { HtmlBody } from "./html-body.tsx";
 import { Icon, type IconComponent } from "./icon.tsx";
-import { Avatar, Btn, Chip, Mark } from "./primitives.tsx";
+import { Avatar, Btn, Mark } from "./primitives.tsx";
 
 /* ------------------------------ Brief ------------------------------ */
-
-/** The chip text for a suggested action. */
-export function briefActionLabel(action: BriefAction): string {
-  return action.label;
-}
 
 function Rich({ runs }: { runs: RichText }) {
   return (
@@ -63,50 +57,22 @@ export interface BriefProps {
   source?: string | undefined;
   /** The word shown in place of the source while a stale Brief waits for a fresh one, such as "Updating". */
   updating?: string | undefined;
-  /** How many action chips to show. The mock shows three. */
-  maxActions?: number | undefined;
-  onAction?: ((action: BriefAction) => void) | undefined;
-  /** More chips for the same row, after the Brief's own: the custom actions the user defined (slice 26). */
-  extra?: ReactNode | undefined;
+  /**
+   * The chip row under the bullets: the Custom actions and the Recommended
+   * actions (docs/spec/actions.md), already capped and ordered by the caller.
+   * The Brief no longer chooses actions of its own.
+   */
+  chips?: ReactNode | undefined;
   className?: string | undefined;
 }
 
-/** The chip row under a Brief, or in its place: the model's chips first, the caller's after them. */
-function ChipRow({
-  actions,
-  onAction,
-  extra,
-}: {
-  actions: readonly BriefAction[];
-  onAction?: ((action: BriefAction) => void) | undefined;
-  extra?: ReactNode | undefined;
-}) {
-  if (actions.length === 0 && !extra) return null;
-  return (
-    <div className="brief-actions">
-      {actions.map((a) => {
-        const label = briefActionLabel(a);
-        return (
-          <Chip key={`${a.kind}:${label}`} onClick={() => onAction?.(a)}>
-            {label}
-          </Chip>
-        );
-      })}
-      {extra}
-    </div>
-  );
+/** The chip row under a Brief, or in its place. */
+function ChipRow({ chips }: { chips?: ReactNode | undefined }) {
+  if (!chips) return null;
+  return <div className="brief-actions">{chips}</div>;
 }
 
-export function Brief({
-  brief,
-  source,
-  updating,
-  maxActions = 3,
-  onAction,
-  extra,
-  className,
-}: BriefProps) {
-  const actions = brief.actions.slice(0, maxActions);
+export function Brief({ brief, source, updating, chips, className }: BriefProps) {
   const line = brief.stale && updating ? updating : source;
   return (
     <div className={cx("brief", brief.stale && "stale", className)}>
@@ -122,31 +88,28 @@ export function Brief({
           </li>
         ))}
       </ul>
-      <ChipRow actions={actions} onAction={onAction} extra={extra} />
+      <ChipRow chips={chips} />
     </div>
   );
 }
 
 export interface ActionChipsProps {
-  /** The chips, likeliest first; the caller has already applied the threshold and the cap. */
-  actions: readonly BriefAction[];
-  onAction?: ((action: BriefAction) => void) | undefined;
-  /** More chips for the same row, after the judged ones (the custom actions, slice 26). */
-  extra?: ReactNode | undefined;
+  /** The chips, in the order the caller chose; nothing renders without them. */
+  chips?: ReactNode | undefined;
   className?: string | undefined;
 }
 
 /**
- * Action chips without a Brief (slice 25): what the Thread's Judgments say
- * the reader would do first, shown where the Brief will sit until one
- * arrives, with the caller's extra chips after them. Renders nothing when
- * there is neither.
+ * The chip row without a Brief: the Custom actions and the Recommended
+ * actions the Thread's Signals suggest, shown where the Brief will sit, at
+ * the top of the Thread, before any Brief is written. Renders nothing when
+ * there are none.
  */
-export function ActionChips({ actions, onAction, extra, className }: ActionChipsProps) {
-  if (actions.length === 0 && !extra) return null;
+export function ActionChips({ chips, className }: ActionChipsProps) {
+  if (!chips) return null;
   return (
     <div className={cx("brief chips", className)} data-testid="action-chips">
-      <ChipRow actions={actions} onAction={onAction} extra={extra} />
+      <ChipRow chips={chips} />
     </div>
   );
 }

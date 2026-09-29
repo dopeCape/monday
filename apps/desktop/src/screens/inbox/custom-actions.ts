@@ -1,7 +1,7 @@
 // Custom actions on the Device (CONTEXT.md "Custom action"; docs/spec/inbox.md,
 // Reader): a button the user defined for the Threads of a Group or Section
 // runs an ordinary tool call with its Tier (ADR 0002), over the same seams
-// the Brief chips use (brief-actions.ts). A forward or a draft opens compose
+// the Recommended action chips use (recommended.ts). A forward or a draft opens compose
 // with the recipients and text filled in and never sends; archive, snooze,
 // move, tag and trash apply through InboxActions with Undo; a tool promoted
 // to always-ask, or trash, confirms first. What the Device cannot run (a Tag
@@ -13,7 +13,7 @@
 import type { CustomActionSetting, Group, Person, Tag, Thread, Tier } from "@monday/shared";
 import { normalizeActionArgs, renderTemplate, TOOL_TIERS, tierOf } from "@monday/shared";
 import type { InboxActions, UndoToken } from "./actions.ts";
-import type { ComposeSeed } from "./brief-actions.ts";
+import type { ComposeSeed } from "./recommended.ts";
 
 /** The Tier a custom action renders with: the tool's own, raised by the action or the agent.always_ask Setting. */
 export function customActionTier(

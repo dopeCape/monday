@@ -11,9 +11,11 @@ import type {
   SectionRule,
   Tag,
   Thread,
+  ThreadRecommendations,
 } from "@monday/shared";
 import * as fixtures from "@monday/ui/fixtures";
 import type { Statement } from "./driver.ts";
+import { cachedRecommendationsStatements } from "./recommendations.ts";
 
 export interface SeedData {
   threads: Thread[];
@@ -22,6 +24,8 @@ export interface SeedData {
   sections: SectionRule[];
   groups: Group[];
   briefs: Brief[];
+  /** Recommended actions per Thread (docs/spec/actions.md), as the Cache holds them. */
+  recommendations?: ThreadRecommendations[];
   drafts: Draft[];
   /** Needs a decision, with the (archived) Threads it names. */
   decisions?: Array<{ threadId: string; candidates: DecisionCandidate[] }>;
@@ -36,6 +40,7 @@ export function fixtureSeed(): SeedData {
     sections: fixtures.sections,
     groups: fixtures.groups,
     briefs: fixtures.briefs,
+    recommendations: fixtures.recommendations,
     drafts: [fixtures.draft],
     decisions: fixtures.decisions,
     decisionThreads: fixtures.decisionThreads,
@@ -134,12 +139,17 @@ export function seedStatements(data: SeedData, at = new Date().toISOString()): S
       params: [
         b.threadId,
         b.bullets,
-        b.actions,
+        { replyLine: b.replyLine },
         b.computedAt,
         b.stale,
         countOf.get(b.threadId) ?? 0,
       ],
     });
+  }
+  for (const r of data.recommendations ?? []) {
+    out.push(
+      ...cachedRecommendationsStatements({ ...r, messageCount: countOf.get(r.threadId) ?? 0 }),
+    );
   }
   for (const d of data.decisions ?? []) {
     out.push({

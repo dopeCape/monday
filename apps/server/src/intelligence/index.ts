@@ -47,6 +47,7 @@ import {
   type Workflows,
 } from "../workflows/index.ts";
 import { createIntegrationSecretStore, type IntegrationSecretStore } from "../workflows/secrets.ts";
+import { createRecommendations, type Recommendations } from "./actions/recommend.ts";
 import {
   type ActivityLog,
   type AgentHost,
@@ -64,10 +65,10 @@ import { createBodyGuard, type GuardSeam, type GuardSettings } from "./guard.ts"
 import { type IntentSettings, judgeIntent } from "./intent.ts";
 import { createJudgments, type JudgmentSettings, type Judgments } from "./judgments.ts";
 import { createProviderKeyStore, type ProviderKeyStore } from "./keys.ts";
+import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createDbMeetingSource, createDbMeetingStore, recordMeeting } from "./meetings/db.ts";
 import { createMeetings, type Meetings } from "./meetings/index.ts";
 import { MEETING_SETTING_KEYS, meetingSettingsFrom } from "./meetings/settings.ts";
-import { type BatchingEval, createBatchingEval } from "./measure/index.ts";
 import { createMeter, type Meter } from "./meter.ts";
 import { createOnboarding, type OnboardingSeam } from "./onboarding.ts";
 import { createOrganize, type OrganizeSeam } from "./organize.ts";
@@ -91,11 +92,11 @@ import {
   localLanguageModel,
 } from "./runtime/local.ts";
 import { type KeyValidation, validateTypeSafeKey } from "./runtime/typesafe.ts";
-import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createSignalBackfills, type SignalBackfills } from "./signals/backfill.ts";
 import { backgroundBudget } from "./signals/budget.ts";
 import { createSignals, type Signals } from "./signals/index.ts";
 import { createJudgeLimiter, type JudgeLimiter, type LimiterSettings } from "./signals/limiter.ts";
+import { createTemplateIntelligence, type TemplateIntelligence } from "./templates/index.ts";
 import { createTune } from "./tune.ts";
 import { type BriefVerifier, createBriefVerifier, type VerifySettings } from "./verify.ts";
 import { createVoiceBuilder, type VoiceSeam, type VoiceSettings } from "./voice.ts";
@@ -278,6 +279,8 @@ export interface Intelligence {
   judgments: Judgments;
   /** The Signal store and the Signal request (ADR 0014, slice 30). */
   signals: Signals;
+  /** The Recommended actions (docs/spec/actions.md, slices 34 and 35). */
+  recommendations: Recommendations;
   /** The background read of new and reworded Signals (slice 31). */
   signalBackfills: SignalBackfills;
   /** The one limiter every judge request passes (slice 31). */
@@ -344,11 +347,7 @@ const AGENT_SETTING_KEYS = [
   "agent.search_limit",
 ] as const;
 
-const BRIEF_SETTING_KEYS = [
-  "briefs.bullets_max",
-  "briefs.actions_max",
-  "briefs.input_chars_max",
-] as const;
+const BRIEF_SETTING_KEYS = ["briefs.bullets_max", "briefs.input_chars_max"] as const;
 
 const VERIFY_SETTING_KEYS = [
   "briefs.verify",
@@ -390,12 +389,6 @@ const JUDGMENT_SETTING_KEYS = [
   "judgments.questions.brief_worth_levels",
   "judgments.questions.urgency",
   "judgments.questions.urgency_levels",
-  "judgments.questions.chip.reply",
-  "judgments.questions.chip.call",
-  "judgments.questions.chip.review_link",
-  "judgments.questions.chip.open_attachment",
-  "judgments.questions.chip.pay_or_file",
-  "judgments.questions.chip.snooze",
   "routing.classify.snippet_chars",
 ] as const;
 
@@ -604,6 +597,12 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     };
   };
   const signals = createSignals({ db, mailstore, runtime, now, log, level });
+  // Recommended actions follow every Signal request (docs/spec/actions.md).
+  const recommendations = createRecommendations({ db, mailstore, signals, now, log, level });
+  signals.setCandidateSource(recommendations.candidates);
+  signals.setAnsweredListener((workspaceId, threadId) =>
+    recommendations.refresh(workspaceId, threadId),
+  );
   /**
    * One request for an arriving Thread (slice 33): the Signals it lacks and,
    * when routing places it now, the Group Choice and the speculative
@@ -643,14 +642,6 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
           briefWorthLevels: s["judgments.questions.brief_worth_levels"],
           urgency: s["judgments.questions.urgency"],
           urgencyLevels: s["judgments.questions.urgency_levels"],
-          chips: {
-            reply: s["judgments.questions.chip.reply"],
-            call: s["judgments.questions.chip.call"],
-            review_link: s["judgments.questions.chip.review_link"],
-            open_attachment: s["judgments.questions.chip.open_attachment"],
-            pay_or_file: s["judgments.questions.chip.pay_or_file"],
-            snooze: s["judgments.questions.chip.snooze"],
-          },
         },
       };
     },
@@ -713,7 +704,6 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       const s = await readGlobalSettings(db, BRIEF_SETTING_KEYS);
       return {
         bulletsMax: s["briefs.bullets_max"],
-        actionsMax: s["briefs.actions_max"],
         inputCharsMax: s["briefs.input_chars_max"],
       };
     },
@@ -983,6 +973,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     log,
   });
   extensions.meetings = meetings;
+  extensions.recommendations = recommendations;
   extensions.templates = templates;
   extensions.backlog = {
     async settings() {
@@ -1062,6 +1053,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     policy,
     judgments,
     signals,
+    recommendations,
     routing,
     backlog,
     agent,

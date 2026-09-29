@@ -181,8 +181,10 @@ export interface NewDraftOptions {
   attachments?: DraftAttachment[];
   /** A Brief chip's proposed opening line; the Draft starts with it, still unsent. */
   opening?: string | undefined;
-  /** A Brief chip's forward recipient. */
+  /** A chip's forward recipient. */
   to?: Person[] | undefined;
+  /** People a chip copies in (the person a hand-off goes to). */
+  cc?: Person[] | undefined;
 }
 
 /**
@@ -217,7 +219,13 @@ export function initialContent(o: NewDraftOptions): DraftContent {
   };
   if (o.kind === "new" || !o.last) return empty;
   if (o.kind === "reply") {
-    const { to, cc } = replyRecipients(o.last, o.me, o.replyAll);
+    const { to, cc: replyCc } = replyRecipients(o.last, o.me, o.replyAll);
+    const cc = [
+      ...replyCc,
+      ...(o.cc ?? []).filter(
+        (p) => !replyCc.some((c) => c.email.toLowerCase() === p.email.toLowerCase()),
+      ),
+    ];
     const quoted = quotedReply(o.last, o.strings, o.formatDate);
     return {
       ...empty,

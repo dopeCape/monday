@@ -1,10 +1,10 @@
 // Judgments on arrival (CONTEXT.md "Judgment", "Signal"; ADR 0012, ADR 0014;
 // slices 25 and 30). The arrival request is the Signal request: one request
 // per Thread version asks every shipped Signal (needs a reply, waiting on
-// you, waiting on others, newsletter, automated, Brief worth, urgency, the
-// chips) and the Signal store keeps the answers (signals/index.ts). This
-// module is what the brief policy, the chips and tune read them through, as
-// the slice 25 Judgments, and it owns the `judge` Job the sync engine's
+// you, waiting on others, newsletter, automated, Brief worth, urgency) and
+// the Signal store keeps the answers (signals/index.ts). This module is what
+// the brief policy and tune read them through, as the slice 25 Judgments,
+// and it owns the `judge` Job the sync engine's
 // thread observer enqueues (never inline), at level `automate` only.
 //
 // The pure builders below (judgmentQuestions, judgmentState, readJudgments)
@@ -12,7 +12,6 @@
 
 import type {
   AiLevel,
-  ChipName,
   Id,
   JsonValue,
   JudgeAnswers,
@@ -21,7 +20,6 @@ import type {
   ScoreQuestion,
   ThreadJudgments,
 } from "@monday/shared";
-import { CHIP_NAMES } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { accounts, threads, workspaces } from "../db/schema.ts";
@@ -47,7 +45,6 @@ export interface JudgmentQuestionSettings {
   briefWorthLevels: string[];
   urgency: string;
   urgencyLevels: string[];
-  chips: Record<ChipName, string>;
 }
 
 export interface JudgmentSettings {
@@ -153,8 +150,6 @@ const LIST_HEADERS = [
   "reply-to",
 ] as const;
 
-const chipQuestionId = (chip: ChipName): `chip_${ChipName}` => `chip_${chip}`;
-
 type ArrivalQuestions = {
   needs_reply: NoulQuestion;
   waiting_on_others: NoulQuestion;
@@ -162,14 +157,11 @@ type ArrivalQuestions = {
   automated: NoulQuestion;
   brief_worth: ScoreQuestion;
   urgency: ScoreQuestion;
-} & Record<`chip_${ChipName}`, NoulQuestion>;
+};
 
-/** The arrival request's questions, one per Setting: four Nouls, two Scores, one Noul per chip. */
+/** The arrival request's questions, one per Setting: four Nouls and two Scores. */
 export function judgmentQuestions(q: JudgmentQuestionSettings): ArrivalQuestions {
   const noul = (instructions: string): NoulQuestion => ({ type: "noul", instructions });
-  const chips = Object.fromEntries(
-    CHIP_NAMES.map((chip) => [chipQuestionId(chip), noul(q.chips[chip])]),
-  ) as Record<`chip_${ChipName}`, NoulQuestion>;
   return {
     needs_reply: noul(q.needsReply),
     waiting_on_others: noul(q.waitingOnOthers),
@@ -177,7 +169,6 @@ export function judgmentQuestions(q: JudgmentQuestionSettings): ArrivalQuestions
     automated: noul(q.automated),
     brief_worth: { type: "score", instructions: q.briefWorth, criteria: q.briefWorthLevels },
     urgency: { type: "score", instructions: q.urgency, criteria: q.urgencyLevels },
-    ...chips,
   };
 }
 
@@ -223,8 +214,6 @@ export function readJudgments(
     levels: { briefWorth: number; urgency: number };
   },
 ): ThreadJudgments {
-  const chips: Record<string, number> = {};
-  for (const chip of CHIP_NAMES) chips[chip] = clamp(answers[chipQuestionId(chip)].noul, 1);
   return {
     threadId: meta.threadId,
     needsReply: clamp(answers.needs_reply.noul, 1),
@@ -233,7 +222,6 @@ export function readJudgments(
     automated: clamp(answers.automated.noul, 1),
     briefWorth: clamp(answers.brief_worth.score, Math.max(0, meta.levels.briefWorth - 1)),
     urgency: clamp(answers.urgency.score, Math.max(0, meta.levels.urgency - 1)),
-    chips,
     model: meta.model,
     judgedAt: meta.judgedAt,
   };
@@ -261,8 +249,7 @@ function questionsKey(parts: readonly string[]): string {
 /**
  * Since slice 30 the arrival request is the Signal request (ADR 0014): the
  * answers live in the Signal store and this module reads the shipped Signals
- * back as the slice 25 Judgments for the brief policy, the chips and tune,
- * and keeps the judge Job and its one-per-Thread-version rule.
+ * back as the slice 25 Judgments for the brief policy and tune, and keeps the judge Job and its one-per-Thread-version rule.
  */
 export function createJudgments(options: JudgmentsOptions): Judgments {
   const { db, mailstore, signals } = options;

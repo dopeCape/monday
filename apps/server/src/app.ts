@@ -92,6 +92,7 @@ import { MCP_CALLBACK_PATH, mcpServerRoutes } from "./routes/mcp-servers.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
 import { pairRoutes } from "./routes/pair.ts";
 import { peopleRoutes } from "./routes/people.ts";
+import { recommendationsRoutes } from "./routes/recommendations.ts";
 import { routingRoutes } from "./routes/routing.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { signalsRoutes } from "./routes/signals.ts";
@@ -538,6 +539,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
   app.route("/", intelligenceRoutes(intelligence));
   app.route("/", signalsRoutes(intelligence, { mode, isLoopback }));
+  app.route("/", recommendationsRoutes(intelligence));
   app.route("/", localRuntimeRoutes(localBridge));
   app.route("/", integrationRoutes(intelligence.integrationSecrets));
   app.route(

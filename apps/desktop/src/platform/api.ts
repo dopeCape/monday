@@ -77,6 +77,7 @@ import type {
   SignalBackfill,
   SignalsExplain,
   SignalsPage,
+  ThreadRecommendations,
   ThreadRoute,
   TurnContext,
   VoiceProfile,
@@ -536,6 +537,36 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           return await request<Brief>(`/threads/${encodeURIComponent(threadId)}/brief`);
         } catch (error) {
           if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+    },
+    /** Recommended actions (docs/spec/actions.md). */
+    recommendations: {
+      /** A Thread's Recommended actions with their arguments, or null when it has none. */
+      get: async (threadId: Id): Promise<ThreadRecommendations | null> => {
+        try {
+          return await request<ThreadRecommendations>(
+            `/threads/${encodeURIComponent(threadId)}/recommendations`,
+          );
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null;
+          throw error;
+        }
+      },
+      /** The reader opened the Thread: worked out again, asked once when it has no current answers. */
+      open: async (
+        workspaceId: Id,
+        threadId: Id,
+        zone?: string,
+      ): Promise<ThreadRecommendations | null> => {
+        try {
+          return await request<ThreadRecommendations>(
+            `/threads/${encodeURIComponent(threadId)}/recommendations`,
+            json("POST", { workspace: workspaceId, ...(zone ? { zone } : {}) }),
+          );
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 409) return null;
           throw error;
         }
       },

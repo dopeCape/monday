@@ -2,6 +2,7 @@
 // the Changes feed the client reads from a cursor, and the last-writer-wins rule
 // both sides apply (ADR 0005, ADR 0009). Runtime-neutral.
 
+import type { RecommendationsChange } from "./actions.ts";
 import type {
   Attendee,
   CalendarAccess,
@@ -23,8 +24,8 @@ import type {
 import type { ThreadJudgments } from "./judge.ts";
 import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
-import type { TemplateChange } from "./templates/types.ts";
 import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
+import type { TemplateChange } from "./templates/types.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -230,6 +231,7 @@ export type ChangeKind =
   | "decision"
   | "judgments"
   | "meeting"
+  | "recommendations"
   | "signals"
   | "signal_def"
   | "facts"
@@ -452,6 +454,7 @@ export type ChangePayload =
   | { kind: "decision"; payload: DecisionChange }
   | { kind: "judgments"; payload: JudgmentsChange }
   | { kind: "meeting"; payload: MeetingChange }
+  | { kind: "recommendations"; payload: RecommendationsChange }
   | { kind: "signals"; payload: SignalsChange }
   | { kind: "signal_def"; payload: SignalDefChange }
   | { kind: "facts"; payload: FactsChange }

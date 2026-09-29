@@ -25,9 +25,10 @@ import type { JudgeProvider, KeyProvider } from "../judge.ts";
 import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
+import { ACTION_SETTINGS } from "./actions.ts";
 import { MEETING_SETTINGS } from "./meetings.ts";
-import { TEMPLATE_SETTINGS } from "./templates.ts";
 import { signalsSettings } from "./signals.ts";
+import { TEMPLATE_SETTINGS } from "./templates.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -1629,81 +1630,6 @@ export const settingsSchema = {
     label: "Urgency levels",
     help: "The levels of the urgency question, lowest first. Describe situations, not degrees.",
   }),
-  "judgments.questions.chip.reply": setting({
-    type: z.string().min(1),
-    default: "The first thing the mailbox owner would do with this thread is write a reply.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: reply",
-    help: "A yes or no statement about the first action; the chip shows when its probability clears the chip threshold.",
-  }),
-  "judgments.questions.chip.call": setting({
-    type: z.string().min(1),
-    default:
-      "The first thing the mailbox owner would do with this thread is set up or join a call or meeting with the sender.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: call",
-    help: "A yes or no statement about the first action.",
-  }),
-  "judgments.questions.chip.review_link": setting({
-    type: z.string().min(1),
-    default:
-      "The first thing the mailbox owner would do with this thread is open a link in the newest message and review what is behind it, such as a pull request, a document or a form.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: review the link",
-    help: "A yes or no statement about the first action.",
-  }),
-  "judgments.questions.chip.open_attachment": setting({
-    type: z.string().min(1),
-    default:
-      "The first thing the mailbox owner would do with this thread is open an attachment on it.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: open the attachment",
-    help: "A yes or no statement about the first action.",
-  }),
-  "judgments.questions.chip.pay_or_file": setting({
-    type: z.string().min(1),
-    default:
-      "The first thing the mailbox owner would do with this thread is pay an invoice or file a receipt, bill or statement.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: pay or file",
-    help: "A yes or no statement about the first action.",
-  }),
-  "judgments.questions.chip.snooze": setting({
-    type: z.string().min(1),
-    default:
-      "The thread asks nothing of the mailbox owner today and they would put it aside until later.",
-    scope: "global",
-    section: "ai",
-    group: "TypeSafe",
-    tier: "advanced",
-    label: "Suggested action: snooze",
-    help: "A yes or no statement about the first action.",
-  }),
-  "chips.threshold": setting({
-    type: confidence,
-    default: 0.6,
-    scope: "global",
-    section: "routing",
-    group: "Briefs",
-    tier: "advanced",
-    label: "Suggested action confidence",
-    help: "A suggested action shows in the reader, before any Brief, when TypeSafe is at least this sure of it. The Brief's own actions replace them once it arrives.",
-  }),
   // Meetings from mail (docs/spec/meetings.md): behavior, thresholds, questions and words.
   ...MEETING_SETTINGS,
   "routing.judge.instructions": setting({
@@ -2031,16 +1957,6 @@ export const settingsSchema = {
     visibleWhen: { key: "briefs.verify", truthy: true },
     label: "Verification confidence",
     help: "Below this confidence the judge's verdict on a bullet is ignored and the bullet stays as written.",
-  }),
-  "briefs.actions_max": setting({
-    type: z.int().min(0).max(5),
-    default: 3,
-    scope: "global",
-    section: "routing",
-    group: "Briefs",
-    tier: "advanced",
-    label: "Action chips",
-    help: "The most action chips a Brief may show.",
   }),
   "briefs.background": setting({
     type: z.boolean(),
@@ -4776,25 +4692,10 @@ export const settingsSchema = {
   "strings.inbox.action.move": str("routing", "Action: move", "Move"),
   "strings.inbox.action.label": str("routing", "Action: label", "Label"),
   "strings.inbox.action.delete": str("routing", "Action: delete", "Delete"),
-  "strings.chips.reply": str("routing", "Judged chip: reply", "Reply"),
-  "strings.chips.call": str("routing", "Judged chip: call", "Set up a call"),
-  "strings.chips.review_link": str("routing", "Judged chip: review the link", "Review the link"),
-  "strings.chips.open_attachment": str(
-    "routing",
-    "Judged chip: open the attachment",
-    "Open the attachment",
-  ),
-  "strings.chips.pay_or_file": str("routing", "Judged chip: pay or file", "Pay or file"),
-  "strings.chips.snooze": str("routing", "Judged chip: snooze", "Snooze"),
   "strings.chips.call_prompt": str(
     "routing",
     "Judged chip: the sentence the call chip hands the agent bar",
     "Set up a call with the sender of this thread",
-  ),
-  "strings.chips.pay_or_file_prompt": str(
-    "routing",
-    "Judged chip: the sentence the pay or file chip hands the agent bar",
-    "Pay or file this thread",
   ),
   "strings.inbox.action.star": str("routing", "Action: star", "Star"),
   "strings.inbox.action.unstar": str("routing", "Action: unstar", "Unstar"),
@@ -9203,6 +9104,8 @@ export const settingsSchema = {
   ...TEMPLATE_SETTINGS,
   /* Signals (ADR 0014, slices 28 to 33): their own file. */
   ...signalsSettings,
+  /* Recommended actions (docs/spec/actions.md, slices 34 and 35): their own file. */
+  ...ACTION_SETTINGS,
 } satisfies Record<string, SettingEntry>;
 
 /* ------------------------------ Derived types and helpers ------------------------------ */
@@ -9299,6 +9202,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Groups",
     "Sections",
     "Custom actions",
+    "Recommended actions",
     "Briefs",
     "Meetings",
     "Confidence",

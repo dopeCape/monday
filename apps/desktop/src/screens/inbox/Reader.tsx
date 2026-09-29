@@ -1,22 +1,16 @@
 // The reader: toolbar, title, Brief, the Messages with collapsed history
 // that expands on click, and the reply box. Toolbar actions go through
 // InboxActions via the callbacks so they get the same undo toasts as the list.
-// The chip row under the Brief is one row: the Brief's own chips when a
-// Brief exists, else the chips the Thread's Judgments suggest (slice 25),
-// then the custom actions (CONTEXT.md "Custom action", slice 26), each with
-// its Tier's affordance; the same custom actions render in the toolbar after
-// the built-in buttons.
+// The chip row under the Brief, or at the top of the Thread before any Brief
+// is written, is one row the screen builds (recommended.ts): the Custom
+// actions first (CONTEXT.md "Custom action"), then the meeting chips, then
+// the Recommended actions (docs/spec/actions.md), each with its Tier's
+// affordance and its key; the same Custom actions render in the toolbar
+// after the built-in buttons.
 // Bodies are the Cache's (filled on open through the content routes);
 // attachments download through the opener; links open through it too.
 
-import type {
-  BriefAction,
-  Brief as BriefData,
-  Message as MessageData,
-  Tag,
-  Thread,
-  Tier,
-} from "@monday/shared";
+import type { Brief as BriefData, Message as MessageData, Tag, Thread, Tier } from "@monday/shared";
 import {
   ActionChips,
   Brief,
@@ -31,6 +25,8 @@ import {
 } from "@monday/ui";
 import {
   ArchiveIcon,
+  ArrowBendUpLeftIcon,
+  ArrowBendUpRightIcon,
   CalendarPlusIcon,
   ClockIcon,
   DotsThreeIcon,
@@ -45,6 +41,7 @@ import {
 import { type AnimationEvent, type ReactNode, useState } from "react";
 import { useShownThread } from "../compose/bus.ts";
 import { Picker } from "./Picker.tsx";
+import type { ReaderChip } from "./recommended.ts";
 import { useExit } from "./useExit.ts";
 
 export interface ReaderStrings {
@@ -89,12 +86,36 @@ export interface ReaderAction {
   tier: Tier;
 }
 
+/** A chip's Phosphor icon by what it does; a Custom action's chip has none. */
+function chipIcon(c: ReaderChip): ReactNode {
+  if (c.kind === "meeting") return <CalendarPlusIcon />;
+  if (c.kind === "follow_up") return <ClockIcon />;
+  if (c.kind !== "recommended") return null;
+  switch (c.rec.kind) {
+    case "reply":
+    case "delegate":
+      return <ArrowBendUpLeftIcon />;
+    case "forward":
+      return <ArrowBendUpRightIcon />;
+    case "archive":
+      return <ArchiveIcon />;
+    case "snooze":
+      return <ClockIcon />;
+  }
+}
+
 export interface ReaderProps {
   thread: Thread;
   messages: readonly MessageData[];
   brief: BriefData | undefined;
-  /** Action chips from the Thread's Judgments, shown until a Brief exists; the Brief's own chips then win (slice 25). */
-  chips?: readonly BriefAction[] | undefined;
+  /**
+   * The chip row, in order and already capped (recommended.ts readerChips):
+   * Custom actions, meeting chips, Recommended actions. Shown under the Brief,
+   * or at the top of the Thread before any Brief exists.
+   */
+  chips?: readonly ReaderChip[] | undefined;
+  /** The keys that run the chips in order (actions.recommended.keys), for their tooltips. */
+  chipKeys?: readonly string[] | undefined;
   tags: readonly Tag[];
   sheet: boolean;
   now: Date;
@@ -118,12 +139,8 @@ export interface ReaderProps {
   onToggleRead: () => void;
   /** The user wants to answer: focus in the reply box, R, A or F, the reply-all or forward buttons. */
   onReply?: ((kind: "reply" | "forward", replyAll?: boolean) => void) | undefined;
-  /** A Brief action chip was clicked; the screen runs it as a tool call (docs/spec/inbox.md, Briefs). */
-  onBriefAction?: ((action: BriefAction) => void) | undefined;
-  /** The meeting chips (docs/spec/meetings.md), before the custom actions in the chip row. */
-  meetingChips?: readonly ReaderMeetingChip[] | undefined;
-  /** A meeting chip was clicked, by its index; the screen runs it as its tool call. */
-  onMeetingChip?: ((index: number) => void) | undefined;
+  /** A chip was clicked (or its key pressed); the screen runs it as its tool call with its Tier. */
+  onChip?: ((chip: ReaderChip) => void) | undefined;
   /** The custom actions that apply to this Thread, in the toolbar after the built-in buttons and as chips. */
   actions?: readonly ReaderAction[] | undefined;
   /** A custom action was clicked; the screen runs it with its Tier. */
@@ -145,6 +162,7 @@ export function Reader({
   messages,
   brief,
   chips,
+  chipKeys,
   tags,
   sheet,
   now,
@@ -163,9 +181,7 @@ export function Reader({
   onStar,
   onToggleRead,
   onReply,
-  onBriefAction,
-  meetingChips,
-  onMeetingChip,
+  onChip,
   actions,
   onAction,
   makeTemplate,
@@ -199,42 +215,38 @@ export function Reader({
   const title = (label: string, key: string) => `${label} (${key})`;
   const recipient = personName(last?.from ?? thread.participants[0]);
 
-  // The meeting chips first, then the custom actions, after the model's in the same row.
-  const meetingNodes = meetingChips?.length
-    ? meetingChips.map((m, i) => (
-        <Chip
-          key={`meeting-${m.kind}-${m.label}`}
-          className="meeting-chip"
-          data-meeting={m.kind}
-          title={m.title}
-          onClick={() => onMeetingChip?.(i)}
-        >
-          <CalendarPlusIcon /> {m.label}
-        </Chip>
-      ))
+  // One row: each chip with its Tier's affordance and, for the first few, its key.
+  const chipNodes = chips?.length
+    ? chips.map((c, i) => {
+        const key = chipKeys?.[i];
+        const tier = c.kind === "meeting" ? null : c.tier;
+        const asks = tier === "always-ask" ? ` (${strings.asksFirst})` : "";
+        const base = c.title ?? c.label;
+        const title = key ? `${base}${asks} (${key})` : `${base}${asks}`;
+        return (
+          <Chip
+            key={c.key}
+            className={
+              c.kind === "custom"
+                ? "custom-action"
+                : c.kind === "meeting"
+                  ? "meeting-chip"
+                  : "recommended-chip"
+            }
+            data-chip={c.kind === "recommended" ? c.rec.kind : c.kind}
+            {...(c.kind === "custom" ? { "data-action": c.id } : {})}
+            {...(c.kind === "meeting" ? { "data-meeting": c.meeting } : {})}
+            data-tier={tier ?? undefined}
+            title={title}
+            onClick={() => onChip?.(c)}
+          >
+            {chipIcon(c)}
+            {c.kind === "custom" ? null : " "}
+            {c.label}
+          </Chip>
+        );
+      })
     : null;
-  // The custom actions as chips, after the model's in the same row, each with its Tier.
-  const actionChips = actions?.length
-    ? actions.map((a) => (
-        <Chip
-          key={a.id}
-          className="custom-action"
-          data-action={a.id}
-          data-tier={a.tier}
-          title={a.tier === "always-ask" ? strings.asksFirst : undefined}
-          onClick={() => onAction?.(a.id)}
-        >
-          {a.label}
-        </Chip>
-      ))
-    : null;
-  const customChips =
-    meetingNodes || actionChips ? (
-      <>
-        {meetingNodes}
-        {actionChips}
-      </>
-    ) : null;
 
   return (
     <section
@@ -335,11 +347,10 @@ export function Reader({
               brief={brief}
               source={strings.briefSource}
               updating={strings.briefUpdating}
-              onAction={onBriefAction}
-              extra={customChips}
+              chips={chipNodes}
             />
           ) : (
-            <ActionChips actions={chips ?? []} onAction={onBriefAction} extra={customChips} />
+            <ActionChips chips={chipNodes} />
           )}
           {banner}
           {messages.map((m, i) => (

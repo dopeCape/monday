@@ -29,7 +29,6 @@ describe("the Cache's Signals", () => {
     expect(rows).toEqual([
       { signal_id: "automated", noul: 0.02, score: null },
       { signal_id: "brief_worth", noul: null, score: 2 },
-      { signal_id: "chip_reply", noul: 0.9, score: null },
       { signal_id: "needs_reply", noul: 0.8, score: null },
       { signal_id: "newsletter", noul: 0.05, score: null },
       { signal_id: "urgency", noul: null, score: 1.5 },
@@ -40,7 +39,8 @@ describe("the Cache's Signals", () => {
     ).toEqual([]);
     // Applying again moves nothing twice.
     await applySchema(driver);
-    expect(await driver.query("select count(*) as n from thread_signals")).toEqual([{ n: 7 }]);
+    // The judged chips are not carried over (docs/spec/actions.md): the Recommended actions replaced them.
+    expect(await driver.query("select count(*) as n from thread_signals")).toEqual([{ n: 6 }]);
     await driver.close();
   });
 

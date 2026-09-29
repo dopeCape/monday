@@ -165,10 +165,8 @@ describe("the Signal store", () => {
       expect.arrayContaining([
         "automated",
         "brief_worth",
-        "chip_call",
-        "chip_pay_or_file",
-        "chip_reply",
-        "chip_snooze",
+        "action:archive.fits",
+        "action:snooze.fits",
         "needs_reply",
         "newsletter",
         "urgency",
