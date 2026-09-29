@@ -23,6 +23,7 @@ import { COMPOSE_TOOLS } from "./compose.ts";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
 import { ORGANIZE_TOOLS } from "./organize.ts";
+import { TEMPLATE_TOOLS } from "./templates.ts";
 import { TUNE_TOOLS } from "./tune.ts";
 
 export interface ToolSettings {
@@ -458,7 +459,7 @@ const draftMessage: ToolDefinition<{
   },
 };
 
-async function draftContent(
+export async function draftContent(
   ctx: ToolContext,
   input: z.output<typeof draftMessage.input>,
 ): Promise<DraftContent | { refused: string }> {
@@ -751,6 +752,7 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   ...ORGANIZE_TOOLS,
   ...TUNE_TOOLS,
   ...COMPOSE_TOOLS,
+  ...TEMPLATE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {

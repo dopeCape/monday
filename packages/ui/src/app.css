@@ -11726,6 +11726,69 @@ button.appr-link:focus-visible {
   align-items: center;
   gap: 8px;
 }
+/* the suggestion line above the editor: one quiet line */
+.tpl-suggest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 var(--pad) 6px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.tpl-suggest.quiet {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.tpl-suggest-use {
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+}
+.tpl-suggest-use:hover {
+  background: var(--hover);
+}
+/* a Template shown whole: the Agent's card and the sheet */
+.tpl-body-view {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+.tpl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  min-width: 0;
+}
+.tpl-card .tpl-fit,
+.tpl-subject {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.tpl-card-phs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tpl-side {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.tpl-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 16px;
+  overflow-y: auto;
+}
+.tpl-duplicate[data-level="same"] {
+  color: var(--warning);
+}
 .tpl-ph code {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);

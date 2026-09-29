@@ -189,6 +189,19 @@ export function ReplyCompose({
         status={
           <>
             <span className="c-status">{editor.saving ? strings.saving : strings.saved}</span>
+            {templateLink?.enabled && content.bodyText.trim() ? (
+              <Btn
+                sm
+                className="tpl-save-as"
+                onClick={() =>
+                  templateLink.draftFrom({
+                    texts: [{ subject: content.subject, text: content.bodyText }],
+                  })
+                }
+              >
+                {templateLink.strings.saveAs}
+              </Btn>
+            ) : null}
             {link ? (
               <>
                 <Btn
@@ -258,6 +271,7 @@ export function ReplyCompose({
                 </label>
               ) : null}
             </div>
+            {templates.suggestionLine}
             <Editor
               initialHtml={initial.bodyHtml}
               placeholder={strings.replyTo.replace(

@@ -525,7 +525,8 @@ describe("Settings pages come from the schema", () => {
       const control = (settingsSchema[key] as SettingEntry).control;
       if (control) expect(controlKinds[control], `${key}: ${control}`).toBeDefined();
     }
-  });
+    // It mounts every page once per choice a key depends on: the whole schema, so it takes a while.
+  }, 30_000);
 
   test("a fresh page shows only what the current choices make relevant, folded behind disclosures that remember their state", async () => {
     await mount({ initialSection: "ai" }, { api: scriptedApi().api });
@@ -973,8 +974,8 @@ describe("Settings › AI and agent", () => {
     });
     await mountOpen({ initialSection: "ai" }, { api: scripted.api }, HOSTED);
 
-    // Every Task has a row; promoting draft_message to always-ask writes the Setting.
-    expect(qa('[data-setting^="ai.task."]')).toHaveLength(9);
+    // Every Task has a row (ten with the template Task); promoting draft_message to always-ask writes the Setting.
+    expect(qa('[data-setting^="ai.task."]')).toHaveLength(10);
     await clickText("Fast", q('[data-setting="ai.task.composer"]') ?? document);
     expect(captured?.settings["ai.task.composer"].role).toBe("fast");
     await click(q('[data-tool="draft_message"] .switch'));

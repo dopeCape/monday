@@ -24,6 +24,7 @@ export const HOSTED_SETTING_KEYS = [
   "ai.task.tag",
   "ai.task.draft-in-voice",
   "ai.task.summarize",
+  "ai.task.template",
   "ai.pricing.anthropic",
   "ai.pricing.gemini",
   "ai.pricing.openai",

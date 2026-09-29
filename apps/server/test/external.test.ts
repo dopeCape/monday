@@ -259,6 +259,7 @@ describe("the external MCP server", () => {
         "explain_placement",
         "list_judgments",
         "test_judgment",
+        "list_templates",
         "list_drafts",
         "read_draft",
         "open_draft",

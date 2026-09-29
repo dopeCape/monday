@@ -389,7 +389,9 @@ export type Task =
   | "section"
   | "tag"
   | "draft-in-voice"
-  | "summarize";
+  | "summarize"
+  /** Drafting a Template from example Messages (docs/spec/templates.md). */
+  | "template";
 
 export type Tier = "always-ask" | "reversible" | "read-only";
 

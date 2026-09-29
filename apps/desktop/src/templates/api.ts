@@ -6,10 +6,13 @@ import type {
   Id,
   Person,
   Template,
+  TemplateDraftResult,
   TemplateFile,
   TemplateFillResult,
   TemplateInput,
   TemplateScope,
+  TemplateSuggestRequest,
+  TemplateSuggestResult,
 } from "@monday/shared";
 
 export type Requester = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -52,6 +55,23 @@ export function templatesApi(request: Requester) {
       request<TemplateFillResult>(
         `/templates/${encodeURIComponent(id)}/fill`,
         body("POST", { workspace: workspaceId, threadId: from.threadId, to: from.to ?? [] }),
+      ),
+    /** The two requests while the owner types (slice 37). */
+    suggest: (req: TemplateSuggestRequest) =>
+      request<TemplateSuggestResult>("/templates/suggest", body("POST", req)),
+    /** The on-open suggestion that names the Reply chip. */
+    suggestOnOpen: (workspaceId: Id, threadId: Id) =>
+      request<TemplateSuggestResult>(
+        `/threads/${encodeURIComponent(threadId)}/template-suggestion?${new URLSearchParams({ workspace: workspaceId })}`,
+      ),
+    /** A Template written from example Messages or texts, with the duplicate check. */
+    draft: (
+      workspaceId: Id,
+      from: { messageIds?: Id[]; texts?: Array<{ subject: string; text: string }> },
+    ) =>
+      request<TemplateDraftResult>(
+        "/templates/draft",
+        body("POST", { workspace: workspaceId, ...from }),
       ),
     exportFiles: (workspaceId: Id) =>
       request<{ files: TemplateFile[] }>(

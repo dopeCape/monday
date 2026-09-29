@@ -27,7 +27,7 @@ import { readTemplateFiles, saveTemplateFiles } from "./files.ts";
 import { blankTemplate, placeholdersFor } from "./form.ts";
 import { fillIn, type TemplateUiStrings, templateStrings } from "./strings.ts";
 
-type Editing =
+export type Editing =
   | { kind: "new"; input: TemplateInput }
   | { kind: "edit"; template: Template; input: TemplateInput };
 
@@ -284,7 +284,7 @@ export function TemplatesPanel(_: PanelProps) {
 
 /* ------------------------------ The form ------------------------------ */
 
-interface TemplateFormProps {
+export interface TemplateFormProps {
   editing: Editing;
   strings: TemplateUiStrings;
   defaultScope: TemplateScope;
@@ -293,7 +293,7 @@ interface TemplateFormProps {
   onCancel(): void;
 }
 
-function TemplateForm({
+export function TemplateForm({
   editing,
   strings,
   defaultScope,

@@ -7,7 +7,7 @@
 // renders windows kept open beside it through ComposeWindow, bare.
 
 import type { DraftContent, Person } from "@monday/shared";
-import { Compose, formatWhen } from "@monday/ui";
+import { Btn, Compose, formatWhen } from "@monday/ui";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import {
   type DragEvent,
@@ -329,8 +329,22 @@ export function ComposeWindow({
           <>
             <span className="c-status">{editor.saving ? strings.saving : strings.saved}</span>
             {byline}
+            {templateLink?.enabled && content.bodyText.trim() ? (
+              <Btn
+                sm
+                className="tpl-save-as"
+                onClick={() =>
+                  templateLink.draftFrom({
+                    texts: [{ subject: content.subject, text: content.bodyText }],
+                  })
+                }
+              >
+                {templateLink.strings.saveAs}
+              </Btn>
+            ) : null}
           </>
         }
+        above={templates.suggestionLine}
       />
       {later ? (
         <AnchoredMenu

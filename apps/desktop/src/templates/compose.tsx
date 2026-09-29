@@ -8,7 +8,8 @@
 
 import type { Id, Person, Template } from "@monday/shared";
 import { placeholderLabel, placeholdersIn } from "@monday/shared";
-import { cx, type Placement, placeMenu } from "@monday/ui";
+import { Btn, cx, type Placement, placeMenu } from "@monday/ui";
+import { XIcon } from "@phosphor-icons/react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import {
@@ -72,9 +73,27 @@ export interface TemplateCompose {
   blocked: string | null;
   /** The picker and the chip menu, in portals; render anywhere in the surface. */
   overlay: ReactNode;
-  /** Inserts a Template at the caret as if picked (the suggestion line's Tab). */
+  /** The one quiet line above the editor: "Use Confirm the time (Tab)", or null. */
+  suggestionLine: ReactNode;
+  /** The Template suggested now, if any. */
+  suggested: { templateId: Id; name: string } | null;
+  /** Inserts a Template at the caret as if picked. */
   insert(template: Template, range?: { from: number; to: number }): void;
 }
+
+/** Where the owner's own words end: before the quoted history, or at the end of the document. */
+function ownRange(editor: TiptapEditor): { from: number; to: number; text: string } {
+  let end = editor.state.doc.content.size;
+  editor.state.doc.forEach((node, offset) => {
+    if (node.type.name === "quoted" && offset < end) end = offset;
+  });
+  const text = editor.state.doc.textBetween(0, end, "\n", "\n");
+  // Inside the first and the last block, so the Template replaces their text.
+  return { from: 1, to: Math.max(1, end - 1), text };
+}
+
+/** "Template suggestions need a judge" is said once per window session, quietly. */
+let unavailableSaid = false;
 
 export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
   const { link, editor } = o;
@@ -88,9 +107,17 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
     [library, picker],
   );
 
+  // Suggestions while typing (slice 37): the Template suggested, the replace question, the quiet line.
+  const [suggested, setSuggested] = useState<{ templateId: Id; name: string } | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  const dismissed = useRef(false);
+  const lastAsked = useRef(0);
+  const asking = useRef(0);
+
   // Latest values for the plugin, which is made once per editor.
-  const latest = useRef({ o, picker, items, enabled });
-  latest.current = { o, picker, items, enabled };
+  const latest = useRef({ o, picker, items, enabled, suggested });
+  latest.current = { o, picker, items, enabled, suggested };
 
   const insert = useCallback((template: Template, range?: { from: number; to: number }) => {
     const { o: opts } = latest.current;
@@ -131,6 +158,38 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
     [insert],
   );
 
+  /** The suggestion goes away for the rest of this Draft: Esc, or it was used. */
+  const dismiss = useCallback(() => {
+    dismissed.current = true;
+    asking.current++;
+    setSuggested(null);
+    setConfirmReplace(false);
+  }, []);
+
+  /** Inserts the suggested Template: over what was typed, or at the caret when the owner keeps it. */
+  const takeSuggested = useCallback(
+    (replace: boolean) => {
+      const { o: opts, suggested: s } = latest.current;
+      const ed = opts.editor;
+      const template = s ? opts.link?.library.find((t) => t.id === s.templateId) : undefined;
+      dismiss();
+      if (!ed || !template) return;
+      insert(template, replace ? ownRange(ed) : undefined);
+    },
+    [dismiss, insert],
+  );
+
+  /** Tab on the suggestion line: one line typed is replaced; more asks first. */
+  const accept = useCallback(() => {
+    const ed = latest.current.o.editor;
+    if (!ed) return;
+    const lines = ownRange(ed)
+      .text.split("\n")
+      .filter((l) => l.trim());
+    if (lines.length > 1) setConfirmReplace(true);
+    else takeSuggested(true);
+  }, [takeSuggested]);
+
   const onKey = useCallback(
     (event: KeyboardEvent): boolean => {
       const { picker: p, items: list, enabled: on, o: opts } = latest.current;
@@ -164,14 +223,68 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
         setPicker({ mode: "key", from, to, query: "", index: 0 });
         return true;
       }
-      if (event.key === "Tab" && !event.altKey && !event.metaKey && !event.ctrlKey) {
-        if (chipsIn(ed.state.doc).length === 0) return false;
+      const plainTab = event.key === "Tab" && !event.altKey && !event.metaKey && !event.ctrlKey;
+      if (plainTab && chipsIn(ed.state.doc).length > 0) {
         return moveToChip(ed, event.shiftKey ? -1 : 1);
+      }
+      if (latest.current.suggested) {
+        if (plainTab && !event.shiftKey) {
+          accept();
+          return true;
+        }
+        if (event.key === "Escape") {
+          dismiss();
+          return true;
+        }
       }
       return false;
     },
-    [pick],
+    [pick, accept, dismiss],
   );
+
+  // After a pause in the first words, the two requests (docs/spec/templates.md, "When").
+  const suggestion = link?.suggestion;
+  const typedNow = editor && link ? ownRange(editor).text.trim() : "";
+  useEffect(() => {
+    const opts = latest.current.o;
+    const l = opts.link;
+    const ed = opts.editor;
+    if (!l || !ed || !enabled || !suggestion?.enabled || dismissed.current) return;
+    if (
+      !typedNow ||
+      typedNow.length >= suggestion.maxTypedChars ||
+      chipsIn(ed.state.doc).length > 0 ||
+      /data-(placeholder|filled)=/.test(opts.bodyHtml)
+    ) {
+      setSuggested(null);
+      return;
+    }
+    const wait = Math.max(
+      suggestion.debounceMs,
+      lastAsked.current + suggestion.minIntervalMs - Date.now(),
+    );
+    const timer = setTimeout(() => {
+      lastAsked.current = Date.now();
+      const mine = ++asking.current;
+      const now = latest.current.o;
+      void l
+        .suggest({
+          threadId: now.threadId,
+          draft: { to: [...now.to], subject: now.subject, typed: typedNow },
+        })
+        .then((r) => {
+          if (mine !== asking.current || dismissed.current || !r) return;
+          if (r.status === "suggested") setSuggested({ templateId: r.templateId, name: r.name });
+          else setSuggested(null);
+          if (r.status === "unavailable" && !unavailableSaid) {
+            unavailableSaid = true;
+            setUnavailable(true);
+          }
+        })
+        .catch(() => {});
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [typedNow, enabled, suggestion]);
 
   // The plugin: first in line, so Enter and the arrows reach the picker before the editor.
   useEffect(() => {
@@ -298,7 +411,46 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
       </>
     );
   }
-  return { blocked, overlay, insert };
+  let suggestionLine: ReactNode = null;
+  if (link && enabled) {
+    const s = link.strings;
+    if (confirmReplace && suggested) {
+      suggestionLine = (
+        <div className="tpl-suggest" role="status" data-suggest="replace">
+          <span>{s.suggestReplace}</span>
+          <Btn sm primary onClick={() => takeSuggested(true)}>
+            {s.replaceYes}
+          </Btn>
+          <Btn sm onClick={() => takeSuggested(false)}>
+            {s.replaceNo}
+          </Btn>
+        </div>
+      );
+    } else if (suggested) {
+      suggestionLine = (
+        <div className="tpl-suggest" role="status" data-suggest={suggested.templateId}>
+          <button
+            type="button"
+            className="tpl-suggest-use"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={accept}
+          >
+            {fillIn(s.suggestUse, { name: suggested.name })}
+          </button>
+          <Btn icon sm title={s.dismiss} onClick={dismiss}>
+            <XIcon />
+          </Btn>
+        </div>
+      );
+    } else if (unavailable) {
+      suggestionLine = (
+        <div className="tpl-suggest quiet" role="status" data-suggest="unavailable">
+          {s.unavailable}
+        </div>
+      );
+    }
+  }
+  return { blocked, overlay, insert, suggestionLine, suggested };
 }
 
 /* ------------------------------ The picker ------------------------------ */

@@ -55,6 +55,22 @@ export interface TemplateUiStrings {
   palette: string;
   loadFailed: string;
   empty: string;
+  suggestUse: string;
+  suggestReplace: string;
+  replaceYes: string;
+  replaceNo: string;
+  dismiss: string;
+  unavailable: string;
+  replyWith: string;
+  fromMessage: string;
+  saveAs: string;
+  drafting: string;
+  draftFailed: string;
+  duplicateSame: string;
+  duplicateRelated: string;
+  duplicateReplace: string;
+  duplicateKeep: string;
+  saved: string;
 }
 
 export function templateStrings(s: Settings): TemplateUiStrings {
@@ -121,6 +137,22 @@ export function templateStrings(s: Settings): TemplateUiStrings {
     palette: s["strings.templates.palette"],
     loadFailed: s["strings.templates.load_failed"],
     empty: s["strings.templates.empty"],
+    suggestUse: s["strings.templates.suggest.use"],
+    suggestReplace: s["strings.templates.suggest.replace"],
+    replaceYes: s["strings.templates.suggest.replace_yes"],
+    replaceNo: s["strings.templates.suggest.replace_no"],
+    dismiss: s["strings.templates.suggest.dismiss"],
+    unavailable: s["strings.templates.suggest.unavailable"],
+    replyWith: s["strings.templates.reply_with"],
+    fromMessage: s["strings.templates.from_message"],
+    saveAs: s["strings.templates.save_as"],
+    drafting: s["strings.templates.drafting"],
+    draftFailed: s["strings.templates.draft_failed"],
+    duplicateSame: s["strings.templates.duplicate.same"],
+    duplicateRelated: s["strings.templates.duplicate.related"],
+    duplicateReplace: s["strings.templates.duplicate.replace"],
+    duplicateKeep: s["strings.templates.duplicate.keep"],
+    saved: s["strings.templates.saved"],
   };
 }
 

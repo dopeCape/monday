@@ -5,7 +5,13 @@
 // are at hand; a surface rendered on its own in a test finds none and offers
 // no Templates.
 
-import type { Id, Person, Template, TemplateFillResult } from "@monday/shared";
+import type {
+  Id,
+  Person,
+  Template,
+  TemplateFillResult,
+  TemplateSuggestResult,
+} from "@monday/shared";
 import { useSyncExternalStore } from "react";
 import type { Composer } from "../screens/compose/composer.ts";
 import type { TemplateUiStrings } from "./strings.ts";
@@ -23,7 +29,32 @@ export interface TemplateLink {
     templateId: Id,
     from: { threadId: Id | null; to: Person[] },
   ): Promise<TemplateFillResult | null>;
+  /** Suggestions while typing (templates.suggest.*); off when `enabled` is false. */
+  suggestion: {
+    enabled: boolean;
+    debounceMs: number;
+    minIntervalMs: number;
+    maxTypedChars: number;
+  };
+  /** The two requests; null when the Server could not be asked. */
+  suggest(request: {
+    threadId: Id | null;
+    draft: { to: Person[]; subject: string; typed: string };
+  }): Promise<TemplateSuggestResult | null>;
+  /** "Save as template" and "Make a template from this": opens the sheet that writes one. */
+  draftFrom(source: TemplateDraftSource): void;
+  /** On open: the Template that names the Reply chip, when a needs-reply Thread has one (templates.suggest.on_open). */
+  onOpen: {
+    enabled: boolean;
+    needsReplyAt: number;
+    suggest(threadId: Id): Promise<TemplateSuggestResult | null>;
+  };
 }
+
+/** Where a Template is written from: sent Messages, or a Draft's text. */
+export type TemplateDraftSource =
+  | { messageIds: Id[] }
+  | { texts: Array<{ subject: string; text: string }> };
 
 interface LinkBox {
   value: TemplateLink | null;

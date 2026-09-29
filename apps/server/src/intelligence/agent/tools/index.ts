@@ -15,6 +15,7 @@ import type { ToolSpec } from "../../runtime/index.ts";
 import type { ActivityLog, ActivityRow } from "../activity.ts";
 import { findTool, TOOL_CATALOG, type ToolContext, type ToolSettings } from "./catalog.ts";
 import type { ToolExtensions } from "./extensions.ts";
+import { undoTemplate } from "./templates.ts";
 
 export type { ToolDefinition, ToolPlan, ToolSettings } from "./catalog.ts";
 export { TOOL_CATALOG } from "./catalog.ts";
@@ -526,6 +527,8 @@ export async function replayUndo(
       }
       return `Undone: ${applied} of ${plural(undo.intents.length, "thread")} put back.`;
     }
+    case "template":
+      return undoTemplate(extensions?.templates, undo);
     case "example": {
       const tune = extensions?.tune;
       if (!tune) return "Cannot undo: Examples cannot be changed from this host.";

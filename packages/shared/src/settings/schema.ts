@@ -246,6 +246,7 @@ export const TASKS: readonly Task[] = [
   "tag",
   "draft-in-voice",
   "summarize",
+  "template",
 ];
 
 const reevaluatePolicy = z.enum(["manual", "on-rule-change", "on-correction", "always"]);
@@ -369,6 +370,7 @@ const TASK_LABEL: Record<Task, string> = {
   tag: "Tags",
   "draft-in-voice": "Drafts in your voice",
   summarize: "Summaries",
+  template: "Templates from examples",
 };
 
 function aiTask(task: Task, r: Role, e: Effort) {
@@ -2782,6 +2784,7 @@ export const settingsSchema = {
   "ai.task.tag": aiTask("tag", "fast", "low"),
   "ai.task.draft-in-voice": aiTask("draft-in-voice", "main", "medium"),
   "ai.task.summarize": aiTask("summarize", "fast", "low"),
+  "ai.task.template": aiTask("template", "fast", "low"),
   "ai.judge.provider": setting({
     type: z.enum(["auto", "typesafe", "llm"]),
     default: "auto",
@@ -2877,7 +2880,16 @@ export const settingsSchema = {
   "ai.local.model.opencode": aiLocalModel("opencode"),
   "ai.local.background.tasks": setting({
     type: z.array(z.enum(TASKS as [Task, ...Task[]])),
-    default: ["agentic-step", "classify", "route", "section", "tag", "draft-in-voice", "summarize"],
+    default: [
+      "agentic-step",
+      "classify",
+      "route",
+      "section",
+      "tag",
+      "draft-in-voice",
+      "summarize",
+      "template",
+    ],
     scope: "global",
     section: "ai",
     group: "Runtime",

@@ -20,7 +20,32 @@ import type {
 } from "./domain.ts";
 import type { GroupInput } from "./routing/index.ts";
 import type { Actor, DraftContent, Intent, IntentArgs } from "./sync.ts";
+import type {
+  DuplicateVerdict,
+  TemplateChecks,
+  TemplateInput,
+  TemplateScope,
+} from "./templates/types.ts";
 import type { WorkflowSketch } from "./workflow/index.ts";
+
+/**
+ * The Template card (create_template, update_template, delete_template,
+ * use_template): the Template rendered with its Placeholders as chips, the
+ * one it replaces for an edit, and the duplicate the judge found, if any.
+ */
+export interface TemplatePreview {
+  kind: "template";
+  action: "create" | "update" | "delete" | "use";
+  template: TemplateInput;
+  /** The id, for an edit, a delete or a use; null for a new one. */
+  templateId: Id | null;
+  previous: TemplateInput | null;
+  duplicate: DuplicateVerdict | null;
+  /** Where a new Template goes. */
+  scope?: TemplateScope | undefined;
+  /** For use: the Thread the Draft answers. */
+  threadId?: Id | null | undefined;
+}
 
 /* ------------------------------ Tiers ------------------------------ */
 
@@ -120,6 +145,13 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   test_judgment: "read",
   update_judgment: "reversible",
   add_example: "reversible",
+  // Templates (slice 37, docs/spec/templates.md): listing reads; using one makes
+  // a Draft, and writing, changing or deleting one is reversible with its card.
+  list_templates: "read",
+  use_template: "reversible",
+  create_template: "reversible",
+  update_template: "reversible",
+  delete_template: "reversible",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -147,8 +179,18 @@ export interface PreviewThread {
 /** What a tool is about to do, shown on the card before it runs. */
 export type ToolPreview =
   | { kind: "threads"; action: string; count: number; threads: PreviewThread[] }
-  | { kind: "send"; to: Person[]; cc: Person[]; subject: string; text: string }
+  | {
+      kind: "send";
+      to: Person[];
+      cc: Person[];
+      subject: string;
+      text: string;
+      /** A draft_from_template Step's checks, shown as badges on the approval card (slice 38). */
+      checks?: TemplateChecks | undefined;
+    }
   | { kind: "setting"; key: string; from: unknown; to: unknown }
+  /** A Template the Agent writes, changes, deletes or starts a Draft from (slice 37). */
+  | TemplatePreview
   | { kind: "event"; event: EventPreview }
   /** A calendar draft the Agent proposes: the card shows the summary with Apply and Discard. */
   | { kind: "calendar-draft"; draft: CalendarDraft }
@@ -271,7 +313,17 @@ export type UndoRecord =
    * An Example the Agent recorded for a Group (add_example): Undo removes it,
    * or puts back the Example the Thread already was for that Group.
    */
-  | { kind: "example"; threadId: Id; groupId: Id; previous: { positive: boolean } | null };
+  | { kind: "example"; threadId: Id; groupId: Id; previous: { positive: boolean } | null }
+  /**
+   * Templates the Agent wrote, changed or deleted (slice 37): Undo deletes
+   * what was created, puts the previous words back, or restores what was deleted.
+   */
+  | {
+      kind: "template";
+      action: "create" | "update" | "delete";
+      ids: Id[];
+      previous: TemplateInput | null;
+    };
 
 /** One Tool call in the Activity log with everything the composer card shows. */
 export interface ActivityRecord extends ToolCall {

@@ -8,7 +8,12 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import type { PlaceholderFill, Template, TemplateFillResult } from "@monday/shared";
+import type {
+  PlaceholderFill,
+  Template,
+  TemplateFillResult,
+  TemplateSuggestResult,
+} from "@monday/shared";
 import { BUILTIN_TEMPLATES, defaultSettings } from "@monday/shared";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { act, useState } from "react";
@@ -34,6 +39,15 @@ afterEach(async () => {
 });
 
 const tick = (ms = 5) => new Promise<void>((r) => setTimeout(r, ms));
+/** Waits, a few milliseconds at a time, until the check holds; fails after the deadline. */
+async function until(check: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await act(async () => tick(10));
+  }
+  throw new Error("condition not met");
+}
 
 const fillOf = (
   name: string,
@@ -54,9 +68,13 @@ interface Harness {
   html: () => string;
   subject: () => string;
   fills: Array<{ templateId: string; threadId: string | null }>;
+  suggestions: string[];
 }
 
-async function mount(result: (id: string) => TemplateFillResult | null): Promise<Harness> {
+async function mount(
+  result: (id: string) => TemplateFillResult | null,
+  suggest?: (typed: string) => TemplateSuggestResult | null,
+): Promise<Harness> {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -67,6 +85,7 @@ async function mount(result: (id: string) => TemplateFillResult | null): Promise
     subject: string;
   } = { editor: null, compose: null, html: "", subject: "" };
   const fills: Harness["fills"] = [];
+  const suggestions: string[] = [];
   const link: TemplateLink = {
     enabled: true,
     trigger: ";;",
@@ -77,6 +96,18 @@ async function mount(result: (id: string) => TemplateFillResult | null): Promise
       fills.push({ templateId, threadId: from.threadId });
       return result(templateId);
     },
+    suggestion: {
+      enabled: suggest !== undefined,
+      debounceMs: 150,
+      minIntervalMs: 0,
+      maxTypedChars: 200,
+    },
+    suggest: async (request) => {
+      suggestions.push(request.draft.typed);
+      return suggest ? suggest(request.draft.typed) : null;
+    },
+    draftFrom: () => {},
+    onOpen: { enabled: false, needsReplyAt: 0.6, suggest: async () => null },
   };
   function Surface() {
     const [ed, setEd] = useState<TiptapEditor | null>(null);
@@ -115,6 +146,7 @@ async function mount(result: (id: string) => TemplateFillResult | null): Promise
           onReady={setEd}
         />
         {compose.blocked ? <span className="blocked">{compose.blocked}</span> : null}
+        {compose.suggestionLine}
         {compose.overlay}
       </div>
     );
@@ -127,6 +159,7 @@ async function mount(result: (id: string) => TemplateFillResult | null): Promise
     html: () => state.html,
     subject: () => state.subject,
     fills,
+    suggestions,
   };
 }
 
@@ -247,5 +280,90 @@ describe("Templates in compose", () => {
     await act(async () => tick(20));
     expect(h.subject()).toBe("A quick call about {topic}");
     expect(h.compose().blocked).toBe("Fill topic first");
+  });
+});
+
+describe("suggestions while typing", () => {
+  const thanks = (typed: string): TemplateSuggestResult =>
+    /thanks for sending/i.test(typed)
+      ? {
+          status: "suggested",
+          templateId: "t_thanks_received",
+          name: "Thanks, received",
+          fits: 0.9,
+          gate: 0.8,
+        }
+      : { status: "none", reason: "gate", gate: 0.1 };
+  const line = () => document.body.querySelector(".tpl-suggest");
+
+  test("Thanks for sending the ... suggests Thanks, received after the pause; Tab replaces the line typed", async () => {
+    const h = await mount(
+      () => ({
+        templateId: "t_thanks_received",
+        judge: "typesafe",
+        fills: [fillOf("first_name", "Sofia")],
+      }),
+      thanks,
+    );
+    await type(h.editor(), "Thanks for sending the");
+    expect(line()).toBeNull();
+    await until(() => line() !== null);
+    expect(h.suggestions.at(-1)).toBe("Thanks for sending the");
+    expect(line()?.textContent).toContain("Use Thanks, received (Tab)");
+    await key(h.editor(), "Tab");
+    await until(() => h.editor().getText().includes("Hi Sofia,"));
+    expect(line()).toBeNull();
+    expect(h.editor().getText()).not.toContain("Thanks for sending the");
+    expect(h.editor().getText()).toContain("Hi Sofia,");
+    expect(h.editor().getText()).toContain("Thanks for sending");
+  });
+
+  test("a personal paragraph suggests nothing; Esc dismisses a suggestion for this Draft", async () => {
+    const h = await mount(() => null, thanks);
+    await type(h.editor(), "I was so sorry to hear about your father");
+    await until(() => h.suggestions.at(-1) === "I was so sorry to hear about your father");
+    await act(async () => tick(20));
+    expect(line()).toBeNull();
+    await act(async () => h.editor().commands.setContent("<p></p>"));
+    await type(h.editor(), "Thanks for sending the");
+    await until(() => line() !== null);
+    await key(h.editor(), "Escape");
+    expect(line()).toBeNull();
+    const asked = h.suggestions.length;
+    await type(h.editor(), " contract");
+    await act(async () => tick(300));
+    expect(line()).toBeNull();
+    expect(h.suggestions.length).toBe(asked);
+  });
+
+  test("more than one line typed asks before replacing it", async () => {
+    const h = await mount(() => null, thanks);
+    await act(async () =>
+      h.editor().commands.setContent("<p>Hi Sofia,</p><p>Thanks for sending the</p>"),
+    );
+    await act(async () => h.editor().commands.focus("end"));
+    await type(h.editor(), " deck");
+    await until(() => line() !== null);
+    await key(h.editor(), "Tab");
+    expect(line()?.textContent).toContain("Replace what you typed?");
+    await act(async () => {
+      [...document.body.querySelectorAll<HTMLButtonElement>(".tpl-suggest button")]
+        .find((b) => b.textContent === "Keep it")
+        ?.click();
+      await tick(20);
+    });
+    await until(() => h.editor().getText().includes("I've got it"));
+    expect(h.editor().getText()).toContain("Thanks for sending the deck");
+    expect(h.editor().getText()).toContain("I've got it and will take a look.");
+  });
+
+  test("with no judge on the Server the window says so once, quietly", async () => {
+    const h = await mount(
+      () => null,
+      () => ({ status: "unavailable", reason: "no judge" }),
+    );
+    await type(h.editor(), "Hello");
+    await until(() => line() !== null);
+    expect(line()?.textContent).toBe("Template suggestions need TypeSafe or a language model");
   });
 });

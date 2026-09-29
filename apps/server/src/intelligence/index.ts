@@ -772,7 +772,18 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       };
     },
   });
-  const templates = createTemplateIntelligence({ db, mailstore, runtime, now, log });
+  const templates = createTemplateIntelligence({
+    db,
+    mailstore,
+    runtime,
+    now,
+    log,
+    voice: async (workspaceId) => {
+      const v = await voice.get(workspaceId);
+      return v.enabled && v.description ? v.description : null;
+    },
+    needsReply: async (threadId) => (await judgments.get(threadId))?.needsReply ?? null,
+  });
   // Filled once the Workflows module exists; the tool server reads it per call.
   const extensions: ToolExtensions = { integrations, mcp, voice, guard };
   const agent = createAgentHost({
@@ -859,6 +870,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
   const organize = createOrganize({ db, mailstore, runtime, routing, now, log });
   extensions.organize = organize;
   extensions.tune = createTune({ db, mailstore, runtime, routing, judgments, organize, now });
+  extensions.templates = templates;
   extensions.backlog = {
     async settings() {
       const s = await readGlobalSettings(db, BACKLOG_TOOL_SETTING_KEYS);
