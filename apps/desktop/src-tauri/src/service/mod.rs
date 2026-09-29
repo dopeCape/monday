@@ -75,6 +75,7 @@ pub fn ensure(host: &dyn Host, bundled_build: &str, deadline: Duration) -> Resul
             Some(r) if alive && r.ready() => Some(host.health(r.port.unwrap_or_default())),
             _ => None,
         };
+        let seen = health.clone();
         let plan = decide(
             &Found {
                 runtime: rt,
@@ -85,10 +86,7 @@ pub fn ensure(host: &dyn Host, bundled_build: &str, deadline: Duration) -> Resul
             bundled_build,
         );
         if !matches!(plan, Plan::Wait) {
-            eprintln!(
-                "[monday] sidecar: {plan:?} (alive: {alive}, health: {:?})",
-                health_label(rt, alive, host)
-            );
+            eprintln!("[monday] sidecar: {plan:?} (alive: {alive}, health: {seen:?})");
         }
         match plan {
             Plan::Reuse { port } => return Ok(port),
@@ -130,14 +128,6 @@ pub fn ensure(host: &dyn Host, bundled_build: &str, deadline: Duration) -> Resul
                 started_at = Some(host.elapsed());
             }
         }
-    }
-}
-
-/** What the last health check said, for the log line; asked again only for the log. */
-fn health_label(rt: Option<&RuntimeInfo>, alive: bool, host: &dyn Host) -> Option<Health> {
-    match rt {
-        Some(r) if alive && r.ready() => Some(host.health(r.port.unwrap_or_default())),
-        _ => None,
     }
 }
 
