@@ -55,6 +55,7 @@ import type { CandidateGroup, Routing } from "./routing/index.ts";
 import type { HostedRuntime } from "./runtime/index.ts";
 import { AiOffError, NoJudgeError } from "./runtime/index.ts";
 import type { Signals } from "./signals/index.ts";
+import { eachPool } from "./signals/pool.ts";
 
 /** One Thread's judged answers as POST /sections/judgments returns them. */
 export interface SectionJudgmentView {
@@ -249,6 +250,7 @@ const SETTING_KEYS = [
   "actions.organize_preview_above",
   "sections.examples",
   "routing.examples_in_prompt",
+  "signals.backfill.concurrency",
 ] as const;
 
 /**
@@ -410,9 +412,11 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
     groupNames: Record<string, string>,
   ): Promise<Map<Id, Record<string, number>>> => {
     const out = new Map<Id, Record<string, number>>();
-    for (const thread of threads) {
-      const rules = need.get(thread.id);
-      if (!rules?.length) continue;
+    const asked = threads.filter((t) => (need.get(t.id)?.length ?? 0) > 0);
+    // One Thread per request, signals.backfill.concurrency of them in flight at once.
+    const concurrency = (await readSettings())["signals.backfill.concurrency"];
+    await eachPool(asked, concurrency, async (thread) => {
+      const rules = need.get(thread.id) ?? [];
       const questions: Record<string, NoulQuestion> = Object.fromEntries(
         rules.map((r) => [r.id, r.question]),
       );
@@ -428,7 +432,7 @@ export function createOrganize(options: OrganizeOptions): OrganizeSeam {
       }
       await signals.store(workspaceId, thread.id, stored, { model: result.model });
       out.set(thread.id, learned);
-    }
+    });
     return out;
   };
 

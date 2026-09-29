@@ -276,7 +276,7 @@ The state (code builds it; nothing else goes in):
 
 ## Budget and rate
 
-- **Rate.** Every judge request from one Server passes one limiter: at most `signals.rate.requests_per_minute` (default 600, half of Jev 1.13's published 1,200, because TypeSafe says its limits move while it scales and arrival needs headroom) and `signals.backfill.concurrency` requests in flight for background work. Arrival requests go first. A 429 honours `retry-after`, halves background concurrency for `signals.rate.cooldown_seconds`, then grows it back one at a time. With a Cloud and a Sidecar both running, each limits itself; background walks are one per Workspace, so they do not double.
+- **Rate.** Every judge request from one Server passes one limiter: at most `signals.rate.requests_per_minute` (default 1,100, a little under Jev 1.13's published 1,200 because TypeSafe says its limits move while it scales) and `signals.backfill.concurrency` requests in flight for background work (default 16: a request takes about half a second, so 16 in flight reach the rate). Arrival requests go first, background leaves `signals.rate.arrival_reserve_per_minute` (default 100) of every minute to arrival and is spread across the minute instead of spent in a burst. Many Threads are asked through one worker pool, each Thread its own request, the next one starting as soon as any answers (never in lock-step rounds; `docs/research/judge-parallelism.md`). A 429 honours `retry-after`, halves background concurrency for `signals.rate.cooldown_seconds`, then grows it back one at a time. With a Cloud and a Sidecar both running, each limits itself; background walks are one per Workspace, so they do not double.
 - **Money.** `signals.budget.background_monthly_usd` (default 3.00) caps what background walks (Signal backfills, the Backlog sort, Board tests beyond their sample) may spend on `judge.*` in a calendar month, from the Meter's estimates. Reaching it pauses the walks with the reason shown ("Paused: this month's background reading budget of $3.00 is spent."), with Raise and Resume next month. Arrival requests are never capped: they are the product working, about $0.0002 a Thread.
 
 ## Unsure, flicker and Jev's limits
@@ -312,9 +312,10 @@ Settings › AI and agent › Signals (and the Agent's `list_judgments`, `explai
 | `judgments.on_arrival` | on | Existing key; now governs the Signal request on arrival |
 | `signals.questions.*` | as written above | Every shipped question is the user's to reword (ADR 0012) |
 | `signals.backfill.scope` | `last 3 months` | Same as the Backlog sort; older mail stays not read until asked |
-| `signals.backfill.concurrency` | 4 | Existing pace; the limiter caps it anyway |
+| `signals.backfill.concurrency` | 16 | Requests in flight for background reading and any task that reads many Threads; enough to reach the rate at about half a second a request |
 | `signals.backfill.confirm_above` | 2,000 | Above this a backfill asks first with its estimate |
-| `signals.rate.requests_per_minute` | 600 | Half the published limit, leaving room for arrival |
+| `signals.rate.requests_per_minute` | 1,100 | Just under the published 1,200, which TypeSafe says can move |
+| `signals.rate.arrival_reserve_per_minute` | 100 | Background never takes these, so arrival is never queued behind a backfill |
 | `signals.rate.cooldown_seconds` | 60 | How long background work stays slowed after a 429 |
 | `signals.budget.background_monthly_usd` | 3.00 | About 15,000 Threads of background reading a month |
 | `signals.state.newest_chars` | 4,000 | The newest Message, where most answers live |

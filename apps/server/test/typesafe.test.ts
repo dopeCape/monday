@@ -184,6 +184,21 @@ describe("the TypeSafe judge over a fake fetch", () => {
     expect((error as TypeSafeError).retryable).toBe(true);
   });
 
+  test("under the limiter a 429 is handed straight back with its retry-after, so the limiter sees it", async () => {
+    const { waits, sleep } = noSleep();
+    const { fetchImpl, seen } = scriptedFetch(
+      jsonResponse({ error: "rate limit" }, 429, { "retry-after": "3" }),
+      jsonResponse(RECORDED),
+    );
+    const judge = createTypeSafeJudge({ fetch: fetchImpl, sleep, retryRateLimited: false });
+    const error = await judge({ model: "m", key: "k", state: "x", questions: QUESTIONS }).catch(
+      (e: unknown) => e,
+    );
+    expect(error as TypeSafeError).toMatchObject({ code: "rate_limited", retryAfterMs: 3000 });
+    expect(seen).toHaveLength(1);
+    expect(waits).toEqual([]);
+  });
+
   test("a wrong key is 401 unauthorized and a malformed request 422 invalid_request, neither retried", async () => {
     const { waits, sleep } = noSleep();
     const bad = scriptedFetch(jsonResponse({ message: "Invalid API key" }, 401));

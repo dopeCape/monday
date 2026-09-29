@@ -80,6 +80,7 @@ import {
   NoProviderKeyError,
 } from "../intelligence/runtime/index.ts";
 import { LocalRuntimeTimeoutError } from "../intelligence/runtime/local.ts";
+import { mapPool, valuesOf } from "../intelligence/signals/pool.ts";
 import type { TemplateStepSeam } from "../intelligence/templates/step.ts";
 import type { Job, StepContext as JobContext, Jobs, StepResult } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
@@ -137,6 +138,8 @@ export interface WorkflowSettings {
     /** The judge's instructions, with {statement}. */
     question: string;
     inputCharsMax: number;
+    /** signals.backfill.concurrency: how many Threads a Dry run asks at once. Absent means one. */
+    concurrency?: number;
   };
 }
 
@@ -1621,36 +1624,51 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     const rejected: ThreadRow[] = [];
     // A judged trigger costs one request per Thread: the sample stops once it has enough.
     const judgedTrigger = doc.trigger.kind === "arrival" && doc.trigger.judge !== undefined;
-    for (const t of rows) {
+    const concurrency = (await options.settings()).judged.concurrency ?? 1;
+    // Many Threads in flight at once (signals.backfill.concurrency); the sample is read back in order.
+    let counted = 0;
+    const verdicts = await mapPool(
+      rows,
+      concurrency,
+      async (t) => {
+        const trigger = doc.trigger;
+        const event =
+          trigger.kind === "thread_event"
+            ? { event: trigger.event, value: trigger.value ?? null }
+            : null;
+        let ok = false;
+        if (event) {
+          switch (event.event) {
+            case "archived":
+              ok = t.archived;
+              break;
+            case "snoozed":
+              ok = t.snoozedUntil !== null;
+              break;
+            case "starred":
+              ok = t.starred;
+              break;
+            case "moved":
+              ok = event.value
+                ? t.groupId === event.value || t.subgroupId === event.value
+                : t.groupId !== null;
+              break;
+            case "tagged":
+              ok = false;
+              break;
+          }
+        } else ok = await triggerMatches(trigger, t, null, (j) => judgedMap.set(t.id, j));
+        if (ok || judgedMap.has(t.id)) counted += 1;
+        return ok;
+      },
+      { stop: () => judgedTrigger && counted >= recent },
+    );
+    for (const [i, t] of rows.entries()) {
       if (judgedTrigger && matched.length + rejected.length >= recent) break;
-      const trigger = doc.trigger;
-      const event =
-        trigger.kind === "thread_event"
-          ? { event: trigger.event, value: trigger.value ?? null }
-          : null;
-      let ok = false;
-      if (event) {
-        switch (event.event) {
-          case "archived":
-            ok = t.archived;
-            break;
-          case "snoozed":
-            ok = t.snoozedUntil !== null;
-            break;
-          case "starred":
-            ok = t.starred;
-            break;
-          case "moved":
-            ok = event.value
-              ? t.groupId === event.value || t.subgroupId === event.value
-              : t.groupId !== null;
-            break;
-          case "tagged":
-            ok = false;
-            break;
-        }
-      } else ok = await triggerMatches(trigger, t, null, (j) => judgedMap.set(t.id, j));
-      if (ok) matched.push(t);
+      const verdict = verdicts[i];
+      if (!verdict || verdict.status === "skipped") break;
+      if (verdict.status === "failed") throw verdict.error;
+      if (verdict.value) matched.push(t);
       else if (judgedMap.has(t.id)) rejected.push(t);
     }
     return {
@@ -1777,9 +1795,10 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     if (doc.trigger.kind === "schedule" || doc.trigger.kind === "manual") {
       out.push(await dryRunOne(w, doc, null, settings));
     } else {
-      for (const t of sample.threads) {
-        out.push(await dryRunOne(w, doc, t, settings, sample.judged.get(t.id)));
-      }
+      const tried = await mapPool(sample.threads, settings.judged.concurrency ?? 1, (t) =>
+        dryRunOne(w, doc, t, settings, sample.judged.get(t.id)),
+      );
+      out.push(...valuesOf(tried));
       for (const t of sample.rejected) {
         const verdict = sample.judged.get(t.id);
         if (verdict) out.push(await dryRunRejected(t, verdict));

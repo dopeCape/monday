@@ -1343,8 +1343,8 @@ export const settingsSchema = {
     help: "How many of the newest Threads a re-run scores before showing what would move.",
   }),
   "routing.rerun.concurrency": setting({
-    type: z.int().min(1).max(16),
-    default: 4,
+    type: z.int().min(1).max(64),
+    default: 16,
     scope: "global",
     section: "routing",
     group: "Sorting",
@@ -1442,14 +1442,14 @@ export const settingsSchema = {
     help: "Without TypeSafe, background sorting asks the language model (or your coding agent) about this many Threads in one prompt. Small keeps each answer quick.",
   }),
   "routing.backfill.concurrency": setting({
-    type: z.int().min(1).max(16),
-    default: 4,
+    type: z.int().min(1).max(64),
+    default: 16,
     scope: "global",
     section: "routing",
     group: "Sorting",
     tier: "advanced",
     label: "Background sorting pace",
-    help: "How many requests background sorting keeps in flight at once. A coding agent always takes one at a time.",
+    help: "How many requests background sorting keeps in flight at once, one thread each on TypeSafe, starting the next as soon as one answers. The TypeSafe rate limit caps it anyway. A coding agent always takes one at a time.",
   }),
   "routing.backfill.sync_wait_seconds": setting({
     type: z.int().min(5).max(3600),

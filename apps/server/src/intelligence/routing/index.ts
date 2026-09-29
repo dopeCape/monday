@@ -73,6 +73,7 @@ import {
   NoProviderKeyError,
 } from "../runtime/index.ts";
 import { LocalRuntimeTimeoutError } from "../runtime/local.ts";
+import { eachPool } from "../signals/pool.ts";
 import {
   type BatchItem,
   batchQuestion,
@@ -902,22 +903,6 @@ export function createRouting(options: RoutingOptions): Routing {
     sorter: "typesafe" | "llm" | null;
   }
 
-  /** Runs `work` over every item, at most `limit` at a time. */
-  const inPool = async <T>(
-    items: readonly T[],
-    limit: number,
-    work: (item: T) => Promise<void>,
-  ) => {
-    let next = 0;
-    const worker = async () => {
-      while (next < items.length) {
-        const item = items[next++] as T;
-        await work(item);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
-  };
-
   /** One Thread through the language model's one-Thread prompt. */
   const classifyOne = async (item: ManyItem, candidates: GroupText[], ctx: ManyContext) => {
     const { prompt, labels } = classifyPrompt(item.facts, candidates, ctx.settings);
@@ -960,7 +945,7 @@ export function createRouting(options: RoutingOptions): Routing {
         stateTokens: ctx.backfill.stateTokens,
       },
     );
-    await inPool(batches, ctx.backfill.concurrency, async (batch) => {
+    await eachPool(batches, ctx.backfill.concurrency, async (batch) => {
       const keyed: BatchItem[] = batch.map((it, i) => ({ key: `t${i + 1}`, facts: it.facts }));
       const asked = routeBatchQuestions(keyed, candidates, owner, js);
       const answer = await runtime.judge("judge.backlog", asked.state, asked.questions, {
@@ -1151,7 +1136,7 @@ export function createRouting(options: RoutingOptions): Routing {
     ctx.owner ??= await ownerOf(ctx.workspaceId);
     const owner = ctx.owner;
     const out = new Map<Id, EachResult>();
-    await inPool(items, ctx.backfill.concurrency, async (it) => {
+    await eachPool(items, ctx.backfill.concurrency, async (it) => {
       const plan = planOne(it.facts, all, owner, ctx.settings, ctx.thresholdOf);
       let answers: Record<string, JudgeAnswer | undefined> = {};
       if (Object.keys(plan.questions).length > 0 && plan.state !== null) {
@@ -1745,31 +1730,24 @@ export function createRouting(options: RoutingOptions): Routing {
         return { workspaceId, considered: 0, moves: [], calls: 0, ...scoped };
       }
       const todo = walked.filter((row) => !userPlaced(row));
-      // A few at a time: each score may wait on the Judge over the network.
+      // routing.rerun.concurrency at a time, continuously: each score may wait on the Judge over the network.
       const found: Array<ProposedMove | null> = todo.map(() => null);
       let calls = 0;
       let done = 0;
       let moved = 0;
-      let next = 0;
       opts.onProgress?.({ done: 0, total: todo.length, moves: 0, subject: null });
-      const worker = async () => {
-        while (next < todo.length) {
-          const i = next++;
-          const row = todo[i] as ThreadRow;
-          const facts = await readFacts(row);
-          const scored = await scoreThread(row, facts, all, settings, null);
-          calls += scored.calls;
-          const { proposal, differs } = toProposed(row, facts, scored, settings);
-          if (differs) {
-            found[i] = proposal;
-            moved += 1;
-          }
-          done += 1;
-          opts.onProgress?.({ done, total: todo.length, moves: moved, subject: proposal.subject });
+      await eachPool(todo, settings.rerunConcurrency ?? 1, async (row, i) => {
+        const facts = await readFacts(row);
+        const scored = await scoreThread(row, facts, all, settings, null);
+        calls += scored.calls;
+        const { proposal, differs } = toProposed(row, facts, scored, settings);
+        if (differs) {
+          found[i] = proposal;
+          moved += 1;
         }
-      };
-      const pool = Math.max(1, Math.min(settings.rerunConcurrency ?? 1, todo.length));
-      await Promise.all(Array.from({ length: pool }, worker));
+        done += 1;
+        opts.onProgress?.({ done, total: todo.length, moves: moved, subject: proposal.subject });
+      });
       const moves = found.filter((m): m is ProposedMove => m !== null);
       if (!scope) return { workspaceId, considered: todo.length, moves, calls };
       const byTarget: Record<string, number> = {};

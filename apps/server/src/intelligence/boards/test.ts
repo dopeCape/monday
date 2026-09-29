@@ -41,6 +41,7 @@ import type { Db } from "../../db/client.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
+import { eachPool } from "../signals/pool.ts";
 
 export interface TestSettings {
   pool: number;
@@ -68,12 +69,6 @@ export function readingFrom(answer: JudgeAnswer): SignalReading {
     return { choice: answer.choice, confidence: answer.confidence, version: 0 };
   }
   return { score: answer.score, confidence: answer.confidence, version: 0 };
-}
-
-async function inBatches<T>(items: readonly T[], size: number, run: (item: T) => Promise<void>) {
-  for (let i = 0; i < items.length; i += Math.max(1, size)) {
-    await Promise.all(items.slice(i, i + Math.max(1, size)).map(run));
-  }
 }
 
 export async function runBoardTest(
@@ -142,7 +137,7 @@ export async function runBoardTest(
   if (judge) {
     // The definitions settle once before the parallel requests read them.
     await deps.signals.defs(workspaceId);
-    await inBatches(pool, settings.concurrency, async (t) => {
+    await eachPool(pool, settings.concurrency, async (t) => {
       const have = stored.get(t.id) ?? {};
       const missing = doc.uses.filter((u) => !have[u]);
       if (own.length === 0 && missing.length === 0) return;

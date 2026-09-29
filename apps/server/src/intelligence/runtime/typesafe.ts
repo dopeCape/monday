@@ -36,6 +36,13 @@ export interface TypeSafeOptions {
   backoffMs?: number;
   /** Longest wait for one response; 20 s by default (the judge answers in about a second). */
   timeoutMs?: number;
+  /**
+   * Whether a 429 is retried here. The Server's judge runs under the limiter
+   * (signals/limiter.ts), which must see every 429 to halve background work
+   * and honour retry-after without holding a request slot, so it passes
+   * false. True by default.
+   */
+  retryRateLimited?: boolean;
 }
 
 export type TypeSafeErrorCode = JudgeErrorCode;
@@ -229,6 +236,7 @@ export function createTypeSafeJudge(options: TypeSafeOptions = {}): JudgeModel {
   const retries = options.retries ?? 3;
   const backoffMs = options.backoffMs ?? 500;
   const timeoutMs = options.timeoutMs ?? 20_000;
+  const retryRateLimited = options.retryRateLimited ?? true;
 
   return async <Q extends JudgeQuestions>(call: JudgeCall<Q>): Promise<JudgeResponse<Q>> => {
     const body = JSON.stringify({
@@ -270,6 +278,7 @@ export function createTypeSafeJudge(options: TypeSafeOptions = {}): JudgeModel {
       } catch (error) {
         last = asTypeSafeError(error);
         if (!last.retryable) throw last;
+        if (last.code === "rate_limited" && !retryRateLimited) throw last;
       }
     }
     throw last ?? new TypeSafeError("network", 0, "could not reach TypeSafe");

@@ -4,9 +4,11 @@
 //
 // One per Workspace: the routing_backlogs row holds the scope, the cursor
 // and the counts, and the route-backlog Job advances it one round at a time
-// (a round is routing.backfill.concurrency batches of routing.backfill.
-// batch_size Threads on TypeSafe, one prompt of routing.backfill.
-// llm_batch_size on a language model), so a restart resumes where it was
+// (on TypeSafe one Thread per request, routing.backfill.concurrency of them
+// in flight continuously, page after page, while the step has budget
+// left; above routing.backfill.batch_size 1, concurrency batches of that
+// size; one prompt of routing.backfill.llm_batch_size on a language model),
+// each page written back in order, so a restart resumes where it was
 // and the Routing page reads progress from the row. Starting another
 // replaces it; pause, resume and cancel change the row, and a Job whose run
 // id no longer matches stops.
@@ -35,9 +37,10 @@ import { formatSortScope, parseSortScope } from "@monday/shared";
 import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import { groups, routingBacklogs, syncState, threadRoutes, threads } from "../../db/schema.ts";
-import type { Job, Jobs } from "../../jobs/index.ts";
+import type { Job, Jobs, StepContext } from "../../jobs/index.ts";
 import { AiOffError, NoJudgeError, NoProviderKeyError } from "../runtime/index.ts";
 import { LocalRuntimeTimeoutError } from "../runtime/local.ts";
+import { streamPool } from "../signals/pool.ts";
 import type { CandidateGroup, Routing } from "./index.ts";
 import {
   above,
@@ -224,7 +227,7 @@ export function createBacklog(options: BacklogOptions): Backlog {
   };
 
   /** Threads above the top that arrival routing has not placed since the run began. */
-  const catchupRows = async (row: Row, limit: number) => {
+  const catchupRows = async (row: Row, limit: number, from?: Cursor | null) => {
     if (!row.topAt || !row.topId) return [];
     const top: Cursor = { at: row.topAt, id: row.topId };
     const conditions = [
@@ -233,9 +236,13 @@ export function createBacklog(options: BacklogOptions): Backlog {
       or(isNull(threadRoutes.threadId), lt(threadRoutes.routedAt, row.startedAt)),
       sql`coalesce(${threads.writes}->'placement'->>'by', '') <> 'user'`,
     ];
-    if (row.cursorAt && row.cursorId) {
-      conditions.push(below({ at: row.cursorAt, id: row.cursorId }));
-    }
+    const cursor =
+      from !== undefined
+        ? from
+        : row.cursorAt && row.cursorId
+          ? { at: row.cursorAt, id: row.cursorId }
+          : null;
+    if (cursor) conditions.push(below(cursor));
     return db
       .select({ id: threads.id, lastActivity: threads.lastActivity })
       .from(threads)
@@ -262,9 +269,146 @@ export function createBacklog(options: BacklogOptions): Backlog {
     return { sleepMs: Math.max(1, seconds) * 1000 };
   };
 
+  /**
+   * One Thread per request on TypeSafe (routing.backfill.batch_size 1): the
+   * walk streams page after page through one pool, routing.backfill.
+   * concurrency requests in flight all the time, the next page read ahead.
+   * Each page is written back once all of it is placed, in order, so the
+   * cursor never passes a Thread still being asked and a restart resumes.
+   * The step goes on while half its budget is left.
+   */
+  const streamRound = async (
+    job: Job<BacklogJobPayload>,
+    ctx: StepContext | undefined,
+    row: Row,
+    s: BacklogStepSettings,
+    phase: Row["phase"],
+    first: Array<{ id: string; lastActivity: Date }>,
+  ): Promise<"done" | "again" | { sleepMs: number }> => {
+    const { workspaceId, runId } = job.payload;
+    const resolved = resolvedOf(row);
+    const pageSize = Math.max(1, s.concurrency) * 4;
+    const budgetAtStart = ctx?.remainingMs() ?? Number.POSITIVE_INFINITY;
+    const outOfTime = () => (ctx ? ctx.remainingMs() < budgetAtStart / 2 : false);
+    const last = first[first.length - 1];
+    let cursor: Cursor | null = last ? { at: last.lastActivity, id: last.id } : null;
+    let fetched = first.length;
+    let handedFirst = false;
+    let stop = false;
+    let halt: "gone" | "kept" | "budget" | null = null;
+    const results = new Map<Id, Awaited<ReturnType<Routing["routeMany"]>>>();
+    try {
+      await streamPool<{ id: string; lastActivity: Date }>({
+        concurrency: s.concurrency,
+        stop: () => stop || halt !== null || outOfTime(),
+        next: async () => {
+          if (!handedFirst) {
+            handedFirst = true;
+            return first;
+          }
+          if (!cursor) return [];
+          if (phase === "catchup") {
+            const page = await catchupRows(row, pageSize, cursor);
+            const end = page[page.length - 1];
+            if (end) cursor = { at: end.lastActivity, id: end.id };
+            return page;
+          }
+          const remaining =
+            row.limit === null ? pageSize : Math.max(0, row.limit - row.walked - fetched);
+          if (remaining <= 0) return [];
+          const page = (
+            await pageInScope(db, workspaceId, resolved, {
+              limit: Math.min(pageSize, remaining),
+              below: cursor,
+              atOrBelow: null,
+            })
+          ).map((r) => ({ id: r.id, lastActivity: r.lastActivity }));
+          const end = page[page.length - 1];
+          if (end) cursor = { at: end.lastActivity, id: end.id };
+          fetched += page.length;
+          return page;
+        },
+        work: async (t) => {
+          if (stop) return;
+          try {
+            results.set(t.id, await routing.routeMany(workspaceId, [t.id], { jobId: job.id }));
+          } catch (error) {
+            if (!nothingSorts(error)) throw error;
+            log(`backlog ${workspaceId}: waiting: ${(error as Error).message}`);
+            stop = true;
+          }
+        },
+        onPage: async (page, settled) => {
+          for (const r of settled) if (r.status === "failed") throw r.error;
+          if (stop || halt === "gone") return;
+          const current = await read(workspaceId);
+          if (!current || current.runId !== runId) {
+            halt = "gone";
+            return;
+          }
+          const sum = { moved: 0, asked: 0, skipped: 0, calls: 0, batches: 0 };
+          let batchSize = 0;
+          let sorter: Row["sorter"] = null;
+          for (const t of page) {
+            const r = results.get(t.id);
+            results.delete(t.id);
+            if (!r) continue;
+            sum.moved += r.moved;
+            sum.asked += r.asked;
+            sum.skipped += r.skipped;
+            sum.calls += r.calls;
+            sum.batches += r.batches;
+            batchSize = r.batchSize || batchSize;
+            sorter = r.sorter ?? sorter;
+          }
+          const end = page[page.length - 1];
+          const local =
+            sorter === "llm" && options.sorterIsLocal ? await options.sorterIsLocal() : false;
+          const total = await countInScope(db, workspaceId, resolved);
+          const keep = current.status === "paused" || current.status === "cancelled";
+          await patch(workspaceId, {
+            status: keep ? current.status : "running",
+            reason: keep ? current.reason : null,
+            phase,
+            cursorAt: end?.lastActivity ?? current.cursorAt,
+            cursorId: end?.id ?? current.cursorId,
+            walked: current.walked + (phase === "walk" ? page.length : 0),
+            done: current.done + page.length,
+            total: Math.max(total, current.done + page.length),
+            moved: current.moved + sum.moved,
+            asked: current.asked + sum.asked,
+            skipped: current.skipped + sum.skipped,
+            calls: current.calls + sum.calls,
+            batches: current.batches + sum.batches,
+            batchSize: batchSize || current.batchSize,
+            sorter: sorter ?? current.sorter,
+            local,
+            lastError: null,
+          });
+          if (keep) halt = "kept";
+          else if (options.budget && (await options.budget(workspaceId)).over) halt = "budget";
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`backlog ${workspaceId}: ${message}`);
+      await patch(workspaceId, { lastError: message.slice(0, 500) });
+      return { sleepMs: Math.max(1, s.waitSeconds) * 1000 };
+    }
+    if (halt === "gone" || halt === "kept") return "done";
+    if (stop) {
+      const current = await read(workspaceId);
+      if (!current || current.runId !== runId) return "done";
+      return wait(current, "no_judge", s.waitSeconds);
+    }
+    // Out of pages or out of time: the next round picks up from the cursor (and moves on a phase).
+    return "again";
+  };
+
   /** One round of a Backlog sort. */
   const step = async (
     job: Job<BacklogJobPayload>,
+    ctx?: StepContext,
   ): Promise<"done" | "again" | { sleepMs: number }> => {
     const { workspaceId, runId } = job.payload;
     const row = await read(workspaceId);
@@ -330,6 +474,10 @@ export function createBacklog(options: BacklogOptions): Backlog {
         await finish(row);
         return "done";
       }
+    }
+
+    if (judge && Math.max(1, s.batchSize) <= 1) {
+      return streamRound(job, ctx, row, s, phase, ids);
     }
 
     let result: Awaited<ReturnType<Routing["routeMany"]>>;
@@ -469,7 +617,7 @@ export function createBacklog(options: BacklogOptions): Backlog {
       target.registerStep<BacklogJobPayload>(BACKLOG_STEP, async (job, ctx) => {
         // A round may take a while on a language model: the lease is renewed first.
         await ctx.extend();
-        return step(job);
+        return step(job, ctx);
       });
     },
   };
