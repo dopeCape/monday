@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import type { Id, IsoDate, Placement, Tier } from "../domain.ts";
+import type { TemplateChecks } from "../templates/types.ts";
 import { parseCron } from "./cron.ts";
 
 export type { CronSchedule } from "./cron.ts";
@@ -233,6 +234,17 @@ export const stepSchema = z.discriminatedUnion("kind", [
     /** The draft_reply Step whose Draft this sends. Always asks. */
     draftFrom: stepId,
   }),
+  /* A Template filled from the Thread, written up and checked (docs/spec/templates.md, slice 38) */
+  z.object({
+    ...base,
+    kind: z.literal("draft_from_template"),
+    /** A Template id, or "choose" to let the judge pick from the library as on open. */
+    template: z.string().min(1),
+    /** For the language model that writes the Message around the Template. */
+    instructions: z.string().max(4000).optional(),
+    /** "draft" saves a Draft; "send" schedules a send, which asks unless a Standing approval covers it and every check passes. */
+    send: z.enum(["draft", "send"]).default("draft"),
+  }),
   z.object({ ...base, kind: z.literal("notify"), text: template }),
   z.object({
     ...base,
@@ -304,6 +316,7 @@ export const STEP_KINDS: readonly StepKind[] = [
   "snooze",
   "draft_reply",
   "send",
+  "draft_from_template",
   "notify",
   "wait",
   "condition",
@@ -332,6 +345,8 @@ export function stepTier(kind: StepKind): Tier {
     case "archive":
     case "snooze":
     case "draft_reply":
+    // Its send, when it sends, goes through send_draft and asks there.
+    case "draft_from_template":
       return "reversible";
     default:
       return "read-only";
@@ -460,6 +475,8 @@ export interface RunStepView {
   /** The Activity row the Step ran as, when it ran through a tool. */
   activityId: Id | null;
   at: IsoDate;
+  /** A draft_from_template Step's three checks, for its badges (slice 38). */
+  checks?: TemplateChecks | undefined;
 }
 
 export interface RunView {
@@ -745,6 +762,11 @@ export function describeStep(step: Step, groupName?: (id: string) => string): Fl
       return act("note", step.template ? "from template" : "in my voice");
     case "send":
       return act("send", "asks first");
+    case "draft_from_template":
+      return act(
+        step.send === "send" ? "send" : "note",
+        `${step.template === "choose" ? "the template that fits" : step.template}${step.send === "send" ? ", sends when checked" : ""}`,
+      );
     case "notify":
       return act("bell");
     case "wait":

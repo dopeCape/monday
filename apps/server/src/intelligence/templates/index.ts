@@ -5,6 +5,7 @@
 // model's fallback, else nobody).
 
 import type {
+  Draft,
   DuplicateVerdict,
   Id,
   Person,
@@ -29,6 +30,7 @@ import type { HostedRuntime } from "../runtime/index.ts";
 import { type Ask, createAsk } from "./ask.ts";
 import { draftTemplate, type Example, findDuplicate } from "./author.ts";
 import { type FillSettings, fillFromThread, threadForNewMessage } from "./fill.ts";
+import { createTemplateStepSeam, type TemplateStepSeam } from "./step.ts";
 import { suggestTemplate } from "./suggest.ts";
 import { ownerOf, readThread, threadState } from "./thread.ts";
 
@@ -38,9 +40,13 @@ export type { AuthorSettings, DuplicateSettings, Example } from "./author.ts";
 export { authorPrompt, draftTemplate, findDuplicate, parseTemplateDraft } from "./author.ts";
 export type { FillSettings } from "./fill.ts";
 export { fillFromThread, fillQuestion, fillQuestionId, NONE } from "./fill.ts";
+export type { TemplateStepSeam, TemplateStepStrings } from "./step.ts";
+export { createTemplateStepSeam } from "./step.ts";
 export type { SuggestSettings } from "./suggest.ts";
 export { rankQuestions, rerankQuestions, suggestState, suggestTemplate } from "./suggest.ts";
 export { readThread, threadState } from "./thread.ts";
+export type { VerifySettings } from "./verify.ts";
+export { detailsNotInThread, verifyDraft, verifyQuestions } from "./verify.ts";
 
 const FILL_KEYS = [
   "templates.fill.confidence",
@@ -85,6 +91,8 @@ export interface TemplateIntelligence {
   draftFromExamples(workspaceId: Id, from: ExampleSource): Promise<TemplateDraftResult>;
   /** The duplicate check alone, for a Template written by hand or by the Agent. */
   duplicateOf(workspaceId: Id, candidate: TemplateInput): Promise<DuplicateVerdict | null>;
+  /** What a draft_from_template Workflow Step asks of Templates (slice 38). */
+  step: TemplateStepSeam;
 }
 
 /** Where examples come from: sent Messages by id, or texts as the caller holds them (a Draft). */
@@ -105,6 +113,8 @@ export interface TemplateIntelligenceOptions {
   voice?: ((workspaceId: Id) => Promise<string | null>) | undefined;
   /** How likely a Thread needs a reply, from its stored Judgments; null when none are stored. */
   needsReply?: ((threadId: Id) => Promise<number | null>) | undefined;
+  /** A Draft by id, for a Workflow Step that waits on the user to fill it. */
+  readDraft?: ((draftId: Id) => Promise<Draft | null>) | undefined;
 }
 
 const SUGGEST_KEYS = [
@@ -242,10 +252,39 @@ export function createTemplateIntelligence(
       settings: duplicateSettings(await readAuthor()),
     });
 
+  const step = createTemplateStepSeam({
+    db,
+    mailstore,
+    runtime: options.runtime,
+    ask,
+    get: (id) => store.get(id),
+    // "choose": the judge picks from the library as it does on open, with nothing typed.
+    choose: async (workspaceId, threadId) => {
+      const r = await suggestWith(
+        workspaceId,
+        threadId,
+        { to: [], subject: "", typed: "" },
+        await readSuggest(),
+      );
+      return r.status === "suggested" ? store.get(r.templateId) : null;
+    },
+    fill: async (workspaceId, template, threadId, jobId) =>
+      fillFromThread({
+        ask,
+        workspaceId,
+        template,
+        thread: await readThread(db, mailstore, threadId),
+        settings: await fillSettings(),
+        jobId,
+      }),
+    readDraft: async (id) => (await options.readDraft?.(id)) ?? null,
+  });
+
   return {
     store,
     ask,
     fillSettings,
+    step,
 
     async suggest(request) {
       const s = await readSuggest();

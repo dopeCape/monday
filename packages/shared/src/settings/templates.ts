@@ -363,6 +363,152 @@ export const TEMPLATE_SETTINGS = {
     help: "The most example messages one template is written from.",
   }),
 
+  /* Slice 38: the draft_from_template Step, its checks and Standing approvals */
+
+  "templates.verify.enabled": entry({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    label: "Check drafts from templates",
+    help: "A Workflow that drafts from a template checks the draft: it answers every question, promises nothing the thread does not support and shares nothing from outside it. The checks show as badges on the approval card.",
+  }),
+  "templates.verify.standing_requires_clean": entry({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    label: "Send unattended only when every check passes",
+    help: "A standing approval on a step that sends from a template applies only when every badge is clean; otherwise that run waits for you and the notification says which badge.",
+  }),
+  "templates.verify.unsure_band": entry({
+    type: z.number().min(0).max(0.5),
+    default: 0.15,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "advanced",
+    label: "Could not check, within",
+    help: "A check whose answer is this close to even reads Could not check, and counts as not clean.",
+  }),
+  "templates.verify.question.asks": question(
+    "Check: a sentence asks something",
+    "`newest_message.sentences[{i}]` asks the owner to do or answer something.",
+    "Asked of each sentence of the newest message that does not end in a question mark.",
+  ),
+  "templates.verify.question.answers": question(
+    "Check: the draft answers it",
+    "The draft reply answers or addresses `newest_message.sentences[{i}]`.",
+    "Asked of each question or request in the newest message.",
+  ),
+  "templates.verify.question.commits": question(
+    "Check: a sentence promises",
+    "`draft[{j}]` commits the owner to do something (send, pay, deliver, meet, decide) or names a date for it.",
+    "Asked of each sentence of the draft.",
+  ),
+  "templates.verify.question.supports": question(
+    "Check: the promise is supported",
+    "Does the thread or the template support the commitment in `draft[{j}]`?",
+    "Asked of each sentence that commits the owner; supported, partly or unsupported. Only supported counts as clean.",
+  ),
+  "templates.verify.supports.supported": question(
+    "Answer: supported",
+    "The thread or the template says the owner will do this, or asks for exactly this.",
+    "The supported answer to the promise check.",
+  ),
+  "templates.verify.supports.partly": question(
+    "Answer: partly supported",
+    "The thread or the template supports part of it, but the draft adds a detail such as a date or an amount.",
+    "The partly answer to the promise check.",
+  ),
+  "templates.verify.supports.unsupported": question(
+    "Answer: not supported",
+    "Nothing in the thread or the template supports this commitment.",
+    "The unsupported answer to the promise check.",
+  ),
+  "templates.verify.question.leak": question(
+    "Check: something confidential",
+    "The draft shares internal or confidential information the recipient did not ask for: prices, salaries, other customers, credentials, internal plans.",
+    "Asked once over the whole draft.",
+  ),
+  "templates.step.write_prompt": entry({
+    type: z.string().min(1).max(8000),
+    default:
+      "Write the reply email from this template. Keep the template's sentences as they are and change only what connects them to this thread, following the extra instructions if there are any. Plain text, no subject line, no signature, no em-dashes.",
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    control: "sentence",
+    tier: "advanced",
+    label: "Writing from a template",
+    help: "What the language model is told when a Workflow step writes a message from a template.",
+  }),
+
+  "strings.templates.badge.answers_all": str(
+    "Badge: answers every question",
+    "Answers {n} of {m} questions",
+  ),
+  "strings.templates.badge.answers_some": str(
+    "Badge: leaves questions",
+    "Leaves {n} unanswered: {question}",
+  ),
+  "strings.templates.badge.no_promises": str("Badge: no new promises", "No new promises"),
+  "strings.templates.badge.promises": str(
+    "Badge: an unsupported promise",
+    "Promises something the thread does not support: {sentence}",
+  ),
+  "strings.templates.badge.no_details": str("Badge: no outside details", "No outside details"),
+  "strings.templates.badge.details": str(
+    "Badge: outside details",
+    "{n} details not in the thread: {list}",
+  ),
+  "strings.templates.badge.confidential": str(
+    "Badge: confidential information",
+    "Shares internal information nobody asked for",
+  ),
+  "strings.templates.badge.could_not_check": str("Badge: unsure", "Could not check"),
+  "strings.templates.could_not_fill": str(
+    "Step waiting on a Placeholder",
+    "Could not fill {placeholder} from the thread",
+  ),
+  "strings.templates.gone": str("Step's Template deleted", "The template {name} no longer exists"),
+  "strings.templates.standing_clean": str(
+    "Workflow card: unattended when clean",
+    "Runs on your standing approval when every check passes",
+  ),
+  "strings.templates.waiting_check": str(
+    "Waiting because of a badge",
+    "Waiting for your approval: {badge}",
+  ),
+
+  "strings.workflows.flow.summary.draft_from_template": str(
+    "Flow: drafts from a template",
+    "Drafts a reply from {template}",
+  ),
+  "strings.workflows.flow.summary.draft_from_template_send": str(
+    "Flow: writes and sends from a template",
+    "Writes a reply from {template} and sends it",
+  ),
+  "strings.workflows.flow.kind.draft_from_template": str(
+    "Step kind: draft from a template",
+    "Draft from a template",
+  ),
+  "strings.workflows.flow.template_choose": str(
+    "Flow: the template the judge picks",
+    "the template that fits",
+  ),
+  "strings.workflows.flow.arg.checks": str("Flow: the checks field", "Checks"),
+  "strings.workflows.flow.checks_standing": str(
+    "Flow: unattended when clean",
+    "Runs on your standing approval when every check passes",
+  ),
+  "strings.workflows.flow.checks_ask": str(
+    "Flow: asks with the checks",
+    "Asks first; the approval shows whether it answers every question, promises nothing new and shares nothing from outside the thread",
+  ),
+
   "strings.templates.suggest.use": str("Suggestion line", "Use {name} (Tab)"),
   "strings.templates.suggest.replace": str(
     "Replace typed text question",

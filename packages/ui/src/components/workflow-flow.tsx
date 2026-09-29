@@ -45,6 +45,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { cx } from "../format.ts";
+import { type CheckBadge, CheckBadges } from "./check-badges.tsx";
 import { Icon, type IconComponent } from "./icon.tsx";
 
 /* ------------------------------ The model ------------------------------ */
@@ -92,6 +93,8 @@ export interface FlowCardModel {
   change?: { kind: FlowChangeKind; label: string } | undefined;
   /** One Run's outcome at this card. */
   run?: { status: FlowRunStatus; label: string; detail?: string | undefined } | undefined;
+  /** A draft_from_template Step's three checks in that Run, as badges (slice 38). */
+  badges?: readonly CheckBadge[] | undefined;
 }
 
 /* ------------------------------ Glyphs ------------------------------ */
@@ -273,6 +276,7 @@ export function WorkflowFlow({
                 ) : null}
                 {!compact && fields && c.fields?.length ? <Fields fields={c.fields} /> : null}
                 {c.run?.detail ? <p className="wflow-run-detail">{c.run.detail}</p> : null}
+                {c.badges?.length ? <CheckBadges badges={c.badges} /> : null}
                 {!compact && c.note ? <p className="wflow-note">{c.note}</p> : null}
                 {c.branches ? (
                   <div className="wflow-branches">

@@ -1,3 +1,4 @@
+export * from "./badges.ts";
 export * from "./builtin.ts";
 export * from "./candidates.ts";
 export * from "./markdown.ts";

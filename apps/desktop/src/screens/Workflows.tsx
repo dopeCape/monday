@@ -59,6 +59,7 @@ import { cliLabel } from "../agent/runtimes/index.ts";
 import type { LiveRunsSnapshot } from "../approvals/live-runs.ts";
 import { openExternal } from "../platform/open.ts";
 import { useShell } from "../shell/Shell.tsx";
+import { badgeStrings, previewBadges } from "../templates/badges.ts";
 import { useWorkspace } from "../workspace.tsx";
 import { fill } from "./inbox/triage.ts";
 import { LevelLock, useLevelLock } from "./LevelLock.tsx";
@@ -731,6 +732,7 @@ export function Workflows({
                         standingLabel={s.standing ?? "Always allow this step"}
                         declineLabel={s.decline ?? "Decline"}
                         onDecide={(decision, standing) => decide(waitingRun, decision, standing)}
+                        badges={previewBadges(waitingCard?.preview, settings)}
                         busy={busy}
                       />
                     </SideCard>
@@ -796,7 +798,13 @@ export function Workflows({
                   ) : null}
                   <WorkflowFlow
                     label={selected.name}
-                    cards={flowModel(selected, fs, { groupName, run: overlay }).cards}
+                    cards={
+                      flowModel(selected, fs, {
+                        groupName,
+                        run: overlay,
+                        badges: badgeStrings(settings),
+                      }).cards
+                    }
                     fields={settings["workflows.page.step_details"]}
                     dim={locked || !selected.enabled}
                   />

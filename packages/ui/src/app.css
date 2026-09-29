@@ -11726,6 +11726,34 @@ button.appr-link:focus-visible {
   align-items: center;
   gap: 8px;
 }
+/* a drafted Message's three checks (slice 38): clean, flagged, could not check */
+.check-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+.check-badge {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+.check-badge[data-state="clean"] svg {
+  color: var(--success);
+}
+.check-badge[data-state="flagged"] {
+  color: var(--fg);
+}
+.check-badge[data-state="flagged"] svg {
+  color: var(--warning);
+}
+.check-badge[data-state="unsure"] svg {
+  color: var(--fg-faint);
+}
 /* the suggestion line above the editor: one quiet line */
 .tpl-suggest {
   display: flex;

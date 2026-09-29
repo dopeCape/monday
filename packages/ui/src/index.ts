@@ -2,6 +2,7 @@
 // Import "@monday/ui/tokens.css" and "@monday/ui/app.css" for the styles.
 
 export * from "./components/agent.tsx";
+export * from "./components/check-badges.tsx";
 export * from "./components/command-palette.tsx";
 export * from "./components/compose.tsx";
 export * from "./components/flow-chain.tsx";

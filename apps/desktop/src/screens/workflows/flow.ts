@@ -15,7 +15,14 @@ import type {
   WorkflowDiff,
   WorkflowSketch,
 } from "@monday/shared";
-import { describeCron, stepTier, TOOL_TIERS } from "@monday/shared";
+import {
+  type BadgeStrings,
+  describeCron,
+  findBuiltinTemplate,
+  stepTier,
+  TOOL_TIERS,
+  templateBadges,
+} from "@monday/shared";
 import type { FlowCardModel, FlowField, FlowRunStatus, FlowText, FlowTierKind } from "@monday/ui";
 import { fill } from "../inbox/triage.ts";
 
@@ -40,6 +47,8 @@ export interface FlowOptions {
   diff?: WorkflowDiff | null | undefined;
   /** One Run whose Step results lay over the cards. */
   run?: RunView | null | undefined;
+  /** The words of a draft_from_template Step's check badges (slice 38); absent, no badges. */
+  badges?: BadgeStrings | undefined;
 }
 
 export interface FlowModel {
@@ -177,6 +186,7 @@ const STEP_ICON: Record<Step["kind"], string> = {
   snooze: "clock",
   draft_reply: "note",
   send: "send",
+  draft_from_template: "note",
   notify: "bell",
   wait: "timer",
   condition: "branch",
@@ -192,6 +202,10 @@ const STEP_ICON: Record<Step["kind"], string> = {
 /** The approval a Step runs under: what leaves the mailbox asks, unless the user granted a Standing approval. */
 function tierOfStep(step: Step, standing: readonly string[]): FlowTierKind | null {
   if (step.kind === "condition") return null;
+  // A Template Step that sends asks through send_draft, unless its Standing approval covers it.
+  if (step.kind === "draft_from_template" && step.send === "send") {
+    return standing.includes(step.id) ? "standing" : "ask";
+  }
   if (step.kind === "agentic") {
     // An agent Step asks exactly where its tools do; no allowlist means every tool.
     const tiers = step.tools.length
@@ -231,6 +245,7 @@ function stepWords(
   s: FlowStrings,
   stepName: (id: string) => string,
   groupName: (id: string) => string,
+  standing: readonly string[] = [],
 ): StepWords {
   const t = (template: string) => templateText(template, s, stepName);
   const text = (label: FlowKey, template: string | undefined): FlowField[] =>
@@ -284,6 +299,46 @@ function stepWords(
         summary: fill(s["strings.workflows.flow.summary.send"], { step: stepName(step.draftFrom) }),
         fields: [],
       };
+    case "draft_from_template": {
+      const template =
+        step.template === "choose"
+          ? s["strings.workflows.flow.template_choose"]
+          : (findBuiltinTemplate(step.template)?.name ?? step.template);
+      const sends = step.send === "send";
+      return {
+        summary: fill(
+          s[
+            sends
+              ? "strings.workflows.flow.summary.draft_from_template_send"
+              : "strings.workflows.flow.summary.draft_from_template"
+          ],
+          { template },
+        ),
+        fields: [
+          ...(step.instructions
+            ? [
+                {
+                  label: s["strings.workflows.flow.arg.instructions"],
+                  text: [step.instructions],
+                  quote: true,
+                },
+              ]
+            : []),
+          ...(sends
+            ? [
+                {
+                  label: s["strings.workflows.flow.arg.checks"],
+                  text: [
+                    standing.includes(step.id)
+                      ? s["strings.workflows.flow.checks_standing"]
+                      : s["strings.workflows.flow.checks_ask"],
+                  ],
+                },
+              ]
+            : []),
+        ],
+      };
+    }
     case "notify":
       return {
         summary: s["strings.workflows.flow.summary.notify"],
@@ -432,7 +487,7 @@ export function flowModel(
   doc.steps.forEach((step, index) => {
     const depth = pending ?? base;
     pending = null;
-    const words = stepWords(step, s, stepName, groupName);
+    const words = stepWords(step, s, stepName, groupName, doc.standingApprovals);
     const tier = tierOfStep(step, doc.standingApprovals);
     const card: FlowCardModel = {
       key: step.id,
@@ -487,6 +542,9 @@ export function flowModel(
             (result?.status === status && result.detail !== s[RUN_KEY[status]] && result.detail) ||
             undefined,
         };
+      }
+      if (result?.checks && options.badges) {
+        card.badges = templateBadges(result.checks, options.badges);
       }
     }
     cards.push(card);

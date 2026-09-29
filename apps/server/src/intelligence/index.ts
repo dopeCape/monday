@@ -783,6 +783,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       return v.enabled && v.description ? v.description : null;
     },
     needsReply: async (threadId) => (await judgments.get(threadId))?.needsReply ?? null,
+    readDraft: async (draftId) => drafts.get(draftId).catch(() => null),
   });
   // Filled once the Workflows module exists; the tool server reads it per call.
   const extensions: ToolExtensions = { integrations, mcp, voice, guard };
@@ -836,6 +837,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     now,
     log,
     level,
+    templates: templates.step,
     settings: async (): Promise<WorkflowSettings> => {
       const s = await readGlobalSettings(db, WORKFLOW_SETTING_KEYS);
       return {
