@@ -581,11 +581,27 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     };
   };
   const signals = createSignals({ db, mailstore, runtime, now, log, level });
+  /**
+   * One request for an arriving Thread (slice 33): the Signals it lacks and,
+   * when routing places it now, the Group Choice and the speculative
+   * Sub-group Choices, placed from the same answers.
+   */
+  const arrivalAsk = async (workspaceId: string, threadId: string, jobId: string | null) => {
+    const plan = await routing.arrivalPlan(threadId);
+    const questions = plan?.questions ?? {};
+    const asked = await signals.ask(workspaceId, threadId, {
+      reason: "arrival",
+      jobId,
+      ...(Object.keys(questions).length > 0 ? { extra: questions } : {}),
+    });
+    if (plan) await plan.apply(asked.extra);
+  };
   const judgments = createJudgments({
     db,
     mailstore,
     runtime,
     signals,
+    arrivalAsk,
     llmAvailable: async () => (await judgeStateNow()).provider === "llm",
     now,
     log,
@@ -965,6 +981,8 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     },
   });
   signals.setDefsListener((workspaceId, ids) => signalBackfills.request(workspaceId, ids));
+  // The arrival request (slice 33): routing's Group and Sub-group Choices ride with every Signal.
+  routing.setArrivalAsk(arrivalAsk);
   // A running Backlog sort carries the Signals a Thread lacks in its one request per Thread.
   routing.setOneThreadAsk(async (req) => {
     const r = await signals.ask(req.workspaceId, req.threadId, {

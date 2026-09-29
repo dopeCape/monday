@@ -1130,7 +1130,9 @@ export function createSignals(options: SignalsOptions): Signals {
 
   /** Whether the arrival request carries a Signal: the shipped ones (only the slice 25 set while Signals are off). */
   const inArrival = (d: StoredDef, s: Settings) =>
-    d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id));
+    (d.owner.kind === "shipped" && (s["signals.enabled"] || isArrivalSignal(d.id))) ||
+    // A Section's and a Custom action's own statements ride in the same request (slice 33).
+    (s["signals.enabled"] && (d.owner.kind === "section" || d.owner.kind === "custom_action"));
 
   const isArrivalSignal = (id: string) =>
     (Object.values(ARRIVAL_SIGNALS) as string[]).includes(id) ||

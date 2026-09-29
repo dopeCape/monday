@@ -350,7 +350,27 @@ export interface Routing {
    * own (the judge over routing's state). The Signals module sets it.
    */
   setOneThreadAsk(ask: OneThreadAsk | null): void;
+  /**
+   * An arriving Thread's routing questions, when it is routed now (slice 33),
+   * and how their answers place it; null when routing leaves it alone.
+   */
+  arrivalPlan(threadId: Id): Promise<ArrivalPlan | null>;
+  /**
+   * Who asks the arrival request (slice 33): set, the route Job hands an
+   * arriving Thread to it when TypeSafe answers, so routing, Sections, the
+   * brief policy and custom actions are one request. Null keeps routing's own.
+   */
+  setArrivalAsk(
+    ask: ((workspaceId: Id, threadId: Id, jobId: string | null) => Promise<void>) | null,
+  ): void;
   registerSteps(jobs: Jobs): void;
+}
+
+/** An arriving Thread's routing questions and how their answers place it (slice 33). */
+export interface ArrivalPlan {
+  workspaceId: Id;
+  questions: Record<string, ChoiceQuestion>;
+  apply(answers: Record<string, JudgeAnswer | undefined>): Promise<ThreadRoute | null>;
 }
 
 /** What judgeInputs returns. */
@@ -1035,13 +1055,94 @@ export function createRouting(options: RoutingOptions): Routing {
     subgroup: { groupId: GroupId; confidence: Confidence } | null;
   };
 
+  /** What one Thread's placement asks, and how its answers place it. */
+  interface OnePlan {
+    questions: Record<string, ChoiceQuestion>;
+    state: JsonValue | null;
+    decide(answers: Record<string, JudgeAnswer | undefined>): EachResult;
+  }
+
   /**
-   * One request per Thread (slice 29; ADR 0014): the stage-one Group Choice
-   * and, speculatively, the Sub-group Choice of every Group that has
-   * Sub-groups, so a two-stage placement is one request; code reads only the
-   * Sub-group Choice under the Group chosen. Predicates decide first, and a
-   * Thread they settle entirely costs no request.
+   * One Thread's routing questions (slice 29): the stage-one Group Choice and,
+   * speculatively, the Sub-group Choice of every Group that has Sub-groups,
+   * so a two-stage placement is one request; code reads only the Sub-group
+   * Choice under the Group chosen. Predicates decide first, and a Thread
+   * they settle entirely asks nothing.
    */
+  const planOne = (
+    facts: ThreadFacts,
+    all: ReadonlyArray<GroupText & { row: GroupRow }>,
+    owner: string,
+    settings: RoutingSettings,
+    thresholdOf: (id: GroupId) => Confidence | null,
+  ): OnePlan => {
+    const js = {
+      instructions: settings.judge.instructions,
+      noneOption: settings.judge.noneOption,
+      snippetChars: settings.snippetChars,
+      examplesInPrompt: settings.examplesInPrompt,
+    };
+    const top = all.filter((g) => g.row.parentId === null);
+    const childrenOf = (id: GroupId) => all.filter((g) => g.row.parentId === id);
+    const placeOf = (st: Staged): RoutePlacement =>
+      st.judged?.placement ?? place(st.scores, settings.thresholds, thresholdOf);
+    const questions: Record<string, ChoiceQuestion> = {};
+    const options = new Map<string, Record<string, GroupId>>();
+    const first = settings.predicateFirst ? predicateStage(facts, top) : null;
+    let state: JsonValue | null = null;
+    if (!first) {
+      const asked = routeQuestion(facts, top, owner, js);
+      questions.group = asked.question;
+      options.set("group", asked.options);
+      state = asked.state;
+    }
+    // Every Group that could be chosen before the answer; only the one a Predicate chose after it.
+    let parents = top;
+    if (first) {
+      const p = placeOf(first);
+      parents = p.kind === "route" ? top.filter((g) => g.id === p.groupId) : [];
+    }
+    const decidedSub = new Map<GroupId, Staged>();
+    for (const parent of parents) {
+      const children = childrenOf(parent.id);
+      if (children.length === 0) continue;
+      const byPredicate = settings.predicateFirst ? predicateStage(facts, children) : null;
+      if (byPredicate) {
+        decidedSub.set(parent.id, byPredicate);
+        continue;
+      }
+      const asked = routeQuestion(facts, children, owner, js);
+      questions[subQuestionId(parent.id)] = asked.question;
+      options.set(subQuestionId(parent.id), asked.options);
+      state ??= asked.state;
+    }
+    return {
+      questions,
+      state,
+      decide(answers) {
+        const read = (id: string): Staged | null => {
+          const a = answers[id];
+          const opts = options.get(id);
+          if (a?.type !== "choice" || !opts) return null;
+          const judged = judgedPlacement(a, opts, settings.thresholds, thresholdOf);
+          return { scores: judged.scores, by: "model", judged };
+        };
+        const stage: Staged = first ?? read("group") ?? { scores: [], by: "model" };
+        const placement = placeOf(stage);
+        let subgroup: EachResult["subgroup"] = null;
+        if (placement.kind === "route") {
+          const inner = decidedSub.get(placement.groupId) ?? read(subQuestionId(placement.groupId));
+          const innerPlacement = inner ? placeOf(inner) : null;
+          if (innerPlacement?.kind === "route") {
+            subgroup = { groupId: innerPlacement.groupId, confidence: innerPlacement.confidence };
+          }
+        }
+        return { first: stage, subgroup };
+      },
+    };
+  };
+
+  /** One request per Thread (slice 29; ADR 0014), through the one-Thread ask. */
   const judgeEach = async (
     items: readonly ManyItem[],
     all: ReadonlyArray<GroupText & { row: GroupRow }>,
@@ -1049,56 +1150,17 @@ export function createRouting(options: RoutingOptions): Routing {
   ): Promise<Map<Id, EachResult>> => {
     ctx.owner ??= await ownerOf(ctx.workspaceId);
     const owner = ctx.owner;
-    const js = {
-      instructions: ctx.settings.judge.instructions,
-      noneOption: ctx.settings.judge.noneOption,
-      snippetChars: ctx.settings.snippetChars,
-      examplesInPrompt: ctx.settings.examplesInPrompt,
-    };
-    const top = all.filter((g) => g.row.parentId === null);
-    const childrenOf = (id: GroupId) => all.filter((g) => g.row.parentId === id);
-    const placeOf = (st: Staged): RoutePlacement =>
-      st.judged?.placement ?? place(st.scores, ctx.settings.thresholds, ctx.thresholdOf);
     const out = new Map<Id, EachResult>();
     await inPool(items, ctx.backfill.concurrency, async (it) => {
-      const questions: Record<string, ChoiceQuestion> = {};
-      const options = new Map<string, Record<string, GroupId>>();
-      const first = ctx.settings.predicateFirst ? predicateStage(it.facts, top) : null;
-      let state: JsonValue | null = null;
-      if (!first) {
-        const asked = routeQuestion(it.facts, top, owner, js);
-        questions.group = asked.question;
-        options.set("group", asked.options);
-        state = asked.state;
-      }
-      // Every Group that could be chosen before the answer; only the one a Predicate chose after it.
-      let parents = top;
-      if (first) {
-        const p = placeOf(first);
-        parents = p.kind === "route" ? top.filter((g) => g.id === p.groupId) : [];
-      }
-      const decidedSub = new Map<GroupId, Staged>();
-      for (const parent of parents) {
-        const children = childrenOf(parent.id);
-        if (children.length === 0) continue;
-        const byPredicate = ctx.settings.predicateFirst ? predicateStage(it.facts, children) : null;
-        if (byPredicate) {
-          decidedSub.set(parent.id, byPredicate);
-          continue;
-        }
-        const asked = routeQuestion(it.facts, children, owner, js);
-        questions[subQuestionId(parent.id)] = asked.question;
-        options.set(subQuestionId(parent.id), asked.options);
-        state ??= asked.state;
-      }
+      const plan = planOne(it.facts, all, owner, ctx.settings, ctx.thresholdOf);
       let answers: Record<string, JudgeAnswer | undefined> = {};
-      if (Object.keys(questions).length > 0 && state !== null) {
+      if (Object.keys(plan.questions).length > 0 && plan.state !== null) {
         const asked = await oneThreadAsk({
           workspaceId: ctx.workspaceId,
           threadId: it.row.id,
           facts: it.facts,
-          state,
-          questions,
+          state: plan.state,
+          questions: plan.questions,
           jobId: ctx.jobId,
         });
         answers = asked.answers;
@@ -1107,27 +1169,64 @@ export function createRouting(options: RoutingOptions): Routing {
         ctx.batchSize = 1;
         ctx.sorter = "typesafe";
       }
-      const read = (id: string): Staged | null => {
-        const a = answers[id];
-        const opts = options.get(id);
-        if (a?.type !== "choice" || !opts) return null;
-        const judged = judgedPlacement(a, opts, ctx.settings.thresholds, ctx.thresholdOf);
-        return { scores: judged.scores, by: "model", judged };
-      };
-      const stage: Staged = first ?? read("group") ?? { scores: [], by: "model" };
-      const placement = placeOf(stage);
-      let subgroup: EachResult["subgroup"] = null;
-      if (placement.kind === "route") {
-        const inner = decidedSub.get(placement.groupId) ?? read(subQuestionId(placement.groupId));
-        const innerPlacement = inner ? placeOf(inner) : null;
-        if (innerPlacement?.kind === "route") {
-          subgroup = { groupId: innerPlacement.groupId, confidence: innerPlacement.confidence };
-        }
-      }
-      out.set(it.row.id, { first: stage, subgroup });
+      out.set(it.row.id, plan.decide(answers));
     });
     return out;
   };
+
+  /**
+   * Whether an arriving Thread is routed now (routing.on_arrival, the
+   * lookback, a Group to route into, not placed by the user, and not routed
+   * yet), and what that asks: the questions ride
+   * in the arrival Signal request (slice 33), and `apply` places the Thread
+   * from the answers the way route() would.
+   */
+  const arrivalPlan = async (threadId: Id): Promise<ArrivalPlan | null> => {
+    if ((await level()) !== "automate") return null;
+    const row = await db.query.threads.findFirst({ where: eq(threads.id, threadId) });
+    if (!row || row.deleted || userPlaced(row)) return null;
+    const settings = await options.settings();
+    if (!settings.onArrival) return null;
+    const ageMs = now().getTime() - row.lastActivity.getTime();
+    if (Number.isFinite(ageMs) && ageMs > settings.lookbackDays * 86_400_000) return null;
+    const all = await groupTexts(row.workspaceId);
+    if (all.every((g) => g.row.parentId !== null)) return null;
+    // Routing places a Thread once, when it arrives, as the route Job always has.
+    const [routed] = await db
+      .select({ at: threadRoutes.routedAt })
+      .from(threadRoutes)
+      .where(eq(threadRoutes.threadId, threadId));
+    if (routed) return null;
+    const facts = await readFacts(row);
+    const owner = await ownerOf(row.workspaceId);
+    const thresholdOf = (id: GroupId) => all.find((g) => g.id === id)?.row.threshold ?? null;
+    const plan = planOne(facts, all, owner, settings, thresholdOf);
+    return {
+      workspaceId: row.workspaceId,
+      questions: plan.questions,
+      async apply(answers) {
+        const decided = plan.decide(answers);
+        const placement: RoutePlacement =
+          decided.first.judged?.placement ??
+          place(decided.first.scores, settings.thresholds, thresholdOf);
+        const current =
+          (await db.query.threads.findFirst({ where: eq(threads.id, threadId) })) ?? row;
+        return applyScored(
+          current,
+          {
+            scores: decided.first.scores,
+            placement,
+            subgroup: decided.subgroup,
+            by: decided.first.by,
+            calls: 0,
+          },
+          settings,
+        );
+      },
+    };
+  };
+  let arrivalAsk: ((workspaceId: Id, threadId: Id, jobId: string | null) => Promise<void>) | null =
+    null;
 
   /** One stage for many Threads over the same candidates: the Predicate first, then batched requests. */
   const stageMany = async (
@@ -1911,10 +2010,25 @@ export function createRouting(options: RoutingOptions): Routing {
       oneThreadAsk = ask ?? ownOneThreadAsk;
     },
 
+    arrivalPlan: (threadId) => arrivalPlan(threadId),
+
+    setArrivalAsk(ask) {
+      arrivalAsk = ask;
+    },
+
     registerSteps(target) {
       jobs = target;
       target.registerStep<RouteJobPayload>(ROUTE_STEP, async (job: Job<RouteJobPayload>) => {
         try {
+          // With TypeSafe, the arrival request carries routing with every Signal (slice 33).
+          if (arrivalAsk && (await runtime.judgeAvailable())) {
+            try {
+              await arrivalAsk(job.payload.workspaceId, job.payload.threadId, job.id);
+              return "done";
+            } catch (error) {
+              if (!(error instanceof NoJudgeError)) throw error;
+            }
+          }
           await api.route(job.payload.threadId, { jobId: job.id });
         } catch (error) {
           // A Thread that vanished before its turn is done, not failed.

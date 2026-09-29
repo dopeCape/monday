@@ -89,6 +89,12 @@ export interface JudgmentsOptions {
   signals: Signals;
   /** Whether a language model can answer Signals without TypeSafe (signals.llm_fallback); absent means no. */
   llmAvailable?: () => Promise<boolean>;
+  /**
+   * The arrival request with routing riding in it (slice 33): what the judge
+   * Job and an on-open ask go through when TypeSafe answers, so one request
+   * covers routing, Sections, the brief policy and custom actions.
+   */
+  arrivalAsk?: (workspaceId: Id, threadId: Id, jobId: string | null) => Promise<void>;
   settings: () => Promise<JudgmentSettings>;
   /** The AI level (CONTEXT.md): judging on arrival only at `automate`. Absent means `automate`. */
   level?: () => Promise<AiLevel>;
@@ -305,12 +311,16 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
         if (fresh && (await signals.missing(workspaceId, threadId)).length === 0) return fresh;
       }
       // Asked on open for the brief policy: TypeSafe only, the language model is not asked here.
-      await signals.ask(workspaceId, threadId, {
-        reason: "arrival",
-        force: opts.force,
-        jobId: opts.jobId ?? null,
-        llm: false,
-      });
+      if (options.arrivalAsk && !opts.force && (await options.runtime.judgeAvailable())) {
+        await options.arrivalAsk(workspaceId, threadId, opts.jobId ?? null);
+      } else {
+        await signals.ask(workspaceId, threadId, {
+          reason: "arrival",
+          force: opts.force,
+          jobId: opts.jobId ?? null,
+          llm: false,
+        });
+      }
       const judged = await signals.judgments(threadId);
       if (!judged) throw new NoJudgeError("no_key");
       return judged;
@@ -363,7 +373,11 @@ export function createJudgments(options: JudgmentsOptions): Judgments {
       target.registerStep<JudgeJobPayload>(JUDGE_STEP, async (job: Job<JudgeJobPayload>) => {
         const { workspaceId, threadId } = job.payload;
         try {
-          await signals.ask(workspaceId, threadId, { reason: "arrival", jobId: job.id });
+          if (options.arrivalAsk && (await options.runtime.judgeAvailable())) {
+            await options.arrivalAsk(workspaceId, threadId, job.id);
+          } else {
+            await signals.ask(workspaceId, threadId, { reason: "arrival", jobId: job.id });
+          }
         } catch (error) {
           // A Thread that vanished, or nothing that can answer, is done, not failed: the header rules decide.
           if (

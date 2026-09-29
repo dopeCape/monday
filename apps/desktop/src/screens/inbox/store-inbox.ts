@@ -52,6 +52,7 @@ import {
   INBOX_COUNTS_SQL,
   type LiveQuery,
   MESSAGES_OF_THREAD_SQL,
+  rowSignals,
   rowToBrief,
   rowToCachedThread,
   rowToGroup,
@@ -372,9 +373,31 @@ export async function createStoreInbox(
   };
 
   /** Whether any custom action with a judge statement lacks an answer for a Thread. */
+  /**
+   * The judged answers for a Thread by Section or custom action id: the
+   * owned Signals the arrival request asked (slice 33, `section:<id>` and
+   * `action:<id>` in thread_signals), over what the Server answered on demand.
+   */
+  const judgedOf = (threadId: string): SectionJudged => {
+    const asked = judgedById.get(threadId);
+    const row = projectedById.get(threadId)?.row;
+    if (!row) return asked ?? EMPTY_JUDGED;
+    const hide =
+      (options.sections?.signalRules?.() ?? DEFAULT_SIGNAL_RULES).staleAnswers === "hide";
+    const fromCache: Record<string, number> = {};
+    for (const [id, a] of Object.entries(rowSignals(row))) {
+      if (hide && a.stale) continue;
+      if (typeof a.noul !== "number") continue;
+      if (id.startsWith("section:")) fromCache[id.slice("section:".length)] = a.noul;
+      else if (id.startsWith("action:")) fromCache[id.slice("action:".length)] = a.noul;
+    }
+    if (Object.keys(fromCache).length === 0) return asked ?? EMPTY_JUDGED;
+    return { ...(asked ?? {}), ...fromCache };
+  };
+
   const actionsToJudge = (threadId: string): boolean => {
     const actions = options.sections?.actions?.() ?? [];
-    const have = judgedById.get(threadId);
+    const have = judgedOf(threadId);
     return actions.some((a) => a.on.judge?.trim() && have?.[a.id] === undefined);
   };
 
@@ -1286,7 +1309,7 @@ export async function createStoreInbox(
       generation += 1;
       project();
     },
-    judged: (threadId) => judgedById.get(threadId) ?? EMPTY_JUDGED,
+    judged: (threadId) => judgedOf(threadId),
     close() {
       if (judgeTimer !== null) clearTimeout(judgeTimer);
       judgeTimer = null;
