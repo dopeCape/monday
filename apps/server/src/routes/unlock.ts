@@ -25,7 +25,11 @@ export function recoveryFile(rootKey: Uint8Array): string {
   ].join("\n");
 }
 
-export function unlockRoutes(keys: Keys): Hono<AppEnv> {
+export function unlockRoutes(
+  keys: Keys,
+  /** Runs after a successful unlock: what failed only because the Server was locked. */
+  onUnlocked?: () => Promise<void>,
+): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.post("/unlock", async (c) => {
@@ -41,6 +45,7 @@ export function unlockRoutes(keys: Keys): Hono<AppEnv> {
       if (error instanceof WrongRootKeyError) return c.json({ error: "wrong_root_key" }, 403);
       throw error;
     }
+    await onUnlocked?.().catch(() => {});
     return c.json({ unlocked: true });
   });
 

@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Account, Thread } from "@monday/shared";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { type AppEnv, createApp } from "../src/app.ts";
 import { createAuth } from "../src/auth/index.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys, encodeKey, type Keys } from "../src/crypto/keys.ts";
+import { syncState } from "../src/db/schema.ts";
 import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
 import { RECOVERY_FILE_NAME } from "../src/routes/unlock.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
@@ -186,6 +188,35 @@ describe("key provisioning over HTTP", () => {
     expect((await app.request(`/messages/${messageId}/body`, auth())).status).toBe(423);
     const caps = (await (await app.request("/capabilities")).json()) as { unlocked: boolean };
     expect(caps.unlocked).toBe(false);
+  });
+
+  test("unlocking clears the Account errors that only said the Server was locked", async () => {
+    // Locked (the test above locked it): a sync that ran then left this behind.
+    await db.handle.db
+      .insert(syncState)
+      .values({
+        workspaceId,
+        accountId: account.id,
+        lastError: "the server is locked: no root key in memory",
+      })
+      .onConflictDoUpdate({
+        target: syncState.workspaceId,
+        set: { lastError: "the server is locked: no root key in memory" },
+      });
+    const read = async () =>
+      (await db.handle.db.select().from(syncState).where(eq(syncState.workspaceId, workspaceId)))[0]
+        ?.lastError;
+    const res = await app.request("/unlock", post({ rootKey: encodeKey(root) }));
+    expect(res.status).toBe(200);
+    expect(await read()).toBeNull();
+    // A real Provider error is the Account's and stays.
+    await db.handle.db
+      .update(syncState)
+      .set({ lastError: "token endpoint: invalid_grant" })
+      .where(eq(syncState.workspaceId, workspaceId));
+    await app.request("/unlock", post({ rootKey: encodeKey(root) }));
+    expect(await read()).toBe("token endpoint: invalid_grant");
+    await app.request("/lock", auth({ method: "POST" }));
   });
 
   test("createApp without a key holder starts locked", async () => {

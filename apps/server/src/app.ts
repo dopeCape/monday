@@ -4,7 +4,7 @@
 
 import type { DeploymentMode, HostedProvider } from "@monday/shared";
 import { DEPLOYMENT_FEATURES } from "@monday/shared";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "./auth/cors.ts";
 import type { Auth } from "./auth/index.ts";
@@ -24,7 +24,14 @@ import { type ChangeBus, createChangeBus } from "./changes/bus.ts";
 import { DecryptError } from "./crypto/aead.ts";
 import { createKeys, type Keys, LockedError, UnknownWorkspaceKeyError } from "./crypto/keys.ts";
 import type { Db } from "./db/client.ts";
-import { accounts, type BodyState, syncMessages, threads, workspaces } from "./db/schema.ts";
+import {
+  accounts,
+  type BodyState,
+  syncMessages,
+  syncState as syncStateTable,
+  threads,
+  workspaces,
+} from "./db/schema.ts";
 import {
   createDrafts,
   DraftNotOpenError,
@@ -482,7 +489,16 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/settings", settingsRoutes(db));
   app.route("/devices", devicesRoutes(auth));
   app.route("/", storageRoutes(db));
-  app.route("/", unlockRoutes(keys));
+  app.route(
+    "/",
+    unlockRoutes(keys, async () => {
+      // Errors written while the Server was locked say nothing about the Accounts.
+      await db
+        .update(syncStateTable)
+        .set({ lastError: null })
+        .where(like(syncStateTable.lastError, "the server is locked%"));
+    }),
+  );
   app.route(
     "/",
     mailRoutes(mailstore, {

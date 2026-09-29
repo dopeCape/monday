@@ -17,6 +17,7 @@
 import type { Intent, Person, Provider as ProviderKind } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { LockedError } from "../crypto/keys.ts";
 import type { Db } from "../db/client.ts";
 import {
   accounts,
@@ -1268,13 +1269,18 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
         }
       });
     } catch (error) {
-      await saveState(acct, {
-        lastError: error instanceof Error ? error.message : String(error),
-      });
-      const code = (error as Partial<ProviderError>).code ?? null;
-      await recordFirstSync(acct, { errorCode: code }).catch(() => {});
+      // A locked Server is not the Account's problem: the Job retries once unlocked.
+      if (!(error instanceof LockedError)) {
+        await saveState(acct, {
+          lastError: error instanceof Error ? error.message : String(error),
+        });
+        const code = (error as Partial<ProviderError>).code ?? null;
+        await recordFirstSync(acct, { errorCode: code }).catch(() => {});
+      }
       throw error;
     }
+    // A pass that finished clears what an earlier one left.
+    if ((await loadState(acct)).lastError) await saveState(acct, { lastError: null });
     return report;
   }
 
