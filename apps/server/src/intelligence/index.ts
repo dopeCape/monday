@@ -434,6 +434,7 @@ const WORKFLOW_SETTING_KEYS = [
   "workflows.judged.threshold",
   "workflows.judged.question",
   "workflows.judged.input_chars_max",
+  "signals.backfill.concurrency",
 ] as const;
 
 const VOICE_SETTING_KEYS = [
@@ -558,6 +559,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
         const s = await readGlobalSettings(db, [
           "signals.rate.requests_per_minute",
           "signals.rate.cooldown_seconds",
+          "signals.rate.arrival_reserve_per_minute",
           "signals.backfill.concurrency",
         ] as const);
         limiterCache = {
@@ -565,6 +567,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
           value: {
             requestsPerMinute: s["signals.rate.requests_per_minute"],
             cooldownSeconds: s["signals.rate.cooldown_seconds"],
+            arrivalReservePerMinute: s["signals.rate.arrival_reserve_per_minute"],
             concurrency: s["signals.backfill.concurrency"],
           },
         };
@@ -976,6 +979,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
           threshold: s["workflows.judged.threshold"],
           question: s["workflows.judged.question"],
           inputCharsMax: s["workflows.judged.input_chars_max"],
+          concurrency: s["signals.backfill.concurrency"],
         },
       };
     },

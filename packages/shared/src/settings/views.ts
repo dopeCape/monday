@@ -349,6 +349,7 @@ export const VIEW_SETTINGS = {
   "strings.views.dismiss": str("dismiss", "Dismiss"),
   "strings.views.lane_empty": str("empty lane", "Nothing here"),
   "strings.views.empty": str("empty view", "No threads in this view's scope yet."),
+  "strings.views.loading": str("loading view", "Loading this view"),
   "strings.views.tried": str("tried line", "Tried on {count} threads"),
   "strings.views.counts_over": str("counts over the tried", "Over all {count}: {counts}"),
   "strings.views.apply": str("apply", "Apply"),

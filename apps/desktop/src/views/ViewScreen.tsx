@@ -195,7 +195,11 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
       name: "",
       threads: [],
       header: null,
-      render: () => <div className="empty-line">{s["strings.views.empty"]}</div>,
+      render: () => (
+        <div className="empty-line">
+          {s[views === undefined ? "strings.views.loading" : "strings.views.empty"]}
+        </div>
+      ),
     });
   }
 
@@ -460,6 +464,8 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
             }
           />
         )
-      ) : null,
+      ) : (
+        <div className="empty-line">{s["strings.views.loading"]}</div>
+      ),
   });
 }

@@ -81,6 +81,21 @@ export interface LiveQuery<T> {
   close(): void;
 }
 
+/** A 53-bit hash of rows' JSON (cyrb53): tells a changed result from the same one without keeping its text. */
+export function fingerprint(rows: unknown): number {
+  const text = JSON.stringify(rows) ?? "";
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
 /** What a live query is about, so writes elsewhere pass it by. */
 export interface LiveScope {
   threadId?: Id | undefined;
@@ -1611,6 +1626,85 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     setStatus("offline");
   };
 
+  /** One live query's run, rows and listeners, shared by every handle that asked it. */
+  interface SharedLive<T> {
+    rows: T[] | undefined;
+    refs: number;
+    subscribe(listener: (rows: T[]) => void): () => void;
+    unsubscribe(listener: (rows: T[]) => void): void;
+    refresh(): Promise<T[]>;
+    close(): void;
+  }
+  const shareds = new Map<string, SharedLive<unknown>>();
+
+  const openShared = <T>(
+    sql: string,
+    params: SqlParam[],
+    scope: LiveScope,
+    forget: () => void,
+  ): SharedLive<T> => {
+    const listeners = new Set<(rows: T[]) => void>();
+    let rows: T[] | undefined;
+    // A fingerprint of the last rows, not their text: a list's rows are not kept twice.
+    let last = 0;
+    let closed = false;
+    let running: Promise<T[]> | null = null;
+    let rerun = false;
+    const run = async (): Promise<T[]> => {
+      const next = (await driver.query(sql, params)) as T[];
+      if (closed) return next;
+      const print = fingerprint(next);
+      if (rows === undefined || print !== last) {
+        rows = next;
+        last = print;
+        for (const l of [...listeners]) l(next);
+      }
+      return next;
+    };
+    const refresh = (): Promise<T[]> => {
+      if (running) {
+        rerun = true;
+        return running;
+      }
+      running = (async () => {
+        let out = await run();
+        while (rerun && !closed) {
+          rerun = false;
+          out = await run();
+        }
+        running = null;
+        return out;
+      })();
+      return running;
+    };
+    const entry: LiveEntry = { tables: tablesRead(sql), threadId: scope.threadId, refresh };
+    lives.add(entry);
+    void refresh();
+    const shared: SharedLive<T> = {
+      get rows() {
+        return rows;
+      },
+      refs: 0,
+      subscribe(listener) {
+        listeners.add(listener);
+        if (rows !== undefined) listener(rows);
+        return () => listeners.delete(listener);
+      },
+      unsubscribe(listener) {
+        listeners.delete(listener);
+      },
+      refresh,
+      close() {
+        closed = true;
+        lives.delete(entry);
+        listeners.clear();
+        rows = undefined;
+        forget();
+      },
+    };
+    return shared;
+  };
+
   const store: Store = {
     workspaceId,
 
@@ -1619,56 +1713,39 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     },
 
     live<T = Row>(sql: string, params: SqlParam[] = [], scope: LiveScope = {}): LiveQuery<T> {
-      const listeners = new Set<(rows: T[]) => void>();
-      let rows: T[] | undefined;
-      let last = "";
+      // Screens asking the same question share one query and one copy of its rows:
+      // a View's nav count and the open View, the nav and a screen's View list.
+      const key = `${scope.threadId ?? ""}\u0000${sql}\u0000${JSON.stringify(params)}`;
+      let shared = shareds.get(key) as SharedLive<T> | undefined;
+      if (!shared) {
+        const created = openShared<T>(sql, params, scope, () => shareds.delete(key));
+        shareds.set(key, created as SharedLive<unknown>);
+        shared = created;
+      }
+      const s = shared;
+      s.refs += 1;
+      const mine = new Set<(rows: T[]) => void>();
       let closed = false;
-      let running: Promise<T[]> | null = null;
-      let rerun = false;
-      const run = async (): Promise<T[]> => {
-        const next = (await driver.query(sql, params)) as T[];
-        if (closed) return next;
-        const key = JSON.stringify(next);
-        if (rows === undefined || key !== last) {
-          rows = next;
-          last = key;
-          for (const l of listeners) l(next);
-        }
-        return next;
-      };
-      const refresh = (): Promise<T[]> => {
-        if (running) {
-          rerun = true;
-          return running;
-        }
-        running = (async () => {
-          let out = await run();
-          while (rerun && !closed) {
-            rerun = false;
-            out = await run();
-          }
-          running = null;
-          return out;
-        })();
-        return running;
-      };
-      const entry: LiveEntry = { tables: tablesRead(sql), threadId: scope.threadId, refresh };
-      lives.add(entry);
-      void refresh();
       return {
         get rows() {
-          return rows;
+          return s.rows;
         },
         subscribe(listener) {
-          listeners.add(listener);
-          if (rows !== undefined) listener(rows);
-          return () => listeners.delete(listener);
+          mine.add(listener);
+          const off = s.subscribe(listener);
+          return () => {
+            mine.delete(listener);
+            off();
+          };
         },
-        refresh,
+        refresh: s.refresh,
         close() {
+          if (closed) return;
           closed = true;
-          lives.delete(entry);
-          listeners.clear();
+          for (const l of mine) s.unsubscribe(l);
+          mine.clear();
+          s.refs -= 1;
+          if (s.refs === 0) s.close();
         },
       };
     },

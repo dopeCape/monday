@@ -211,7 +211,9 @@ export function viewThreadsSql(
   }
   if (since) {
     where.push("t.last_activity >= ?");
-    params.push(since.toISOString());
+    // A bound only: the View's own scope test is exact. Rounded down to the UTC day so
+    // the nav count and the open View ask the same query and share its rows.
+    params.push(new Date(Math.floor(since.getTime() / 86_400_000) * 86_400_000).toISOString());
   }
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const sql = `select * from (${ALL_THREADS_SQL.slice(0, at).replace(

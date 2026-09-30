@@ -641,7 +641,22 @@ export function createSignals(options: SignalsOptions): Signals {
 
   const synced = new Map<Id, { key: string; at: number; defs: StoredDef[] }>();
 
-  const syncDefs = async (workspaceId: Id, s: Settings): Promise<StoredDef[]> => {
+  // Syncs of one Workspace take turns: many Threads asked at once (the judge's
+  // pool) must not race to insert the same definition, or the losers would
+  // store their answers under none. After the first, a turn is the cached read.
+  const syncTurns = new Map<Id, Promise<unknown>>();
+  const syncDefs = (workspaceId: Id, s: Settings): Promise<StoredDef[]> => {
+    const before = syncTurns.get(workspaceId) ?? Promise.resolve();
+    const turn = before.catch(() => {}).then(() => syncDefsNow(workspaceId, s));
+    syncTurns.set(workspaceId, turn);
+    void turn
+      .catch(() => {})
+      .finally(() => {
+        if (syncTurns.get(workspaceId) === turn) syncTurns.delete(workspaceId);
+      });
+    return turn;
+  };
+  const syncDefsNow = async (workspaceId: Id, s: Settings): Promise<StoredDef[]> => {
     const model = s["ai.judge.model"];
     const viewWindow = parseSortScope(s["signals.backfill.scope"])
       ? s["signals.backfill.scope"]
@@ -1496,19 +1511,26 @@ export function createSignals(options: SignalsOptions): Signals {
         const answers: Record<string, JudgeAnswer> = {};
         let model = "";
         try {
-          for (const part of splitQuestions(state, questions, {
+          // A Thread whose questions outgrow one request is asked in parts, all in flight at once.
+          const parts = splitQuestions(state, questions, {
             requestTokens: s["routing.backfill.request_tokens"],
             stateTokens: s["routing.backfill.state_tokens"],
-          })) {
-            const r = await runtime.judge(TASK[opts.reason], state, part, {
-              workspaceId,
-              priority:
-                opts.reason === "arrival" || opts.reason === "view" ? "arrival" : "background",
-              jobId: opts.jobId ?? null,
-            });
+          });
+          const replies = await Promise.allSettled(
+            parts.map((part) =>
+              runtime.judge(TASK[opts.reason], state, part, {
+                workspaceId,
+                priority:
+                  opts.reason === "arrival" || opts.reason === "view" ? "arrival" : "background",
+                jobId: opts.jobId ?? null,
+              }),
+            ),
+          );
+          for (const reply of replies) {
+            if (reply.status === "rejected") throw reply.reason;
             result.calls += 1;
-            model = r.model;
-            Object.assign(answers, r.answers);
+            model = reply.value.model;
+            Object.assign(answers, reply.value.answers);
           }
         } catch (error) {
           if (!(error instanceof NoJudgeError)) throw error;

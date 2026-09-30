@@ -15,7 +15,7 @@ import { eq } from "drizzle-orm";
 import { LockedError } from "../../crypto/keys.ts";
 import type { Db } from "../../db/client.ts";
 import { signalBackfills } from "../../db/schema.ts";
-import type { Job, Jobs } from "../../jobs/index.ts";
+import type { Job, Jobs, StepContext } from "../../jobs/index.ts";
 import { NotFoundError } from "../../mailstore/index.ts";
 import {
   type Cursor,
@@ -27,6 +27,7 @@ import {
 import { AiOffError, NoJudgeError } from "../runtime/index.ts";
 import { averageTokensPerThread, backgroundBudget, estimateMicros } from "./budget.ts";
 import type { Signals } from "./index.ts";
+import { streamPool } from "./pool.ts";
 
 export const SIGNALS_BACKFILL_STEP = "signals-backfill";
 
@@ -106,17 +107,6 @@ function project(
   };
 }
 
-async function inPool<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>) {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const item = items[next++] as T;
-      await work(item);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
-}
-
 export function createSignalBackfills(options: SignalBackfillOptions): SignalBackfills {
   const { db, signals } = options;
   const now = options.now ?? (() => new Date());
@@ -172,6 +162,7 @@ export function createSignalBackfills(options: SignalBackfillOptions): SignalBac
 
   const step = async (
     job: Job<SignalBackfillPayload>,
+    ctx?: StepContext,
   ): Promise<"done" | "again" | { sleepMs: number }> => {
     const { workspaceId, runId } = job.payload;
     const row = await read(workspaceId);
@@ -187,67 +178,102 @@ export function createSignalBackfills(options: SignalBackfillOptions): SignalBac
     }
     if (!(await options.canAnswer())) return wait(row, "no_judge", waitMs);
     const resolved = { since: row.since, limit: row.limit };
-    const cursor: Cursor | null =
+    let cursor: Cursor | null =
       row.cursorAt && row.cursorId ? { at: row.cursorAt, id: row.cursorId } : null;
     const top: Cursor | null = row.topAt && row.topId ? { at: row.topAt, id: row.topId } : null;
-    const remaining =
-      row.limit === null ? Number.POSITIVE_INFINITY : Math.max(0, row.limit - row.walked);
-    const round = Math.max(1, s.concurrency) * 4;
-    const page =
-      remaining > 0 && (cursor || top)
-        ? await pageInScope(db, workspaceId, resolved, {
-            limit: Math.min(round, remaining),
-            below: cursor,
-            atOrBelow: cursor ? null : top,
-          })
-        : [];
-    if (page.length === 0) {
-      await patch(workspaceId, { status: "done", reason: null, finishedAt: now() });
-      return "done";
-    }
-    let asked = 0;
-    let calls = 0;
+    const pageSize = Math.max(1, s.concurrency) * 4;
+    // The step streams page after page while half its budget is left; the rest is for the requests in flight.
+    const budgetAtStart = ctx?.remainingMs() ?? Number.POSITIVE_INFINITY;
+    const outOfTime = () => (ctx ? ctx.remainingMs() < budgetAtStart / 2 : false);
+    let fetched = 0;
     let stop: "no_judge" | null = null;
-    await inPool(page, s.concurrency, async (t) => {
-      if (stop) return;
-      try {
-        const r = await signals.ask(workspaceId, t.id, {
-          reason: "background",
-          only: row.signalIds,
-          jobId: job.id,
+    let halt: "gone" | "kept" | "budget" | null = null;
+    const counts = new Map<Id, { asked: number; calls: number }>();
+    type Page = Awaited<ReturnType<typeof pageInScope>>;
+    const run = await streamPool<Page[number]>({
+      concurrency: s.concurrency,
+      stop: () => stop !== null || halt !== null || outOfTime(),
+      next: async () => {
+        const remaining =
+          row.limit === null
+            ? Number.POSITIVE_INFINITY
+            : Math.max(0, row.limit - row.walked - fetched);
+        if (remaining <= 0 || !(cursor || top)) return [];
+        const page = await pageInScope(db, workspaceId, resolved, {
+          limit: Math.min(pageSize, remaining),
+          below: cursor,
+          atOrBelow: cursor ? null : top,
         });
-        if (r.calls > 0) asked += 1;
-        calls += r.calls;
-      } catch (error) {
-        if (error instanceof NotFoundError) return;
-        if (
-          error instanceof NoJudgeError ||
-          error instanceof AiOffError ||
-          error instanceof LockedError
-        ) {
-          stop = "no_judge";
+        const last = page[page.length - 1];
+        if (last) cursor = { at: last.lastActivity, id: last.id };
+        fetched += page.length;
+        return page;
+      },
+      work: async (t) => {
+        if (stop) return;
+        try {
+          const r = await signals.ask(workspaceId, t.id, {
+            reason: "background",
+            only: row.signalIds,
+            jobId: job.id,
+          });
+          counts.set(t.id, { asked: r.calls > 0 ? 1 : 0, calls: r.calls });
+        } catch (error) {
+          if (error instanceof NotFoundError) return;
+          if (
+            error instanceof NoJudgeError ||
+            error instanceof AiOffError ||
+            error instanceof LockedError
+          ) {
+            stop = "no_judge";
+            return;
+          }
+          throw error;
+        }
+      },
+      // Pages are written back in order: the cursor never passes a Thread still being asked.
+      onPage: async (page, results) => {
+        for (const r of results) if (r.status === "failed") throw r.error;
+        if (stop || halt === "gone") return;
+        const current = await read(workspaceId);
+        if (!current || current.runId !== runId) {
+          halt = "gone";
           return;
         }
-        throw error;
-      }
+        let asked = 0;
+        let calls = 0;
+        for (const t of page) {
+          const c = counts.get(t.id);
+          asked += c?.asked ?? 0;
+          calls += c?.calls ?? 0;
+          counts.delete(t.id);
+        }
+        const last = page[page.length - 1];
+        const keep = current.status === "paused" || current.status === "cancelled";
+        await patch(workspaceId, {
+          status: keep ? current.status : "running",
+          reason: keep ? current.reason : null,
+          cursorAt: last?.lastActivity ?? current.cursorAt,
+          cursorId: last?.id ?? current.cursorId,
+          walked: current.walked + page.length,
+          done: current.done + page.length,
+          asked: current.asked + asked,
+          calls: current.calls + calls,
+          lastError: null,
+        });
+        if (keep) halt = "kept";
+        else if ((await budgetOf(workspaceId)).over) halt = "budget";
+      },
     });
+    if (halt === "gone" || halt === "kept") return "done";
     const current = await read(workspaceId);
     if (!current || current.runId !== runId) return "done";
     if (stop) return wait(current, stop, waitMs);
-    const last = page[page.length - 1];
-    const keep = current.status === "paused" || current.status === "cancelled";
-    await patch(workspaceId, {
-      status: keep ? current.status : "running",
-      reason: keep ? current.reason : null,
-      cursorAt: last?.lastActivity ?? current.cursorAt,
-      cursorId: last?.id ?? current.cursorId,
-      walked: current.walked + page.length,
-      done: current.done + page.length,
-      asked: current.asked + asked,
-      calls: current.calls + calls,
-      lastError: null,
-    });
-    return keep ? "done" : "again";
+    if (run.exhausted && halt === null) {
+      await patch(workspaceId, { status: "done", reason: null, finishedAt: now() });
+      return "done";
+    }
+    return "again";
   };
 
   const api: SignalBackfills = {
@@ -351,7 +377,7 @@ export function createSignalBackfills(options: SignalBackfillOptions): SignalBac
       target.registerStep<SignalBackfillPayload>(SIGNALS_BACKFILL_STEP, async (job, ctx) => {
         await ctx.extend();
         try {
-          return await step(job);
+          return await step(job, ctx);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           log(`signals backfill ${job.payload.workspaceId}: ${message}`);

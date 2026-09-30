@@ -213,7 +213,8 @@ describe("the Signal backfill", () => {
     await intelligence.signals.defs(workspaceId);
     const status = await intelligence.signalBackfills.status(workspaceId);
     expect(status).toMatchObject({ status: "running", signals: ["urgency"], total: 6 });
-    expect(await runDue()).toEqual({ [SIGNALS_BACKFILL_STEP]: 2 });
+    // One step streams the whole walk through the pool and sees it end.
+    expect(await runDue()).toEqual({ [SIGNALS_BACKFILL_STEP]: 1 });
     expect(requests).toHaveLength(6);
     expect(requests.every((r) => r.questions.join() === "urgency")).toBe(true);
     expect(await intelligence.signalBackfills.status(workspaceId)).toMatchObject({

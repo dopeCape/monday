@@ -171,7 +171,8 @@ export async function createServices(options: ServicesOptions): Promise<Services
     },
   });
 
-  const judge = createTypeSafeJudge();
+  // One client for the process (fetch keeps its connections alive); 429s go to the limiter.
+  const judge = createTypeSafeJudge({ retryRateLimited: false });
 
   return {
     auth,
