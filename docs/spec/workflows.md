@@ -21,7 +21,7 @@ Behaviors a tester can check. The document, its schema and the run engine are AD
 
 ## A Workflow
 
-- The head: the name with Rename (a new version with the new name), the status, where it runs (Placement), the version, the last run; then the enable switch, Dry run, Run now for a manual trigger, and Source (the JSON document, read-only).
+- The head: the name with Rename (a new version with the new name), the status, where it runs (Placement), the version, the last run; then the enable switch, Dry run, Run now for a manual trigger, and Source (the JSON document, read-only). A Run started by hand may carry inputs (a View's button fills them from the Thread's Fields, `views.md`); its Steps read them as `{{inputs.<name>}}` beside `{{thread.subject}}` and `{{steps.<id>.<field>}}`.
 - "What you asked for": the sentence the Workflow was written from. Under it, "Ask monday to change this workflow" hands "Change the workflow "name": …" to the composer. There is no editor.
 - "How it runs": the Workflow as a vertical flow of cards on a thin rail. The rail and connectors are secondary; each node is a card with content:
   - The trigger card: "When", the trigger in plain words, and its conditions as chips (sender, subject, list, header, attachment, the judged statement with its threshold, the cron in UTC).

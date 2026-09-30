@@ -11,9 +11,15 @@
 // Undo. Without a TypeSafe key a View that reads mail offers to keep only
 // its Fact Lanes. Every word is a strings.views.* Setting.
 
-import type { Settings, ViewDraft, ViewPreview } from "@monday/shared";
+import type {
+  BlockPreview,
+  Settings,
+  ViewDraft,
+  ViewPreview,
+  ViewTriedThread,
+} from "@monday/shared";
 import { OTHERS_LANE, UNSURE_LANE } from "@monday/shared";
-import { Btn, cx } from "@monday/ui";
+import { BarChart, Btn, cx } from "@monday/ui";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { ComposerEnvContext } from "../agent/aui/context.tsx";
 import { Picker } from "../screens/inbox/Picker.tsx";
@@ -36,9 +42,15 @@ const toneOf = (draft: ViewDraft, lane: string) =>
 function correctionsOf(draft: ViewDraft, threadId: string) {
   const lane = draft.doc.examples._lanes?.find((e) => e.threadId === threadId)?.lane;
   const wrong = Object.entries(draft.doc.examples)
-    .filter(([k, list]) => k !== "_lanes" && list.some((e) => e.threadId === threadId))
+    .filter(
+      ([k, list]) =>
+        k !== "_lanes" && !k.startsWith("x:") && list.some((e) => e.threadId === threadId),
+    )
     .map(([k]) => k);
-  return { lane, wrong };
+  const values = Object.entries(draft.doc.examples)
+    .filter(([k, list]) => k.startsWith("x:") && list.some((e) => e.threadId === threadId))
+    .map(([k]) => k.slice(2));
+  return { lane, wrong, values };
 }
 
 /** Whether Pin view may be clicked: the card showed the tried Threads, or there was nothing to try. */
@@ -56,6 +68,8 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
   const api = shell.api.views;
   const [draft, setDraft] = useState<ViewDraft | null>(preview.draft);
   const [moving, setMoving] = useState<string | null>(null);
+  /** The value whose "Wrong value" picker is open: its Thread and Extraction. */
+  const [valuing, setValuing] = useState<{ threadId: string; extraction: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [applied, setApplied] = useState<{
@@ -142,7 +156,8 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
                 key={row.threadId}
                 className={cx(
                   "bc-row",
-                  (Boolean(fixed.lane) || fixed.wrong.length > 0) && "corrected",
+                  (Boolean(fixed.lane) || fixed.wrong.length > 0 || fixed.values.length > 0) &&
+                    "corrected",
                 )}
                 data-thread={row.threadId}
                 data-lane={row.lane}
@@ -159,6 +174,30 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
                     })}
                     {fixed.lane ? ` → ${laneLabel(draft, fixed.lane, s)}` : ""}
                   </span>
+                  {row.values?.length ? (
+                    <span className="vals">
+                      {row.values.map((v) => (
+                        <span key={v.extraction} className="val" data-state={v.state}>
+                          {fill(s["strings.views.value_title"], {
+                            label: v.label,
+                            value: valueText(v, s),
+                          })}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                  {row.actions?.length ? (
+                    <span className="acts">
+                      <span className="lab">
+                        {fill(s["strings.views.card.actions"], { actions: "" }).trim()}
+                      </span>
+                      {row.actions.map((a) => (
+                        <Btn key={a} sm disabled>
+                          {a}
+                        </Btn>
+                      ))}
+                    </span>
+                  ) : null}
                 </span>
                 {open ? (
                   <span className="fix">
@@ -197,7 +236,52 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
                         </Btn>
                       );
                     })}
+                    {(row.values ?? []).map((v) => (
+                      <Btn
+                        key={v.extraction}
+                        sm
+                        on={fixed.values.includes(v.extraction)}
+                        disabled={busy}
+                        data-extraction={v.extraction}
+                        title={v.label}
+                        onClick={() =>
+                          setValuing(
+                            valuing?.threadId === row.threadId &&
+                              valuing.extraction === v.extraction
+                              ? null
+                              : { threadId: row.threadId, extraction: v.extraction },
+                          )
+                        }
+                      >
+                        {s["strings.views.wrong_value"]}
+                      </Btn>
+                    ))}
                   </span>
+                ) : null}
+                {valuing?.threadId === row.threadId ? (
+                  <Picker
+                    label={s["strings.views.wrong_value"]}
+                    title={row.values.find((v) => v.extraction === valuing.extraction)?.label ?? ""}
+                    items={[
+                      ...(
+                        row.values.find((v) => v.extraction === valuing.extraction)?.candidates ??
+                        []
+                      ).map((c) => ({ key: `c:${c}`, label: c })),
+                      { key: "none", label: s["strings.views.not_stated"] },
+                    ]}
+                    onPick={(key) => {
+                      const extraction = valuing.extraction;
+                      setValuing(null);
+                      void run(() =>
+                        api.correct(draft.id, {
+                          threadId: row.threadId,
+                          extraction,
+                          value: key === "none" ? null : key.slice(2),
+                        }),
+                      );
+                    }}
+                    onClose={() => setValuing(null)}
+                  />
                 ) : null}
                 {moving === row.threadId ? (
                   <Picker
@@ -214,6 +298,16 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
               </div>
             );
           })}
+        </div>
+      ) : null}
+      {t?.blocks?.length ? (
+        <div className="bc-blocks">
+          <div className="bc-line">
+            <b>{s["strings.views.card.blocks"]}</b>
+          </div>
+          {t.blocks.map((b) => (
+            <BlockMini key={b.id} b={b} s={s} />
+          ))}
         </div>
       ) : null}
       {t?.agreement ? (
@@ -343,6 +437,68 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** An Extraction's value on a tried row in words: the span, Unsure, Not stated or Not read yet. */
+function valueText(v: ViewTriedThread["values"][number], s: Settings): string {
+  if (v.state === "value") return v.text ?? "";
+  if (v.state === "unsure") return s["strings.views.unsure"];
+  if (v.state === "empty") return s["strings.views.not_stated"];
+  return s["strings.views.not_read"];
+}
+
+/** One Block drawn small on the card: a stat's number, a chart's bars, Lane counts, first rows in words. */
+function BlockMini({ b, s }: { b: BlockPreview; s: Settings }) {
+  const title = b.title || s[`strings.views.show_as.${b.type as "lanes"}`] || b.type;
+  return (
+    <div className="bc-block" data-type={b.type} data-block={b.id}>
+      {b.type !== "text" ? <span className="bt">{title}</span> : null}
+      {b.type === "stat" ? (
+        <span className="bstat">
+          <b>{b.value}</b>
+          {b.change ? <span className="chg">{b.change}</span> : null}
+        </span>
+      ) : b.type === "chart" ? (
+        <BarChart
+          label={title}
+          height={60}
+          items={b.items.map((i, n) => ({
+            key: `${n}`,
+            label: i.label,
+            value: i.count ?? 0,
+            text: i.value,
+          }))}
+        />
+      ) : b.type === "text" ? (
+        <span className="btext">{b.value}</span>
+      ) : b.type === "lanes" || b.type === "list" || b.type === "counts" ? (
+        <span className="blanes">
+          {b.items.map((i) => (
+            <span key={i.label} className="bc-lane" data-tone={i.tone}>
+              <span className="dot" aria-hidden="true" />
+              {i.label} <b>{i.count ?? 0}</b>
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="brows">
+          {b.items.map((i, n) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a preview row is its position
+            <span key={n} className="brow">
+              {i.label}
+              {i.value ? <span className="v"> · {i.value}</span> : null}
+              {i.count !== undefined ? <b> {i.count}</b> : null}
+            </span>
+          ))}
+        </span>
+      )}
+      {b.unsure > 0 ? (
+        <span className="bunsure">
+          {fill(s["strings.views.unsure_count"], { count: b.unsure })}
+        </span>
+      ) : null}
     </div>
   );
 }

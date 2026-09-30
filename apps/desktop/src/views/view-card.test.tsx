@@ -224,6 +224,91 @@ describe("the View card", () => {
     expect(el.textContent).toContain("Pinned in the nav.");
   });
 
+  test("what it shows, the values on a tried row, Wrong value, and the buttons it would carry", async () => {
+    const row = {
+      ...tried(1, "red", ["support request 95%"]),
+      values: [
+        {
+          extraction: "order_total",
+          label: "Total",
+          state: "value" as const,
+          text: "$120.00",
+          confidence: 0.9,
+          candidates: ["$110.00", "$10.00", "$120.00"],
+        },
+        {
+          extraction: "order_number",
+          label: "Order",
+          state: "unsure" as const,
+          text: "113-2",
+          confidence: 0.4,
+          candidates: ["113-2"],
+        },
+      ],
+      actions: ["Track package"],
+    };
+    const withBlocks: ViewDraft = {
+      ...DRAFT,
+      test: {
+        ...TEST,
+        shown: [row, ...TEST.shown.slice(1)],
+        blocks: [
+          {
+            id: "spend",
+            type: "stat",
+            title: "Spent this month",
+            value: "$120.00",
+            change: "up 186%",
+            items: [],
+            unsure: 0,
+          },
+          {
+            id: "by_month",
+            type: "chart",
+            title: "Spend per month",
+            value: null,
+            change: null,
+            items: [
+              { label: "Sep", count: 41.97, value: "$41.97" },
+              { label: "Oct", count: 120, value: "$120.00" },
+            ],
+            unsure: 1,
+          },
+        ],
+      },
+    };
+    const { el, calls } = await mount(withBlocks);
+    expect(el.textContent).toContain("What it shows");
+    expect(el.querySelector('.bc-block[data-block="spend"] .bstat')?.textContent).toBe(
+      "$120.00up 186%",
+    );
+    expect(el.querySelectorAll('.bc-block[data-block="by_month"] svg rect')).toHaveLength(2);
+    expect(el.querySelector('.bc-block[data-block="by_month"] .bunsure')?.textContent).toBe(
+      "1 unsure",
+    );
+    const first = el.querySelector(".bc-row");
+    expect(first?.querySelector(".vals")?.textContent).toBe("Total: $120.00Order: Unsure");
+    const track = first && button(first, "Track package");
+    expect(track?.hasAttribute("disabled")).toBe(true);
+    const wrong = first?.querySelector('[data-extraction="order_total"]');
+    await click(wrong);
+    await click(
+      [...el.querySelectorAll(".pop-item")].find((b) => b.textContent === "$110.00") ?? null,
+    );
+    expect(calls.at(-1)).toEqual({
+      name: "correct",
+      args: ["bd_1", { threadId: "t1", extraction: "order_total", value: "$110.00" }],
+    });
+    await click(first?.querySelector('[data-extraction="order_number"]'));
+    await click(
+      [...el.querySelectorAll(".pop-item")].find((b) => b.textContent === "Not stated") ?? null,
+    );
+    expect(calls.at(-1)).toEqual({
+      name: "correct",
+      args: ["bd_1", { threadId: "t1", extraction: "order_number", value: null }],
+    });
+  });
+
   test("an edit shows its moves and Apply, then Undo; no key keeps only the Fact Lanes", async () => {
     const edit: ViewDraft = {
       ...DRAFT,

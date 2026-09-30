@@ -16,13 +16,13 @@ import {
   viewIdFor,
   viewMoves,
 } from "@monday/shared";
-import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
-import { groups, views as viewsTable } from "../../db/schema.ts";
+import { views as viewsTable } from "../../db/schema.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
 import type { DraftStore } from "../../views/drafts.ts";
 import { ViewLimitError, ViewNotFoundError, type ViewStore } from "../../views/index.ts";
+import { viewRefs } from "../../views/refs.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import {
@@ -30,6 +30,7 @@ import {
   type AuthorSettings,
   type CorrectionLine,
   reviseView,
+  rewordedExtractions,
   rewordedSignals,
   writeView,
 } from "./author.ts";
@@ -83,6 +84,9 @@ export interface DraftCorrection {
   /** "Wrong": a Noul of the View's own and what it should have said. */
   signal?: string | undefined;
   holds?: boolean | undefined;
+  /** "Wrong value": an Extraction, and the span that is right (null: not stated). */
+  extraction?: string | undefined;
+  value?: string | null | undefined;
 }
 
 /** What update_view proposes: a change applied at once, or a draft whose moves the user sees first. */
@@ -174,15 +178,15 @@ export function createViewDrafting(deps: {
     s: Awaited<ReturnType<typeof settings>>,
   ): Promise<AuthorContext> => {
     const ctx = await deps.context(workspaceId);
-    const g = await db
-      .select({ id: groups.id, name: groups.name })
-      .from(groups)
-      .where(eq(groups.workspaceId, workspaceId));
+    const refs = await viewRefs(db, workspaceId);
     return {
       owner: ctx.owner,
       today: ctx.now.toDateString(),
-      groups: g,
+      groups: refs.named.groups,
       sections: s["sections.rules"].map((r) => ({ id: r.id, name: r.name?.trim() || r.id })),
+      workflows: refs.named.workflows,
+      customActions: refs.named.customActions,
+      refs,
     };
   };
 
@@ -219,14 +223,23 @@ export function createViewDrafting(deps: {
       for (const e of list) {
         const t = shown.get(e.threadId);
         const lane = draft.doc.lanes.find((l) => l.id === e.lane)?.label ?? e.lane;
+        const x = key.startsWith("x:")
+          ? draft.doc.extractions.find((d) => d.id === key.slice(2))
+          : undefined;
+        const xLabel = x ? x.label?.trim() || x.id.replaceAll("_", " ") : "";
+        const picked = x ? t?.values.find((v) => v.extraction === x.id)?.text : null;
         lines.push({
           from: e.from ?? t?.from ?? "",
           subject: e.subject ?? t?.subject ?? "",
           said:
             key === "_lanes"
               ? `it belongs in ${lane}`
-              : `${signalName(draft.doc, key)} ${e.holds ? "holds" : "does not hold"}`,
-          answers: t?.reasons ?? [],
+              : x
+                ? e.value === null
+                  ? `the thread states no ${xLabel}`
+                  : `the ${xLabel} is "${e.value}"`
+                : `${signalName(draft.doc, key)} ${e.holds ? "holds" : "does not hold"}`,
+          answers: x ? [`${xLabel} picked: ${picked ?? "none"}`] : (t?.reasons ?? []),
         });
       }
     }
@@ -280,6 +293,21 @@ export function createViewDrafting(deps: {
         ...(subject ? { subject } : {}),
         at: new Date().toISOString(),
       };
+      if (c.extraction !== undefined) {
+        // "Wrong value": the span the user says is right (one code found), or null for "not stated".
+        const x = draft.doc.extractions.find((e) => e.id === c.extraction);
+        const found = tried?.values.find((v) => v.extraction === c.extraction);
+        const value = c.value ?? null;
+        if (!x || (value !== null && found && !found.candidates.includes(value))) {
+          throw new ViewNotFoundError(`${draftId} extraction ${c.extraction}`);
+        }
+        const key = `x:${x.id}`;
+        const list = (draft.doc.examples[key] ?? []).filter((e) => e.threadId !== c.threadId);
+        list.push({ ...example, value });
+        return drafts.save(draftId, {
+          doc: { ...draft.doc, examples: { ...draft.doc.examples, [key]: list } },
+        });
+      }
       const key = c.lane !== undefined ? "_lanes" : c.signal;
       if (!key || (key !== "_lanes" && !draft.doc.signals.some((x) => x.id === key))) {
         throw new ViewNotFoundError(`${draftId} signal ${c.signal ?? ""}`);
@@ -318,10 +346,22 @@ export function createViewDrafting(deps: {
       }
       const before = draft.test ? draft.doc : null;
       const reworded = before ? rewordedSignals(before, doc) : [];
+      const rewordedX = before ? rewordedExtractions(before, doc) : [];
+      const xName = (id: string) => {
+        const x = doc.extractions.find((e) => e.id === id);
+        return x?.label?.trim() || id.replaceAll("_", " ");
+      };
       const changes = [
         ...reworded.map((id) =>
           fill(s["strings.views.change.reworded"], { signal: signalName(doc, id) }),
         ),
+        ...rewordedX.map((id) => fill(s["strings.views.change.reworded"], { signal: xName(id) })),
+        ...doc.extractions.flatMap((x) => {
+          const n = (doc.examples[`x:${x.id}`] ?? []).length;
+          return n
+            ? [fill(s["strings.views.change.examples"], { count: n, signal: xName(x.id) })]
+            : [];
+        }),
         ...doc.signals.flatMap((sig) => {
           const n = (doc.examples[sig.id] ?? []).length;
           return n

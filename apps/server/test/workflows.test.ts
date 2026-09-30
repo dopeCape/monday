@@ -611,6 +611,40 @@ describe("the Candidate intake workflow runs on a fixture arrival, pauses at Sla
     ]);
   });
 
+  test("a Run by hand carries its inputs (a View's button): the Steps read them as {{inputs.<name>}}", async () => {
+    const res = await send("/workflows", {
+      workspace: workspaceId,
+      name: "Refund",
+      trigger: { kind: "manual" },
+      steps: [
+        {
+          id: "note",
+          kind: "notify",
+          name: "Notify",
+          text: "Refund {{inputs.order}} for {{inputs.amount}}",
+        },
+      ],
+    });
+    const view = (await res.json()) as WorkflowView;
+    await send(`/workflows/${view.id}/enable`, { enabled: true });
+    const started = await send(`/workflows/${view.id}/run`, {
+      inputs: { order: "113-2222222-2222222", amount: "$120.00" },
+    });
+    expect(started.status).toBe(202);
+    const run = (await started.json()) as RunView;
+    expect(run.trigger).toMatchObject({
+      kind: "manual",
+      inputs: { order: "113-2222222-2222222", amount: "$120.00" },
+    });
+    await drain();
+    const done = await runOf(run.id);
+    expect(done.steps.map((s) => s.detail)).toEqual(["Refund 113-2222222-2222222 for $120.00"]);
+    // An input name code cannot read is refused before anything runs.
+    expect(
+      (await send(`/workflows/${view.id}/run`, { inputs: { "Order Number": "x" } })).status,
+    ).toBe(400);
+  });
+
   test("an error outside a tool gets the Jobs table's retries with backoff before the policy applies (ADR 0005)", async () => {
     const res = await send("/workflows", {
       workspace: workspaceId,

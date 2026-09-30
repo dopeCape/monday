@@ -1,14 +1,24 @@
-// The Agent's View tools (slice 40, docs/spec/views.md): list_views reads
-// the pinned Views with their Lane counts; create_view writes a View from
-// the owner's sentence and tries it on their own mail (the View card shows
-// the tried Threads; nothing is saved until the user clicks Pin view);
-// revise_view folds the user's corrections into the questions and tries
-// again on the same Threads; update_view changes a View (a name, icon or
-// layout applies with Undo; a Lane or Signal change is tried and its moves
-// shown before Apply); delete_view removes it with Undo. Approvals stay in
-// the tool server (ADR 0002): Pin view and Apply are the user's clicks.
+// The Agent's View tools (docs/spec/views.md, "Making a View" and "Changing
+// and removing"; ADR 0016): list_views reads the Views with their Lane
+// counts; create_view writes a View from the owner's sentence (its Fields,
+// its own Jev questions and Extractions, its Blocks and buttons) and tries
+// it on their own mail (the card draws every Block small over the tried
+// Threads; nothing is saved until the user clicks Pin view); revise_view
+// folds the user's corrections into the questions and tries again on the
+// same Threads; update_view changes a View (a name, icon, Block or button
+// applies with Undo; a Lane, Signal, Extraction or scope change is tried and
+// its moves shown before Apply); delete_view removes it with Undo. The
+// Board tool names stay as aliases (TOOL_ALIASES). Approvals stay in the
+// tool server (ADR 0002): Pin view and Apply are the user's clicks.
 
-import type { ToolPreview, UndoRecord, View, ViewDraft, ViewPreview } from "@monday/shared";
+import type {
+  BlockPreview,
+  ToolPreview,
+  UndoRecord,
+  View,
+  ViewDraft,
+  ViewPreview,
+} from "@monday/shared";
 import { LANE_COMPONENTS, OTHERS_LANE, UNSURE_LANE } from "@monday/shared";
 import { z } from "zod";
 import type { ViewIntelligence } from "../../views/index.ts";
@@ -26,6 +36,17 @@ function seamOf(ctx: ToolContext): ViewsSeam | null {
 const card = (p: Omit<ViewPreview, "kind">): ToolPreview => ({ kind: "view", ...p });
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** One Block of the card in words for the model: "stat Spent this month $120.00 (up 186%)". */
+function blockLine(b: BlockPreview): string {
+  const head = [b.type, b.title].filter(Boolean).join(" ");
+  const value = b.value ? ` ${b.value}${b.change ? ` (${b.change})` : ""}` : "";
+  const items = b.items
+    .slice(0, 6)
+    .map((i) => `${i.label}${i.value ? ` ${i.value}` : i.count !== undefined ? ` ${i.count}` : ""}`)
+    .join(", ");
+  return `${head}${value}${items ? `: ${items}` : ""}${b.unsure ? ` (${b.unsure} unsure)` : ""}`;
+}
 
 /** The draft's test in one paragraph for the model: counts, what the card shows, what waits on the user. */
 function draftText(d: ViewDraft): string {
@@ -54,6 +75,19 @@ function draftText(d: ViewDraft): string {
     t?.moves?.length
       ? `Threads that would move: ${t.moves.map((m) => `${m.threadIds.length} ${m.from} to ${m.to}`).join(", ")}.`
       : "",
+    t?.blocks.length ? `It shows: ${t.blocks.map(blockLine).join("; ")}.` : "",
+    ...d.doc.extractions.map((x) => {
+      const rows = t?.shown ?? [];
+      const values = rows.map((r) => r.values.find((v) => v.extraction === x.id));
+      const found = values.filter((v) => v?.state === "value").length;
+      const unsure = values.filter((v) => v?.state === "unsure").length;
+      return rows.length
+        ? `${x.label || x.id}: a value on ${found} of the ${rows.length} shown threads${unsure ? `, ${unsure} unsure` : ""}.`
+        : "";
+    }),
+    d.doc.actions.length
+      ? `Buttons on its items: ${d.doc.actions.map((a) => a.label).join(", ")}.`
+      : "",
     t?.needsJudge ? "It reads mail through questions and no TypeSafe key answers them." : "",
     d.viewId
       ? "Nothing changes until the user clicks Apply on the card."
@@ -76,7 +110,7 @@ const describe = async (seam: ViewsSeam, b: View) => {
 const listViews: ToolDefinition<Record<string, never>> = {
   name: "list_views",
   description:
-    "List the user's Views: id, name, version, layout, how many threads are in each Lane now, the scope and the Signals each reads. Read-only.",
+    "List the user's Views: id, name, version, its Blocks, how many threads are in each Lane now, the scope and the Signals each reads. Read-only.",
   tier: "read",
   input: z.object({}),
   summarize: () => "views",
@@ -99,7 +133,7 @@ const listViews: ToolDefinition<Record<string, never>> = {
 const createView: ToolDefinition<{ sentence: string }> = {
   name: "create_view",
   description:
-    "Make a View from the user's sentence (\"show today's support requests as red, yellow and green\"). monday writes the View (exact Facts for dates, addresses, counts and amounts; questions only for what needs reading, reusing shipped Signals), validates it, and tries it on the newest threads in its scope, widening a quiet scope's dates. The card shows the tried threads with their Lane and the answers behind it; the user corrects rows there and pins it. Nothing is saved until the user clicks Pin view. Metered, read-only.",
+    'Make a View from the user\'s sentence: any page of their mail they ask for, such as "today\'s support requests as red, yellow and green", "all my Amazon orders with shipped and delivered lanes and total spend per month", "invoices I owe as a table by due date", "who emails me most this quarter", "my travel bookings on a calendar", with buttons on the items when asked ("with a button that runs my refund workflow"). monday writes the View: exact Facts for dates, addresses and counts; values such as totals, due dates and order numbers picked from what code finds in the mail; its own yes, no, choice or score questions only for what needs reading; Blocks from a fixed catalog (lanes, list, counts, table, stat, chart, timeline, calendar, cards, people, checklist, heatmap, text) with sums and groups done by code. It validates the View and tries it on the newest threads in its scope, each thread asked once. The card draws every Block small over the tried threads with the values and answers behind each row; the user corrects rows there (Move to, Wrong, Wrong value) and pins it. Nothing is saved until the user clicks Pin view. Metered, read-only.',
   tier: "read",
   input: z.object({
     sentence: z.string().min(3).max(1000).describe("The user's words for what the View shows"),
@@ -134,7 +168,7 @@ const createView: ToolDefinition<{ sentence: string }> = {
 const reviseView: ToolDefinition<{ draft_id: string; instruction?: string | undefined }> = {
   name: "revise_view",
   description:
-    'Revise a View draft after the user corrected rows on its card (Move to, Wrong): the corrections become Examples in its questions, a question the corrections show is off is rewritten, and the draft is tried again on the same threads. instruction carries the user\'s own words when they asked for more ("try it with only paying customers"). Returns the new card with the agreement line. Metered, read-only.',
+    'Revise a View draft after the user corrected rows on its card (Move to, Wrong, Wrong value): the corrections become Examples in its questions, a question the corrections show is off is rewritten, and the draft is tried again on the same threads. instruction carries the user\'s own words when they asked for more ("try it with only paying customers", "add a chart of spend per vendor", "add a button to track the package"). Returns the new card with the agreement line. Metered, read-only.',
   tier: "read",
   input: z.object({
     draft_id: z.string().min(1),
@@ -179,7 +213,7 @@ type UpdateInput = {
 const updateView: ToolDefinition<UpdateInput> = {
   name: "update_view",
   description:
-    'Change a View. A new name, icon or layout (show_as: lanes, list, counts, table, timeline) applies at once with Undo. instruction (the user\'s words: "make yellow only paying customers") or fold_corrections (the moves the user made on the View folded into its questions) change what decides the Lanes: the card tries the new version and shows which threads would move before the user clicks Apply. Reversible.',
+    'Change a View. A new name, icon, or how its Lanes are drawn (show_as: lanes, list, counts, table, timeline) applies at once with Undo. instruction carries the user\'s words: a new Block, column, chart or button ("add a chart of spend per month", "a button that runs my refund workflow") applies with Undo; a change to what decides the Lanes or the values ("make yellow only paying customers") is tried first and the card shows which threads would move before the user clicks Apply. fold_corrections folds the moves the user made on the View into its questions. Reversible.',
   tier: "reversible",
   input: z.object({
     view_id: z.string().min(1),

@@ -46,6 +46,8 @@ const correctionBody = z.object({
   lane: z.string().min(1).max(40).optional(),
   signal: z.string().min(1).max(80).optional(),
   holds: z.boolean().optional(),
+  extraction: z.string().min(1).max(80).optional(),
+  value: z.string().max(500).nullable().optional(),
 });
 const pinDraftBody = z.object({ factsOnly: z.boolean().optional() });
 const valuesBody = z.object({

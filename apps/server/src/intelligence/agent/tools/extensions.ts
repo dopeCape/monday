@@ -84,7 +84,12 @@ export interface WorkflowsSeam {
     decision: "approved" | "declined",
     options?: { standing?: boolean },
   ): Promise<RunView>;
-  start(workflowId: string, threadId?: string | null): Promise<RunView>;
+  /** A Run by hand; `inputs` are what the Run's templates read as {{inputs.<name>}} (a View's button fills them). */
+  start(
+    workflowId: string,
+    threadId?: string | null,
+    inputs?: Record<string, string>,
+  ): Promise<RunView>;
   /** The Setting workflows.ask_before_enable. */
   askBeforeEnable(): Promise<boolean>;
 }

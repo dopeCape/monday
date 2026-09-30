@@ -421,3 +421,584 @@ button.view-tr:hover {
   top: 34px;
   right: 10px;
 }
+
+/* ------------------------------ Blocks (docs/spec/views.md, "The Block catalog") ------------------------------ */
+/* A View's Blocks in a 6-column grid by their width; on a narrow list area
+   they stack. A single Block (a Board's lanes) fills the list area. */
+
+.view-grid {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--gap);
+  padding: var(--gap);
+  align-content: start;
+}
+.view-grid.only {
+  display: block;
+  padding: 0;
+  height: 100%;
+}
+.view-grid.only > .view-block {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  height: 100%;
+}
+.view-block {
+  grid-column: span 6;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  overflow: hidden;
+}
+.view-block[data-width="half"] {
+  grid-column: span 3;
+}
+.view-block[data-width="third"] {
+  grid-column: span 2;
+}
+.view-block[data-width="two_thirds"] {
+  grid-column: span 4;
+}
+@container (max-width: 640px) {
+  .view-block[data-width] {
+    grid-column: span 6;
+  }
+}
+.view-block-h {
+  margin: 0;
+  padding: 10px var(--pad) 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+.view-unsure {
+  padding: 4px var(--pad) 10px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.view-block .view-lanes {
+  min-height: 240px;
+}
+
+/* the note the Agent writes */
+.view-note {
+  margin: 0;
+  padding: 12px var(--pad);
+  font-size: var(--fs-md);
+  color: var(--fg);
+  border-left: 3px solid var(--tone, var(--border-strong));
+}
+
+/* a stat: one big number, its label, the change */
+.view-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px var(--pad);
+}
+.view-stat .lab {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.view-stat .num {
+  font-size: var(--fs-3xl);
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.view-stat .chg {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.view-stat .chg[data-dir="up"] {
+  color: var(--success);
+}
+.view-stat .chg[data-dir="down"] {
+  color: var(--danger);
+}
+.view-stat .note {
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+
+/* charts: plain SVG over the palette's tokens */
+.view-chart-block {
+  padding: 8px var(--pad) 10px;
+}
+.view-chart {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+}
+.view-chart text {
+  font-family: var(--font-sans);
+  font-size: 9px;
+  fill: var(--fg-muted);
+}
+.view-chart text.v {
+  fill: var(--fg);
+  font-weight: 600;
+}
+.view-chart [role="button"] {
+  cursor: pointer;
+  outline: none;
+}
+.view-chart .bar-g:hover rect,
+.view-chart .bar-g.on rect,
+.view-chart [role="button"]:focus-visible rect {
+  opacity: 0.8;
+}
+.view-chart.heat {
+  max-height: 160px;
+}
+.view-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.view-chart-wrap.donut {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--gap);
+}
+.view-chart-wrap.donut .view-chart {
+  width: 140px;
+  flex: none;
+}
+.view-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-chart-wrap.donut .view-legend {
+  flex-direction: column;
+}
+.view-legend .sw {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+}
+.view-picked {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+/* a Thread line outside the Inbox's rows (charts, people, timeline) */
+.view-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.view-line.focus {
+  background: var(--active);
+}
+.view-line-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px var(--pad);
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.view-line-main:hover {
+  background: var(--hover);
+}
+.view-line-main b {
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-line .who {
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.view-line .val {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.view-line .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tone, var(--fg-faint));
+}
+
+/* the table's rows are divs with a button for the Thread and cells beside it */
+.view-tr:not(.head):hover {
+  background: var(--hover);
+}
+.view-tr .t {
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.view-tr .cell {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-tr .cell.unsure {
+  color: var(--fg-faint);
+  font-style: italic;
+}
+.view-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--sunken);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tone, var(--fg-faint));
+}
+
+/* action buttons: on a row (shown on hover), in a Lane's or group's header */
+.view-acts {
+  display: inline-flex;
+  gap: 2px;
+  padding-right: 6px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.view-row .view-acts {
+  position: absolute;
+  top: 8px;
+  right: 40px;
+}
+.view-row:hover .view-acts,
+.view-line:hover .view-acts,
+.view-tr:hover .view-acts,
+.view-card-item:hover .view-acts,
+.view-check:hover .view-acts,
+.view-acts:focus-within {
+  opacity: 1;
+}
+.view-act {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--fg-muted);
+}
+.view-act:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.view-group-acts {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.view-group-act {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--raised);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-group-act:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+/* cards: a gallery, one card per Thread */
+.view-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 10px var(--pad) 14px;
+}
+.view-card-item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone, var(--border));
+  border-radius: var(--r-md);
+  background: var(--raised);
+}
+.view-card-item.focus {
+  border-color: var(--accent);
+}
+.view-card-item .main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+}
+.view-card-item .title {
+  font-weight: 600;
+  color: var(--fg);
+}
+.view-card-item .sub {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.view-card-item .badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.view-card-item .val {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.view-card-item .view-acts {
+  position: absolute;
+  top: 6px;
+  right: 2px;
+}
+
+/* people: who and how many, the last time */
+.view-people {
+  display: flex;
+  flex-direction: column;
+}
+.view-person {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 6px var(--pad);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.view-person b {
+  font-weight: 500;
+  color: var(--fg);
+}
+.view-person .n {
+  font-variant-numeric: tabular-nums;
+}
+.view-person .when {
+  color: var(--fg-faint);
+}
+.view-person:hover {
+  background: var(--hover);
+}
+.view-person.on {
+  background: var(--active);
+}
+
+/* checklist: open items, the done ones folded away */
+.view-checklist {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 6px;
+}
+.view-check {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px var(--pad);
+  border-bottom: 1px solid var(--border);
+}
+.view-check input {
+  accent-color: var(--accent);
+}
+.view-check .txt {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+}
+.view-check .who {
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.view-check.done .txt {
+  color: var(--fg-faint);
+  text-decoration: line-through;
+}
+.view-done-toggle {
+  align-self: flex-start;
+  margin: 6px var(--pad);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+
+/* calendar: a month of days, each with its Threads */
+.view-month {
+  padding: 8px var(--pad) 12px;
+}
+.view-month-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+}
+.view-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+.view-month-grid .wd {
+  padding: 2px 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.view-month-grid .day {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 64px;
+  padding: 3px;
+  border-radius: var(--r-sm);
+  background: var(--sunken);
+}
+.view-month-grid .day.blank {
+  background: none;
+}
+.view-month-grid .day.today {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.view-month-grid .n {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-month-grid .ev {
+  display: block;
+  padding: 1px 4px;
+  border-radius: var(--r-xs);
+  background: var(--accent-soft);
+  font-size: var(--fs-xs);
+  color: var(--fg);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-month-grid .ev[data-tone] {
+  background: var(--sunken);
+  border-left: 2px solid var(--tone);
+}
+
+/* the confirm bar before a link opens */
+.view-confirm {
+  color: var(--fg);
+}
+
+/* the Panel's stat */
+.view-panel-stat {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+/* the card's small pictures of each Block, and the values on a tried row */
+.view-card .bc-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.view-card .bc-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+}
+.view-card .bc-block .bt {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.view-card .bc-block .bstat b {
+  font-size: var(--fs-xl);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.view-card .bc-block .bstat .chg {
+  margin-left: 8px;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.view-card .bc-block .blanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.view-card .bc-block .brows {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+}
+.view-card .bc-block .brow .v {
+  color: var(--fg-muted);
+}
+.view-card .bc-block .bunsure {
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+}
+.view-card .bc-block .view-chart {
+  max-height: 90px;
+}
+.view-card .bc-row .vals,
+.view-card .bc-row .acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-card .bc-row .val[data-state="unsure"],
+.view-card .bc-row .val[data-state="not_read"] {
+  color: var(--fg-faint);
+  font-style: italic;
+}

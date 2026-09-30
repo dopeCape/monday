@@ -6,18 +6,31 @@
 // Show the source, Ask monday to change this view, Unpin, Delete (with
 // Undo). Above the rows: the "check its first placements" bar for a View
 // pinned without a test, and the offer to tighten a question the user keeps
-// correcting. Every word is a strings.views.* Setting.
+// correcting. The View's action buttons run here (actions.ts) over the
+// Inbox's own paths; a link asks first with its domain. Every word is a
+// strings.views.* Setting.
 
-import type { LaneComponent, View, ViewDoc } from "@monday/shared";
-import { LANE_COMPONENTS, showAs, VIEW_ICONS } from "@monday/shared";
+import type {
+  LaneComponent,
+  Settings,
+  View,
+  ViewAction,
+  ViewBase,
+  ViewDoc,
+  ViewRow,
+} from "@monday/shared";
+import { LANE_COMPONENTS, laneBlockOf, showAs, VIEW_ICONS } from "@monday/shared";
 import { Btn, Toast } from "@monday/ui";
 import { DotsThreeIcon, XIcon } from "@phosphor-icons/react";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import type { ViewLens } from "../screens/Inbox.tsx";
 import { Picker } from "../screens/inbox/Picker.tsx";
 import { useShell } from "../shell/Shell.tsx";
-import { useLaneView, useViews } from "./useViews.ts";
-import { layoutOf, orderedThreads, ViewBlocks } from "./ViewBlocks.tsx";
+import type { CachedViewThread } from "../store/views.ts";
+import { type InboxViewHost, runViewAction } from "./actions.ts";
+import type { ViewsApi } from "./api.ts";
+import { useViewBase, useViews } from "./useViews.ts";
+import { orderedThreads, ViewBlocks, valueWords, viewBlockData } from "./ViewBlocks.tsx";
 
 const fill = (t: string, vars: Record<string, string | number>) =>
   t.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? ""));
@@ -31,6 +44,60 @@ export function movesOutOf(view: View, now: Date): Record<string, number> {
     out[p.from] = (out[p.from] ?? 0) + 1;
   }
   return out;
+}
+
+/**
+ * One press of a View's action button: runs it over the Inbox's paths with
+ * the View's own writes (Move to, a checklist mark), a confirm before a link
+ * opens and the Agent for ask_agent, then says what happened with Undo.
+ */
+export async function runFromView(input: {
+  base: ViewBase<CachedViewThread>;
+  viewId: string;
+  action: ViewAction;
+  rows: readonly ViewRow<CachedViewThread>[];
+  where: "row" | "group";
+  host: InboxViewHost;
+  settings: Settings;
+  views: Pick<ViewsApi, "place" | "done">;
+  onAsk(text: string): void;
+  confirm(text: string): Promise<boolean>;
+}): Promise<void> {
+  const { action, host, settings: s, views, viewId } = input;
+  const result = await runViewAction(
+    input.base,
+    action,
+    input.rows,
+    {
+      ...host,
+      confirm: input.confirm,
+      setLane: async (threadId, lane) => {
+        await views.place(viewId, threadId, lane);
+      },
+      markDone: async (threadId, messageCount) => {
+        await views.done(viewId, threadId, true, messageCount);
+      },
+      ask: (text) => input.onAsk(text),
+    },
+    {
+      morningHour: s["inbox.snooze.morning_hour"],
+      eventMinutes: s["actions.calendar.default_minutes"],
+      opensWords: s["strings.views.action.opens"],
+      askWords: s["strings.views.action.ask_prompt"],
+      words: valueWords(s),
+    },
+    input.where,
+  );
+  if (result.ok) {
+    if (action.do.kind !== "ask_agent") {
+      host.toast(
+        fill(s["strings.views.action.done"], { label: action.label }),
+        result.undo[0] ?? null,
+      );
+    }
+  } else if (result.reason === "unavailable" || result.reason === "no_value") {
+    host.toast(s["strings.views.action.unavailable"], null);
+  }
 }
 
 type Menu = null | "main" | "icon" | "show_as";
@@ -54,13 +121,15 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
   const live = views?.find((b) => b.id === viewId) ?? null;
   const [deleted, setDeleted] = useState<View | null>(null);
   const view = live ?? deleted;
-  const { lanes } = useLaneView(view, now);
+  const { base } = useViewBase(view, now);
   const [menu, setMenu] = useState<Menu>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [source, setSource] = useState(false);
   const [countsLane, setCountsLane] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; undo: () => Promise<unknown> } | null>(null);
+  /** A link waiting for the user's yes before it opens. */
+  const [asking, setAsking] = useState<{ text: string; answer(yes: boolean): void } | null>(null);
 
   const act = useCallback(async (run: () => Promise<unknown>) => {
     try {
@@ -82,9 +151,42 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
     [act, api, view],
   );
 
-  const threads = useMemo(
-    () => (view && lanes ? orderedThreads(view.doc, lanes, countsLane) : []),
-    [view, lanes, countsLane],
+  const data = useMemo(() => (view && base ? viewBlockData(view, base, s) : []), [view, base, s]);
+  const threads = useMemo(() => orderedThreads(data, countsLane), [data, countsLane]);
+
+  /** An action button: run over the Inbox's paths, with the View's own writes and a confirm for links. */
+  const runAction = useCallback(
+    (
+      host: InboxViewHost,
+      action: ViewAction,
+      rows: readonly ViewRow<CachedViewThread>[],
+      where: "row" | "group",
+    ) =>
+      act(async () => {
+        if (!view || !base) return;
+        await runFromView({
+          base,
+          viewId: view.id,
+          action,
+          rows,
+          where,
+          host,
+          settings: s,
+          views: api,
+          onAsk,
+          confirm: (text) =>
+            new Promise<boolean>((resolve) =>
+              setAsking({
+                text,
+                answer: (yes) => {
+                  setAsking(null);
+                  resolve(yes);
+                },
+              }),
+            ),
+        });
+      }),
+    [act, api, base, onAsk, s, view],
   );
 
   if (!view) {
@@ -141,12 +243,15 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
     }
   };
 
+  const laneBlock = laneBlockOf(view.doc);
   const menuItems = [
     { key: "rename", label: s["strings.views.rename"] },
     { key: "icon", label: s["strings.views.change_icon"] },
     { key: "up", label: s["strings.views.move_up"] },
     { key: "down", label: s["strings.views.move_down"] },
-    { key: "show_as", label: s["strings.views.show_as"] },
+    ...(laneBlock || view.doc.lanes.length > 0
+      ? [{ key: "show_as", label: s["strings.views.show_as"] }]
+      : []),
     { key: "source", label: s["strings.views.show_source"] },
     { key: "ask", label: s["strings.views.ask_change"] },
     {
@@ -200,7 +305,7 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
           items={LANE_COMPONENTS.map((c) => ({
             key: c,
             label: s[`strings.views.show_as.${c}`],
-            ...(c === layoutOf(view.doc).component ? { detail: "✓" } : {}),
+            ...(c === laneBlock?.type ? { detail: "✓" } : {}),
           }))}
           onPick={(c) => {
             setMenu(null);
@@ -266,6 +371,17 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
           </Btn>
         </div>
       ) : null}
+      {asking ? (
+        <div className="view-bar view-confirm" role="alertdialog" aria-label={asking.text}>
+          <span>{asking.text}</span>
+          <Btn sm primary onClick={() => asking.answer(true)}>
+            {s["strings.views.action.open"]}
+          </Btn>
+          <Btn sm onClick={() => asking.answer(false)}>
+            {s["strings.views.action.cancel"]}
+          </Btn>
+        </div>
+      ) : null}
       {error ? (
         <div className="view-bar err" role="alert">
           {error}
@@ -314,13 +430,14 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
     header,
     above,
     render: (ctx) =>
-      lanes ? (
-        lanes.total === 0 && layoutOf(view.doc).component !== "lanes" ? (
+      base ? (
+        base.rows.length === 0 && !laneBlock ? (
           <div className="empty-line">{s["strings.views.empty"]}</div>
         ) : (
           <ViewBlocks
-            doc={view.doc}
-            result={lanes}
+            view={view}
+            base={base}
+            data={data}
             settings={s}
             now={now}
             row={ctx.row}
@@ -332,6 +449,14 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
               deleted
                 ? undefined
                 : (threadId, lane) => void act(() => api.place(view.id, threadId, lane))
+            }
+            onAction={
+              deleted
+                ? undefined
+                : (action, rows, where) => void runAction(ctx.host, action, rows, where)
+            }
+            onDone={(threadId, done, messageCount) =>
+              void act(() => api.done(view.id, threadId, done, messageCount))
             }
           />
         )

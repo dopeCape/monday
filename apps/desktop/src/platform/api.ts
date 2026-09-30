@@ -920,10 +920,10 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           json("POST", recent ? { recent } : {}),
         ),
       /** A manual Run, on a Thread when the Workflow is about one. */
-      run: (workflowId: Id, threadId: Id | null = null) =>
+      run: (workflowId: Id, threadId: Id | null = null, inputs?: Record<string, string>) =>
         request<RunView>(
           `/workflows/${encodeURIComponent(workflowId)}/run`,
-          json("POST", { threadId }),
+          json("POST", { threadId, ...(inputs ? { inputs } : {}) }),
         ),
       /** Grants or revokes a Standing approval on one Step. */
       standing: (workflowId: Id, step: string, granted: boolean) =>

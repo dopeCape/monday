@@ -55,7 +55,15 @@ export function viewsApi(request: Requester) {
     draft: (draftId: Id) => request<ViewDraft>(`/views/drafts/${encodeURIComponent(draftId)}`),
     correct: (
       draftId: Id,
-      correction: { threadId: Id; lane?: string; signal?: string; holds?: boolean },
+      correction: {
+        threadId: Id;
+        lane?: string;
+        signal?: string;
+        holds?: boolean;
+        /** "Wrong value": the Extraction and the span that is right, or null for not stated. */
+        extraction?: string;
+        value?: string | null;
+      },
     ) =>
       request<ViewDraft>(
         `/views/drafts/${encodeURIComponent(draftId)}/corrections`,

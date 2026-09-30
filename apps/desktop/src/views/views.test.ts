@@ -9,11 +9,13 @@
 import { describe, expect, test } from "bun:test";
 import type { LaneView, SignalsChange, View } from "@monday/shared";
 import {
+  AMAZON_ORDERS_VIEW,
   DEFAULT_SIGNAL_RULES,
   defaultSettings,
   laneView,
   SUPPORT_TODAY_VIEW,
   scopeSince,
+  viewExtractionId,
   viewSignalId,
 } from "@monday/shared";
 import { navModel } from "../shell/nav.ts";
@@ -233,6 +235,118 @@ describe("Views over the Cache", () => {
     expect(await store.query("select deleted from views")).toEqual([{ deleted: 1 }]);
     sync.stop();
     gone.stop();
+    await store.close();
+  });
+
+  test("picked values: read once per View, again for the Threads the feed names, and drawn from SQL", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const doc = AMAZON_ORDERS_VIEW;
+    const amazonView: View = { ...VIEW, id: doc.id, doc };
+    const total = viewExtractionId(doc.id, "order_total");
+    server.record({
+      kind: "thread",
+      entityId: "o1",
+      payload: {
+        id: "o1",
+        workspaceId: "ws",
+        subject: "Your order of a lamp",
+        participants: [{ name: "Amazon.com", email: "orders@amazon.com" }],
+        lastActivity: "2026-10-02T09:00:00.000Z",
+        messageCount: 1,
+        unread: false,
+        starred: false,
+        archived: false,
+        snoozedUntil: null,
+        section: null,
+        group: null,
+        subgroup: null,
+        tags: [],
+        labels: [],
+        hasAttachments: false,
+        snippet: "Order total: $120.00",
+        deleted: false,
+      },
+    });
+    server.record({
+      kind: "message",
+      entityId: "m-o1",
+      payload: {
+        id: "m-o1",
+        threadId: "o1",
+        from: { name: "Amazon.com", email: "orders@amazon.com" },
+        to: [{ name: "Sam", email: "sam@acme.com" }],
+        cc: [],
+        date: "2026-10-02T09:00:00.000Z",
+        hasAttachments: false,
+      },
+    });
+    server.record({
+      kind: "signals",
+      entityId: "o1",
+      payload: {
+        threadId: "o1",
+        answers: [
+          {
+            signalId: total,
+            version: 1,
+            noul: null,
+            choice: "picked",
+            score: null,
+            confidence: 0.9,
+            stale: false,
+            lowTrust: null,
+            judgedAt: "2026-10-02T09:01:00.000Z",
+          },
+        ],
+      },
+    });
+    await store.sync();
+    let reads = 0;
+    let latest = { value: 120, currency: "USD" };
+    const sync = createViewSync(store, {
+      list: async () => [amazonView],
+      values: async () => {
+        reads += 1;
+        return { o1: { [total]: { text: "$120.00", value: latest, confidence: 0.9 } } };
+      },
+      valuesFor: async (_ws, ids) => {
+        expect([...ids]).toEqual(["o1"]);
+        return { o1: { [total]: { text: "$99.00", value: latest, confidence: 0.9 } } };
+      },
+    });
+    await sync.refresh();
+    await sync.refresh();
+    // Read once for this View version, however often the list is read.
+    expect(reads).toBe(1);
+    const read = async () => {
+      const q = viewThreadsSql(doc.scope.facts, null, 100, "sam@acme.com");
+      const rows = await store.query<Record<string, unknown>>(q.sql, q.params);
+      return rows.map((r) => rowToViewThread(r, "ws"));
+    };
+    const [first] = await read();
+    expect(first?.values?.[total]?.text).toBe("$120.00");
+    expect(first?.correspondent).toEqual({ name: "Amazon.com", email: "orders@amazon.com" });
+    // The feed names the Thread: its values are read again.
+    latest = { value: 99, currency: "USD" };
+    server.record({ kind: "view_values", entityId: "o1", payload: { threadId: "o1" } });
+    await store.sync();
+    for (let i = 0; i < 20; i++) {
+      const [t] = await read();
+      if (t?.values?.[total]?.text === "$99.00") break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const [again] = await read();
+    expect(again?.values?.[total]).toEqual({
+      text: "$99.00",
+      value: { value: 99, currency: "USD" },
+      confidence: 0.9,
+    });
+    expect(await store.query("select * from view_values_stale")).toEqual([]);
+    sync.stop();
     await store.close();
   });
 });

@@ -1276,10 +1276,10 @@ export async function createStoreInbox(
       if (!run) return { ok: false, text: "" };
       return run(store.workspaceId, threadId, approved);
     },
-    async runWorkflow(workflowId, threadId) {
+    async runWorkflow(workflowId, threadId, inputs) {
       const run = options.content?.runWorkflow;
       if (!run) throw new Error("no workflows route");
-      await run(workflowId, threadId);
+      await run(workflowId, threadId, inputs);
     },
     async listThreads(listId) {
       const rows = await store.query(

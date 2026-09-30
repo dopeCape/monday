@@ -189,7 +189,7 @@ A View may declare **actions**, buttons on its items. Each is an ordinary Tool c
 
 | `do.kind` | What it does | How |
 |---|---|---|
-| `run_workflow` | starts a Workflow with a manual trigger on the Thread; `inputs` map Fields into its Run | the Workflow runner; every Step keeps its own approvals and Standing approvals |
+| `run_workflow` | starts a Workflow by hand on the Thread; `inputs` map Fields into its Run, which its Steps read as `{{inputs.<name>}}` | the Workflow runner; every Step keeps its own approvals and Standing approvals |
 | `archive`, `mark_read`, `mark_unread` | as the row actions | InboxActions, with Undo |
 | `snooze` | until a date Field (`x:delivery_date`) or a preset (`tomorrow`, `next_week`, `weekend`) | InboxActions, with Undo |
 | `move` | to a Group | InboxActions, with Undo |

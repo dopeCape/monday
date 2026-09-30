@@ -87,6 +87,7 @@ import { useIsActivePane } from "../shell/active.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { queueTemplate, useTemplateLink } from "../templates/link.ts";
 import { useReplyTemplate } from "../templates/reply.ts";
+import type { InboxViewHost } from "../views/actions.ts";
 import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
@@ -290,6 +291,8 @@ export interface ViewLens {
     row(thread: Thread): ReactNode;
     focus: string | null;
     open(threadId: string): void;
+    /** What the View's action buttons act through. */
+    host: InboxViewHost;
   }): ReactNode;
 }
 
@@ -1870,6 +1873,57 @@ function InboxBody({
       onNavigate,
     ],
   );
+  /**
+   * What a View's action buttons act through (docs/spec/views.md, "Actions on
+   * items"): the same InboxActions, compose, Custom action runner, Workflow
+   * runner and calendar as the reader's chips; nothing is sent from here.
+   */
+  const viewHost = useMemo((): InboxViewHost => {
+    const customOn = createCustomActionRunner({
+      inbox,
+      compose: (kind, threadId, seed) => composeOn(threadId, kind, seed),
+      groups: () => groups,
+      tags: () => tags,
+    });
+    return {
+      archive: (ids) => inbox.archive(ids),
+      markRead: (ids, read) => (read ? inbox.markRead(ids) : inbox.markUnread(ids)),
+      snooze: (ids, until) => inbox.snooze(ids, until),
+      move: (ids, groupId) => inbox.moveToGroup(ids, groupId),
+      tag: async (ids, name) => {
+        const found = tags.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+        if (!found || !inbox.setTags) return "unavailable";
+        const setTags = inbox.setTags;
+        let last: UndoToken | null = null;
+        for (const id of ids) {
+          const current = inbox.thread(id)?.tags ?? [];
+          last = await setTags([id], [...new Set([...current, found.id])]);
+        }
+        return last;
+      },
+      compose: (kind, threadId, seed) => {
+        if (seed.templateId) queueTemplate(composer, seed.templateId);
+        composeOn(threadId, kind, seed.to ? { to: seed.to } : {});
+      },
+      runWorkflow: (workflowId, threadId, inputs) =>
+        inbox.runWorkflow ? inbox.runWorkflow(workflowId, threadId, inputs) : Promise.reject(),
+      customAction: async (actionId, threadId) => {
+        const action = s["actions.custom"].find((a) => a.id === actionId);
+        const target = inbox.thread(threadId);
+        if (!action || !target) return false;
+        return (await customOn.run(action, target)).ok;
+      },
+      openLink: (url) => openExternal(url),
+      ...(calendar
+        ? {
+            createEvent: async (event: { title: string; start: string; end: string }) => {
+              await calendar.create({ ...event, timeZone: deviceZone ?? "UTC" });
+            },
+          }
+        : {}),
+      toast: (text, undo) => showToast(text, undo),
+    };
+  }, [inbox, composeOn, groups, tags, composer, s, calendar, deviceZone, showToast]);
   /** Runs a Recommended action as its tool call; a Thread that changed since is checked again first. */
   const runRecommended = useCallback(
     async (threadId: string, rec: Recommendation, option?: string) => {
@@ -2966,6 +3020,7 @@ function InboxBody({
               row: (th) => renderItem({ key: th.id, row: { thread: th, leaving: false } }),
               focus,
               open: openAnywhere,
+              host: viewHost,
             })}
           </div>
         ) : (

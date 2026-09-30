@@ -1,12 +1,12 @@
 // The Views a screen reads, live from the Cache (docs/spec/views.md): the
 // pinned Views in nav order (kept in step with the Server by cache.ts), and
-// one View's lanes, its Lanes computed on the Device from thread_signals and
+// one View's base, its Lanes and Blocks computed on the Device from thread_signals and
 // thread_facts in SQLite, updated as the answers and the Facts change (a new
 // Thread lands in its Lane when its Signal request answers; a Thread moves
 // when its answers change). Outside a StoreProvider nothing is listed.
 
-import type { LaneView, Settings, View, ViewContext, ViewDoc } from "@monday/shared";
-import { laneView, scopeSince } from "@monday/shared";
+import type { Settings, View, ViewBase, ViewContext, ViewDoc } from "@monday/shared";
+import { laneBlockOf, laneView, scopeSince, viewBase } from "@monday/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "../shell/Shell.tsx";
 import { useOptionalStore } from "../store/react.tsx";
@@ -34,6 +34,7 @@ export function viewContextOf(settings: Settings, owner: string, now: Date): Vie
     now,
     zone: settings["calendar.time_zone"],
     owner: owner.toLowerCase(),
+    extractFloor: settings["views.extract.min_confidence"],
   };
 }
 
@@ -73,12 +74,15 @@ function useViewThreads(
   store: Store | null,
   doc: ViewDoc | null,
   since: Date | null,
+  owner: string,
 ): CachedViewThread[] | undefined {
   const [threads, setThreads] = useState<CachedViewThread[] | undefined>(undefined);
   const query = useMemo(
     () =>
-      doc ? viewThreadsSql(doc.scope.facts, since, Math.min(doc.scope.limit * 2, 5000)) : null,
-    [doc, since],
+      doc
+        ? viewThreadsSql(doc.scope.facts, since, Math.min(doc.scope.limit * 2, 5000), owner)
+        : null,
+    [doc, since, owner],
   );
   useEffect(() => {
     if (!store || !query) {
@@ -108,13 +112,14 @@ function useScopeSince(doc: ViewDoc | null, ctx: ViewContext): Date | null {
 }
 
 /**
- * One View's lanes over the Cache, live. Hysteresis reads where each Thread
- * was on the last read, so a Thread near a threshold does not flicker.
+ * One View over the Cache, live: every Thread in its scope placed in its
+ * Lane, the base every Block's query reads. Hysteresis reads where each
+ * Thread was on the last read, so a Thread near a threshold does not flicker.
  */
-export function useLaneView(
+export function useViewBase(
   view: View | null,
   now: Date,
-): { lanes: LaneView<CachedViewThread> | undefined; context: ViewContext } {
+): { base: ViewBase<CachedViewThread> | undefined; context: ViewContext } {
   const shell = useShell();
   const ws = useWorkspace();
   const store = useOptionalStore();
@@ -124,21 +129,24 @@ export function useLaneView(
   );
   const doc = view?.doc ?? null;
   const since = useScopeSince(doc, ctx);
-  const threads = useViewThreads(store, doc, since);
+  const threads = useViewThreads(store, doc, since, ws.address);
   const previous = useRef<{ id: string; lanes: Map<string, string> } | null>(null);
-  const lanes = useMemo(() => {
+  const base = useMemo(() => {
     if (!view || !threads) return undefined;
     const before = previous.current?.id === view.id ? previous.current.lanes : undefined;
-    const v = laneView(view.doc, threads, ctx, {
+    const block = laneBlockOf(view.doc);
+    const sort = block && "sort" in block ? block.sort : undefined;
+    const b = viewBase(view.doc, threads, ctx, {
       previous: before,
       placements: view.placements,
       unsureLabel: shell.settings["strings.views.unsure"],
       othersLabel: shell.settings["strings.views.everything_else"],
+      sort,
     });
-    previous.current = { id: view.id, lanes: v.lanesOf };
-    return v;
+    previous.current = { id: view.id, lanes: b.lanes.lanesOf };
+    return b;
   }, [view, threads, ctx, shell.settings]);
-  return { lanes, context: ctx };
+  return { base, context: ctx };
 }
 
 /**
@@ -172,6 +180,7 @@ export function useViewCounts(
         b.doc.scope.facts,
         scopeSince(b.doc.scope.facts, ctx.now, ctx.zone),
         Math.min(b.doc.scope.limit * 2, 5000),
+        ws.address,
       );
       const live = store.live<Record<string, unknown>>(q.sql, q.params);
       const off = live.subscribe((rows) => {
@@ -187,6 +196,6 @@ export function useViewCounts(
     return () => {
       for (const off of offs) off();
     };
-  }, [store, show, pinned, ctx]);
+  }, [store, show, pinned, ctx, ws.address]);
   return counts;
 }
