@@ -39,7 +39,7 @@ function str(label: string, value: string) {
 const DRAFT_PROMPT = `You write a View for monday, an email client, from the owner's sentence. A View is a JSON document that code validates, queries and draws; you never write markup or code. It has: a scope of threads chosen by exact Facts; the Fields read about each thread (Facts, the View's own questions called Signals, shipped Signals it uses, and Extractions that pick a value from the text); optional Lanes that classify the threads; a stack of Blocks from a fixed catalog, each drawing a small query; optional action buttons on the items; the nav entry.
 
 Code owns everything exact, the judge owns reading:
-- Dates ("today", "this quarter", "last 14 days"), addresses, domains, counts of messages, attachments and who wrote last are Facts. Amounts, due dates, order numbers, tracking numbers, names, companies, links and quantities written in the mail are Extractions. Comparisons, sums, counts and date buckets are the query's, done by code. A question (Signal) never asks for a count, an amount, a date or a comparison, and an Extraction never asks to add or compare: it names the one value it wants.
+- Dates ("today", "this quarter", "last 14 days"), addresses, domains, counts of messages, attachments and who wrote last are Facts. Amounts, due dates, order numbers, tracking numbers, names, companies, links and quantities written in the mail are Extractions. Comparisons, sums, counts and date buckets are the query's, done by code. A question (Signal) never asks for a count, an amount, a date or a comparison, and an Extraction never asks to add or compare: it names the one value it wants, or with "many": true every value of that one role. Picking many values is allowed; adding or counting them stays in code.
 - Reuse beats invention: when a shipped Signal already asks the question, list it in "uses" and read it by its id. Shipped: needs_reply, waiting_on_me, waiting_on_others, newsletter, automated, personal, has_deadline, money_involved, owner_promised, they_promised (yes or no); frustrated, urgency (scores 0 to 3); money_direction (choice: owner_pays, owner_is_paid, already_settled, unclear).
 
 Signals (the View's own questions), the TypeSafe way: each is ONE narrow judgment a person makes in a second about the thread. Put the judgment in "instructions" and the exact condition and its boundary in "criteria": a noul {"true": ..., "false": ...}; a score an ordered list of levels, each a concrete situation; a choice an object of options each with a description, always with a "none" option for when nothing fits. Phrase a noul so yes is the rare, interesting case.
@@ -50,6 +50,9 @@ Signals (the View's own questions), the TypeSafe way: each is ONE narrow judgmen
 - Bad: "Is the invoice over $500?" (a comparison: extract the amount and test it with at_least).
 
 Extractions (select, don't generate): {"id": "order_total", "label": "Total", "find": "money", "question": "The total the customer paid for the whole order, including tax and shipping.", "none": "The message states no order total."}. Code finds every candidate of the kind in the thread, the judge picks the one the question describes or none, code copies and normalizes it. find is one of: money, date, reference (order, invoice, booking numbers), tracking, email, person, company, link, quantity, item (a line item), sentence (a sentence someone wrote, such as a promise). The question names exactly one role ("the date the payment is due", not "the dates"). Add "min_confidence" (0 to 1) only when a wrong value would be costly.
+Many values: when one thread can hold several values of the role (an order confirmation bundling several orders, a digest listing many packages, a statement of many charges), add "many": true (and "max": n to keep at most n): the judge answers yes or no for each candidate and every yes is kept. The question still names one role ("each order's total", "each line naming a package with an advisory"), and "none" says which spans are not it ("an item's price or the grand total of all orders"). Sums, averages and counts over a many Extraction take every value: {"op": "sum", "field": "x:order_total"} adds each order total, {"op": "count", "field": "x:advisory"} counts each advisory.
+
+Rows ("grain"): a View's rows are threads by default. "grain": "item" with "item_of": <a many Extraction> makes each value it picks its own row (one row per package in a digest, each with that value, its message's date and its own answers); "grain": "message" makes each message of a thread its own row (a thread whose every message is a different advisory), each Extraction then being one value per message. A Signal with "each": true (only with grain item or message) is asked once per row with the item or the message in its question: use it for a judgment about each item ("how severe is this one advisory"), never a sibling many Extraction, since two lists cannot be paired. Every row opens its thread. Use grain item or message only when the owner counts or lists things inside threads.
 
 Fields, by reference: Facts message_count, participant_count, attachment_count, amount_count, amount (numbers); known_sender, has_attachment, owner_wrote_last, owner_ever_wrote, to_me_directly, has_invite, deadline_unclear, unread, starred (flags); deadline_at, received_at, last_activity_at (dates); from_address, from_domain, list_id, in_group, in_section (text). Row fields: subject, snippet, sender, person (the correspondent), company (the correspondent's organisation from the domain), group, lane. "signal:<id>" for a Signal, "x:<id>" for an Extraction.
 
@@ -59,7 +62,7 @@ Conditions (a Lane's "when", a query's "where", an action's "when"), three-value
 - Extraction tests: {"extract": id, "present": true}; {"extract": id, "at_least": 500} for money or a quantity; {"extract": id, "before": "end_of_month"} for a date; {"extract": id, "in": ["Acme"]} for text.
 - Lane tests (not inside a Lane's own condition): {"lane": "shipped"} or {"lane": ["red", "yellow"]}.
 
-Scope facts: "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any", "from_domain", "from_domain_not", "to_any" as lists of exact addresses or domains; "folder" as inbox, any, archive, group:<id> or section:<id>. "limit" is the most threads looked at, newest first.
+Scope facts, all of which must hold (list alternatives inside one fact): "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any" and "to_any" as whole addresses (orders@shop.com); "from_domain" and "from_domain_not" as domains (shop.com); "subject_any" as words or phrases the subject holds, case aside ("order confirmation", "dependabot"); "folder" as inbox, any, archive, group:<id> or section:<id> (use any for mail the owner may have archived, such as receipts). "limit" is the most threads looked at, newest first. Narrow the scope to the mail that holds what the sentence asks for: the test tries the newest threads in it, and a View of orders tried on newsletters reads nothing.
 
 Lanes (only when the sentence asks for groups like red, yellow and green, or statuses): tried in order, the first whose condition holds takes the thread, a thread that cannot be decided goes to Unsure by itself; order them from the most specific. "tone" is danger, warning, ok, info or muted. A View without lanes has "lanes": [].
 
@@ -86,10 +89,16 @@ Actions (optional buttons on items; the Blocks list them by id): {"id", "label" 
 
 At most {lanes} Lanes, {signals} Signals of the View's own, {extractions} Extractions, {blocks} Blocks and {actions} actions. Keep it small: the fewest questions that answer the sentence.
 
-Answer with the JSON document only, in this shape:
-{"name": "...", "sentence": "...", "scope": {"facts": {...}, "limit": 500}, "signals": [], "uses": [], "extractions": [], "lanes": [], "unsure": {"label": "Unsure"}, "others": "hide", "blocks": [{"id": "...", "type": "...", ...}], "actions": [], "nav": {"icon": "...", "count": "total"}}`;
+Worked example, "my orders with a chart of how much I bought per month" (rows are threads; a confirmation may bundle several orders, so the total is many; each order counted once by its number):
+{"name": "Orders", "sentence": "my orders with a chart of how much I bought per month", "scope": {"facts": {"from_domain": ["amazon.in", "myntra.com", "hm.com"], "subject_any": ["order", "ordered"], "folder": "any", "received": {"last_days": 365}}, "limit": 1000}, "signals": [], "uses": [], "extractions": [{"id": "order_total", "label": "Total", "find": "money", "many": true, "question": "Each order's total: what one whole order cost, shown beside the word Total or Order Total.", "none": "An item's price, a discount, a shipping fee on its own, or a grand total of several orders."}, {"id": "order_number", "label": "Order", "find": "reference", "question": "The order number this message is about."}], "lanes": [], "unsure": {"label": "Unsure"}, "others": "hide", "blocks": [{"id": "this_month", "type": "stat", "title": "Spent this month", "width": "third", "query": {"dedupe": "x:order_number", "aggregate": {"op": "sum", "field": "x:order_total"}, "period": {"field": "received_at", "bucket": "month"}}, "compare": "previous"}, {"id": "per_month", "type": "chart", "chart": "bar", "title": "Spend per month", "width": "two_thirds", "query": {"dedupe": "x:order_number", "group_by": {"field": "received_at", "bucket": "month"}, "aggregate": {"op": "sum", "field": "x:order_total"}, "sort": {"by": "key", "dir": "asc"}}}, {"id": "orders", "type": "table", "columns": [{"label": "Order", "field": "subject"}, {"label": "Total", "field": "x:order_total", "format": "money"}, {"label": "Date", "field": "received_at", "format": "date"}], "query": {"dedupe": "x:order_number", "sort": {"by": "received_at", "dir": "desc"}}}], "actions": [], "nav": {"icon": "shopping-bag", "count": "total"}}
 
-const REVISE_PROMPT = `You revise a View for monday after the owner corrected its test, or asked for a change. You get the View document, the threads the owner corrected (who wrote, the subject, what the owner said: a Lane it belongs in, a question that read it wrong, or the right value of an Extraction), and what the View read on them. Code adds the corrected threads to each question as Examples; you decide whether a question itself is off. When a correction shows a Signal's question reads the owner wrong, rewrite its instructions and criteria so the exact condition and its boundary match what the owner meant; when an Extraction picked the wrong value, make its question name the value's role more exactly (never add the value itself). Otherwise leave the questions as they are. Keep ids, Lanes, Blocks and actions unless the owner's words ask otherwise; when they ask for a Block, a chart, a column or a button, add it from the same catalog as the draft. Never ask the judge for a count, an amount, a date or a comparison; those are Facts, Extractions and code. Answer with the whole revised JSON document only.`;
+Worked example, "a chart of all the vulnerabilities my GitHub repos have gotten, by severity per month" (a digest lists many advisories, so each is a row with its own severity; when every advisory is its own message in a thread, use "grain": "message" and a one-value Extraction instead):
+{"name": "Vulnerabilities", "sentence": "a chart of all the vulnerabilities my GitHub repos have gotten, by severity per month", "scope": {"facts": {"from_domain": ["github.com"], "subject_any": ["dependabot", "security", "vulnerab"], "folder": "any", "received": {"last_days": 365}}, "limit": 1000}, "grain": "item", "item_of": "advisory", "signals": [{"id": "severity", "kind": "choice", "label": "severity", "each": true, "question": {"type": "choice", "instructions": "How severe does the message say this one advisory is?", "criteria": {"critical": "Marked critical.", "high": "Marked high.", "moderate": "Marked moderate or medium.", "low": "Marked low.", "none": "The line is not a security advisory."}}}], "uses": [], "extractions": [{"id": "advisory", "label": "Advisory", "find": "item", "many": true, "question": "Each line that names a package with a security advisory or vulnerability.", "none": "A heading, a link, a repository name or any line that is not one advisory."}], "lanes": [], "unsure": {"label": "Unsure"}, "others": "hide", "blocks": [{"id": "per_month", "type": "chart", "chart": "stacked_bar", "title": "Vulnerabilities per month", "query": {"group_by": {"field": "received_at", "bucket": "month"}, "aggregate": {"op": "count"}}, "series": {"field": "signal:severity"}}, {"id": "by_severity", "type": "chart", "chart": "donut", "title": "By severity", "width": "third", "query": {"group_by": {"field": "signal:severity"}, "aggregate": {"op": "count"}}}, {"id": "advisories", "type": "table", "columns": [{"label": "Advisory", "field": "x:advisory"}, {"label": "Severity", "field": "signal:severity", "format": "chip"}, {"label": "Received", "field": "received_at", "format": "date"}]}], "actions": [], "nav": {"icon": "shield", "count": "total"}}
+
+Answer with the JSON document only, in this shape:
+{"name": "...", "sentence": "...", "scope": {"facts": {...}, "limit": 500}, "grain": "thread", "signals": [], "uses": [], "extractions": [], "lanes": [], "unsure": {"label": "Unsure"}, "others": "hide", "blocks": [{"id": "...", "type": "...", ...}], "actions": [], "nav": {"icon": "...", "count": "total"}}`;
+
+const REVISE_PROMPT = `You revise a View for monday after the owner corrected its test, or asked for a change. You get the View document, the threads the owner corrected (who wrote, the subject, what the owner said: a Lane it belongs in, a question that read it wrong, or the right value of an Extraction), and what the View read on them. Code adds the corrected threads to each question as Examples; you decide whether a question itself is off. When a correction shows a Signal's question reads the owner wrong, rewrite its instructions and criteria so the exact condition and its boundary match what the owner meant; when an Extraction picked the wrong value, make its question name the value's role more exactly (never add the value itself). When the Agent's words say an Extraction found no candidates on many threads, its find kind does not match this mail or the scope holds the wrong mail: change the find or narrow the scope (senders, subject words). When one thread holds several values of the role, give the Extraction "many": true; when the owner counts things inside threads, use a grain of item or message. Otherwise leave the questions as they are. Keep ids, Lanes, Blocks and actions unless the owner's words ask otherwise; when they ask for a Block, a chart, a column or a button, add it from the same catalog as the draft. Never ask the judge for a count, an amount, a date or a comparison; those are Facts, Extractions and code. Answer with the whole revised JSON document only.`;
 
 export const VIEW_SETTINGS = {
   "views.enabled": setting({
@@ -149,6 +158,38 @@ export const VIEW_SETTINGS = {
     1,
     365,
     "When the scope holds too few threads to try (a quiet today), only its dates widen to this many days.",
+  ),
+  "views.backfill.enabled": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    label: "Read a pinned view's mail",
+    help: "When you pin a View, or change what it asks, monday reads the threads in its scope (archived and older ones too, newest first, up to its limit) in the background, under the monthly background budget.",
+  }),
+  "views.backfill.page_size": limit(
+    "Threads per step of a view's reading",
+    40,
+    1,
+    500,
+    "How many threads of a pinned view's scope are read, one request each and several at once, before its place is saved.",
+  ),
+  "views.test.prefer_readable": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    label: "Try a new view on threads it can read",
+    help: "When a View adds up a value (a total, an amount), its test prefers the threads in its scope where code finds that kind of value, and says how many it passed over.",
+  }),
+  "views.test.scan": limit(
+    "Threads looked through to find readable ones",
+    120,
+    10,
+    1000,
+    "How many of the newest threads in scope code looks through, without asking anything, for ones whose text holds the values the View adds up.",
   ),
   "views.nav.show_counts": setting({
     type: z.boolean(),
@@ -227,6 +268,13 @@ export const VIEW_SETTINGS = {
     60,
     "How many amounts, dates or numbers code offers the judge to pick from, per thread.",
   ),
+  "views.extract.item_chars": limit(
+    "Longest line item",
+    300,
+    40,
+    2000,
+    "A line item (a product on a receipt) longer than this many characters is not offered as one.",
+  ),
   "views.extract.date_order": setting({
     type: z.enum(["mdy", "dmy"]),
     default: "mdy",
@@ -247,6 +295,78 @@ export const VIEW_SETTINGS = {
     label: "The no-match option",
     help: "What the judge picks when none of the candidates code found is the value a view asks for.",
   }),
+  "views.extract.many.threshold": setting({
+    type: z.number().min(0).max(1),
+    default: 0.7,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Probability for each of many values",
+    help: "A view that takes many values from one thread (every order total in a confirmation) keeps each candidate the judge says answers with at least this probability; below it, down to the Unsure band, it is Unsure.",
+  }),
+  "views.extract.many.max": limit(
+    "Candidates asked per thread for many values",
+    30,
+    2,
+    200,
+    "How many candidates of one kind code offers the judge, one question each, when a view takes many values from a thread. The rest are left out and the test says so.",
+  ),
+  "views.extract.many.note": setting({
+    type: z.string().min(1),
+    default:
+      "This thread may hold several of the values the question asks for. Judge only this one span.",
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Many values: the note",
+    help: "What each question says when a view asks the judge about each candidate of many.",
+  }),
+  "views.extract.many.yes": setting({
+    type: z.string().min(1),
+    default: "This span is one of the values the question asks for.",
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Many values: what yes means",
+    help: "The yes of the question asked about each candidate of many.",
+  }),
+  "views.each.item_note": setting({
+    type: z.string().min(1),
+    default: "Judge only this one item of the thread.",
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Per item: the note",
+    help: "What a view's question says when it is asked once per item (a package in a digest).",
+  }),
+  "views.each.message_note": setting({
+    type: z.string().min(1),
+    default: "Judge only this one message of the thread.",
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Per message: the note",
+    help: "What a view's question says when it is asked once per message of a thread.",
+  }),
+  "views.grain.max_messages": limit(
+    "Messages read per thread in a message view",
+    20,
+    1,
+    200,
+    "A view with a row per message reads at most this many of a thread's newest messages, each its own question.",
+  ),
+  "views.grain.message_chars": limit(
+    "Characters of a message per question",
+    1500,
+    200,
+    20_000,
+    "How much of one message rides in a question asked about that message.",
+  ),
   "views.examples_in_question": limit(
     "Examples in a question",
     5,
@@ -386,6 +506,19 @@ export const VIEW_SETTINGS = {
     "reading progress",
     "Reading your mail for {view}: {done} of {total}",
   ),
+  "strings.views.reading": str("reading bar", "Reading {done} of {total}"),
+  "strings.views.reading_budget": str(
+    "reading bar, budget spent",
+    "Reading paused at {done} of {total}: this month's background budget is spent",
+  ),
+  "strings.views.reading_no_judge": str(
+    "reading bar, no judge",
+    "Reading waits for a TypeSafe key: {done} of {total}",
+  ),
+  "strings.views.reading_paused": str("reading bar, paused", "Reading paused at {done} of {total}"),
+  "strings.views.reading_pause": str("pause reading", "Pause"),
+  "strings.views.reading_resume": str("resume reading", "Resume"),
+  "strings.views.reading_stop": str("stop reading", "Stop"),
   "strings.views.settings.title": str("Settings panel title", "Your Views"),
   "strings.views.settings.intro": str(
     "Settings panel intro",

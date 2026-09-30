@@ -5,7 +5,23 @@
 // it discarded. The card reads the draft by id, so the user's corrections
 // and the Agent's revisions show on it.
 
-import type { Id, ViewDoc, ViewDraft, ViewTest } from "@monday/shared";
+import type {
+  Id,
+  JudgeAnswer,
+  ViewDoc,
+  ViewDraft,
+  ViewTest,
+  ViewThreadDiagnosis,
+} from "@monday/shared";
+
+/** A tried Thread's answers as asked (signals' PriorAnswers), kept for Pin view. */
+export interface DraftPrior {
+  messageCount: number;
+  latestMessageId: string;
+  model: string;
+  answers: Record<string, JudgeAnswer>;
+}
+
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { viewDrafts } from "../db/schema.ts";
@@ -17,19 +33,33 @@ interface Sealed {
   previous: ViewDoc | null;
   test: ViewTest | null;
   threadIds: Id[];
+  /** Each tried Thread explained, for inspect_view_thread; never on the card. */
+  diagnosis?: Record<Id, ViewThreadDiagnosis> | undefined;
+  /** Each tried Thread's answers, written at Pin view so they are not asked again. */
+  priors?: Record<Id, DraftPrior> | undefined;
 }
 
+/** A draft as saved, with what the tool reads beside the card. */
+type DraftInput = Pick<ViewDraft, "viewId" | "doc" | "previous" | "test" | "threadIds"> & {
+  diagnosis?: Record<Id, ViewThreadDiagnosis> | undefined;
+  priors?: Record<Id, DraftPrior> | undefined;
+};
+
 export interface DraftStore {
-  create(
-    workspaceId: Id,
-    draft: Pick<ViewDraft, "viewId" | "doc" | "previous" | "test" | "threadIds">,
-  ): Promise<ViewDraft>;
+  create(workspaceId: Id, draft: DraftInput): Promise<ViewDraft>;
   /** Throws ViewNotFoundError. */
   get(id: Id): Promise<ViewDraft>;
   save(
     id: Id,
-    change: Partial<Pick<ViewDraft, "doc" | "test" | "threadIds" | "status">>,
+    change: Partial<Pick<ViewDraft, "doc" | "test" | "threadIds" | "status">> & {
+      diagnosis?: Record<Id, ViewThreadDiagnosis> | undefined;
+      priors?: Record<Id, DraftPrior> | undefined;
+    },
   ): Promise<ViewDraft>;
+  /** The last test's answers per tried Thread. Throws ViewNotFoundError. */
+  priors(id: Id): Promise<Record<Id, DraftPrior>>;
+  /** The tried Threads explained (the last test's), by Thread. Throws ViewNotFoundError. */
+  diagnosis(id: Id): Promise<Record<Id, ViewThreadDiagnosis>>;
 }
 
 export function createDraftStore(options: {
@@ -48,6 +78,17 @@ export function createDraftStore(options: {
     if (!enc) throw new RangeError("view draft envelope missing");
     return { contentEnc: enc, contentKey: ref.key };
   };
+
+  const unseal = async (r: typeof viewDrafts.$inferSelect): Promise<Sealed> =>
+    JSON.parse(
+      await mailstore.readText({
+        workspaceId: r.workspaceId,
+        kind: "board",
+        key: r.contentKey,
+        chunks: [r.contentEnc],
+        size: -1,
+      }),
+    ) as Sealed;
 
   const toDraft = async (r: typeof viewDrafts.$inferSelect): Promise<ViewDraft> => {
     const sealed = JSON.parse(
@@ -88,6 +129,8 @@ export function createDraftStore(options: {
             previous: draft.previous,
             test: draft.test,
             threadIds: draft.threadIds,
+            diagnosis: draft.diagnosis,
+            priors: draft.priors,
           })),
           createdAt: at,
           updatedAt: at,
@@ -103,8 +146,25 @@ export function createDraftStore(options: {
       return toDraft(r);
     },
 
+    async diagnosis(id) {
+      const r = await db.query.viewDrafts.findFirst({ where: eq(viewDrafts.id, id) });
+      if (!r) throw new ViewNotFoundError(id);
+      return (await unseal(r)).diagnosis ?? {};
+    },
+
+    async priors(id) {
+      const r = await db.query.viewDrafts.findFirst({ where: eq(viewDrafts.id, id) });
+      if (!r) throw new ViewNotFoundError(id);
+      return (await unseal(r)).priors ?? {};
+    },
+
     async save(id, change) {
-      const current = await store.get(id);
+      const r0 = await db.query.viewDrafts.findFirst({ where: eq(viewDrafts.id, id) });
+      if (!r0) throw new ViewNotFoundError(id);
+      const current = await toDraft(r0);
+      const old = await unseal(r0);
+      const kept = change.diagnosis ?? old.diagnosis;
+      const keptPriors = change.priors ?? old.priors;
       const next = { ...current, ...change };
       const [r] = await db
         .update(viewDrafts)
@@ -115,6 +175,8 @@ export function createDraftStore(options: {
             previous: next.previous,
             test: next.test,
             threadIds: next.threadIds,
+            diagnosis: kept,
+            priors: keptPriors,
           })),
           updatedAt: now(),
         })

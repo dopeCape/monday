@@ -311,6 +311,18 @@ export function aggregate<T extends ViewThread>(
 ): Aggregate {
   const op = spec?.op ?? "count";
   const empty: Aggregate = { op, value: null, currency: null, others: [], count: 0, unsure: 0 };
+  if (op === "count" && spec?.field) {
+    // A count of a Field: each value a many-Extraction picked counts, so a digest of 70
+    // packages counts 70; a one-value Field counts the rows that have it.
+    let n = 0;
+    let unsure = 0;
+    for (const r of rows) {
+      const v = readField(base.doc, r.thread, spec.field, base.ctx, r.lane);
+      if (v.state === "unsure" || v.state === "not_read") unsure += 1;
+      else if (v.state === "value") n += v.items?.length ?? 1;
+    }
+    return { ...empty, value: n, count: n, unsure };
+  }
   if (op === "count" || !spec?.field) {
     return { ...empty, op: "count", value: rows.length, count: rows.length };
   }
@@ -325,16 +337,18 @@ export function aggregate<T extends ViewThread>(
       continue;
     }
     if (v.state !== "value") continue;
-    const x = v.value;
-    if (x && typeof x === "object" && "currency" in x) {
-      money = true;
-      const list = byCurrency.get(x.currency) ?? [];
-      list.push(x.value);
-      byCurrency.set(x.currency, list);
-      continue;
+    // Many values on one row (an order confirmation with 9 totals): each one counts.
+    for (const x of v.items ?? [v.value]) {
+      if (x && typeof x === "object" && "currency" in x) {
+        money = true;
+        const list = byCurrency.get(x.currency) ?? [];
+        list.push(x.value);
+        byCurrency.set(x.currency, list);
+        continue;
+      }
+      const n = v.items ? (typeof x === "number" ? x : null) : numeric(v);
+      if (n !== null) plain.push(n);
     }
-    const n = numeric(v);
-    if (n !== null) plain.push(n);
   }
   const reduce = (list: number[]): number | null => {
     if (list.length === 0) return null;

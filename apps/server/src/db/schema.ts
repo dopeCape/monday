@@ -290,6 +290,12 @@ export const messages = pgTable(
     index("messages_thread_idx").on(t.threadId, t.date),
     /** /messages/bodies pages a Workspace by date (the Cache pre-warm). */
     index("messages_workspace_date_idx").on(t.workspaceId, t.date, t.id),
+    /** A View's scope by sender (docs/spec/views.md): the Threads a set of addresses or domains wrote. */
+    index("messages_from_email_idx").on(t.workspaceId, sql`lower(${t.from}->>'email')`),
+    index("messages_from_domain_idx").on(
+      t.workspaceId,
+      sql`split_part(lower(${t.from}->>'email'), '@', 2)`,
+    ),
   ],
 );
 

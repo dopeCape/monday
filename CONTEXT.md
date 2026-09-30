@@ -143,8 +143,12 @@ One value a View reads per Thread: a Fact, a Signal or an Extraction, named by a
 _Avoid_: column, attribute, property
 
 **Extraction**:
-A value a View takes from a Thread's text by selection: code finds the candidates of one kind (amounts, dates, reference numbers, names, links), Jev picks the one the View's question asks for or none, and code copies and normalizes it. Below its confidence floor it is Unsure. Never written by a model.
+A value a View takes from a Thread's text by selection: code finds the candidates of one kind (amounts, dates, reference numbers, names, links), Jev picks the one the View's question asks for or none, and code copies and normalizes it. Below its confidence floor it is Unsure. Never written by a model. An Extraction with `many` picks every candidate that answers (each order total in a confirmation of nine orders), one Jev yes or no per candidate; code still does every sum and count.
 _Avoid_: parsing, scraping, generated value, entity
+
+**Row**:
+What one line of a View's Blocks is: a Thread by default; with the View's grain `item`, each value a many-Extraction picked (one Row per package in a digest); with grain `message`, each Message of a Thread (one Row per advisory). Every Row opens its Thread, a Message Row on that Message.
+_Avoid_: record, entry, line item (a line item is the `item` Extraction kind)
 
 **Lane**:
 One group of Threads in a View with its condition, such as Red or Waiting on legal, drawn by the lanes, list and counts Blocks. Every View with Lanes ends with an Unsure Lane for Threads its Signals could not decide.

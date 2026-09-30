@@ -3,18 +3,31 @@
 // on the owner's own Threads, show it, take corrections as Examples, revise
 // and try again on the same Threads, and save only when the user clicks Pin
 // view (Apply for an edit whose Lanes or Signals changed, after the moves
-// are shown). A pure name or layout change applies at once with Undo.
+// are shown). A pure name or layout change applies at once with Undo. A
+// revision tries again the Threads it tried that the (perhaps changed) scope
+// still admits, and fills the rest with the newest ones it does.
 
-import type { Id, View, ViewDoc, ViewDraft, ViewExample, ViewTest } from "@monday/shared";
+import type {
+  Id,
+  View,
+  ViewDoc,
+  ViewDraft,
+  ViewExample,
+  ViewTest,
+  ViewThreadDiagnosis,
+} from "@monday/shared";
 import {
   factLanesOnly,
   type LaneComponent,
   lanesChanged,
   laneView,
+  scopeReasons,
   showAs,
   signalName,
+  viewExtractionDefs,
   viewIdFor,
   viewMoves,
+  viewSignalDefs,
 } from "@monday/shared";
 import type { Db } from "../../db/client.ts";
 import { views as viewsTable } from "../../db/schema.ts";
@@ -23,8 +36,10 @@ import { readGlobalSettings } from "../../settings/read.ts";
 import type { DraftStore } from "../../views/drafts.ts";
 import { ViewLimitError, ViewNotFoundError, type ViewStore } from "../../views/index.ts";
 import { viewRefs } from "../../views/refs.ts";
+import { loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
+import { eachPool } from "../signals/pool.ts";
 import {
   type AuthorContext,
   type AuthorSettings,
@@ -34,6 +49,7 @@ import {
   rewordedSignals,
   writeView,
 } from "./author.ts";
+import type { ViewBackfills } from "./backfill.ts";
 import { runViewTest, type TestRun, type TestSettings } from "./test.ts";
 
 const KEYS = [
@@ -44,6 +60,10 @@ const KEYS = [
   "views.test.pool",
   "views.test.shown",
   "views.test.widen_days",
+  "views.test.prefer_readable",
+  "views.test.scan",
+  "views.extract.candidates_max",
+  "views.extract.many.max",
   "views.examples_in_question",
   "views.draft.retries",
   "views.prompt",
@@ -100,7 +120,7 @@ export interface ViewDrafting {
   propose(workspaceId: Id, sentence: string): Promise<ViewDraft>;
   /** A correction from the card, kept as the draft's Examples. */
   correct(draftId: Id, correction: DraftCorrection): Promise<ViewDraft>;
-  /** revise_view: the corrections into the questions, then tried again on the same Threads. */
+  /** revise_view: the corrections into the questions, then tried again on the Threads its scope still admits. */
   revise(draftId: Id, instruction?: string): Promise<ViewDraft>;
   /** Pin view: saves version 1, pins it and starts the backfill of its scope. */
   pin(draftId: Id, options?: { factsOnly?: boolean }): Promise<{ view: View; draft: ViewDraft }>;
@@ -117,6 +137,16 @@ export interface ViewDrafting {
   ): Promise<UpdateProposal>;
   /** Apply on an edit's card: the new version, whose Undo points back at the old one. */
   apply(draftId: Id): Promise<{ view: View; draft: ViewDraft; previous: number }>;
+  /**
+   * inspect_view_thread: one Thread as the draft read it (why the scope admits
+   * it, each Extraction's candidates with the judge's share of each, each
+   * Signal's answer), or, for a Thread the test did not try, what code finds
+   * in it without asking anything.
+   */
+  inspect(
+    draftId: Id,
+    threadId: Id,
+  ): Promise<ViewThreadDiagnosis & { tried: boolean; admitted: boolean; workspaceId: Id }>;
   /** Not now. */
   discard(draftId: Id): Promise<ViewDraft>;
 }
@@ -131,8 +161,54 @@ export function createViewDrafting(deps: {
   context: (workspaceId: Id) => Promise<import("@monday/shared").ViewContext>;
   changed: (workspaceId: Id) => Promise<void>;
   log: (message: string) => void;
+  /** The pinned Views' reading of their scope: held while Pin view writes the tried answers. */
+  reading?: (() => ViewBackfills | null) | undefined;
 }): ViewDrafting {
   const { db, store, drafts } = deps;
+
+  /**
+   * Pin view and Apply: the tried Threads' answers are written at the saved
+   * View's question versions (no judge call when the Thread has not changed
+   * since the try), so its reading of the scope skips them. The reading is
+   * held until they are written.
+   */
+  const saveWith = async <T extends { view: View }>(
+    workspaceId: Id,
+    viewId: Id,
+    draftId: Id,
+    save: () => Promise<T>,
+  ): Promise<T> => {
+    const release = deps.reading?.()?.hold(viewId) ?? (async () => {});
+    try {
+      const out = await save();
+      await deps.changed(workspaceId);
+      const priors = await drafts.priors(draftId);
+      const v = out.view;
+      const own = [
+        ...viewSignalDefs(v.doc).map((d) => d.id),
+        ...viewExtractionDefs(v.doc).map((d) => d.id),
+      ];
+      if (own.length && v.id === viewId) {
+        const s = await settings();
+        await eachPool(
+          Object.entries(priors),
+          Math.max(1, s["signals.backfill.concurrency"]),
+          async ([threadId, prior]) => {
+            try {
+              await deps.signals.ask(workspaceId, threadId, { reason: "view", only: own, prior });
+            } catch (error) {
+              deps.log(
+                `view pin ${viewId} ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          },
+        );
+      }
+      return out;
+    } finally {
+      await release();
+    }
+  };
   const settings = () => readGlobalSettings(db, KEYS);
 
   const authorSettings = (s: Awaited<ReturnType<typeof settings>>): AuthorSettings => ({
@@ -153,6 +229,10 @@ export function createViewDrafting(deps: {
     pool: s["views.test.pool"],
     shown: s["views.test.shown"],
     widenDays: s["views.test.widen_days"],
+    preferReadable: s["views.test.prefer_readable"],
+    scan: s["views.test.scan"],
+    candidatesMax: s["views.extract.candidates_max"],
+    manyMax: s["views.extract.many.max"],
     maxThreads: s["views.scope.max_threads"],
     examplesMax: s["views.examples_in_question"],
     notRead: s["strings.views.not_read"].toLowerCase(),
@@ -275,6 +355,8 @@ export function createViewDrafting(deps: {
         previous: null,
         test: run.test,
         threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
+        priors: run.priors,
       });
     },
 
@@ -385,12 +467,16 @@ export function createViewDrafting(deps: {
         : null;
       const next: ViewTest = {
         ...run.test,
-        widened: draft.test?.widened ?? run.test.widened,
-        inScope: draft.test?.inScope ?? run.test.inScope,
         changes: changes.length ? changes : [s["strings.views.change.none"]],
         moves: draft.viewId ? (draft.test?.moves ?? null) : moves,
       };
-      return drafts.save(draftId, { doc, test: next, threadIds: run.threadIds });
+      return drafts.save(draftId, {
+        doc,
+        test: next,
+        threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
+        priors: run.priors,
+      });
     },
 
     async pin(draftId, options = {}) {
@@ -410,8 +496,9 @@ export function createViewDrafting(deps: {
       } else if (t.needsJudge) {
         throw new ViewLimitError("judge", s["strings.views.needs_typesafe"]);
       }
-      const view = await store.create(draft.workspaceId, doc, { checkBar: t.empty });
-      await deps.changed(draft.workspaceId);
+      const { view } = await saveWith(draft.workspaceId, doc.id, draftId, async () => ({
+        view: await store.create(draft.workspaceId, doc, { checkBar: t.empty }),
+      }));
       return { view, draft: await drafts.save(draftId, { status: "pinned" }) };
     },
 
@@ -466,6 +553,8 @@ export function createViewDrafting(deps: {
         previous: view.doc,
         test: { ...run.test, moves },
         threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
+        priors: run.priors,
       });
       return { kind: "draft", draft };
     },
@@ -473,12 +562,63 @@ export function createViewDrafting(deps: {
     async apply(draftId) {
       const draft = await drafts.get(draftId);
       if (draft.status !== "open" || !draft.viewId) throw new ViewNotFoundError(draftId);
-      const { view, previous } = await store.update(draft.viewId, draft.doc);
-      const folded = Object.keys(await store.corrections(draft.viewId)).length > 0;
-      if (folded && Object.keys(draft.doc.examples).length)
-        await store.clearCorrections(draft.viewId);
-      await deps.changed(view.workspaceId);
+      const viewId = draft.viewId;
+      const { view, previous } = await saveWith(draft.workspaceId, viewId, draftId, async () => {
+        const r = await store.update(viewId, draft.doc);
+        const folded = Object.keys(await store.corrections(viewId)).length > 0;
+        if (folded && Object.keys(draft.doc.examples).length) await store.clearCorrections(viewId);
+        return r;
+      });
       return { view, previous, draft: await drafts.save(draftId, { status: "applied" }) };
+    },
+
+    async inspect(draftId, threadId) {
+      const draft = await drafts.get(draftId);
+      const ctx = await deps.context(draft.workspaceId);
+      const [t] = await loadViewThreads(db, {
+        workspaceId: draft.workspaceId,
+        owner: ctx.owner,
+        ids: [threadId],
+        limit: 1,
+      });
+      if (!t) throw new ViewNotFoundError(`${draftId} thread ${threadId}`);
+      const { admitted, reasons } = scopeReasons(draft.doc.scope.facts, t, ctx);
+      const tried = (await drafts.diagnosis(draftId))[threadId];
+      if (tried) return { ...tried, tried: true, admitted, workspaceId: draft.workspaceId };
+      // Not tried: what code finds in it, no judge and nothing written.
+      const s = await settings();
+      const kinds = [...new Set(draft.doc.extractions.map((x) => x.find))];
+      const found = kinds.length
+        ? await deps.signals.candidates(draft.workspaceId, threadId, kinds)
+        : {};
+      let subject = "";
+      try {
+        subject = await deps.mailstore.readThreadSubject(threadId);
+      } catch {}
+      return {
+        threadId,
+        from: t.from ?? "",
+        subject,
+        receivedAt: t.receivedAt,
+        scope: reasons,
+        extractions: draft.doc.extractions.map((x) => {
+          const list = found[x.find] ?? [];
+          return {
+            extraction: x.id,
+            label: x.label?.trim() || x.id.replaceAll("_", " "),
+            find: x.find,
+            state: list.length ? ("not_read" as const) : ("no_candidates" as const),
+            picked: null,
+            confidence: null,
+            candidates: list.map((c) => ({ span: c.span, line: c.line, probability: null })),
+            capped: list.length >= s["views.extract.candidates_max"],
+          };
+        }),
+        signals: [],
+        tried: false,
+        admitted,
+        workspaceId: draft.workspaceId,
+      };
     },
 
     async discard(draftId) {

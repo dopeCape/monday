@@ -29,7 +29,7 @@ import { useShell } from "../shell/Shell.tsx";
 import type { CachedViewThread } from "../store/views.ts";
 import { type InboxViewHost, runViewAction } from "./actions.ts";
 import type { ViewsApi } from "./api.ts";
-import { useViewBase, useViews } from "./useViews.ts";
+import { useViewBase, useViewReading, useViews } from "./useViews.ts";
 import { orderedThreads, ViewBlocks, valueWords, viewBlockData } from "./ViewBlocks.tsx";
 
 const fill = (t: string, vars: Record<string, string | number>) =>
@@ -122,6 +122,7 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
   const [deleted, setDeleted] = useState<View | null>(null);
   const view = live ?? deleted;
   const { base } = useViewBase(view, now);
+  const reading = useViewReading(view?.id ?? null);
   const [menu, setMenu] = useState<Menu>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [source, setSource] = useState(false);
@@ -353,6 +354,44 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
             {s["strings.views.rename"]}
           </Btn>
         </form>
+      ) : null}
+      {reading && ["running", "waiting", "paused"].includes(reading.status) ? (
+        <div className="view-bar view-reading" role="status">
+          <span>
+            {fill(
+              s[
+                reading.status === "paused"
+                  ? "strings.views.reading_paused"
+                  : reading.reason === "budget"
+                    ? "strings.views.reading_budget"
+                    : reading.reason === "no_judge"
+                      ? "strings.views.reading_no_judge"
+                      : "strings.views.reading"
+              ],
+              { done: reading.done, total: reading.total },
+            )}
+          </span>
+          {reading.total > 0 ? <progress value={reading.done} max={reading.total} /> : null}
+          <Btn
+            sm
+            onClick={() =>
+              void act(() =>
+                api.readingAct(view.id, reading.status === "paused" ? "resume" : "pause"),
+              )
+            }
+          >
+            {
+              s[
+                reading.status === "paused"
+                  ? "strings.views.reading_resume"
+                  : "strings.views.reading_pause"
+              ]
+            }
+          </Btn>
+          <Btn sm onClick={() => void act(() => api.readingAct(view.id, "stop"))}>
+            {s["strings.views.reading_stop"]}
+          </Btn>
+        </div>
       ) : null}
       {view.checkBar ? (
         <div className="view-bar" role="status">

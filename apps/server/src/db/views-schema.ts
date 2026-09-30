@@ -11,6 +11,7 @@ import {
   customType,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -90,4 +91,40 @@ export const viewDrafts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [index("view_drafts_workspace_idx").on(t.workspaceId, t.status)],
+);
+
+/**
+ * A pinned View reading its own scope (docs/spec/views.md, "Reading a pinned
+ * View"): one walk per View, newest first, asking only the View's questions a
+ * Thread lacks, resumable from its cursor, under the monthly background
+ * budget. Headers only: counts and where the walk is, nothing from the mail.
+ */
+export const viewBackfills = pgTable(
+  "view_backfills",
+  {
+    viewId: text("view_id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: text("run_id").notNull(),
+    status: text("status")
+      .$type<"running" | "waiting" | "paused" | "done" | "cancelled">()
+      .notNull(),
+    reason: text("reason").$type<"budget" | "no_judge" | "level">(),
+    /** The View version the walk reads for. */
+    version: integer("version").notNull(),
+    /** The stored Signal ids it asks (only the questions a new version changed). */
+    signalIds: jsonb("signal_ids").$type<string[]>().notNull().default([]),
+    cursorAt: timestamp("cursor_at", { withTimezone: true, mode: "date" }),
+    cursorId: text("cursor_id"),
+    done: integer("done").notNull().default(0),
+    total: integer("total").notNull().default(0),
+    asked: integer("asked").notNull().default(0),
+    calls: integer("calls").notNull().default(0),
+    lastError: text("last_error"),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [index("view_backfills_workspace_idx").on(t.workspaceId)],
 );

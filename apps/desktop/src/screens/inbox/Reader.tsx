@@ -44,7 +44,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { type AnimationEvent, type ReactNode, useState } from "react";
+import { type AnimationEvent, type ReactNode, useEffect, useState } from "react";
 import { useShownThread } from "../compose/bus.ts";
 import { Picker } from "./Picker.tsx";
 import type { ReaderChip } from "./recommended.ts";
@@ -127,6 +127,8 @@ function chipIcon(c: ReaderChip): ReactNode {
 export interface ReaderProps {
   thread: Thread;
   messages: readonly MessageData[];
+  /** Open on this Message: unfolded and scrolled to (a View row that is one Message). */
+  focusMessage?: string | null | undefined;
   brief: BriefData | undefined;
   /**
    * The chip row, in order and already capped (recommended.ts readerChips):
@@ -184,6 +186,7 @@ export interface ReaderProps {
 export function Reader({
   thread,
   messages,
+  focusMessage,
   brief,
   chips,
   chipKeys,
@@ -222,6 +225,17 @@ export function Reader({
   // it (the user's or the Agent's) opens as the inline reply, ready to continue.
   useShownThread(leaving ? null : thread.id);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // Opened on one Message (a View row that is a Message): it unfolds and scrolls into view.
+  useEffect(() => {
+    if (!focusMessage || !messages.some((m) => m.id === focusMessage)) return;
+    setExpanded((s) => (s.has(focusMessage) ? s : new Set(s).add(focusMessage)));
+    const at = requestAnimationFrame(() =>
+      document
+        .querySelector(`[data-message="${CSS.escape(focusMessage)}"]`)
+        ?.scrollIntoView({ block: "start" }),
+    );
+    return () => cancelAnimationFrame(at);
+  }, [focusMessage, messages]);
   const [more, setMore] = useState(false);
   /** The chip whose menu is open, by its key. */
   const [menuFor, setMenuFor] = useState<string | null>(null);

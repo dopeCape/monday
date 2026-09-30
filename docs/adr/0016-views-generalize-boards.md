@@ -16,6 +16,10 @@ TypeSafe's guidance drove the Extraction shape (the pre-parsed value extraction 
 - Keep Boards and add a separate "Dashboard" concept. Rejected: two documents, two drafting prompts, two nav headings, and a Board is exactly a View with one Block.
 - Convert amounts to one currency. Rejected: it needs rates from the network and quietly changes numbers; sums stay per currency.
 
+## Amendment: many values and Rows
+
+A real session asked for "a chart of all the vulnerabilities my GitHub repos have gotten" and "how much I bought per month" and could not have either: one Dependabot digest lists seventy packages, a thread of advisories holds one per Message, and one order confirmation bundles nine orders, while a View had one value per Extraction per Thread. We kept selection over generation and code over arithmetic, and added two things. An Extraction may pick **many**: code finds the candidates, Jev answers one Noul per candidate ("does this span answer?"), independent questions in the Thread's one request, and code keeps every one above a threshold, marks the Unsure band and caps them; sums and counts take every value. A View's **grain** makes a Row of each value of a many-Extraction or of each Message, and a View Signal may be asked **each** Row, with the item or the Message in its question, still one request per Thread. We rejected asking Jev to list the values (generation), letting it add them up (arithmetic), batching Threads into one request, and pairing a sibling list of severities with a list of packages (two independent lists cannot be matched item by item).
+
 ## Consequences
 
 - The glossary's View (a saved Layout) is renamed Layout shortcut; View now means this document. The Setting that stores Layout shortcuts keeps its key `views` in the config file (ADR 0001) and is unrelated to `views.*` keys for the document.

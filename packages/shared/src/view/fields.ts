@@ -55,7 +55,15 @@ export type FieldScalar = number | string | boolean | Money | PersonValue | Link
 
 /** One Field's value on one Thread (or one deduped row). */
 export type FieldValue =
-  | { state: "value"; type: FieldType; value: FieldScalar; text: string; confidence?: number }
+  | {
+      state: "value";
+      type: FieldType;
+      value: FieldScalar;
+      text: string;
+      confidence?: number;
+      /** A many-Extraction's values on a Thread row: sums and counts take each one. */
+      items?: FieldScalar[] | undefined;
+    }
   /** Known absent: no deadline, an Extraction that found none. */
   | { state: "empty" }
   /** A Signal or an Extraction that could not decide. */
@@ -249,7 +257,14 @@ export function readField(
     if (read.state === "value") {
       const x = doc.extractions.find((e) => e.id === ref.slice(2));
       const type = x ? EXTRACT_TYPES[x.find] : "text";
-      return value(type, fromJson(type, read.value, read.text), read.text, read.confidence);
+      const v = value(type, fromJson(type, read.value, read.text), read.text, read.confidence);
+      if (read.items && read.items.length > 0 && v.state === "value") {
+        // Many values on one row: each is kept for sums and counts; the row reads as their total.
+        const items = read.items.map((i) => fromJson(type, i.value, i.text));
+        const total = totalOf(items);
+        return { ...v, value: total ?? v.value, items };
+      }
+      return v;
     }
     if (read.state === "unsure") return { state: "unsure", text: read.text ?? undefined };
     return read;
@@ -320,6 +335,28 @@ export function readField(
     return value("text", list.join(", "), list.join(", "));
   }
   return { state: "empty" };
+}
+
+/**
+ * Many values as one: numbers add up; money adds up in the currency most of them
+ * use (the others are left to the Block's aggregate, which keeps each currency);
+ * anything else is the first value.
+ */
+function totalOf(items: readonly FieldScalar[]): FieldScalar | null {
+  if (items.length === 0) return null;
+  if (items.every((i) => typeof i === "number")) {
+    return Math.round((items as number[]).reduce((a, b) => a + b, 0) * 100) / 100;
+  }
+  if (items.every((i) => i && typeof i === "object" && "currency" in i)) {
+    const money = items as Money[];
+    const counts = new Map<string, number>();
+    for (const m of money) counts.set(m.currency, (counts.get(m.currency) ?? 0) + 1);
+    const main =
+      [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
+    const sum = money.filter((m) => m.currency === main).reduce((a, m) => a + m.value, 0);
+    return { value: Math.round(sum * 100) / 100, currency: main };
+  }
+  return items[0] ?? null;
 }
 
 /** A value as a number for sums and comparisons (money's amount), else null. */

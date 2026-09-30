@@ -19,6 +19,7 @@
 
 import type {
   AiLevel,
+  ExtractedItem,
   ExtractKind,
   FactsChange,
   Id,
@@ -28,6 +29,7 @@ import type {
   JudgeTask,
   LowTrust,
   Person,
+  RowAnswer,
   SignalDefChange,
   SignalGate,
   SignalKind,
@@ -95,6 +97,15 @@ import {
   type SenderStats,
 } from "./facts.ts";
 import {
+  foldRows,
+  planRows,
+  type RowFold,
+  type RowMessage,
+  type RowPlan,
+  type RowWords,
+  rowModeOf,
+} from "./rows.ts";
+import {
   amountOptions,
   SHIPPED_SETTING_KEYS,
   type ShippedSettings,
@@ -104,6 +115,7 @@ import {
 } from "./shipped.ts";
 import { type StateMessage, signalState } from "./state.ts";
 
+export type { Candidate } from "./candidates.ts";
 export { shippedSignals, type WantedSignal } from "./shipped.ts";
 export { dateInWords, ownWords, signalState } from "./state.ts";
 
@@ -114,6 +126,15 @@ const SETTING_KEYS = [
   "signals.candidates.max",
   "views.extract.candidates_max",
   "views.extract.date_order",
+  "views.extract.item_chars",
+  "views.extract.many.threshold",
+  "views.extract.many.max",
+  "views.extract.many.note",
+  "views.extract.many.yes",
+  "views.each.item_note",
+  "views.each.message_note",
+  "views.grain.max_messages",
+  "views.grain.message_chars",
   "signals.stats.window",
   "signals.stats.broad_above",
   "signals.stats.min_answers",
@@ -199,7 +220,21 @@ export interface AskOptions {
    * and normalized into the result's `picks`.
    */
   extraOptions?: Record<string, SignalOptionsFrom> | undefined;
+  /**
+   * Answers this Thread version already has, by question id as asked (a View's
+   * try before Pin view): they stand in for asking again when the Thread has
+   * not changed since, and are written as if just answered.
+   */
+  prior?: PriorAnswers | undefined;
   jobId?: string | null | undefined;
+}
+
+/** What one Signal request answered, kept to be written later without asking again. */
+export interface PriorAnswers {
+  messageCount: number;
+  latestMessageId: string;
+  model: string;
+  answers: Record<string, JudgeAnswer>;
 }
 
 /** A value an Extraction picked: the span as written, normalized by code, with the pick's confidence. */
@@ -209,6 +244,12 @@ export interface ExtractPick {
   confidence: number;
   /** The other spans code found, for "Wrong value". */
   candidates: string[];
+  /** A many-Extraction's values (and the ones in the Unsure band), or one per Message. */
+  items?: ExtractedItem[] | undefined;
+  /** A per-row Signal's answers, by row key. */
+  answers?: Record<string, RowAnswer> | undefined;
+  /** Candidates past views.extract.many.max, not asked. */
+  capped?: number | undefined;
 }
 
 export interface AskResult {
@@ -220,10 +261,14 @@ export interface AskResult {
   picks: Record<string, ExtractPick | null>;
   /** For `extraOptions`: every span code found, the pick among them. */
   candidates: Record<string, string[]>;
+  /** For `extraOptions`: the same spans as the judge saw them, with their option keys and words around them. */
+  found?: Record<string, Array<Pick<Candidate, "key" | "span" | "line">>> | undefined;
   /** Requests made. */
   calls: number;
   /** Who answered: TypeSafe, the language model, or nobody. */
   by: "typesafe" | "llm" | null;
+  /** Every answer by question id as asked, with the Thread version and model (a later `prior`). */
+  prior?: PriorAnswers | undefined;
 }
 
 export interface SignalsSettings {
@@ -289,6 +334,16 @@ export interface Signals {
   page(workspaceId: Id): Promise<SignalsPage>;
   /** Explain on a Thread: its Signals with their numbers, versions and when asked, and its Facts. */
   explain(threadId: Id): Promise<SignalsExplain | null>;
+  /**
+   * The spans code finds of each kind in a Thread, as a View's Extractions
+   * would see them: no judge, no answer written (the test's choice of Threads
+   * and inspect_view_thread read it). Decrypts the newest Messages.
+   */
+  candidates(
+    workspaceId: Id,
+    threadId: Id,
+    kinds: readonly ExtractKind[],
+  ): Promise<Partial<Record<ExtractKind, Candidate[]>>>;
   /** The Signals the arrival request would ask that this Thread version lacks. */
   missing(workspaceId: Id, threadId: Id): Promise<string[]>;
   version(threadId: Id): Promise<ThreadVersion>;
@@ -790,7 +845,10 @@ export function createSignals(options: SignalsOptions): Signals {
       }
       await recordDef(workspaceId, updated);
       byId.set(w.id, updated);
-      if (changedWords) toRead.push(w.id);
+      // A View whose scope moved has Threads to read that it never looked at.
+      const movedScope =
+        w.owner.kind === "view" && canonicalJson(row.scope) !== canonicalJson(scope);
+      if (changedWords || movedScope) toRead.push(w.id);
     }
     // A Signal nobody declares any more is retired; its answers stay signals.keep_inactive_days for an Undo.
     const wantedIds = new Set(want.map((w) => w.id));
@@ -1056,7 +1114,7 @@ export function createSignals(options: SignalsOptions): Signals {
    * Everything a Signal request reads about one Thread: the state, and the
    * Facts code computes for it. Decrypts, so it needs the root key.
    */
-  const loadThread = async (workspaceId: Id, threadId: Id, s: Settings) => {
+  const loadThread = async (workspaceId: Id, threadId: Id, s: Settings, rowCount = 0) => {
     const [owner] = await db
       .select({ address: accounts.address, name: accounts.displayName })
       .from(workspaces)
@@ -1074,9 +1132,24 @@ export function createSignals(options: SignalsOptions): Signals {
       Math.ceil(s["signals.state.thread_chars"] / Math.max(1, s["signals.state.earlier_chars"])) +
         1,
     );
-    for (const h of headers.slice(-room)) {
+    // A message-grain View reads more of the Messages: each is its own row and its own question.
+    const span = Math.max(room, rowCount);
+    const first = Math.max(0, headers.length - span);
+    const rowMessages: Array<RowMessage & { to: Person[]; cc: Person[] }> = [];
+    for (const [n, h] of headers.slice(-span).entries()) {
       const body = await mailstore.readMessageBody(h.id);
       const text = body.text || body.snippet;
+      rowMessages.push({
+        id: h.id,
+        index: first + n,
+        date: h.date,
+        from: h.from,
+        to: h.to,
+        cc: h.cc,
+        text,
+      });
+      // The state carries only the newest few, as before.
+      if (first + n < headers.length - room) continue;
       texts.push({ from: h.from, to: h.to, cc: h.cc, date: h.date, text });
       factMessages.push({
         from: h.from,
@@ -1166,6 +1239,7 @@ export function createSignals(options: SignalsOptions): Signals {
       text: factMessages.map((m) => m.text).join("\n\n"),
       written: newest?.date ?? now().toISOString(),
       messages: factMessages,
+      rowMessages,
       owner: ownerAddress,
     };
   };
@@ -1185,12 +1259,105 @@ export function createSignals(options: SignalsOptions): Signals {
         owner: loaded.owner,
         written: loaded.written,
         dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
       },
       s["views.extract.candidates_max"],
     );
     byKind.set(kind, list);
     return list;
   };
+
+  /** A many-Extraction's candidates: the same finder, up to views.extract.many.max. */
+  const manyFound = new WeakMap<Loaded, Map<string, Candidate[]>>();
+  const manyCandidates = (loaded: Loaded, kind: ExtractKind, s: Settings): Candidate[] => {
+    const byKind = manyFound.get(loaded) ?? new Map<string, Candidate[]>();
+    manyFound.set(loaded, byKind);
+    const hit = byKind.get(kind);
+    if (hit) return hit;
+    const list = findCandidates(
+      kind,
+      {
+        messages: loaded.messages,
+        owner: loaded.owner,
+        written: loaded.written,
+        dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
+      },
+      s["views.extract.many.max"],
+    );
+    byKind.set(kind, list);
+    return list;
+  };
+
+  /** One Message's own candidates of a kind (a message-grain View). */
+  const messageCandidates = (
+    loaded: Loaded,
+    m: RowMessage,
+    kind: ExtractKind,
+    s: Settings,
+  ): Candidate[] => {
+    const full = loaded.rowMessages.find((r) => r.id === m.id);
+    return findCandidates(
+      kind,
+      {
+        messages: [
+          { from: m.from, to: full?.to ?? [], cc: full?.cc ?? [], date: m.date, text: m.text },
+        ],
+        owner: loaded.owner,
+        written: m.date,
+        dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
+      },
+      s["views.extract.candidates_max"],
+    );
+  };
+
+  const rowWords = (s: Settings): RowWords => ({
+    manyNote: s["views.extract.many.note"],
+    manyYes: s["views.extract.many.yes"],
+    itemNote: s["views.each.item_note"],
+    messageNote: s["views.each.message_note"],
+    messageChars: s["views.grain.message_chars"],
+  });
+
+  /** The questions of a per-row question for this Thread; null when it is asked once. */
+  const planFor = (
+    id: string,
+    template: JudgeQuestion,
+    from: SignalOptionsFrom | string | null | undefined,
+    loaded: Loaded,
+    s: Settings,
+  ): RowPlan | null => {
+    const mode = rowModeOf(from);
+    if (!mode) return null;
+    return planRows(
+      id,
+      template,
+      mode,
+      {
+        found:
+          mode.mode === "many" || mode.mode === "each_item"
+            ? manyCandidates(loaded, mode.kind, s)
+            : [],
+        messages: loaded.rowMessages,
+        ...(mode.mode === "message"
+          ? { perMessage: (m: RowMessage) => messageCandidates(loaded, m, mode.kind, s) }
+          : {}),
+        listOptions: candidateOptions,
+      },
+      rowWords(s),
+      mode.mode === "many" || mode.mode === "each_item"
+        ? s["views.extract.many.max"]
+        : s["views.extract.candidates_max"],
+    );
+  };
+
+  /** Whether any of these option sources reads the Messages one by one. */
+  const readsMessages = (froms: ReadonlyArray<SignalOptionsFrom | string | null | undefined>) =>
+    froms.some((f) => {
+      const m = rowModeOf(f);
+      return m?.mode === "message" || m?.mode === "each_message";
+    });
 
   /** The View Signals among `need` whose View's scope does not admit this Thread. */
   const scopedOut = async (
@@ -1273,6 +1440,8 @@ export function createSignals(options: SignalsOptions): Signals {
     s: Settings,
     /** The Choices whose options were built per Thread (other than amounts), by what: their picks are kept sealed. */
     pickedFrom: ReadonlyMap<string, SignalOptionsFrom> = new Map(),
+    /** Per-row questions folded back: a many-Extraction's values, a per-row Signal's answers. */
+    folds: ReadonlyMap<string, RowFold> = new Map(),
   ) => {
     const { clear, sealed } = loaded.facts;
     const previous = await db.query.threadFacts.findFirst({
@@ -1368,6 +1537,22 @@ export function createSignals(options: SignalsOptions): Signals {
           probability: a.probabilities[a.choice] ?? a.confidence,
         };
     }
+    for (const [id, f] of folds) {
+      if (!f.items?.length && !f.answers) {
+        delete picks[id];
+        continue;
+      }
+      const first = f.items?.find((i) => !i.unsure) ?? f.items?.[0];
+      const confidence = f.row.type === "noul" ? 1 : f.row.confidence;
+      picks[id] = {
+        value: first?.text ?? "each",
+        normalized: first?.value ?? null,
+        confidence,
+        probability: confidence,
+        ...(f.items ? { items: f.items } : {}),
+        ...(f.answers ? { answers: f.answers } : {}),
+      };
+    }
     sealed.picks = picks;
     const stored = await mailstore.storeContent(workspaceId, "facts", JSON.stringify(sealed));
     const values = {
@@ -1462,16 +1647,51 @@ export function createSignals(options: SignalsOptions): Signals {
         by: null,
       };
       if (need.length === 0 && Object.keys(extra).length === 0) return result;
-      const loaded = await loadThread(workspaceId, threadId, s);
+      const loaded = await loadThread(
+        workspaceId,
+        threadId,
+        s,
+        readsMessages([
+          ...need.map((d) => d.optionsFrom),
+          ...Object.values(opts.extraOptions ?? {}),
+        ])
+          ? s["views.grain.max_messages"]
+          : 0,
+      );
       const state = loaded.state;
       // A View's Signal is asked only of the Threads its scope's Facts admit; code decides.
       const outOfScope = await scopedOut(workspaceId, threadId, need, s);
       // Code decides what applies: a gated Signal whose gate fails is answered by code as not stated.
       const gatedOut = need.filter((d) => !outOfScope.has(d.id) && !gateHolds(d, loaded, s));
-      const asked = need.filter((d) => !outOfScope.has(d.id) && gateHolds(d, loaded, s));
+      let asked = need.filter((d) => !outOfScope.has(d.id) && gateHolds(d, loaded, s));
       const questions: Record<string, JudgeQuestion> = {};
-      for (const d of asked) questions[d.id] = questionFor(d, loaded, s);
+      // Per-row questions (many values, one per Message, a Signal per item or Message) ride as
+      // several independent questions in this same request.
+      const plans = new Map<string, RowPlan>();
+      for (const d of asked) {
+        const plan = planFor(d.id, d.question as JudgeQuestion, d.optionsFrom, loaded, s);
+        if (!plan) {
+          questions[d.id] = questionFor(d, loaded, s);
+          continue;
+        }
+        plans.set(d.id, plan);
+        if (plan.parts.length === 0) gatedOut.push(d);
+        Object.assign(questions, plan.questions);
+      }
+      asked = asked.filter((d) => !plans.has(d.id) || (plans.get(d.id)?.parts.length ?? 0) > 0);
       for (const [id, q] of Object.entries(extra)) {
+        const plan = planFor(id, q, opts.extraOptions?.[id], loaded, s);
+        if (plan) {
+          plans.set(id, plan);
+          result.picks[id] = null;
+          result.candidates[id] = plan.found.map((c) => c.span);
+          result.found = {
+            ...result.found,
+            [id]: plan.found.map((c) => ({ key: c.key, span: c.span, line: c.line })),
+          };
+          Object.assign(questions, plan.questions);
+          continue;
+        }
         const kind = extractKindOf(opts.extraOptions?.[id]);
         if (!kind) {
           questions[id] = q;
@@ -1481,6 +1701,10 @@ export function createSignals(options: SignalsOptions): Signals {
         const found = extractCandidates(loaded, kind, s);
         result.picks[id] = null;
         result.candidates[id] = found.map((c) => c.span);
+        result.found = {
+          ...result.found,
+          [id]: found.map((c) => ({ key: c.key, span: c.span, line: c.line })),
+        };
         if (found.length > 0) questions[id] = candidateOptions(q, found);
       }
       // A gated Noul is answered no; a gated Choice, not stated.
@@ -1507,15 +1731,31 @@ export function createSignals(options: SignalsOptions): Signals {
         await answered(workspaceId, threadId);
         return result;
       }
-      if (await runtime.judgeAvailable()) {
-        const answers: Record<string, JudgeAnswer> = {};
-        let model = "";
+      // Answers this Thread version already has (a View's try before Pin view) are not asked again.
+      const prior =
+        opts.prior &&
+        opts.prior.messageCount === version.messageCount &&
+        opts.prior.latestMessageId === version.latestMessageId
+          ? opts.prior
+          : null;
+      const reused: Record<string, JudgeAnswer> = {};
+      for (const id of Object.keys(questions)) {
+        const a = prior?.answers[id];
+        if (a) reused[id] = a;
+      }
+      const toAsk = Object.fromEntries(Object.entries(questions).filter(([id]) => !reused[id]));
+      const asking = Object.keys(toAsk).length > 0;
+      if (!asking || (await runtime.judgeAvailable())) {
+        const answers: Record<string, JudgeAnswer> = { ...reused };
+        let model = prior?.model ?? "";
         try {
           // A Thread whose questions outgrow one request is asked in parts, all in flight at once.
-          const parts = splitQuestions(state, questions, {
-            requestTokens: s["routing.backfill.request_tokens"],
-            stateTokens: s["routing.backfill.state_tokens"],
-          });
+          const parts = !asking
+            ? []
+            : splitQuestions(state, toAsk, {
+                requestTokens: s["routing.backfill.request_tokens"],
+                stateTokens: s["routing.backfill.state_tokens"],
+              });
           const replies = await Promise.allSettled(
             parts.map((part) =>
               runtime.judge(TASK[opts.reason], state, part, {
@@ -1536,7 +1776,21 @@ export function createSignals(options: SignalsOptions): Signals {
           if (!(error instanceof NoJudgeError)) throw error;
           return llmAsk(workspaceId, threadId, s, asked, state, version, opts, error, loaded);
         }
+        const folds = new Map<string, RowFold>();
+        for (const [id, plan] of plans) {
+          const f = foldRows(plan, answers, {
+            threshold: s["views.extract.many.threshold"],
+            unsureFrom: s["signals.unsure.noul_low"],
+            max: s["views.extract.many.max"],
+          });
+          if (f) folds.set(id, f);
+        }
         const items = asked.flatMap((d) => {
+          if (plans.has(d.id)) {
+            const f = folds.get(d.id);
+            if (!f) return [];
+            return [{ def: d, answer: f.row, ...(f.choice ? { choice: f.choice } : {}) }];
+          }
           const a = answers[d.id];
           if (!a) return [];
           // A picked span stays sealed with the Facts; the answer keeps only whether one was picked.
@@ -1553,8 +1807,18 @@ export function createSignals(options: SignalsOptions): Signals {
           model,
           loaded.lowTrust,
         );
-        await storeFacts(workspaceId, threadId, version, loaded, answers, s, pickedFrom);
-        if ([...pickedFrom.values()].some((f) => extractKindOf(f) !== null)) {
+        const storedFolds = new Map([...folds].filter(([id]) => asked.some((d) => d.id === id)));
+        await storeFacts(
+          workspaceId,
+          threadId,
+          version,
+          loaded,
+          answers,
+          s,
+          pickedFrom,
+          storedFolds,
+        );
+        if ([...pickedFrom.values()].some((f) => extractKindOf(f) !== null) || storedFolds.size) {
           // A View's picked values changed: the Device reads them again (they stay sealed here).
           await mailstore.recordChange(db, {
             workspaceId,
@@ -1565,8 +1829,27 @@ export function createSignals(options: SignalsOptions): Signals {
         }
         result.asked = [...items, ...notStated].map((i) => i.def.id);
         await answered(workspaceId, threadId);
-        for (const id of Object.keys(extra)) result.extra[id] = answers[id];
+        for (const id of Object.keys(extra)) result.extra[id] = answers[id] ?? folds.get(id)?.row;
+        for (const [id, plan] of plans) {
+          if (!(id in extra)) continue;
+          const f = folds.get(id);
+          if (!f) continue;
+          const first = f.items?.find((i) => !i.unsure);
+          result.picks[id] =
+            f.items?.length || f.answers
+              ? {
+                  text: first?.text ?? (f.answers ? "each" : ""),
+                  value: first?.value ?? null,
+                  confidence: f.row.type === "choice" ? f.row.confidence : 1,
+                  candidates: plan.found.map((c) => c.span),
+                  ...(f.items ? { items: f.items } : {}),
+                  ...(f.answers ? { answers: f.answers } : {}),
+                  capped: plan.capped,
+                }
+              : null;
+        }
         for (const id of Object.keys(result.picks)) {
+          if (plans.has(id)) continue;
           const kind = extractKindOf(opts.extraOptions?.[id]);
           const a = answers[id];
           if (!kind || a?.type !== "choice" || a.choice === "none") continue;
@@ -1582,6 +1865,12 @@ export function createSignals(options: SignalsOptions): Signals {
           }
         }
         result.by = "typesafe";
+        result.prior = {
+          messageCount: version.messageCount,
+          latestMessageId: version.latestMessageId,
+          model,
+          answers,
+        };
         return result;
       }
       return llmAsk(
@@ -1598,6 +1887,45 @@ export function createSignals(options: SignalsOptions): Signals {
     },
 
     readings,
+
+    async candidates(workspaceId, threadId, kinds) {
+      const s = await readSettings();
+      const [owner] = await db
+        .select({ address: accounts.address })
+        .from(workspaces)
+        .innerJoin(accounts, eq(accounts.id, workspaces.accountId))
+        .where(eq(workspaces.id, workspaceId));
+      const headers = await mailstore.listMessages(threadId);
+      // The same Messages the Signal request reads: only the newest few fit its state.
+      const room = Math.max(
+        1,
+        Math.ceil(s["signals.state.thread_chars"] / Math.max(1, s["signals.state.earlier_chars"])) +
+          1,
+      );
+      const messages = [];
+      for (const h of headers.slice(-room)) {
+        const body = await mailstore.readMessageBody(h.id);
+        messages.push({
+          from: h.from,
+          to: h.to,
+          cc: h.cc,
+          date: h.date,
+          text: body.text || body.snippet,
+        });
+      }
+      const input = {
+        messages,
+        owner: (owner?.address ?? "").toLowerCase(),
+        written: headers[headers.length - 1]?.date ?? now().toISOString(),
+        dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
+      };
+      const out: Partial<Record<ExtractKind, Candidate[]>> = {};
+      for (const kind of new Set(kinds)) {
+        out[kind] = findCandidates(kind, input, s["views.extract.candidates_max"]);
+      }
+      return out;
+    },
 
     async store(workspaceId, threadId, answers, meta) {
       const s = await readSettings();
@@ -1875,7 +2203,10 @@ export function createSignals(options: SignalsOptions): Signals {
       throw cause;
     }
     const allowed = need.filter(
-      (d) => d.kind !== "choice" && (mode === "all" || SHIPPED_SECTION_SIGNALS.includes(d.id)),
+      (d) =>
+        d.kind !== "choice" &&
+        rowModeOf(d.optionsFrom) === null &&
+        (mode === "all" || SHIPPED_SECTION_SIGNALS.includes(d.id)),
     );
     if (allowed.length === 0) throw cause;
     const questions: Record<string, JudgeQuestion> = {};

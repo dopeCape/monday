@@ -5,6 +5,7 @@
 // request; the language model writes and revises the document (slice 40).
 
 import type {
+  AiLevel,
   Id,
   LaneView,
   View,
@@ -17,6 +18,7 @@ import { laneView, scopeSince, viewExtractionId } from "@monday/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import { accounts, workspaces } from "../../db/schema.ts";
+import type { Jobs } from "../../jobs/index.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { readGlobalSettings } from "../../settings/read.ts";
 import { createDraftStore } from "../../views/drafts.ts";
@@ -25,9 +27,19 @@ import { loadViewThreads } from "../../views/threads.ts";
 import { readValues, type ValuesByThread } from "../../views/values.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
+import { createViewBackfills, type ViewBackfills } from "./backfill.ts";
 import { createViewDrafting, type ViewDrafting } from "./drafting.ts";
 
 export type { DraftCorrection, UpdateProposal, ViewDrafting } from "./drafting.ts";
+
+const READING_KEYS = [
+  "views.backfill.enabled",
+  "views.backfill.page_size",
+  "signals.backfill.concurrency",
+  "views.scope.max_threads",
+  "signals.budget.background_monthly_usd",
+  "routing.wait_seconds",
+] as const;
 
 const CONTEXT_KEYS = [
   "signals.unsure.noul_low",
@@ -79,6 +91,14 @@ export interface ViewIntelligence {
   values(viewId: Id): Promise<ValuesByThread>;
   /** The values every View of the Workspace picked on these Threads (the feed named them). */
   valuesFor(workspaceId: Id, threadIds: readonly Id[]): Promise<ValuesByThread>;
+  /** Each pinned View reading its own scope (docs/spec/views.md, "Reading a pinned View"). */
+  reading: ViewBackfills;
+  /**
+   * The Signal store's new or reworded definitions: a View's go to its own reading,
+   * the rest are returned for the Workspace's backfill.
+   */
+  readNew(workspaceId: Id, signalIds: readonly string[]): Promise<string[]>;
+  registerSteps(jobs: Jobs): void;
 }
 
 export interface ViewIntelligenceOptions {
@@ -89,6 +109,7 @@ export interface ViewIntelligenceOptions {
   store: ViewStore;
   now?: () => Date;
   log?: (message: string) => void;
+  level?: () => Promise<AiLevel>;
 }
 
 export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIntelligence {
@@ -147,8 +168,11 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
         owner: ctx.owner,
         ...(opts.threadIds
           ? { ids: opts.threadIds }
-          : { since: scopeSince(doc.scope.facts, ctx.now, ctx.zone) }),
-        limit: opts.threadIds ? opts.threadIds.length : Math.min(doc.scope.limit * 2, 5000),
+          : {
+              since: scopeSince(doc.scope.facts, ctx.now, ctx.zone),
+              scope: { facts: doc.scope.facts, now: ctx.now, zone: ctx.zone },
+            }),
+        limit: opts.threadIds ? opts.threadIds.length : Math.min(doc.scope.limit, 5000),
       }),
     );
     return { threads, lanes: laneView(doc, threads, ctx, { placements: opts.placements }) };
@@ -162,6 +186,29 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     }
   };
 
+  const reading = createViewBackfills({
+    db,
+    mailstore: options.mailstore,
+    signals,
+    store,
+    context,
+    now,
+    log,
+    ...(options.level ? { level: options.level } : {}),
+    canAnswer: () => options.runtime.judgeAvailable(),
+    settings: async () => {
+      const s = await readGlobalSettings(db, READING_KEYS);
+      return {
+        enabled: s["views.backfill.enabled"],
+        pageSize: s["views.backfill.page_size"],
+        concurrency: Math.max(1, s["signals.backfill.concurrency"]),
+        maxThreads: s["views.scope.max_threads"],
+        budgetUsd: s["signals.budget.background_monthly_usd"],
+        waitSeconds: s["routing.wait_seconds"],
+      };
+    },
+  });
+
   const drafting = createViewDrafting({
     db,
     mailstore: options.mailstore,
@@ -172,6 +219,7 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     context,
     changed,
     log,
+    reading: () => reading,
   });
 
   return {
@@ -179,6 +227,29 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     context,
     changed,
     drafting,
+    reading,
+    registerSteps: (jobs) => reading.registerSteps(jobs),
+    async readNew(workspaceId, signalIds) {
+      // A View's stored ids are board:<viewId>:<local>; each View reads its own scope.
+      const byView = new Map<string, string[]>();
+      const rest: string[] = [];
+      for (const id of signalIds) {
+        const m = /^board:([^:]+):/.exec(id);
+        if (!m?.[1]) {
+          rest.push(id);
+          continue;
+        }
+        byView.set(m[1], [...(byView.get(m[1]) ?? []), id]);
+      }
+      for (const [viewId, ids] of byView) {
+        try {
+          await reading.request(workspaceId, viewId, ids);
+        } catch (error) {
+          log(`view reading ${viewId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return rest;
+    },
     place,
     async values(viewId) {
       const view = await store.get(viewId);

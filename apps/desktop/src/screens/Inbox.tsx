@@ -290,7 +290,8 @@ export interface ViewLens {
   render(ctx: {
     row(thread: Thread): ReactNode;
     focus: string | null;
-    open(threadId: string): void;
+    /** Opens a Thread, on one of its Messages when a View row is that Message. */
+    open(threadId: string, messageId?: string | null): void;
     /** What the View's action buttons act through. */
     host: InboxViewHost;
   }): ReactNode;
@@ -912,6 +913,10 @@ function InboxBody({
   );
   const selTotal = useSyncExternalStore(subscribeList, selTotalOf, selTotalOf);
   const [readerOpen, setReaderOpen] = useState(!stream || urlSel !== null);
+  /** The Message a View row opened its Thread on, scrolled to in the reader. */
+  const [focusMessage, setFocusMessage] = useState<{ thread: string; message: string } | null>(
+    null,
+  );
   const [agentOpen, setAgentOpen] = useState(initialAgentText !== undefined);
   const [agentText, setAgentText] = useState(initialAgentText ?? "");
   // `?overlay=cmdk` opens the palette on mount, as the mock does, for the screenshot check.
@@ -2562,7 +2567,8 @@ function InboxBody({
     setReaderOpen(true);
   }
   /** Opens a Thread here, read from the Cache when the list does not hold it; elsewhere when there is none. */
-  function openAnywhere(id: string) {
+  function openAnywhere(id: string, messageId?: string | null) {
+    setFocusMessage(messageId ? { thread: id, message: messageId } : null);
     if (inbox.thread(id)) return open(id);
     if (!inbox.resolve) return onNavigate?.(`thread:${id}`);
     void inbox.resolve(id).then((found) => {
@@ -3154,6 +3160,7 @@ function InboxBody({
 
       {shownThread ? (
         <Reader
+          focusMessage={focusMessage?.thread === shownThread.id ? focusMessage.message : null}
           loadRemoteImages={settings["reader.load_remote_images"]}
           banner={
             calendar ? (

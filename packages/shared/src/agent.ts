@@ -149,6 +149,7 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   list_views: "read",
   create_view: "read",
   revise_view: "read",
+  inspect_view_thread: "read",
   update_view: "reversible",
   delete_view: "reversible",
   // Tuning the judgments behind routing and Sections from the user's feedback

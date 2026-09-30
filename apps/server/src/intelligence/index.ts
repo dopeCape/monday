@@ -624,6 +624,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
     store: viewStore,
     now,
     log,
+    level,
   });
   // Recommended actions follow every Signal request (docs/spec/actions.md).
   const recommendations = createRecommendations({
@@ -1072,7 +1073,11 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       };
     },
   });
-  signals.setDefsListener((workspaceId, ids) => signalBackfills.request(workspaceId, ids));
+  // A pinned View reads its own scope; everything else goes to the Workspace's backfill.
+  signals.setDefsListener(async (workspaceId, ids) => {
+    const rest = await views.readNew(workspaceId, ids);
+    return rest.length ? signalBackfills.request(workspaceId, rest) : null;
+  });
   // The arrival request (slice 33): routing's Group and Sub-group Choices ride with every Signal.
   routing.setArrivalAsk(arrivalAsk);
   // A running Backlog sort carries the Signals a Thread lacks in its one request per Thread.
@@ -1166,6 +1171,7 @@ export function createIntelligence(options: IntelligenceOptions): Intelligence {
       routing.registerSteps(jobs);
       backlog.registerSteps(jobs);
       signalBackfills.registerSteps(jobs);
+      views.registerSteps(jobs);
       workflows.registerSteps(jobs);
     },
   };

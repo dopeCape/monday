@@ -28,6 +28,8 @@ export interface CandidateInput {
   written: string;
   /** How 10/03/2026 reads (views.extract.date_order). */
   dateOrder: "mdy" | "dmy";
+  /** The longest line an item may be (views.extract.item_chars). */
+  itemChars?: number | undefined;
 }
 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -261,16 +263,72 @@ export function findQuantities(text: string): Array<{ span: string; value: numbe
   return out;
 }
 
-/** Line items: lines that name a thing with a quantity or a price, or a bullet. */
-export function findItems(text: string): Array<{ span: string; value: string }> {
+const BULLET = /^\s*(?:[-*•·▪◦]|\d{1,3}[.)])\s+/;
+const QTY_PREFIX = /^\s*\d{1,4}\s*[x×]\s+\S/i;
+/** Words that say what a line is (a price, a count), not what was bought. */
+const LABEL_WORDS =
+  /\b(?:qty|quantity|price|unit price|each|mrp|amount|items?|pcs|pieces|units|rs|inr|usd|eur|gbp)\b/gi;
+/** A summary line of a receipt: a total, a tax, a fee, a discount; never an item. */
+const SUMMARY =
+  /^\s*(?:[-*•·]\s*)?(?:(?:order|bag|item|cart|grand|sub|net)[\s-]*)?(?:total|subtotal|tax(?:es)?|gst|vat|igst|cgst|sgst|shipping|delivery(?: charges?| fee)?|discount|coupon|savings|you saved|amount (?:paid|due|payable)|balance|convenience fee|handling|payment|paid|refund)\b/i;
+/** A short attribute line under an item: "Size: M", "Color: White", "Art. No.: 0987654001". */
+const ATTRIBUTE = /^\s*[A-Za-z][A-Za-z .]{0,24}:\s*\S.{0,19}$/;
+
+/** A letter in any script, for names such as "Kérastase". */
+const LETTERS = /\p{L}{3,}/u;
+
+/** What is left of a line once its amounts, counts and label words are gone. */
+function namePart(line: string): string {
+  let rest = line;
+  for (const a of findAmounts(line, 20)) rest = rest.replace(a, " ");
+  return rest
+    .replace(/\b\d+\s*[x×]\s*/gi, " ")
+    .replace(LABEL_WORDS, " ")
+    .replace(/[\d:.,#()|/\\-]+/g, " ")
+    .trim();
+}
+
+/** A line that is only a count ("Quantity: 1") or only a price ("2900 INR", "Price: Rs. 799"). */
+function countOrPrice(line: string): boolean {
+  const priced = findAmounts(line, 1).length > 0;
+  const counted = /\b(?:qty|quantity)\b|^\s*\d{1,4}\s*[x×]\s*$/i.test(line);
+  return (priced || counted) && !LETTERS.test(namePart(line));
+}
+
+/**
+ * Line items: the lines that name what was bought. A bulleted or numbered line
+ * ("* Kérastase Gloss Absolu Shampoo | 250ml"), a line led by a count ("1x Desk
+ * lamp"), a line that names a thing beside its price, and a line followed (after
+ * its short attributes such as "Size: M") by its count or its price. Never a line
+ * that is only a count or a price, never a total, tax or fee. At most `maxChars`
+ * characters, copied as written.
+ */
+export function findItems(text: string, maxChars = 300): Array<{ span: string; value: string }> {
   const out: Array<{ span: string; value: string }> = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/^\s*(?:[-*•·]|\d+[.)])\s+/, "").trim();
-    if (line.length < 3 || line.length > 140) continue;
-    const bullet = /^\s*(?:[-*•·]|\d+[.)])\s+/.test(raw);
-    const priced =
-      findAmounts(line, 1).length > 0 || /\b(?:qty|quantity)\b|\b\d+\s*[x×]\s/i.test(line);
-    if ((bullet || priced) && /[A-Za-z]{3,}/.test(line)) out.push({ span: line, value: line });
+  const lines = text.split(/\r?\n/);
+  const nonEmpty = lines.map((l, i) => ({ l, i })).filter((x) => x.l.trim() !== "");
+  for (let k = 0; k < nonEmpty.length; k++) {
+    const raw = (nonEmpty[k] as { l: string }).l;
+    const line = raw.replace(BULLET, "").trim();
+    if (line.length < 3 || line.length > maxChars) continue;
+    if (SUMMARY.test(line) || /^https?:\/\/\S+$/.test(line)) continue;
+    if (countOrPrice(line) || !LETTERS.test(namePart(line))) continue;
+    const bullet = BULLET.test(raw) || QTY_PREFIX.test(raw);
+    const priced = findAmounts(line, 1).length > 0 || /\b(?:qty|quantity)\b/i.test(line);
+    let followed = false;
+    if (!bullet && !priced && !ATTRIBUTE.test(line)) {
+      // Its count or its price follows, after at most a few short attributes.
+      for (let j = k + 1; j < Math.min(nonEmpty.length, k + 6); j++) {
+        const next = (nonEmpty[j] as { l: string }).l.trim();
+        if (SUMMARY.test(next)) break;
+        if (countOrPrice(next)) {
+          followed = true;
+          break;
+        }
+        if (!ATTRIBUTE.test(next)) break;
+      }
+    }
+    if (bullet || priced || followed) out.push({ span: line, value: line });
   }
   return out;
 }
@@ -367,7 +425,7 @@ export function findCandidates(kind: ExtractKind, input: CandidateInput, max: nu
     case "quantity":
       return keyed(findQuantities(text), text, cap);
     case "item":
-      return keyed(findItems(text), text, cap);
+      return keyed(findItems(text, input.itemChars), text, cap);
     case "sentence":
       return keyed(findSentences(input), text, cap);
   }

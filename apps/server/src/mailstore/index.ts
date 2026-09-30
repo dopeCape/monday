@@ -38,7 +38,12 @@ import type {
   ThreadChange,
   Workspace,
 } from "@monday/shared";
-import { FIELD_GROUP_OF, resolveWrite } from "@monday/shared";
+import {
+  FIELD_GROUP_OF,
+  resolveWrite,
+  SUBJECT_SEARCH_CHARS as SHARED_SUBJECT_SEARCH_CHARS,
+  subjectSearchOf as sharedSubjectSearchOf,
+} from "@monday/shared";
 import {
   and,
   asc,
@@ -101,7 +106,7 @@ export { CONTENT_KINDS, createContentStore, isContentKind } from "./content.ts";
 export type { FullSearchOptions } from "./full-search.ts";
 
 /** How much of the subject the headers index keeps in the clear. */
-export const SUBJECT_SEARCH_CHARS = 80;
+export const SUBJECT_SEARCH_CHARS = SHARED_SUBJECT_SEARCH_CHARS;
 
 export interface ThreadInput {
   workspaceId: Id;
@@ -380,9 +385,9 @@ export class NotFoundError extends Error {
   }
 }
 
-/** The one plaintext derivative of a subject: lowercased, whitespace collapsed, 80 chars. */
+/** The one plaintext derivative of a subject: lowercased, whitespace collapsed, 80 chars (shared with Views' subject_any). */
 export function subjectSearchOf(subject: string): string {
-  return subject.toLowerCase().replace(/\s+/g, " ").trim().slice(0, SUBJECT_SEARCH_CHARS);
+  return sharedSubjectSearchOf(subject);
 }
 
 /** The `to_tsquery` text for what was typed: every token prefix-matched, ANDed. Empty when nothing survives. */

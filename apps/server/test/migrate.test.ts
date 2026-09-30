@@ -81,6 +81,7 @@ describe("migrations", () => {
       "thread_routes",
       "thread_tags",
       "threads",
+      "view_backfills",
       "view_drafts",
       "view_versions",
       "views",

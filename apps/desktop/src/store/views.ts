@@ -19,6 +19,7 @@ import type {
   ViewDoc,
   ViewDone,
   ViewPlacement,
+  ViewReadingChange,
   ViewScopeFacts,
   ViewThread,
 } from "@monday/shared";
@@ -46,12 +47,43 @@ export const VIEWS_SCHEMA_SQL = `
     text text not null,
     value text not null,
     confidence real not null,
+    items text,
     primary key (thread_id, signal_id)
   );
   create table if not exists view_values_stale (
     thread_id text primary key
   );
+  create table if not exists view_reading (
+    view_id text primary key,
+    status text not null,
+    reason text,
+    done integer not null default 0,
+    total integer not null default 0
+  );
 `;
+
+/** How far a pinned View has read its scope, from the feed (counts only). */
+export function viewReadingUpsert(r: ViewReadingChange): Statement {
+  return {
+    sql: `insert into view_reading (view_id, status, reason, done, total) values (?, ?, ?, ?, ?)
+          on conflict (view_id) do update set status = excluded.status, reason = excluded.reason,
+            done = excluded.done, total = excluded.total`,
+    params: [r.viewId, r.status, r.reason, r.done, r.total],
+  };
+}
+
+/** One View's reading, as its bar shows it. */
+export const VIEW_READING_SQL = "select * from view_reading where view_id = ?";
+
+export function rowToViewReading(r: Row): ViewReadingChange {
+  return {
+    viewId: String(r.view_id),
+    status: String(r.status) as ViewReadingChange["status"],
+    reason: (r.reason ?? null) as ViewReadingChange["reason"],
+    done: Number(r.done ?? 0),
+    total: Number(r.total ?? 0),
+  };
+}
 
 /** The Views the nav and the screens read: not deleted, content read, in nav order. */
 export const VIEWS_SQL =
@@ -103,11 +135,20 @@ export function viewValuesStatements(
         : { sql: "delete from view_values where thread_id = ?", params: [threadId] },
     );
     for (const [signalId, v] of Object.entries(values[threadId] ?? {})) {
+      // Many values, one per Message, or a per-row Signal's answers ride in `items`.
+      const extra =
+        v.items || v.answers
+          ? JSON.stringify({
+              ...(v.items ? { items: v.items } : {}),
+              ...(v.answers ? { answers: v.answers } : {}),
+            })
+          : null;
       out.push({
-        sql: `insert into view_values (thread_id, signal_id, text, value, confidence) values (?, ?, ?, ?, ?)
+        sql: `insert into view_values (thread_id, signal_id, text, value, confidence, items) values (?, ?, ?, ?, ?, ?)
               on conflict (thread_id, signal_id) do update set
-                text = excluded.text, value = excluded.value, confidence = excluded.confidence`,
-        params: [threadId, signalId, v.text, JSON.stringify(v.value), v.confidence],
+                text = excluded.text, value = excluded.value, confidence = excluded.confidence,
+                items = excluded.items`,
+        params: [threadId, signalId, v.text, JSON.stringify(v.value), v.confidence, extra],
       });
     }
     out.push({ sql: "delete from view_values_stale where thread_id = ?", params: [threadId] });
@@ -186,9 +227,9 @@ export type CachedViewThread = ViewThread & { thread: Thread };
  * The Threads a View looks at, newest first, as one query over the Cache:
  * each Thread row with its Signal answers (`j_signals`), its clear Facts,
  * who started it, its correspondent, every address it was sent to and the
- * values the Views picked. SQL narrows by the scope's folder and date; the
- * exact addresses, the Lanes and every Block are decided by the View code
- * over these rows.
+ * values the Views picked. SQL narrows by the scope's folder, date, senders
+ * and recipients before the limit; the View code checks the scope again
+ * exactly and decides the Lanes and every Block over these rows.
  */
 export function viewThreadsSql(
   facts: ViewScopeFacts,
@@ -215,6 +256,42 @@ export function viewThreadsSql(
     // the nav count and the open View ask the same query and share its rows.
     params.push(new Date(Math.floor(since.getTime() / 86_400_000) * 86_400_000).toISOString());
   }
+  // Who started it and who it went to narrow in SQL too, so the limit counts only Threads in
+  // scope: a View of five senders over a year shows their newest Threads, not the few of
+  // them among the newest of everything.
+  const firstFrom =
+    "(select lower(json_extract(m.sender, '$.email')) from messages m where m.thread_id = t.id order by m.date asc, m.id asc limit 1)";
+  const marks = (list: readonly string[]) => list.map(() => "?").join(", ");
+  const lower = (list: readonly string[]) => list.map((x) => x.toLowerCase());
+  const domainOf = `substr(coalesce(${firstFrom}, ''), instr(coalesce(${firstFrom}, ''), '@') + 1)`;
+  if (facts.from_any?.length) {
+    where.push(`${firstFrom} in (${marks(facts.from_any)})`);
+    params.push(...lower(facts.from_any));
+  }
+  if (facts.from_domain?.length) {
+    where.push(
+      `instr(coalesce(${firstFrom}, ''), '@') > 0 and ${domainOf} in (${marks(facts.from_domain)})`,
+    );
+    params.push(...lower(facts.from_domain));
+  }
+  if (facts.from_domain_not?.length) {
+    where.push(
+      `(instr(coalesce(${firstFrom}, ''), '@') = 0 or ${domainOf} not in (${marks(facts.from_domain_not)}))`,
+    );
+    params.push(...lower(facts.from_domain_not));
+  }
+  if (facts.to_any?.length) {
+    where.push(`(exists (select 1 from messages m, json_each(m.recipients) r where m.thread_id = t.id
+        and lower(json_extract(r.value, '$.email')) in (${marks(facts.to_any)}))
+      or exists (select 1 from messages m, json_each(m.cc) r where m.thread_id = t.id
+        and lower(json_extract(r.value, '$.email')) in (${marks(facts.to_any)})))`);
+    params.push(...lower(facts.to_any), ...lower(facts.to_any));
+  }
+  if (facts.subject_any?.length) {
+    // A bound: the View code reads the subject's first 80 characters, whitespace collapsed.
+    where.push(`(${facts.subject_any.map(() => "instr(lower(t.subject), ?) > 0").join(" or ")})`);
+    params.push(...lower(facts.subject_any));
+  }
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const sql = `select * from (${ALL_THREADS_SQL.slice(0, at).replace(
     "select ",
@@ -227,12 +304,27 @@ export function viewThreadsSql(
        from messages m, json_each(m.recipients) r where m.thread_id = t.id) as to_emails,
     (select group_concat(lower(json_extract(r.value, '$.email')), ' ')
        from messages m, json_each(m.cc) r where m.thread_id = t.id) as cc_emails,
-    (select json_group_object(v.signal_id, json_object('text', v.text, 'value', json(v.value), 'confidence', v.confidence))
+    (select json_group_object(v.signal_id, json_object('text', v.text, 'value', json(v.value), 'confidence', v.confidence,
+         'items', json_extract(coalesce(v.items, '{}'), '$.items'), 'answers', json_extract(coalesce(v.items, '{}'), '$.answers')))
        from view_values v where v.thread_id = t.id) as v_values,
     f.facts as f_facts,
     `,
   )} left join thread_facts f on f.thread_id = t.id where ${where.join(" and ")} ${ALL_THREADS_SQL.slice(at)} limit ${Math.max(1, Math.floor(limit))})`;
   return { sql, params };
+}
+
+/** The picked values as the View code reads them: no `items` or `answers` where there are none. */
+function valuesOf(raw: Record<string, ExtractedValue>): Record<string, ExtractedValue> {
+  const out: Record<string, ExtractedValue> = {};
+  for (const [id, v] of Object.entries(raw)) {
+    const { items, answers, ...rest } = v;
+    out[id] = {
+      ...rest,
+      ...(Array.isArray(items) ? { items } : {}),
+      ...(answers && typeof answers === "object" ? { answers } : {}),
+    };
+  }
+  return out;
 }
 
 /** One row of viewThreadsSql as the View code and the row read it. */
@@ -259,7 +351,7 @@ export function rowToViewThread(r: Row, workspaceId: Id): CachedViewThread {
     recipients: [...words(r.to_emails), ...words(r.cc_emails)],
     facts: json<Record<string, unknown> | null>(r.f_facts, null),
     readings: rowSignals(r),
-    values: json<Record<string, ExtractedValue>>(r.v_values, {}),
+    values: valuesOf(json<Record<string, ExtractedValue>>(r.v_values, {})),
     subject: thread.subject,
     snippet: thread.snippet,
     correspondent: who?.email ? { name: who.name ?? "", email: who.email.toLowerCase() } : null,

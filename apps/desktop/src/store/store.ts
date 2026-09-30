@@ -68,7 +68,7 @@ import {
   signalsStatements,
 } from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
-import { VIEWS_SCHEMA_SQL, viewUpsert, viewValuesStale } from "./views.ts";
+import { VIEWS_SCHEMA_SQL, viewReadingUpsert, viewUpsert, viewValuesStale } from "./views.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 
@@ -355,6 +355,8 @@ const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; type: string
   { table: "calendars", column: "access", type: "text" },
   { table: "calendars", column: "shared_by", type: "text" },
   { table: "calendars", column: "error", type: "text" },
+  // Many values per Thread and per-row answers (Views V): read again with the next values read.
+  { table: "view_values", column: "items", type: "text" },
 ];
 
 async function addColumns(driver: SqlDriver): Promise<void> {
@@ -780,6 +782,9 @@ export function changeStatements(change: Change): Statement[] {
     case "view_values":
       // Headers only: the Views module reads the picked values through POST /views/values.
       return [viewValuesStale(change.payload.threadId)];
+    case "view_reading":
+      // How far a pinned View has read its scope: the View's bar follows it live.
+      return [viewReadingUpsert(change.payload)];
   }
 }
 

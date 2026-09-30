@@ -89,6 +89,15 @@ export const EXTRACT_KINDS = [
 ] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 
+/**
+ * What one row of a View is (docs/spec/views.md, "Rows"): a Thread (the
+ * default), each value a many-Extraction picked in a Thread (`item`, one row
+ * per package in a digest), or each Message of a Thread (`message`, one row
+ * per advisory in a thread of advisories).
+ */
+export const VIEW_GRAINS = ["thread", "item", "message"] as const;
+export type ViewGrain = (typeof VIEW_GRAINS)[number];
+
 /** The Block catalog (docs/spec/views.md, "The Block catalog"). */
 export const BLOCK_TYPES = [
   "lanes",
@@ -251,6 +260,11 @@ export interface ViewScopeFacts {
   from_domain_not?: string[] | undefined;
   /** Any Message's To or Cc holds one of these addresses. */
   to_any?: string[] | undefined;
+  /**
+   * The subject holds one of these words or phrases, case aside, within its first 80
+   * characters (the Server's clear subject index, ADR 0015): "order confirmation".
+   */
+  subject_any?: string[] | undefined;
   folder?: ViewFolder | undefined;
 }
 
@@ -268,6 +282,12 @@ export interface ViewSignal {
   /** A few words for the card's reasons ("support request", "blocked"). */
   label?: string | undefined;
   question: SignalQuestion;
+  /**
+   * Asked once per row, not once per Thread (an item or a Message View): the
+   * item's span or the Message rides in the question, all in the Thread's one
+   * request. Read by the rows' Lanes, conditions and Blocks.
+   */
+  each?: boolean | undefined;
 }
 
 /**
@@ -352,15 +372,52 @@ export interface ViewExtraction {
   none?: string | undefined;
   /** Below this confidence the value is Unsure; views.extract.min_confidence when absent. */
   min_confidence?: number | undefined;
+  /**
+   * Picks every candidate that answers, not one: an order confirmation with 9
+   * totals, a digest listing 70 packages. Jev answers one Noul per candidate in
+   * the Thread's one request; code keeps each above views.extract.many.threshold.
+   */
+  many?: boolean | undefined;
+  /** At most this many values per Thread (and never more than views.extract.many.max). */
+  max?: number | undefined;
+}
+
+/** One of the values a many-Extraction (or a message-grain one) picked in a Thread. */
+export interface ExtractedItem {
+  /** The candidate's key: the row key of an item row. */
+  key: string;
+  text: string;
+  value: JsonValue;
+  /** The Noul's probability (many) or the Choice's confidence (per Message). */
+  confidence: number;
+  /** Inside the Unsure band: counted as Unsure, never as a value. */
+  unsure?: boolean | undefined;
+  /** The Message it was found in, and that Message's date. */
+  message?: string | null | undefined;
+  at?: string | null | undefined;
+}
+
+/** A per-row Signal's answer for one row (an item or a Message). */
+export interface RowAnswer {
+  noul?: number | null | undefined;
+  choice?: string | null | undefined;
+  score?: number | null | undefined;
+  confidence?: number | null | undefined;
+  message?: string | null | undefined;
+  at?: string | null | undefined;
 }
 
 /** A value an Extraction picked for one Thread, as code copied and normalized it. */
 export interface ExtractedValue {
-  /** The span as the Thread wrote it. */
+  /** The span as the Thread wrote it (a many-Extraction: its first value). */
   text: string;
   /** Normalized by code: `{value, currency}`, `YYYY-MM-DD`, `{url, domain}`, a number, or the text. */
   value: JsonValue;
   confidence: number;
+  /** A many-Extraction's values, or a message-grain Extraction's value per Message. */
+  items?: ExtractedItem[] | undefined;
+  /** A per-row Signal's answers by row key (sealed beside the values, read through the same route). */
+  answers?: Record<string, RowAnswer> | undefined;
 }
 
 /* ------------------------------ A Board's old layout ------------------------------ */
@@ -413,6 +470,10 @@ export interface ViewDoc {
   sentence: string;
   version: number;
   scope: ViewScope;
+  /** What a row is: a Thread (the default), each value of `item_of`, or each Message. */
+  grain?: ViewGrain | undefined;
+  /** For grain `item`: the many-Extraction whose values are the rows. */
+  item_of?: string | undefined;
   signals: ViewSignal[];
   /** Shipped Signals the View also reads. */
   uses: string[];
@@ -487,6 +548,68 @@ export interface BlockPreview {
   unsure: number;
 }
 
+/**
+ * How well each of a draft's Fields read over every tried Thread, so the
+ * Agent can see what went wrong before it rewrites anything: for an
+ * Extraction, how many Threads got a value, "none of these", an answer below
+ * its floor, or no candidate at all (code found none of its kind, so nothing
+ * was asked); for a Signal, how many answers were clear, Unsure or none.
+ */
+export interface ViewCoverage {
+  /** The tried Threads' senders, most first (at most five). */
+  senders: Array<{ from: string; count: number }>;
+  fields: Array<{
+    /** `x:<id>` or `signal:<id>`. */
+    field: string;
+    label: string;
+    /** A value above its floor; a clear answer. */
+    resolved: number;
+    /** "None of these" above the floor; a Choice's `none`. */
+    none: number;
+    /** Below the floor; inside the Unsure band. */
+    unsure: number;
+    /** Code found no candidate of its kind, so it was not asked (Extractions). */
+    noCandidates: number;
+    /** No answer at all: no judge, or the request failed. */
+    notRead: number;
+    /** Threads whose candidates were cut at views.extract.candidates_max. */
+    capped: number;
+    /** A few values picked, as written. */
+    examples: string[];
+    /** A many-Extraction: every value picked over the tried Threads (a Thread may hold several). */
+    values?: number | undefined;
+    /** A per-row Signal: the counts are over rows (items or Messages), not Threads. */
+    per?: "row" | undefined;
+  }>;
+}
+
+/**
+ * One tried Thread as inspect_view_thread explains it: why the scope admits
+ * it, each Extraction's candidates with the judge's share for each, and each
+ * Signal's answer. Sealed in the draft; never on the card.
+ */
+export interface ViewThreadDiagnosis {
+  threadId: Id;
+  from: string;
+  subject: string;
+  receivedAt: IsoDate | null;
+  /** Why the scope admits it, fact by fact. */
+  scope: string[];
+  extractions: Array<{
+    extraction: string;
+    label: string;
+    find: ExtractKind;
+    /** What happened: a value, none of these, below the floor, no candidates, not asked. */
+    state: "value" | "none" | "unsure" | "no_candidates" | "not_read";
+    picked: string | null;
+    confidence: number | null;
+    /** The spans code found, in order, each with the share of the judge's answer it got. */
+    candidates: Array<{ span: string; line: string; probability: number | null }>;
+    capped: boolean;
+  }>;
+  signals: Array<{ signal: string; label: string; answer: string }>;
+}
+
 /** What the test found: the Threads tried, the ones shown, the counts over all of them. */
 export interface ViewTest {
   /** Threads asked. */
@@ -501,6 +624,15 @@ export interface ViewTest {
   empty: boolean;
   /** Threads in the real scope, for the limit and the backfill estimate. */
   inScope: number;
+  /**
+   * How the tried Threads were chosen: `kept` tried before (a revision keeps the ones its
+   * scope still admits), `fresh` the newest others in scope. When a Block adds up a value,
+   * code looked through `scanned` Threads in scope and passed over `skipped` whose text holds
+   * no value of that kind.
+   */
+  pool?: { kept: number; fresh: number; skipped?: number; scanned?: number } | undefined;
+  /** How well each Field read over every tried Thread (the tool's words for the Agent). */
+  coverage?: ViewCoverage | undefined;
   /** After corrections: how many of them the View now agrees with. */
   agreement: { agree: number; total: number } | null;
   /** What a revision changed, in words. */
@@ -571,6 +703,20 @@ export interface ViewValuesChange {
   threadId: Id;
 }
 
+/**
+ * How far a pinned View has read its own scope (docs/spec/views.md, "Reading
+ * a pinned View"): the Changes feed's `view_reading` row, headers only.
+ */
+export interface ViewReadingChange {
+  viewId: Id;
+  status: "running" | "waiting" | "paused" | "done" | "cancelled";
+  /** Why it waits: the monthly background budget, no judge, or the AI level. */
+  reason: "budget" | "no_judge" | "level" | null;
+  /** Threads of the scope walked so far, of `total`. */
+  done: number;
+  total: number;
+}
+
 /** The Changes feed's `view` row: headers only; the document is sealed and read through GET /views. */
 export interface ViewChange {
   id: Id;
@@ -589,6 +735,11 @@ const localId = z
   .regex(/^[a-z][a-z0-9_]{0,39}$/, "use lowercase letters, digits and underscores");
 const address = z.string().trim().toLowerCase().min(3).max(320);
 const domain = z.string().trim().toLowerCase().min(1).max(253);
+/** A whole address: a bare domain in from_any or to_any matches nothing, so it is refused. */
+const fullAddress = address.regex(
+  /^[^@\s]+@[^@\s]+$/,
+  "a whole address like orders@shop.com; a bare domain goes in from_domain",
+);
 const dateText = z.string().regex(/^\d{4}-\d{2}-\d{2}(T.*)?$/, "a date like 2026-10-03");
 
 const dateScope = z.union([
@@ -601,10 +752,21 @@ export const scopeFactsSchema = z
   .object({
     received: dateScope.optional(),
     active: dateScope.optional(),
-    from_any: z.array(address).max(50).optional(),
+    from_any: z.array(fullAddress).max(50).optional(),
     from_domain: z.array(domain).max(50).optional(),
     from_domain_not: z.array(domain).max(50).optional(),
-    to_any: z.array(address).max(50).optional(),
+    to_any: z.array(fullAddress).max(50).optional(),
+    subject_any: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .transform((w) => w.replace(/\s+/g, " "))
+          .pipe(z.string().min(2).max(80)),
+      )
+      .max(20)
+      .optional(),
     folder: z
       .union([
         z.enum(["inbox", "any", "archive"]),
@@ -644,6 +806,7 @@ const viewSignal = z
     kind: z.enum(["noul", "choice", "score"]),
     label: z.string().trim().max(60).optional(),
     question: z.discriminatedUnion("type", [noulQuestion, choiceQuestion, scoreQuestion]),
+    each: z.boolean().optional(),
   })
   .strict();
 
@@ -988,6 +1151,8 @@ const extraction = z
     question: z.union([z.string().trim().min(1).max(600), z.record(z.string(), z.any())]),
     none: z.string().trim().min(1).max(300).optional(),
     min_confidence: z.number().min(0).max(1).optional(),
+    many: z.boolean().optional(),
+    max: z.int().min(1).max(200).optional(),
   })
   .strict();
 
@@ -1012,6 +1177,8 @@ export const viewDocSchema = z
     scope: z
       .object({ facts: scopeFactsSchema.default({}), limit: z.int().min(1).max(100_000) })
       .strict(),
+    grain: z.enum(VIEW_GRAINS).optional(),
+    item_of: localId.optional(),
     signals: z.array(viewSignal).default([]),
     uses: z.array(z.string().min(1).max(80)).default([]),
     extractions: z.array(extraction).default([]),

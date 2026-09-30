@@ -21,7 +21,14 @@ import {
 import { navModel } from "../shell/nav.ts";
 import { bunDriver } from "../store/bun-driver.ts";
 import { createFakeStore } from "../store/fake.ts";
-import { type CachedViewThread, rowToViewThread, viewThreadsSql } from "../store/views.ts";
+import {
+  type CachedViewThread,
+  rowToViewReading,
+  rowToViewThread,
+  VIEW_READING_SQL,
+  viewThreadsSql,
+  viewValuesStatements,
+} from "../store/views.ts";
 import { createViewSync } from "./cache.ts";
 
 const NOW = new Date("2026-09-29T15:00:00Z");
@@ -347,6 +354,186 @@ describe("Views over the Cache", () => {
     });
     expect(await store.query("select * from view_values_stale")).toEqual([]);
     sync.stop();
+    await store.close();
+  });
+});
+
+describe("A View's scope narrows in SQL before the limit", () => {
+  test("the newest Threads of a few senders are found under many newer ones of others", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const add = (
+      id: string,
+      from: string,
+      at: string,
+      to = "sam@acme.com",
+      cc: string[] = [],
+      subject = id,
+    ) => {
+      server.record({
+        kind: "thread",
+        entityId: id,
+        payload: {
+          id,
+          workspaceId: "ws",
+          subject,
+          participants: [{ name: "", email: from }],
+          lastActivity: at,
+          messageCount: 1,
+          unread: false,
+          starred: false,
+          archived: true,
+          snoozedUntil: null,
+          section: null,
+          group: null,
+          subgroup: null,
+          tags: [],
+          labels: [],
+          hasAttachments: false,
+          snippet: id,
+          deleted: false,
+        },
+      });
+      server.record({
+        kind: "message",
+        entityId: `m-${id}`,
+        payload: {
+          id: `m-${id}`,
+          threadId: id,
+          from: { name: "", email: from },
+          to: [{ name: "", email: to }],
+          cc: cc.map((email) => ({ name: "", email })),
+          date: at,
+          hasAttachments: false,
+        },
+      });
+    };
+    // Three orders months ago, then 250 newer newsletters from someone else.
+    add("o1", "Auto-Confirm@amazon.in", "2026-03-01T10:00:00.000Z");
+    add("o2", "orders@myntra.com", "2026-04-01T10:00:00.000Z", "sam@acme.com", ["me@home.test"]);
+    add("o3", "auto-confirm@amazon.in", "2026-05-01T10:00:00.000Z");
+    for (let i = 0; i < 250; i++) {
+      const day = String(1 + (i % 28)).padStart(2, "0");
+      add(`n${i}`, "digest@substack.com", `2026-09-${day}T0${i % 10}:00:00.000Z`);
+    }
+    await store.sync();
+    const ids = async (facts: Parameters<typeof viewThreadsSql>[0]) => {
+      const q = viewThreadsSql(facts, null, 20, "sam@acme.com");
+      const rows = await store.query<Record<string, unknown>>(q.sql, q.params);
+      return rows.map((r) => rowToViewThread(r, "ws").id);
+    };
+    expect(
+      await ids({ folder: "any", from_any: ["auto-confirm@amazon.in", "orders@myntra.com"] }),
+    ).toEqual(["o3", "o2", "o1"]);
+    expect(await ids({ folder: "any", from_domain: ["amazon.in"] })).toEqual(["o3", "o1"]);
+    expect(await ids({ folder: "any", to_any: ["me@home.test"] })).toEqual(["o2"]);
+    expect((await ids({ folder: "any", from_domain_not: ["substack.com"] })).sort()).toEqual([
+      "o1",
+      "o2",
+      "o3",
+    ]);
+    // The inbox holds none of them: every one is archived.
+    expect(await ids({ folder: "inbox", from_domain: ["amazon.in"] })).toEqual([]);
+    // Words in the subject narrow in SQL too, and the View code checks them exactly.
+    add(
+      "s1",
+      "shop@flo.test",
+      "2026-02-01T10:00:00.000Z",
+      "sam@acme.com",
+      [],
+      "Your Order Confirmation #123",
+    );
+    await store.sync();
+    expect(await ids({ folder: "any", subject_any: ["order confirmation"] })).toEqual(["s1"]);
+
+    // Many values and per-row answers ride in view_values and come back whole.
+    const items = [
+      { key: "a", text: "1,250 INR", value: { value: 1250, currency: "INR" }, confidence: 0.95 },
+      {
+        key: "b",
+        text: "830 INR",
+        value: { value: 830, currency: "INR" },
+        confidence: 0.5,
+        unsure: true,
+        message: "m-o3",
+        at: "2026-05-01T10:00:00.000Z",
+      },
+    ];
+    await store.write(
+      viewValuesStatements(
+        {
+          o3: {
+            "board:v:x_total": {
+              text: "1,250 INR",
+              value: items[0]?.value ?? null,
+              confidence: 0.95,
+              items,
+            },
+            "board:v:severity": {
+              text: "each",
+              value: null,
+              confidence: 1,
+              answers: { a: { choice: "critical", confidence: 0.9 } },
+            },
+            "board:v:x_one": { text: "#123", value: "123", confidence: 0.8 },
+          },
+        },
+        ["o3"],
+      ),
+    );
+    const q = viewThreadsSql(
+      { folder: "any", from_domain: ["amazon.in"] },
+      null,
+      5,
+      "sam@acme.com",
+    );
+    const [o3] = (await store.query<Record<string, unknown>>(q.sql, q.params)).map((r) =>
+      rowToViewThread(r, "ws"),
+    );
+    expect(o3?.values?.["board:v:x_total"]?.items).toEqual(items);
+    expect(o3?.values?.["board:v:severity"]?.answers).toEqual({
+      a: { choice: "critical", confidence: 0.9 },
+    });
+    expect(o3?.values?.["board:v:x_one"]).toEqual({ text: "#123", value: "123", confidence: 0.8 });
+    await store.close();
+  });
+});
+
+describe("a pinned View's reading", () => {
+  test("the feed's view_reading rows keep the View's bar live: N of M, then done", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const read = async () =>
+      (await store.query<Record<string, unknown>>(VIEW_READING_SQL, ["v_orders"])).map(
+        rowToViewReading,
+      );
+    expect(await read()).toEqual([]);
+    const reading = (done: number, status: "running" | "waiting" | "done", reason = null) => ({
+      kind: "view_reading" as const,
+      entityId: "v_orders",
+      payload: { viewId: "v_orders", status, reason, done, total: 40 },
+    });
+    server.record(reading(12, "running"));
+    await store.sync();
+    expect(await read()).toEqual([
+      { viewId: "v_orders", status: "running", reason: null, done: 12, total: 40 },
+    ]);
+    server.record({
+      kind: "view_reading",
+      entityId: "v_orders",
+      payload: { viewId: "v_orders", status: "waiting", reason: "budget", done: 24, total: 40 },
+    });
+    server.record(reading(40, "done"));
+    await store.sync();
+    expect(await read()).toEqual([
+      { viewId: "v_orders", status: "done", reason: null, done: 40, total: 40 },
+    ]);
     await store.close();
   });
 });

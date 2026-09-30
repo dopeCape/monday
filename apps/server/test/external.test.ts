@@ -265,6 +265,7 @@ describe("the external MCP server", () => {
         "list_views",
         "create_view",
         "revise_view",
+        "inspect_view_thread",
         "list_drafts",
         "read_draft",
         "open_draft",

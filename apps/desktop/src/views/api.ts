@@ -2,7 +2,14 @@
 // Built from the API client's own request helper, so the target, the token
 // and the error handling are the same as every other route.
 
-import type { ExtractedValue, Id, View, ViewDoc, ViewDraft } from "@monday/shared";
+import type {
+  ExtractedValue,
+  Id,
+  View,
+  ViewDoc,
+  ViewDraft,
+  ViewReadingChange,
+} from "@monday/shared";
 
 export type Requester = <T>(path: string, init?: RequestInit) => Promise<T>;
 
@@ -51,6 +58,13 @@ export function viewsApi(request: Requester) {
         "/views/values",
         body("POST", { workspace: workspaceId, threadIds }),
       ).then((r) => r.values),
+    /** How far the pinned View has read its scope; pause, resume or stop it. */
+    reading: (id: Id) =>
+      request<{ reading: ViewReadingChange | null }>(`${at(id)}/reading`).then((r) => r.reading),
+    readingAct: (id: Id, action: "pause" | "resume" | "stop") =>
+      request<{ reading: ViewReadingChange | null }>(`${at(id)}/reading/${action}`, {
+        method: "POST",
+      }).then((r) => r.reading),
     /** The Agent's draft (slice 40): read, correct, revise, pin or discard. */
     draft: (draftId: Id) => request<ViewDraft>(`/views/drafts/${encodeURIComponent(draftId)}`),
     correct: (

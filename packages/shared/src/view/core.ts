@@ -19,11 +19,13 @@ import { questionLabel } from "../signals.ts";
 import type {
   DateRef,
   DateScope,
+  ExtractedItem,
   ExtractedValue,
   ExtractTest,
   FactTest,
   Lane,
   LaneCondition,
+  RowAnswer,
   SignalTest,
   ViewDoc,
   ViewExample,
@@ -99,6 +101,26 @@ export function viewReadsSignals(doc: ViewDoc): boolean {
   );
 }
 
+/**
+ * The Extractions a View's Blocks add up, group or chart by (local ids): a
+ * tried Thread tells the most about the View when code finds candidates for
+ * each of them. None when no Block adds one up.
+ */
+export function aggregatedExtractions(doc: ViewDoc): string[] {
+  const out: string[] = [];
+  const take = (ref: string | undefined) => {
+    if (!ref?.startsWith("x:")) return;
+    const id = ref.slice(2);
+    if (doc.extractions.some((x) => x.id === id) && !out.includes(id)) out.push(id);
+  };
+  for (const b of doc.blocks) {
+    take(b.query?.aggregate?.field);
+    take(b.query?.group_by?.field);
+    if (b.type === "chart") take(b.series?.field);
+  }
+  return out;
+}
+
 /* ------------------------------ The question as asked ------------------------------ */
 
 const EXAMPLES_NOTE =
@@ -148,13 +170,37 @@ export function viewQuestion(
 export function viewSignalDefs(
   doc: ViewDoc,
   examplesMax = 5,
-): Array<{ id: string; local: string; kind: ViewSignal["kind"]; question: SignalQuestion }> {
+): Array<{
+  id: string;
+  local: string;
+  kind: ViewSignal["kind"];
+  question: SignalQuestion;
+  /** Asked per row: per candidate of the item Extraction's kind, or per Message. */
+  each: { item: ViewExtraction["find"] } | { message: true } | null;
+}> {
+  const itemOf = doc.extractions.find((x) => x.id === doc.item_of);
   return doc.signals.map((s) => ({
     id: viewSignalId(doc.id, s.id),
     local: s.id,
     kind: s.kind,
     question: viewQuestion(s, doc.examples[s.id], examplesMax),
+    each: !s.each
+      ? null
+      : doc.grain === "message"
+        ? { message: true as const }
+        : doc.grain === "item" && itemOf
+          ? { item: itemOf.find }
+          : null,
   }));
+}
+
+/**
+ * How an Extraction is asked: one value per Thread (a Choice), many (a Noul per
+ * candidate), or one per Message in a message-grain View.
+ */
+export function extractionMode(doc: ViewDoc, x: ViewExtraction): "one" | "many" | "message" {
+  if (doc.grain === "message") return "message";
+  return x.many ? "many" : "one";
 }
 
 /** The words of "none of these" when an Extraction names none (views.extract.none). */
@@ -203,11 +249,21 @@ export function extractionQuestion(
 export function viewExtractionDefs(
   doc: ViewDoc,
   options: { none?: string; examplesMax?: number } = {},
-): Array<{ id: string; local: string; find: ViewExtraction["find"]; question: ChoiceQuestion }> {
+): Array<{
+  id: string;
+  local: string;
+  find: ViewExtraction["find"];
+  question: ChoiceQuestion;
+  mode: "one" | "many" | "message";
+  /** A many-Extraction's own cap on values per Thread. */
+  max: number | null;
+}> {
   return doc.extractions.map((x) => ({
     id: viewExtractionId(doc.id, x.id),
     local: x.id,
     find: x.find,
+    mode: extractionMode(doc, x),
+    max: x.max ?? null,
     question: extractionQuestion(x, doc.examples[`x:${x.id}`], {
       ...(options.none ? { none: options.none } : {}),
       ...(options.examplesMax !== undefined ? { max: options.examplesMax } : {}),
@@ -359,12 +415,26 @@ export interface ViewThread {
   values?: Readonly<Record<string, ExtractedValue>> | undefined;
   /** The subject and snippet, when the reader of the View has them (the Device; the test's tried Threads). */
   subject?: string | undefined;
+  /** The subject's searchable prefix (the Server's clear subject_search: lowercased, 80 characters). */
+  subjectSearch?: string | undefined;
   snippet?: string | undefined;
   /** The correspondent: the newest sender who is not the owner, else the first. */
   correspondent?: { name: string; email: string } | null | undefined;
   /** Dedupe merged these Threads into this row, newest first (the row is the newest). */
   merged?: readonly string[] | undefined;
+  /**
+   * An item or a Message of the Thread as its own row (grain item or message): its key
+   * among the Thread's rows, the Message it came from and that Message's date. The row's
+   * `id` stays the Thread's, so every row opens its Thread.
+   */
+  row?:
+    | { key: string; message?: string | null | undefined; at?: string | null | undefined }
+    | undefined;
 }
+
+/** A row's own key: the Thread's id, with the item's or Message's key for an item or Message row. */
+export const rowKey = (t: Pick<ViewThread, "id" | "row">): string =>
+  t.row ? `${t.id}#${t.row.key}` : t.id;
 
 export interface ViewContext {
   rules: SignalRules;
@@ -382,6 +452,21 @@ export const DEFAULT_EXTRACT_FLOOR = 0.6;
 
 export const domainOfAddress = (address: string | null) =>
   address ? (address.split("@")[1] ?? "").toLowerCase() : "";
+
+/** How long the subject's clear prefix is (the Server's subject_search, ADR 0015). */
+export const SUBJECT_SEARCH_CHARS = 80;
+
+/** A subject as its clear prefix: lowercased, whitespace collapsed, the first 80 characters. */
+export function subjectSearchOf(subject: string): string {
+  return subject.toLowerCase().replace(/\s+/g, " ").trim().slice(0, SUBJECT_SEARCH_CHARS);
+}
+
+/** The subject words a Thread's subject holds, or null when its subject is not known here. */
+function subjectHolds(words: readonly string[], t: ViewThread): boolean | null {
+  const prefix = t.subjectSearch ?? (t.subject !== undefined ? subjectSearchOf(t.subject) : null);
+  if (prefix === null) return null;
+  return words.some((w) => prefix.includes(w.toLowerCase()));
+}
 
 /** Whether the scope's exact filters admit a Thread. Code only. */
 export function scopeAdmits(
@@ -421,7 +506,71 @@ export function scopeAdmits(
   if (facts.to_any?.length && !t.recipients.some((r) => facts.to_any?.includes(r.toLowerCase()))) {
     return false;
   }
+  // A subject not known to this reader cannot refuse: the SQL that loaded it already asked.
+  if (facts.subject_any?.length && subjectHolds(facts.subject_any, t) === false) return false;
   return true;
+}
+
+/** A date part of the scope in words: "today", "the last 365 days", "since 2026-01-01". */
+function dateScopeWords(d: DateScope): string {
+  if ("within" in d) return d.within === "today" ? "today" : "this week";
+  if ("last_days" in d) return `the last ${d.last_days} days`;
+  return `since ${d.since}`;
+}
+
+/**
+ * Why the scope admits a Thread or not, fact by fact, in words for the Agent
+ * (inspect_view_thread): "started by auto-confirm@amazon.in, in from_any".
+ * Code only, the same tests as scopeAdmits.
+ */
+export function scopeReasons(
+  facts: ViewScopeFacts,
+  t: ViewThread,
+  ctx: Pick<ViewContext, "now" | "zone">,
+): { admitted: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const folder = facts.folder ?? "inbox";
+  const where = t.archived ? "archived" : t.snoozed ? "snoozed" : "in the inbox";
+  reasons.push(`folder ${folder}: the thread is ${where}`);
+  const received = t.receivedAt ?? t.lastActivity;
+  if (facts.received) {
+    const ok = Date.parse(received) >= dateScopeStart(facts.received, ctx.now, ctx.zone).getTime();
+    reasons.push(
+      `received ${received.slice(0, 10)}, ${ok ? "within" : "outside"} ${dateScopeWords(facts.received)}`,
+    );
+  }
+  if (facts.active) {
+    const ok =
+      Date.parse(t.lastActivity) >= dateScopeStart(facts.active, ctx.now, ctx.zone).getTime();
+    reasons.push(
+      `last active ${t.lastActivity.slice(0, 10)}, ${ok ? "within" : "outside"} ${dateScopeWords(facts.active)}`,
+    );
+  }
+  const from = t.from?.toLowerCase() ?? "";
+  if (facts.from_any?.length)
+    reasons.push(
+      `started by ${from || "nobody known"}, ${facts.from_any.includes(from) ? "in" : "not in"} from_any`,
+    );
+  if (facts.from_domain?.length)
+    reasons.push(
+      `sender domain ${domainOfAddress(from) || "none"}, ${facts.from_domain.includes(domainOfAddress(from)) ? "in" : "not in"} from_domain`,
+    );
+  if (facts.from_domain_not?.length)
+    reasons.push(
+      `sender domain ${domainOfAddress(from) || "none"}, ${facts.from_domain_not.includes(domainOfAddress(from)) ? "in" : "not in"} from_domain_not`,
+    );
+  if (facts.to_any?.length) {
+    const hit = t.recipients.find((r) => facts.to_any?.includes(r.toLowerCase()));
+    reasons.push(hit ? `sent to ${hit}, in to_any` : "sent to none of to_any");
+  }
+  if (facts.subject_any?.length) {
+    const prefix = t.subjectSearch ?? subjectSearchOf(t.subject ?? "");
+    const hit = facts.subject_any.find((w) => prefix.includes(w.toLowerCase()));
+    reasons.push(
+      hit ? `the subject holds "${hit}", in subject_any` : "the subject holds none of subject_any",
+    );
+  }
+  return { admitted: scopeAdmits(facts, t, ctx), reasons };
 }
 
 /* ------------------------------ Three-valued evaluation ------------------------------ */
@@ -438,7 +587,14 @@ export interface EvalState {
 
 /** An Extraction's value on one Thread, three-valued: a value, Unsure, not stated, or not read yet. */
 export type ExtractRead =
-  | { state: "value"; text: string; value: JsonValue; confidence: number }
+  | {
+      state: "value";
+      text: string;
+      value: JsonValue;
+      confidence: number;
+      /** A many-Extraction's values on a Thread row (each one on an item row). */
+      items?: readonly ExtractedItem[] | undefined;
+    }
   | { state: "unsure"; text: string | null; confidence: number | null }
   | { state: "empty" }
   | { state: "not_read" };
@@ -461,6 +617,23 @@ export function readExtraction(
   const v = t.values?.[id];
   if (r?.stale && ctx.rules.staleAnswers === "hide") return { state: "not_read" };
   const floor = x?.min_confidence ?? ctx.extractFloor ?? DEFAULT_EXTRACT_FLOOR;
+  if (v?.items) {
+    // Many values (or one per Message, on a Thread row): the ones above the threshold, at most
+    // the Extraction's own max; the rest inside the Unsure band make the Field Unsure only when
+    // nothing was picked.
+    const picked = v.items.filter((i) => !i.unsure).slice(0, x?.max ?? v.items.length);
+    if (picked.length > 0) {
+      return {
+        state: "value",
+        text: picked.map((i) => i.text).join(", "),
+        value: (picked[0] as ExtractedItem).value,
+        confidence: Math.min(...picked.map((i) => i.confidence)),
+        items: picked,
+      };
+    }
+    if (v.items.length > 0) return { state: "unsure", text: null, confidence: null };
+    return { state: "empty" };
+  }
   if (r?.choice === "none") {
     const c = r.confidence ?? 1;
     return c >= floor ? { state: "empty" } : { state: "unsure", text: null, confidence: c };
@@ -808,22 +981,23 @@ export function laneView<T extends ViewThread>(
     sort?: ViewSort | undefined;
   } = {},
 ): LaneView<T> {
-  if (doc.lanes.length === 0) return allInOne(doc, threads, ctx, options.sort);
+  const rows = expandRows(doc, threads);
+  if (doc.lanes.length === 0) return allInOne(doc, rows, ctx, options.sort);
   const byLane = new Map<string, LaneRow<T>[]>();
   const lanesOf = new Map<string, string>();
-  let taken = 0;
-  for (const t of threads) {
-    if (taken >= doc.scope.limit) break;
+  const taken = new Set<string>();
+  for (const t of rows) {
+    if (!taken.has(t.id) && taken.size >= doc.scope.limit) continue;
     if (!scopeAdmits(doc.scope.facts, t, ctx)) continue;
-    taken += 1;
+    taken.add(t.id);
     const placement = placeThread(
       doc,
       t,
       ctx,
-      options.previous?.get(t.id) ?? null,
+      options.previous?.get(rowKey(t)) ?? null,
       options.placements?.[t.id] ?? null,
     );
-    lanesOf.set(t.id, placement.lane);
+    lanesOf.set(rowKey(t), placement.lane);
     const list = byLane.get(placement.lane) ?? [];
     list.push({ thread: t, placement });
     byLane.set(placement.lane, list);
@@ -858,6 +1032,118 @@ export function laneView<T extends ViewThread>(
   return { lanes, counts, total, navCount, lanesOf };
 }
 
+/* ------------------------------ Rows: Threads, items, Messages ------------------------------ */
+
+/** A per-row Signal's answer as a reading the row's conditions read. */
+function rowReading(a: RowAnswer): SignalReading {
+  return {
+    noul: a.noul ?? null,
+    choice: a.choice ?? null,
+    score: a.score ?? null,
+    confidence: a.confidence ?? null,
+    version: 0,
+  };
+}
+
+/**
+ * The rows of a View (docs/spec/views.md, "Rows"). Grain `thread`: the Threads
+ * as they are. Grain `item`: each value the `item_of` Extraction picked becomes
+ * its own row, carrying that value alone, the per-row Signals' answers for it and
+ * its Message's date; a Thread whose items are Unsure or not read yet stays one
+ * row (so it is counted as Unsure or Not read yet), one with none has no rows.
+ * Grain `message`: each Message that holds a value or a per-row answer becomes a
+ * row with that Message's values, answers and date. Every row keeps its Thread's
+ * id, so it opens its Thread. Code only.
+ */
+export function expandRows<T extends ViewThread>(doc: ViewDoc, threads: readonly T[]): T[] {
+  const grain = doc.grain ?? "thread";
+  if (grain === "thread") return [...threads];
+  const eachIds = doc.signals.filter((s) => s.each).map((s) => viewSignalId(doc.id, s.id));
+  const answersOf = (t: T, key: string): Record<string, SignalReading> => {
+    const out: Record<string, SignalReading> = {};
+    for (const sid of eachIds) {
+      const a = t.values?.[sid]?.answers?.[key];
+      if (a) out[sid] = rowReading(a);
+    }
+    return out;
+  };
+  const dated = (
+    t: T,
+    at: string | null | undefined,
+  ): Partial<Pick<ViewThread, "facts" | "receivedAt">> =>
+    at ? { receivedAt: at, facts: { ...(t.facts ?? {}), received_at: at } } : {};
+  const out: T[] = [];
+  if (grain === "item") {
+    const x = doc.extractions.find((e) => e.id === doc.item_of);
+    if (!x) return [...threads];
+    const sid = viewExtractionId(doc.id, x.id);
+    for (const t of threads) {
+      const items = t.values?.[sid]?.items ?? [];
+      const picked = items.filter((i) => !i.unsure).slice(0, x.max ?? items.length);
+      if (picked.length === 0) {
+        // Unsure, or not read yet: one row that says so. None picked: no rows.
+        const read = t.readings[sid];
+        if (items.length > 0 || !read || (read.choice !== "none" && !t.values?.[sid])) out.push(t);
+        continue;
+      }
+      for (const item of picked) {
+        out.push({
+          ...t,
+          ...dated(t, item.at),
+          row: { key: item.key, message: item.message ?? null, at: item.at ?? null },
+          values: {
+            ...t.values,
+            [sid]: { text: item.text, value: item.value, confidence: item.confidence },
+          },
+          readings: { ...t.readings, ...answersOf(t, item.key) },
+        });
+      }
+    }
+    return out;
+  }
+  // Grain message: a row per Message that holds a value or an answer.
+  const pulls = doc.extractions.map((x) => viewExtractionId(doc.id, x.id));
+  for (const t of threads) {
+    const byMessage = new Map<string, string | null>();
+    for (const sid of pulls) {
+      for (const i of t.values?.[sid]?.items ?? []) {
+        if (i.message) byMessage.set(i.message, i.at ?? byMessage.get(i.message) ?? null);
+      }
+    }
+    for (const sid of eachIds) {
+      for (const [key, a] of Object.entries(t.values?.[sid]?.answers ?? {})) {
+        byMessage.set(key, a.at ?? byMessage.get(key) ?? null);
+      }
+    }
+    if (byMessage.size === 0) {
+      out.push(t);
+      continue;
+    }
+    const ordered = [...byMessage.entries()].sort((a, b) => (b[1] ?? "").localeCompare(a[1] ?? ""));
+    for (const [message, at] of ordered) {
+      const values: Record<string, ExtractedValue> = { ...t.values };
+      const readings: Record<string, SignalReading> = { ...t.readings, ...answersOf(t, message) };
+      for (const sid of pulls) {
+        const v = t.values?.[sid];
+        if (!v?.items) continue;
+        const item = v.items.find((i) => i.message === message);
+        delete values[sid];
+        if (item && !item.unsure) {
+          values[sid] = { text: item.text, value: item.value, confidence: item.confidence };
+        } else if (item) {
+          readings[sid] = { choice: "picked", confidence: 0, version: 0 };
+          values[sid] = { text: item.text, value: item.value, confidence: 0 };
+        } else {
+          // Asked of the Thread, and this Message holds none: known absent.
+          readings[sid] = { choice: "none", confidence: 1, version: 0 };
+        }
+      }
+      out.push({ ...t, ...dated(t, at), row: { key: message, message, at }, values, readings });
+    }
+  }
+  return out;
+}
+
 /** The Lane of every Thread in a View with no Lanes: its whole scope, one group. */
 export const ALL_LANE = "_all";
 
@@ -869,14 +1155,16 @@ function allInOne<T extends ViewThread>(
 ): LaneView<T> {
   const rows: LaneRow<T>[] = [];
   const lanesOf = new Map<string, string>();
+  const taken = new Set<string>();
   for (const t of threads) {
-    if (rows.length >= doc.scope.limit) break;
+    if (!taken.has(t.id) && taken.size >= doc.scope.limit) continue;
     if (!scopeAdmits(doc.scope.facts, t, ctx)) continue;
+    taken.add(t.id);
     rows.push({
       thread: t,
       placement: { lane: ALL_LANE, notRead: false, byUser: false, decidedBy: null },
     });
-    lanesOf.set(t.id, ALL_LANE);
+    lanesOf.set(rowKey(t), ALL_LANE);
   }
   return {
     lanes: [{ id: ALL_LANE, label: doc.name, tone: "muted", rows: sortRows(rows, sort) }],

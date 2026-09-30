@@ -5,7 +5,14 @@
 // Thread lands in its Lane when its Signal request answers; a Thread moves
 // when its answers change). Outside a StoreProvider nothing is listed.
 
-import type { Settings, View, ViewBase, ViewContext, ViewDoc } from "@monday/shared";
+import type {
+  Settings,
+  View,
+  ViewBase,
+  ViewContext,
+  ViewDoc,
+  ViewReadingChange,
+} from "@monday/shared";
 import { laneBlockOf, laneView, scopeSince, viewBase } from "@monday/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "../shell/Shell.tsx";
@@ -14,7 +21,9 @@ import type { Store } from "../store/store.ts";
 import {
   type CachedViewThread,
   rowToView,
+  rowToViewReading,
   rowToViewThread,
+  VIEW_READING_SQL,
   VIEWS_SQL,
   viewThreadsSql,
 } from "../store/views.ts";
@@ -67,6 +76,25 @@ export function useViews(): View[] | undefined {
     };
   }, [store, shell.api, shell.server, enabled]);
   return views;
+}
+
+/** How far a pinned View has read its scope, live from the Cache; null when it never read. */
+export function useViewReading(viewId: string | null): ViewReadingChange | null {
+  const store = useOptionalStore();
+  const [reading, setReading] = useState<ViewReadingChange | null>(null);
+  useEffect(() => {
+    if (!store || !viewId) {
+      setReading(null);
+      return;
+    }
+    const live = store.live<Record<string, unknown>>(VIEW_READING_SQL, [viewId]);
+    const off = live.subscribe((rows) => setReading(rows[0] ? rowToViewReading(rows[0]) : null));
+    return () => {
+      off();
+      live.close();
+    };
+  }, [store, viewId]);
+  return reading;
 }
 
 /** The rows a View reads from the Cache, live; undefined until the first read. */
