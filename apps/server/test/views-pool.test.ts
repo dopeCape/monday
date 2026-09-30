@@ -172,7 +172,41 @@ describe("The test pool is the newest Threads in scope", () => {
     expect(asked).toHaveLength(4);
   });
 
+  test("a revision that narrows the scope tries the Threads the new scope admits, not the old ones", async () => {
+    // The first draft looked at everything; the newest 30 are all newsletters.
+    const broad = { ...ORDERS_DOC, scope: { facts: { folder: "any" }, limit: 50 } };
+    chat.answer(() => JSON.stringify(broad));
+    const first = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    expect(first.threadIds).toHaveLength(30);
+    const newsletters = new Set(
+      Object.entries(ids)
+        .filter(([k]) => k.startsWith("news-"))
+        .map(([, v]) => v),
+    );
+    expect(first.threadIds.every((t) => newsletters.has(t))).toBe(true);
+    // Revised to the order senders: the newsletters are dropped and the orders tried.
+    const narrow = {
+      ...ORDERS_DOC,
+      scope: {
+        facts: { from_any: ["auto-confirm@amazon.in", "orders@myntra.com"], folder: "any" },
+        limit: 50,
+      },
+    };
+    chat.answer(() => JSON.stringify(narrow));
+    const revised = await intelligence.views.drafting.revise(first.id, "only my order senders");
+    const orders = [1, 2, 3, 4].map((i) => id(`amazon-${i}`)).concat(id("myntra-1"));
+    expect([...revised.threadIds].sort()).toEqual([...orders].sort());
+    expect(revised.test?.tried).toBe(5);
+    expect(revised.test?.inScope).toBe(5);
+    expect(revised.test?.pool).toEqual({ kept: 0, fresh: 5 });
+    // Revised again with the same scope: the same Threads, kept for comparison.
+    const again = await intelligence.views.drafting.revise(first.id);
+    expect(again.threadIds).toEqual(revised.threadIds);
+    expect(again.test?.pool).toEqual({ kept: 5, fresh: 0 });
+  });
+
   test("where the View lands now reads its scope in SQL too", async () => {
+    chat.answer(() => JSON.stringify(ORDERS_DOC));
     const draft = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
     const placed = await intelligence.views.place(workspaceId, {
       ...draft.doc,

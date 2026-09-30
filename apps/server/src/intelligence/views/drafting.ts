@@ -3,7 +3,9 @@
 // on the owner's own Threads, show it, take corrections as Examples, revise
 // and try again on the same Threads, and save only when the user clicks Pin
 // view (Apply for an edit whose Lanes or Signals changed, after the moves
-// are shown). A pure name or layout change applies at once with Undo.
+// are shown). A pure name or layout change applies at once with Undo. A
+// revision tries again the Threads it tried that the (perhaps changed) scope
+// still admits, and fills the rest with the newest ones it does.
 
 import type { Id, View, ViewDoc, ViewDraft, ViewExample, ViewTest } from "@monday/shared";
 import {
@@ -100,7 +102,7 @@ export interface ViewDrafting {
   propose(workspaceId: Id, sentence: string): Promise<ViewDraft>;
   /** A correction from the card, kept as the draft's Examples. */
   correct(draftId: Id, correction: DraftCorrection): Promise<ViewDraft>;
-  /** revise_view: the corrections into the questions, then tried again on the same Threads. */
+  /** revise_view: the corrections into the questions, then tried again on the Threads its scope still admits. */
   revise(draftId: Id, instruction?: string): Promise<ViewDraft>;
   /** Pin view: saves version 1, pins it and starts the backfill of its scope. */
   pin(draftId: Id, options?: { factsOnly?: boolean }): Promise<{ view: View; draft: ViewDraft }>;
@@ -385,8 +387,6 @@ export function createViewDrafting(deps: {
         : null;
       const next: ViewTest = {
         ...run.test,
-        widened: draft.test?.widened ?? run.test.widened,
-        inScope: draft.test?.inScope ?? run.test.inScope,
         changes: changes.length ? changes : [s["strings.views.change.none"]],
         moves: draft.viewId ? (draft.test?.moves ?? null) : moves,
       };

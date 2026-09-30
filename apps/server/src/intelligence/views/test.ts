@@ -112,40 +112,56 @@ export async function runViewTest(
     since: scopeSince(f, ctx.now, ctx.zone),
     scope: { facts: f, now: ctx.now, zone: ctx.zone },
   });
-  const admitted = async (f: typeof facts, limit: number) =>
-    (await loadViewThreads(db, { ...scoped(f), limit })).filter((t) => scopeAdmits(f, t, ctx));
+  const admitted = async (f: typeof facts, limit: number, exclude: readonly Id[] = []) =>
+    limit <= 0
+      ? []
+      : (await loadViewThreads(db, { ...scoped(f), limit, exclude })).filter((t) =>
+          scopeAdmits(f, t, ctx),
+        );
 
-  // The Threads to try: the same ones again for a revision, else the newest in scope, widened when quiet.
+  // The scope's real size; a quiet scope's dates widen so the test has Threads to try.
   const inScope = Math.min(
     await countViewThreads(db, scoped(facts), settings.maxThreads + 1),
     doc.scope.limit,
   );
-  let pool: ViewThread[];
+  let poolFacts = facts;
   let widened: ViewTest["widened"] = null;
-  if (options.threadIds) {
-    const ids = new Set(options.threadIds);
-    pool = (
-      await loadViewThreads(db, { workspaceId, owner: ctx.owner, ids: [...ids], limit: ids.size })
-    ).filter((t) => !t.deleted);
-  } else {
-    pool = await admitted(facts, settings.pool);
-    if (pool.length < settings.pool && (facts.received || facts.active)) {
-      const wide = await admitted(widenScope(facts, settings.widenDays), settings.pool);
-      if (wide.length > pool.length) {
-        const within = (facts.received ?? facts.active) as { within?: string };
-        widened = {
-          when:
-            within.within === "today"
-              ? "today"
-              : within.within === "this_week"
-                ? "this_week"
-                : "scope",
-          count: pool.length,
-        };
-        pool = wide;
-      }
+  if (inScope < settings.pool && (facts.received || facts.active)) {
+    const wide = widenScope(facts, settings.widenDays);
+    if ((await countViewThreads(db, scoped(wide), settings.pool)) > inScope) {
+      const within = (facts.received ?? facts.active) as { within?: string };
+      poolFacts = wide;
+      widened = {
+        when:
+          within.within === "today"
+            ? "today"
+            : within.within === "this_week"
+              ? "this_week"
+              : "scope",
+        count: inScope,
+      };
     }
   }
+  // A revision tries again the Threads it tried that its scope still admits, so the
+  // corrections stay comparable; a changed scope drops the ones it no longer admits and
+  // fills the rest with the newest Threads it does.
+  const kept = options.threadIds?.length
+    ? (
+        await loadViewThreads(db, {
+          ...scoped(poolFacts),
+          ids: options.threadIds,
+          limit: options.threadIds.length,
+        })
+      ).filter((t) => scopeAdmits(poolFacts, t, ctx))
+    : [];
+  const before = new Map((options.threadIds ?? []).map((id, i) => [id, i]));
+  kept.sort((a, b) => (before.get(a.id) ?? 0) - (before.get(b.id) ?? 0));
+  const fresh = await admitted(
+    poolFacts,
+    settings.pool - kept.length,
+    kept.map((t) => t.id),
+  );
+  const pool: ViewThread[] = [...kept.slice(0, settings.pool), ...fresh];
 
   // Ask: the View's own questions and Extractions ride as extras in each Thread's one request;
   // the shipped ones it uses and lacks are stored as usual.
@@ -320,6 +336,7 @@ export async function runViewTest(
       empty: threads.length === 0,
       inScope,
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
+      pool: { kept: Math.min(kept.length, settings.pool), fresh: fresh.length },
       changes: [],
       needsJudge: viewReadsSignals(doc) && (!judge || unanswered),
       moves: null,

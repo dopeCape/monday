@@ -5,7 +5,7 @@
 // it on their own mail (the card draws every Block small over the tried
 // Threads; nothing is saved until the user clicks Pin view); revise_view
 // folds the user's corrections into the questions and tries again on the
-// same Threads; update_view changes a View (a name, icon, Block or button
+// Threads its scope still admits; update_view changes a View (a name, icon, Block or button
 // applies with Undo; a Lane, Signal, Extraction or scope change is tried and
 // its moves shown before Apply); delete_view removes it with Undo. The
 // Board tool names stay as aliases (TOOL_ALIASES). Approvals stay in the
@@ -168,7 +168,7 @@ const createView: ToolDefinition<{ sentence: string }> = {
 const reviseView: ToolDefinition<{ draft_id: string; instruction?: string | undefined }> = {
   name: "revise_view",
   description:
-    'Revise a View draft after the user corrected rows on its card (Move to, Wrong, Wrong value): the corrections become Examples in its questions, a question the corrections show is off is rewritten, and the draft is tried again on the same threads. instruction carries the user\'s own words when they asked for more ("try it with only paying customers", "add a chart of spend per vendor", "add a button to track the package"). Returns the new card with the agreement line. Metered, read-only.',
+    'Revise a View draft after the user corrected rows on its card (Move to, Wrong, Wrong value): the corrections become Examples in its questions, a question the corrections show is off is rewritten, and the draft is tried again: on the same threads while its scope still admits them, and on the newest threads of a changed scope. instruction carries the user\'s own words when they asked for more ("try it with only paying customers", "add a chart of spend per vendor", "add a button to track the package"). Returns the new card with the agreement line. Metered, read-only.',
   tier: "read",
   input: z.object({
     draft_id: z.string().min(1),

@@ -501,6 +501,11 @@ export interface ViewTest {
   empty: boolean;
   /** Threads in the real scope, for the limit and the backfill estimate. */
   inScope: number;
+  /**
+   * How the tried Threads were chosen: `kept` tried before (a revision keeps the ones its
+   * scope still admits), `fresh` the newest others in scope.
+   */
+  pool?: { kept: number; fresh: number } | undefined;
   /** After corrections: how many of them the View now agrees with. */
   agreement: { agree: number; total: number } | null;
   /** What a revision changed, in words. */
