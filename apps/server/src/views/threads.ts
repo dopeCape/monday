@@ -28,6 +28,8 @@ export interface ViewThreadQuery {
   scope?: { facts: ViewScopeFacts; now: Date; zone: string } | undefined;
   /** Not these Threads (a revision keeps the ones it tried and fills the rest). */
   exclude?: readonly Id[] | undefined;
+  /** Only Threads strictly older than this place in the newest-first order (a walk's cursor). */
+  before?: { at: Date; id: Id } | null | undefined;
   limit: number;
 }
 
@@ -122,6 +124,12 @@ function whereOf(query: Omit<ViewThreadQuery, "limit">): SQL {
         sql`, `,
       )})`,
     );
+  if (query.before) {
+    const at = query.before.at.toISOString();
+    where.push(
+      sql`(t.last_activity < ${at}::timestamptz or (t.last_activity = ${at}::timestamptz and t.id < ${query.before.id}))`,
+    );
+  }
   if (query.scope) {
     where.push(
       ...scopeConditions(query.workspaceId, query.scope.facts, query.scope.now, query.scope.zone),

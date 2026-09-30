@@ -68,7 +68,7 @@ import {
   signalsStatements,
 } from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
-import { VIEWS_SCHEMA_SQL, viewUpsert, viewValuesStale } from "./views.ts";
+import { VIEWS_SCHEMA_SQL, viewReadingUpsert, viewUpsert, viewValuesStale } from "./views.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 
@@ -782,6 +782,9 @@ export function changeStatements(change: Change): Statement[] {
     case "view_values":
       // Headers only: the Views module reads the picked values through POST /views/values.
       return [viewValuesStale(change.payload.threadId)];
+    case "view_reading":
+      // How far a pinned View has read its scope: the View's bar follows it live.
+      return [viewReadingUpsert(change.payload)];
   }
 }
 

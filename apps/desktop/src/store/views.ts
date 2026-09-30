@@ -19,6 +19,7 @@ import type {
   ViewDoc,
   ViewDone,
   ViewPlacement,
+  ViewReadingChange,
   ViewScopeFacts,
   ViewThread,
 } from "@monday/shared";
@@ -52,7 +53,37 @@ export const VIEWS_SCHEMA_SQL = `
   create table if not exists view_values_stale (
     thread_id text primary key
   );
+  create table if not exists view_reading (
+    view_id text primary key,
+    status text not null,
+    reason text,
+    done integer not null default 0,
+    total integer not null default 0
+  );
 `;
+
+/** How far a pinned View has read its scope, from the feed (counts only). */
+export function viewReadingUpsert(r: ViewReadingChange): Statement {
+  return {
+    sql: `insert into view_reading (view_id, status, reason, done, total) values (?, ?, ?, ?, ?)
+          on conflict (view_id) do update set status = excluded.status, reason = excluded.reason,
+            done = excluded.done, total = excluded.total`,
+    params: [r.viewId, r.status, r.reason, r.done, r.total],
+  };
+}
+
+/** One View's reading, as its bar shows it. */
+export const VIEW_READING_SQL = "select * from view_reading where view_id = ?";
+
+export function rowToViewReading(r: Row): ViewReadingChange {
+  return {
+    viewId: String(r.view_id),
+    status: String(r.status) as ViewReadingChange["status"],
+    reason: (r.reason ?? null) as ViewReadingChange["reason"],
+    done: Number(r.done ?? 0),
+    total: Number(r.total ?? 0),
+  };
+}
 
 /** The Views the nav and the screens read: not deleted, content read, in nav order. */
 export const VIEWS_SQL =

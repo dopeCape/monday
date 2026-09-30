@@ -23,7 +23,9 @@ import { bunDriver } from "../store/bun-driver.ts";
 import { createFakeStore } from "../store/fake.ts";
 import {
   type CachedViewThread,
+  rowToViewReading,
   rowToViewThread,
+  VIEW_READING_SQL,
   viewThreadsSql,
   viewValuesStatements,
 } from "../store/views.ts";
@@ -496,6 +498,42 @@ describe("A View's scope narrows in SQL before the limit", () => {
       a: { choice: "critical", confidence: 0.9 },
     });
     expect(o3?.values?.["board:v:x_one"]).toEqual({ text: "#123", value: "123", confidence: 0.8 });
+    await store.close();
+  });
+});
+
+describe("a pinned View's reading", () => {
+  test("the feed's view_reading rows keep the View's bar live: N of M, then done", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const read = async () =>
+      (await store.query<Record<string, unknown>>(VIEW_READING_SQL, ["v_orders"])).map(
+        rowToViewReading,
+      );
+    expect(await read()).toEqual([]);
+    const reading = (done: number, status: "running" | "waiting" | "done", reason = null) => ({
+      kind: "view_reading" as const,
+      entityId: "v_orders",
+      payload: { viewId: "v_orders", status, reason, done, total: 40 },
+    });
+    server.record(reading(12, "running"));
+    await store.sync();
+    expect(await read()).toEqual([
+      { viewId: "v_orders", status: "running", reason: null, done: 12, total: 40 },
+    ]);
+    server.record({
+      kind: "view_reading",
+      entityId: "v_orders",
+      payload: { viewId: "v_orders", status: "waiting", reason: "budget", done: 24, total: 40 },
+    });
+    server.record(reading(40, "done"));
+    await store.sync();
+    expect(await read()).toEqual([
+      { viewId: "v_orders", status: "done", reason: null, done: 40, total: 40 },
+    ]);
     await store.close();
   });
 });

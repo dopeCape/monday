@@ -50,6 +50,25 @@
 .view-bar.err {
   color: var(--danger);
 }
+/* A pinned View reading its scope: "Reading 12 of 40" with a thin meter. */
+.view-reading progress {
+  width: 120px;
+  height: 4px;
+  appearance: none;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--sunken);
+  overflow: hidden;
+}
+.view-reading progress::-webkit-progress-bar {
+  background: var(--sunken);
+}
+.view-reading progress::-webkit-progress-value {
+  background: var(--accent);
+}
+.view-reading progress::-moz-progress-bar {
+  background: var(--accent);
+}
 .view-rename input {
   flex: 1;
   min-width: 0;

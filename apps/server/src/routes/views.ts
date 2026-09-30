@@ -17,6 +17,8 @@
 //   POST   /views/:id/done                    {threadId, done, messageCount}  ->  View   a checklist item
 //   GET    /views/:id/values                  {values}   every value the View's Extractions picked, by Thread
 //   POST   /views/values                      {workspace, threadIds}  ->  {values}   the values on these Threads
+//   GET    /views/:id/reading                 {reading}  how far a pinned View has read its scope (null: never)
+//   POST   /views/:id/reading/pause|resume|stop  ->  {reading}
 // The Agent's drafts (slice 40): the card reads and acts on them; only the user's click saves.
 //   GET    /views/drafts/:id                  ViewDraft
 //   POST   /views/drafts/:id/corrections      {threadId, lane?} | {threadId, signal, holds}  ->  ViewDraft
@@ -133,6 +135,25 @@ export function viewRoutes(views: ViewIntelligence): Hono<AppEnv> {
     const body = await parseBody(c, valuesBody);
     if (!body.ok) return body.response;
     return c.json({ values: await views.valuesFor(body.data.workspace, body.data.threadIds) });
+  });
+
+  app.get("/views/:id/reading", async (c) =>
+    c.json({ reading: await views.reading.status(c.req.param("id")) }),
+  );
+
+  app.post("/views/:id/reading/:action", async (c) => {
+    const id = c.req.param("id");
+    const action = c.req.param("action");
+    const reading =
+      action === "pause"
+        ? await views.reading.pause(id)
+        : action === "resume"
+          ? await views.reading.resume(id)
+          : action === "stop"
+            ? await views.reading.cancel(id)
+            : undefined;
+    if (reading === undefined) return c.json({ error: "unknown_action" }, 404);
+    return c.json({ reading });
   });
 
   app.get("/views/:id/values", async (c) => {

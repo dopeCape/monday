@@ -703,6 +703,20 @@ export interface ViewValuesChange {
   threadId: Id;
 }
 
+/**
+ * How far a pinned View has read its own scope (docs/spec/views.md, "Reading
+ * a pinned View"): the Changes feed's `view_reading` row, headers only.
+ */
+export interface ViewReadingChange {
+  viewId: Id;
+  status: "running" | "waiting" | "paused" | "done" | "cancelled";
+  /** Why it waits: the monthly background budget, no judge, or the AI level. */
+  reason: "budget" | "no_judge" | "level" | null;
+  /** Threads of the scope walked so far, of `total`. */
+  done: number;
+  total: number;
+}
+
 /** The Changes feed's `view` row: headers only; the document is sealed and read through GET /views. */
 export interface ViewChange {
   id: Id;

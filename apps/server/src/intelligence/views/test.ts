@@ -54,7 +54,7 @@ import type { Db } from "../../db/client.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
 import { countViewThreads, loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
-import type { Signals } from "../signals/index.ts";
+import type { PriorAnswers, Signals } from "../signals/index.ts";
 import { eachPool } from "../signals/pool.ts";
 import { type AskedThread, coverageOf } from "./coverage.ts";
 
@@ -89,6 +89,8 @@ export interface TestRun {
   threadIds: Id[];
   /** Each tried Thread explained, for inspect_view_thread (sealed in the draft). */
   diagnosis: Record<Id, ViewThreadDiagnosis>;
+  /** What each tried Thread was answered, kept so Pin view writes it instead of asking again. */
+  priors: Record<Id, PriorAnswers>;
   lanesOf: Map<Id, string>;
   threads: ViewThread[];
 }
@@ -275,6 +277,7 @@ export async function runViewTest(
   const values = new Map<Id, Record<string, ExtractedValue>>();
   const candidates = new Map<Id, Record<string, string[]>>();
   const asked = new Map<Id, AskedThread>();
+  const priors: Record<Id, PriorAnswers> = {};
   let unanswered = false;
   if (judge) {
     // The definitions settle once before the parallel requests read them.
@@ -335,6 +338,7 @@ export async function runViewTest(
         values.set(t.id, picked);
         candidates.set(t.id, r.candidates);
         asked.set(t.id, r);
+        if (r.prior) priors[t.id] = r.prior;
       } catch (error) {
         unanswered = true;
         deps.log(`view test ${t.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -472,6 +476,7 @@ export async function runViewTest(
     },
     threadIds: threads.map((t) => t.id),
     diagnosis,
+    priors,
     lanesOf: lanes.lanesOf,
     threads,
   };

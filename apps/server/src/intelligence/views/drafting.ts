@@ -24,8 +24,10 @@ import {
   scopeReasons,
   showAs,
   signalName,
+  viewExtractionDefs,
   viewIdFor,
   viewMoves,
+  viewSignalDefs,
 } from "@monday/shared";
 import type { Db } from "../../db/client.ts";
 import { views as viewsTable } from "../../db/schema.ts";
@@ -37,6 +39,7 @@ import { viewRefs } from "../../views/refs.ts";
 import { loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
+import { eachPool } from "../signals/pool.ts";
 import {
   type AuthorContext,
   type AuthorSettings,
@@ -46,6 +49,7 @@ import {
   rewordedSignals,
   writeView,
 } from "./author.ts";
+import type { ViewBackfills } from "./backfill.ts";
 import { runViewTest, type TestRun, type TestSettings } from "./test.ts";
 
 const KEYS = [
@@ -157,8 +161,54 @@ export function createViewDrafting(deps: {
   context: (workspaceId: Id) => Promise<import("@monday/shared").ViewContext>;
   changed: (workspaceId: Id) => Promise<void>;
   log: (message: string) => void;
+  /** The pinned Views' reading of their scope: held while Pin view writes the tried answers. */
+  reading?: (() => ViewBackfills | null) | undefined;
 }): ViewDrafting {
   const { db, store, drafts } = deps;
+
+  /**
+   * Pin view and Apply: the tried Threads' answers are written at the saved
+   * View's question versions (no judge call when the Thread has not changed
+   * since the try), so its reading of the scope skips them. The reading is
+   * held until they are written.
+   */
+  const saveWith = async <T extends { view: View }>(
+    workspaceId: Id,
+    viewId: Id,
+    draftId: Id,
+    save: () => Promise<T>,
+  ): Promise<T> => {
+    const release = deps.reading?.()?.hold(viewId) ?? (async () => {});
+    try {
+      const out = await save();
+      await deps.changed(workspaceId);
+      const priors = await drafts.priors(draftId);
+      const v = out.view;
+      const own = [
+        ...viewSignalDefs(v.doc).map((d) => d.id),
+        ...viewExtractionDefs(v.doc).map((d) => d.id),
+      ];
+      if (own.length && v.id === viewId) {
+        const s = await settings();
+        await eachPool(
+          Object.entries(priors),
+          Math.max(1, s["signals.backfill.concurrency"]),
+          async ([threadId, prior]) => {
+            try {
+              await deps.signals.ask(workspaceId, threadId, { reason: "view", only: own, prior });
+            } catch (error) {
+              deps.log(
+                `view pin ${viewId} ${threadId}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          },
+        );
+      }
+      return out;
+    } finally {
+      await release();
+    }
+  };
   const settings = () => readGlobalSettings(db, KEYS);
 
   const authorSettings = (s: Awaited<ReturnType<typeof settings>>): AuthorSettings => ({
@@ -306,6 +356,7 @@ export function createViewDrafting(deps: {
         test: run.test,
         threadIds: run.threadIds,
         diagnosis: run.diagnosis,
+        priors: run.priors,
       });
     },
 
@@ -424,6 +475,7 @@ export function createViewDrafting(deps: {
         test: next,
         threadIds: run.threadIds,
         diagnosis: run.diagnosis,
+        priors: run.priors,
       });
     },
 
@@ -444,8 +496,9 @@ export function createViewDrafting(deps: {
       } else if (t.needsJudge) {
         throw new ViewLimitError("judge", s["strings.views.needs_typesafe"]);
       }
-      const view = await store.create(draft.workspaceId, doc, { checkBar: t.empty });
-      await deps.changed(draft.workspaceId);
+      const { view } = await saveWith(draft.workspaceId, doc.id, draftId, async () => ({
+        view: await store.create(draft.workspaceId, doc, { checkBar: t.empty }),
+      }));
       return { view, draft: await drafts.save(draftId, { status: "pinned" }) };
     },
 
@@ -501,6 +554,7 @@ export function createViewDrafting(deps: {
         test: { ...run.test, moves },
         threadIds: run.threadIds,
         diagnosis: run.diagnosis,
+        priors: run.priors,
       });
       return { kind: "draft", draft };
     },
@@ -508,11 +562,13 @@ export function createViewDrafting(deps: {
     async apply(draftId) {
       const draft = await drafts.get(draftId);
       if (draft.status !== "open" || !draft.viewId) throw new ViewNotFoundError(draftId);
-      const { view, previous } = await store.update(draft.viewId, draft.doc);
-      const folded = Object.keys(await store.corrections(draft.viewId)).length > 0;
-      if (folded && Object.keys(draft.doc.examples).length)
-        await store.clearCorrections(draft.viewId);
-      await deps.changed(view.workspaceId);
+      const viewId = draft.viewId;
+      const { view, previous } = await saveWith(draft.workspaceId, viewId, draftId, async () => {
+        const r = await store.update(viewId, draft.doc);
+        const folded = Object.keys(await store.corrections(viewId)).length > 0;
+        if (folded && Object.keys(draft.doc.examples).length) await store.clearCorrections(viewId);
+        return r;
+      });
       return { view, previous, draft: await drafts.save(draftId, { status: "applied" }) };
     },
 

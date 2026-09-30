@@ -220,7 +220,21 @@ export interface AskOptions {
    * and normalized into the result's `picks`.
    */
   extraOptions?: Record<string, SignalOptionsFrom> | undefined;
+  /**
+   * Answers this Thread version already has, by question id as asked (a View's
+   * try before Pin view): they stand in for asking again when the Thread has
+   * not changed since, and are written as if just answered.
+   */
+  prior?: PriorAnswers | undefined;
   jobId?: string | null | undefined;
+}
+
+/** What one Signal request answered, kept to be written later without asking again. */
+export interface PriorAnswers {
+  messageCount: number;
+  latestMessageId: string;
+  model: string;
+  answers: Record<string, JudgeAnswer>;
 }
 
 /** A value an Extraction picked: the span as written, normalized by code, with the pick's confidence. */
@@ -253,6 +267,8 @@ export interface AskResult {
   calls: number;
   /** Who answered: TypeSafe, the language model, or nobody. */
   by: "typesafe" | "llm" | null;
+  /** Every answer by question id as asked, with the Thread version and model (a later `prior`). */
+  prior?: PriorAnswers | undefined;
 }
 
 export interface SignalsSettings {
@@ -829,7 +845,10 @@ export function createSignals(options: SignalsOptions): Signals {
       }
       await recordDef(workspaceId, updated);
       byId.set(w.id, updated);
-      if (changedWords) toRead.push(w.id);
+      // A View whose scope moved has Threads to read that it never looked at.
+      const movedScope =
+        w.owner.kind === "view" && canonicalJson(row.scope) !== canonicalJson(scope);
+      if (changedWords || movedScope) toRead.push(w.id);
     }
     // A Signal nobody declares any more is retired; its answers stay signals.keep_inactive_days for an Undo.
     const wantedIds = new Set(want.map((w) => w.id));
@@ -1712,15 +1731,31 @@ export function createSignals(options: SignalsOptions): Signals {
         await answered(workspaceId, threadId);
         return result;
       }
-      if (await runtime.judgeAvailable()) {
-        const answers: Record<string, JudgeAnswer> = {};
-        let model = "";
+      // Answers this Thread version already has (a View's try before Pin view) are not asked again.
+      const prior =
+        opts.prior &&
+        opts.prior.messageCount === version.messageCount &&
+        opts.prior.latestMessageId === version.latestMessageId
+          ? opts.prior
+          : null;
+      const reused: Record<string, JudgeAnswer> = {};
+      for (const id of Object.keys(questions)) {
+        const a = prior?.answers[id];
+        if (a) reused[id] = a;
+      }
+      const toAsk = Object.fromEntries(Object.entries(questions).filter(([id]) => !reused[id]));
+      const asking = Object.keys(toAsk).length > 0;
+      if (!asking || (await runtime.judgeAvailable())) {
+        const answers: Record<string, JudgeAnswer> = { ...reused };
+        let model = prior?.model ?? "";
         try {
           // A Thread whose questions outgrow one request is asked in parts, all in flight at once.
-          const parts = splitQuestions(state, questions, {
-            requestTokens: s["routing.backfill.request_tokens"],
-            stateTokens: s["routing.backfill.state_tokens"],
-          });
+          const parts = !asking
+            ? []
+            : splitQuestions(state, toAsk, {
+                requestTokens: s["routing.backfill.request_tokens"],
+                stateTokens: s["routing.backfill.state_tokens"],
+              });
           const replies = await Promise.allSettled(
             parts.map((part) =>
               runtime.judge(TASK[opts.reason], state, part, {
@@ -1830,6 +1865,12 @@ export function createSignals(options: SignalsOptions): Signals {
           }
         }
         result.by = "typesafe";
+        result.prior = {
+          messageCount: version.messageCount,
+          latestMessageId: version.latestMessageId,
+          model,
+          answers,
+        };
         return result;
       }
       return llmAsk(

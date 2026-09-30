@@ -159,6 +159,22 @@ export const VIEW_SETTINGS = {
     365,
     "When the scope holds too few threads to try (a quiet today), only its dates widen to this many days.",
   ),
+  "views.backfill.enabled": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    label: "Read a pinned view's mail",
+    help: "When you pin a View, or change what it asks, monday reads the threads in its scope (archived and older ones too, newest first, up to its limit) in the background, under the monthly background budget.",
+  }),
+  "views.backfill.page_size": limit(
+    "Threads per step of a view's reading",
+    40,
+    1,
+    500,
+    "How many threads of a pinned view's scope are read, one request each and several at once, before its place is saved.",
+  ),
   "views.test.prefer_readable": setting({
     type: z.boolean(),
     default: true,
@@ -490,6 +506,19 @@ export const VIEW_SETTINGS = {
     "reading progress",
     "Reading your mail for {view}: {done} of {total}",
   ),
+  "strings.views.reading": str("reading bar", "Reading {done} of {total}"),
+  "strings.views.reading_budget": str(
+    "reading bar, budget spent",
+    "Reading paused at {done} of {total}: this month's background budget is spent",
+  ),
+  "strings.views.reading_no_judge": str(
+    "reading bar, no judge",
+    "Reading waits for a TypeSafe key: {done} of {total}",
+  ),
+  "strings.views.reading_paused": str("reading bar, paused", "Reading paused at {done} of {total}"),
+  "strings.views.reading_pause": str("pause reading", "Pause"),
+  "strings.views.reading_resume": str("resume reading", "Resume"),
+  "strings.views.reading_stop": str("stop reading", "Stop"),
   "strings.views.settings.title": str("Settings panel title", "Your Views"),
   "strings.views.settings.intro": str(
     "Settings panel intro",
