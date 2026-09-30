@@ -128,6 +128,87 @@ describe("candidates", () => {
     );
   });
 
+  test("items: the products on an Amazon.in order, never its quantity or its prices", () => {
+    // The text part of a real Amazon.in confirmation, the shape a session read nothing from.
+    const amazonIn = [
+      "Hello Sam,",
+      "Thank you for your order. We'll send a confirmation when your items ship.",
+      "",
+      "Order #408-1234567-7654321",
+      "",
+      "* Kérastase Gloss Absolu Anti-Frizz Shampoo For Bouncy, Glossy Hair | With Glycerin & Hydrolyzed Rice Protein | Nourishes & Smoothens Frizzy Hair | Adds Shine | 250ml",
+      "  Quantity: 1",
+      "  2900 INR",
+      "",
+      "* Philips BHS386 Kerashine Hair Straightener",
+      "  Quantity: 2",
+      "  1,899 INR",
+      "",
+      "Shipping & Handling",
+      "5 INR",
+      "",
+      "Total",
+      "2905 INR",
+    ].join("\n");
+    const items = findCandidates("item", input(amazonIn), 20).map((c) => c.value);
+    expect(items).toEqual([
+      "Kérastase Gloss Absolu Anti-Frizz Shampoo For Bouncy, Glossy Hair | With Glycerin & Hydrolyzed Rice Protein | Nourishes & Smoothens Frizzy Hair | Adds Shine | 250ml",
+      "Philips BHS386 Kerashine Hair Straightener",
+    ]);
+    // The money finder still finds every amount for the order total.
+    expect(findCandidates("money", input(amazonIn), 20).map((c) => c.key)).toEqual([
+      "2900 INR",
+      "1,899 INR",
+      "5 INR",
+      "2905 INR",
+    ]);
+  });
+
+  test("items: Myntra and H&M receipts, with attributes under each product", () => {
+    const myntra = [
+      "Your order is confirmed!",
+      "Item Details",
+      "Roadster Men Blue Slim Fit Casual Shirt",
+      "Size: M",
+      "Qty: 1",
+      "Rs. 799",
+      "HRX by Hrithik Roshan Running Shoes",
+      "Size: UK 9",
+      "Qty: 1",
+      "Rs. 2,499",
+      "Bag Total Rs. 3,298",
+      "Discount -Rs. 500",
+      "Order Total Rs. 2,798",
+    ].join("\n");
+    expect(findCandidates("item", input(myntra), 20).map((c) => c.value)).toEqual([
+      "Roadster Men Blue Slim Fit Casual Shirt",
+      "HRX by Hrithik Roshan Running Shoes",
+    ]);
+    const hm = [
+      "Thank you for shopping at H&M",
+      "",
+      "Relaxed Fit Printed T-shirt",
+      "Art. No.: 0987654001",
+      "Color: White/Snoopy",
+      "Size: L",
+      "Quantity: 1",
+      "Price: Rs. 1,299.00",
+      "",
+      "2x Ribbed Socks, 5-pack   Rs. 1,198.00",
+      "",
+      "Subtotal: Rs. 2,497.00",
+      "Delivery: Rs. 0.00",
+      "Total: Rs. 2,497.00",
+    ].join("\n");
+    expect(findCandidates("item", input(hm), 20).map((c) => c.value)).toEqual([
+      "Relaxed Fit Printed T-shirt",
+      "2x Ribbed Socks, 5-pack   Rs. 1,198.00",
+    ]);
+    // A line longer than the Setting is not offered.
+    const long = `* ${"Very long product name ".repeat(20)}\n  Quantity: 1`;
+    expect(findCandidates("item", { ...input(long), itemChars: 100 }, 20)).toEqual([]);
+  });
+
   test("an Extraction's kind from its option source", () => {
     expect(extractKindOf("extract:money")).toBe("money");
     expect(extractKindOf("amounts")).toBeNull();

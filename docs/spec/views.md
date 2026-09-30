@@ -107,7 +107,7 @@ An Extraction is a value the View needs from the text that code cannot pick alon
 
 | `find` | Candidates code finds | Normalized to | Type |
 |---|---|---|---|
-| `money` | amounts with a currency symbol or code (`$1,315.50`, `EUR 40`, `12,00 €`) | `{ value, currency }` | money |
+| `money` | amounts with a currency symbol or code (`$1,315.50`, `EUR 40`, `12,00 €`, `2900 INR`, `Rs. 799`) | `{ value, currency }` | money |
 | `date` | written dates (`3 October 2026`, `Oct 3`, `2026-10-03`, `10/03/2026` by `views.extract.date_order`, `Tue, Oct 3`), the year from the Message's own date when not written | `YYYY-MM-DD` in the Workspace's zone | date |
 | `reference` | order, invoice, booking, confirmation, ticket and reference numbers (`#113-4567890-1234567`, `INV-2291`, `Booking ref ABC123`) | the span without a leading `#` | text |
 | `tracking` | carrier tracking numbers by pattern (UPS, USPS, FedEx, DHL), only near a word about shipping | the number, with its carrier | text |
@@ -116,7 +116,7 @@ An Extraction is a value the View needs from the text that code cannot pick alon
 | `company` | organisation names: senders' display names, names ending in Inc, LLC, Ltd, GmbH and the like, and senders' domains | the name | text |
 | `link` | links, each shown by where it goes (`pay.stripe.com/i/2291`) | `{ url, domain }` | link |
 | `quantity` | counts of items (`Qty: 2`, `2 x`, `3 items`) | a number | number |
-| `item` | line items: lines that name a thing with a quantity or a price | the line | text |
+| `item` | line items: bulleted or numbered lines, lines led by a count (`1x`), lines naming a thing beside its price, and lines followed (after short attributes such as `Size: M`) by their count or price; never a line that is only a count or a price, never a total, tax or fee; at most `views.extract.item_chars` (300) characters | the line | text |
 | `sentence` | the sentences of the Messages (the owner's own when the question says "I" or "the owner") | the sentence | text |
 
 Extractions are Signals: each is stored as a Choice Signal owned by the View (`board:<viewId>:x_<id>`, the stored prefix predates Views), gated on its kind's candidates, with per-Thread options built by code (`signals.md`, per-Thread options). Its answer row says only "picked" or "none" and the confidence; the picked value stays sealed on the Server with the Thread's Facts and reaches the Device only through `GET /views/values` (below).
@@ -253,6 +253,7 @@ The card shows at least `views.test.shown` Threads (or all there are) before Pin
 | `views.extract.min_confidence` | 0.6 | Below it an Extraction is Unsure |
 | `views.extract.candidates_max` | 20 | Candidates per Extraction per Thread |
 | `views.extract.date_order` | `mdy` | How `10/03/2026` reads |
+| `views.extract.item_chars` | 300 | The longest line offered as an item |
 | `views.nav.show_counts` | on | Counts beside Views in the nav |
 
 A View over the limits is refused before anything is saved, with the reason in the card. `signals.max_active` also applies (a View's Signals and Extractions both count).

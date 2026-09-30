@@ -243,6 +243,13 @@ export const VIEW_SETTINGS = {
     60,
     "How many amounts, dates or numbers code offers the judge to pick from, per thread.",
   ),
+  "views.extract.item_chars": limit(
+    "Longest line item",
+    300,
+    40,
+    2000,
+    "A line item (a product on a receipt) longer than this many characters is not offered as one.",
+  ),
   "views.extract.date_order": setting({
     type: z.enum(["mdy", "dmy"]),
     default: "mdy",

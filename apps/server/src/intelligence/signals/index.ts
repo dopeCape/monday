@@ -115,6 +115,7 @@ const SETTING_KEYS = [
   "signals.candidates.max",
   "views.extract.candidates_max",
   "views.extract.date_order",
+  "views.extract.item_chars",
   "signals.stats.window",
   "signals.stats.broad_above",
   "signals.stats.min_answers",
@@ -1196,6 +1197,7 @@ export function createSignals(options: SignalsOptions): Signals {
         owner: loaded.owner,
         written: loaded.written,
         dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
       },
       s["views.extract.candidates_max"],
     );
@@ -1640,6 +1642,7 @@ export function createSignals(options: SignalsOptions): Signals {
         owner: (owner?.address ?? "").toLowerCase(),
         written: headers[headers.length - 1]?.date ?? now().toISOString(),
         dateOrder: s["views.extract.date_order"],
+        itemChars: s["views.extract.item_chars"],
       };
       const out: Partial<Record<ExtractKind, Candidate[]>> = {};
       for (const kind of new Set(kinds)) {
