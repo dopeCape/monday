@@ -332,4 +332,45 @@ describe("The test pool is the newest Threads in scope", () => {
     expect(news.text).toContain("started by digest@substack.com, not in from_any");
     expect(judge.calls.length).toBe(calls);
   });
+
+  test("a scope by words in the subject finds them under every newer thread, as a search did", async () => {
+    const shop = { name: "Flo", email: "hello@flomattress.com" };
+    const add = async (key: string, subject: string, date: string) => {
+      const threadId = await store.upsertThread({
+        workspaceId,
+        providerThreadId: key,
+        subject,
+        participants: [shop, owner],
+        lastActivity: date,
+      });
+      await store.upsertMessage({
+        threadId,
+        providerMessageId: `m-${key}`,
+        from: shop,
+        to: [owner],
+        cc: [],
+        date,
+        headers: {},
+        bodyText: "Thanks for your order. Order Total: Rs. 12,000",
+        bodyHtml: null,
+        snippet: "Thanks for your order.",
+      });
+      ids[key] = threadId;
+    };
+    await add("flo-1", "Your Order   Confirmation #FLO-1001", "2026-01-05T09:00:00.000Z");
+    await add("flo-2", "Order confirmation: pillow", "2026-01-20T09:00:00.000Z");
+    await add("flo-3", "Your order has shipped", "2026-01-25T09:00:00.000Z");
+    const doc = {
+      ...ORDERS_DOC,
+      scope: { facts: { folder: "any", subject_any: ["Order Confirmation"] }, limit: 50 },
+    };
+    chat.answer(() => JSON.stringify(doc));
+    const draft = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    expect(draft.doc.scope.facts.subject_any).toEqual(["order confirmation"]);
+    expect([...draft.threadIds].sort()).toEqual([id("flo-1"), id("flo-2")].sort());
+    expect(draft.test?.inScope).toBe(2);
+    const inspected = await intelligence.views.drafting.inspect(draft.id, id("flo-3"));
+    expect(inspected.admitted).toBe(false);
+    expect(inspected.scope).toContain("the subject holds none of subject_any");
+  });
 });

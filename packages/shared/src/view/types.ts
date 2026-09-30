@@ -260,6 +260,11 @@ export interface ViewScopeFacts {
   from_domain_not?: string[] | undefined;
   /** Any Message's To or Cc holds one of these addresses. */
   to_any?: string[] | undefined;
+  /**
+   * The subject holds one of these words or phrases, case aside, within its first 80
+   * characters (the Server's clear subject index, ADR 0015): "order confirmation".
+   */
+  subject_any?: string[] | undefined;
   folder?: ViewFolder | undefined;
 }
 
@@ -737,6 +742,17 @@ export const scopeFactsSchema = z
     from_domain: z.array(domain).max(50).optional(),
     from_domain_not: z.array(domain).max(50).optional(),
     to_any: z.array(fullAddress).max(50).optional(),
+    subject_any: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .transform((w) => w.replace(/\s+/g, " "))
+          .pipe(z.string().min(2).max(80)),
+      )
+      .max(20)
+      .optional(),
     folder: z
       .union([
         z.enum(["inbox", "any", "archive"]),

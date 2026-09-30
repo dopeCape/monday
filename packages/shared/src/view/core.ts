@@ -453,6 +453,21 @@ export const DEFAULT_EXTRACT_FLOOR = 0.6;
 export const domainOfAddress = (address: string | null) =>
   address ? (address.split("@")[1] ?? "").toLowerCase() : "";
 
+/** How long the subject's clear prefix is (the Server's subject_search, ADR 0015). */
+export const SUBJECT_SEARCH_CHARS = 80;
+
+/** A subject as its clear prefix: lowercased, whitespace collapsed, the first 80 characters. */
+export function subjectSearchOf(subject: string): string {
+  return subject.toLowerCase().replace(/\s+/g, " ").trim().slice(0, SUBJECT_SEARCH_CHARS);
+}
+
+/** The subject words a Thread's subject holds, or null when its subject is not known here. */
+function subjectHolds(words: readonly string[], t: ViewThread): boolean | null {
+  const prefix = t.subjectSearch ?? (t.subject !== undefined ? subjectSearchOf(t.subject) : null);
+  if (prefix === null) return null;
+  return words.some((w) => prefix.includes(w.toLowerCase()));
+}
+
 /** Whether the scope's exact filters admit a Thread. Code only. */
 export function scopeAdmits(
   facts: ViewScopeFacts,
@@ -491,6 +506,8 @@ export function scopeAdmits(
   if (facts.to_any?.length && !t.recipients.some((r) => facts.to_any?.includes(r.toLowerCase()))) {
     return false;
   }
+  // A subject not known to this reader cannot refuse: the SQL that loaded it already asked.
+  if (facts.subject_any?.length && subjectHolds(facts.subject_any, t) === false) return false;
   return true;
 }
 
@@ -545,6 +562,13 @@ export function scopeReasons(
   if (facts.to_any?.length) {
     const hit = t.recipients.find((r) => facts.to_any?.includes(r.toLowerCase()));
     reasons.push(hit ? `sent to ${hit}, in to_any` : "sent to none of to_any");
+  }
+  if (facts.subject_any?.length) {
+    const prefix = t.subjectSearch ?? subjectSearchOf(t.subject ?? "");
+    const hit = facts.subject_any.find((w) => prefix.includes(w.toLowerCase()));
+    reasons.push(
+      hit ? `the subject holds "${hit}", in subject_any` : "the subject holds none of subject_any",
+    );
   }
   return { admitted: scopeAdmits(facts, t, ctx), reasons };
 }

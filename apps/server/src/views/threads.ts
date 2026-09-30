@@ -92,6 +92,15 @@ export function scopeConditions(
     out.push(sql`exists (select 1 from messages m, jsonb_array_elements(m."to" || m.cc) r
       where m.thread_id = t.id and lower(r->>'email') in (${list(facts.to_any)}))`);
   }
+  if (facts.subject_any?.length) {
+    // The clear subject prefix (ADR 0015), the same words scopeAdmits reads.
+    out.push(
+      sql`(${sql.join(
+        facts.subject_any.map((w) => sql`position(${w.toLowerCase()} in t.subject_search) > 0`),
+        sql` or `,
+      )})`,
+    );
+  }
   return out;
 }
 

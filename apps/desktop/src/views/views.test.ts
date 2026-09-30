@@ -363,14 +363,21 @@ describe("A View's scope narrows in SQL before the limit", () => {
       seed: null,
       workspaceId: "ws",
     });
-    const add = (id: string, from: string, at: string, to = "sam@acme.com", cc: string[] = []) => {
+    const add = (
+      id: string,
+      from: string,
+      at: string,
+      to = "sam@acme.com",
+      cc: string[] = [],
+      subject = id,
+    ) => {
       server.record({
         kind: "thread",
         entityId: id,
         payload: {
           id,
           workspaceId: "ws",
-          subject: id,
+          subject,
           participants: [{ name: "", email: from }],
           lastActivity: at,
           messageCount: 1,
@@ -428,6 +435,17 @@ describe("A View's scope narrows in SQL before the limit", () => {
     ]);
     // The inbox holds none of them: every one is archived.
     expect(await ids({ folder: "inbox", from_domain: ["amazon.in"] })).toEqual([]);
+    // Words in the subject narrow in SQL too, and the View code checks them exactly.
+    add(
+      "s1",
+      "shop@flo.test",
+      "2026-02-01T10:00:00.000Z",
+      "sam@acme.com",
+      [],
+      "Your Order Confirmation #123",
+    );
+    await store.sync();
+    expect(await ids({ folder: "any", subject_any: ["order confirmation"] })).toEqual(["s1"]);
 
     // Many values and per-row answers ride in view_values and come back whole.
     const items = [

@@ -306,6 +306,27 @@ describe("rows that are items", () => {
   });
 });
 
+describe("a scope by words in the subject", () => {
+  test("the subject's first 80 characters, case and spacing aside", async () => {
+    const { scopeAdmits } = await import("./core.ts");
+    const facts = { folder: "any" as const, subject_any: ["order confirmation"] };
+    const t = (subject: string, extra: Partial<ViewThread> = {}) =>
+      thread("t", "2026-09-01T10:00:00Z", { subject, ...extra });
+    expect(scopeAdmits(facts, t("Your ORDER  Confirmation #12"), ctx)).toBe(true);
+    expect(scopeAdmits(facts, t("Your order has shipped"), ctx)).toBe(false);
+    expect(scopeAdmits(facts, t(`${"x".repeat(80)} order confirmation`), ctx)).toBe(false);
+    // The Server reads its clear prefix.
+    expect(scopeAdmits(facts, t("", { subjectSearch: "order confirmation: pillow" }), ctx)).toBe(
+      true,
+    );
+    const parsed = validateView({
+      ...ORDERS,
+      scope: { facts: { subject_any: ["  Order   Confirmation "] }, limit: 10 },
+    });
+    expect(parsed.ok && parsed.doc.scope.facts.subject_any).toEqual(["order confirmation"]);
+  });
+});
+
 describe("rows that are Messages", () => {
   const ADVISORIES: ViewDoc = {
     ...DIGEST,

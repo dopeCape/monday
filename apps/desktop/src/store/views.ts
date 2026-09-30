@@ -256,6 +256,11 @@ export function viewThreadsSql(
         and lower(json_extract(r.value, '$.email')) in (${marks(facts.to_any)})))`);
     params.push(...lower(facts.to_any), ...lower(facts.to_any));
   }
+  if (facts.subject_any?.length) {
+    // A bound: the View code reads the subject's first 80 characters, whitespace collapsed.
+    where.push(`(${facts.subject_any.map(() => "instr(lower(t.subject), ?) > 0").join(" or ")})`);
+    params.push(...lower(facts.subject_any));
+  }
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const sql = `select * from (${ALL_THREADS_SQL.slice(0, at).replace(
     "select ",
