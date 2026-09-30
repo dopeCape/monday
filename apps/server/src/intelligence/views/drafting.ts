@@ -7,12 +7,21 @@
 // revision tries again the Threads it tried that the (perhaps changed) scope
 // still admits, and fills the rest with the newest ones it does.
 
-import type { Id, View, ViewDoc, ViewDraft, ViewExample, ViewTest } from "@monday/shared";
+import type {
+  Id,
+  View,
+  ViewDoc,
+  ViewDraft,
+  ViewExample,
+  ViewTest,
+  ViewThreadDiagnosis,
+} from "@monday/shared";
 import {
   factLanesOnly,
   type LaneComponent,
   lanesChanged,
   laneView,
+  scopeReasons,
   showAs,
   signalName,
   viewIdFor,
@@ -25,6 +34,7 @@ import { readGlobalSettings } from "../../settings/read.ts";
 import type { DraftStore } from "../../views/drafts.ts";
 import { ViewLimitError, ViewNotFoundError, type ViewStore } from "../../views/index.ts";
 import { viewRefs } from "../../views/refs.ts";
+import { loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import {
@@ -48,6 +58,7 @@ const KEYS = [
   "views.test.widen_days",
   "views.test.prefer_readable",
   "views.test.scan",
+  "views.extract.candidates_max",
   "views.examples_in_question",
   "views.draft.retries",
   "views.prompt",
@@ -121,6 +132,16 @@ export interface ViewDrafting {
   ): Promise<UpdateProposal>;
   /** Apply on an edit's card: the new version, whose Undo points back at the old one. */
   apply(draftId: Id): Promise<{ view: View; draft: ViewDraft; previous: number }>;
+  /**
+   * inspect_view_thread: one Thread as the draft read it (why the scope admits
+   * it, each Extraction's candidates with the judge's share of each, each
+   * Signal's answer), or, for a Thread the test did not try, what code finds
+   * in it without asking anything.
+   */
+  inspect(
+    draftId: Id,
+    threadId: Id,
+  ): Promise<ViewThreadDiagnosis & { tried: boolean; admitted: boolean; workspaceId: Id }>;
   /** Not now. */
   discard(draftId: Id): Promise<ViewDraft>;
 }
@@ -159,6 +180,7 @@ export function createViewDrafting(deps: {
     widenDays: s["views.test.widen_days"],
     preferReadable: s["views.test.prefer_readable"],
     scan: s["views.test.scan"],
+    candidatesMax: s["views.extract.candidates_max"],
     maxThreads: s["views.scope.max_threads"],
     examplesMax: s["views.examples_in_question"],
     notRead: s["strings.views.not_read"].toLowerCase(),
@@ -281,6 +303,7 @@ export function createViewDrafting(deps: {
         previous: null,
         test: run.test,
         threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
       });
     },
 
@@ -394,7 +417,12 @@ export function createViewDrafting(deps: {
         changes: changes.length ? changes : [s["strings.views.change.none"]],
         moves: draft.viewId ? (draft.test?.moves ?? null) : moves,
       };
-      return drafts.save(draftId, { doc, test: next, threadIds: run.threadIds });
+      return drafts.save(draftId, {
+        doc,
+        test: next,
+        threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
+      });
     },
 
     async pin(draftId, options = {}) {
@@ -470,6 +498,7 @@ export function createViewDrafting(deps: {
         previous: view.doc,
         test: { ...run.test, moves },
         threadIds: run.threadIds,
+        diagnosis: run.diagnosis,
       });
       return { kind: "draft", draft };
     },
@@ -483,6 +512,55 @@ export function createViewDrafting(deps: {
         await store.clearCorrections(draft.viewId);
       await deps.changed(view.workspaceId);
       return { view, previous, draft: await drafts.save(draftId, { status: "applied" }) };
+    },
+
+    async inspect(draftId, threadId) {
+      const draft = await drafts.get(draftId);
+      const ctx = await deps.context(draft.workspaceId);
+      const [t] = await loadViewThreads(db, {
+        workspaceId: draft.workspaceId,
+        owner: ctx.owner,
+        ids: [threadId],
+        limit: 1,
+      });
+      if (!t) throw new ViewNotFoundError(`${draftId} thread ${threadId}`);
+      const { admitted, reasons } = scopeReasons(draft.doc.scope.facts, t, ctx);
+      const tried = (await drafts.diagnosis(draftId))[threadId];
+      if (tried) return { ...tried, tried: true, admitted, workspaceId: draft.workspaceId };
+      // Not tried: what code finds in it, no judge and nothing written.
+      const s = await settings();
+      const kinds = [...new Set(draft.doc.extractions.map((x) => x.find))];
+      const found = kinds.length
+        ? await deps.signals.candidates(draft.workspaceId, threadId, kinds)
+        : {};
+      let subject = "";
+      try {
+        subject = await deps.mailstore.readThreadSubject(threadId);
+      } catch {}
+      return {
+        threadId,
+        from: t.from ?? "",
+        subject,
+        receivedAt: t.receivedAt,
+        scope: reasons,
+        extractions: draft.doc.extractions.map((x) => {
+          const list = found[x.find] ?? [];
+          return {
+            extraction: x.id,
+            label: x.label?.trim() || x.id.replaceAll("_", " "),
+            find: x.find,
+            state: list.length ? ("not_read" as const) : ("no_candidates" as const),
+            picked: null,
+            confidence: null,
+            candidates: list.map((c) => ({ span: c.span, line: c.line, probability: null })),
+            capped: list.length >= s["views.extract.candidates_max"],
+          };
+        }),
+        signals: [],
+        tried: false,
+        admitted,
+        workspaceId: draft.workspaceId,
+      };
     },
 
     async discard(draftId) {

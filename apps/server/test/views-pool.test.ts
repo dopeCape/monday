@@ -240,4 +240,96 @@ describe("The test pool is the newest Threads in scope", () => {
     const plain = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
     for (const o of orders) expect(plain.threadIds).not.toContain(o);
   });
+
+  test("the tool says how each value read over every tried thread, and inspect_view_thread shows why", async () => {
+    // A shipping notice from the same sender holds no amount at all.
+    await addThread(
+      "amazon-ship",
+      amazon,
+      "2026-04-20T09:00:00.000Z",
+      "Your package is on its way. Arriving Thursday.",
+    );
+    const doc = {
+      ...ORDERS_DOC,
+      extractions: [
+        ...ORDERS_DOC.extractions,
+        { id: "item", label: "Item", find: "item", question: "The product that was bought." },
+      ],
+    };
+    chat.answer(() => JSON.stringify(doc));
+    const total = viewExtractionId("v_a_custom_view_for", "total");
+    const has = (s: unknown, w: string) => JSON.stringify(s).includes(w);
+    judge.when((s) => has(s, "Something 1"), { [total]: "105 INR" });
+    judge.when((s) => has(s, "Something 2"), { [total]: "none" });
+    judge.when((s) => has(s, "Something 3"), {
+      [total]: {
+        type: "choice",
+        choice: "305 INR",
+        probabilities: { "300 INR": 0.35, "305 INR": 0.45, none: 0.2 },
+        confidence: 0.4,
+      },
+    });
+    judge.when((s) => has(s, "Something 4"), { [total]: "405 INR" });
+    const tools = intelligence.agent.tools(workspaceId);
+    const ask = { ask: async () => "approved" as const };
+    const out = await tools.call(
+      { name: "create_view", args: { sentence: doc.sentence }, callId: "c-1", sessionId: "s-1" },
+      ask,
+    );
+    expect(out.isError).toBe(false);
+    const draftId = (out.activity.preview as { draftId: string }).draftId;
+    const draft = await intelligence.views.drafting.drafts.get(draftId);
+    expect(draft.doc.id).toBe("v_a_custom_view_for");
+    expect(draft.test?.coverage?.fields.find((f) => f.field === "x:total")).toEqual({
+      field: "x:total",
+      label: "Total",
+      resolved: 2,
+      none: 1,
+      unsure: 1,
+      noCandidates: 1,
+      notRead: 0,
+      capped: 0,
+      examples: ["405 INR", "105 INR"],
+    });
+    expect(draft.test?.coverage?.senders).toEqual([{ from: "auto-confirm@amazon.in", count: 5 }]);
+    expect(out.text).toContain("In scope: 5 threads.");
+    expect(out.text).toContain("Tried threads come from: auto-confirm@amazon.in 5.");
+    expect(out.text).toContain(
+      "Total (x:total, find money): a value on 2 of 5; none of the candidates on 1; below its confidence floor on 1; no candidates found on 1 (code found no money in their text, so nothing was asked).",
+    );
+    expect(out.text).toContain("Item (x:item, find item): a value on 4 of 5");
+    expect(out.text).toContain(`inspect_view_thread with draft_id ${draftId}`);
+    expect(out.text).not.toContain("—");
+
+    const inspect = async (threadId: string) =>
+      tools.call(
+        {
+          name: "inspect_view_thread",
+          args: { draft_id: draftId, thread_id: threadId },
+          callId: `c-inspect-${threadId}`,
+          sessionId: "s-1",
+        },
+        ask,
+      );
+    const third = await inspect(id("amazon-3"));
+    expect(third.isError).toBe(false);
+    expect(third.text).toContain("The test tried it.");
+    expect(third.text).toContain("Scope: admits it");
+    expect(third.text).toContain("started by auto-confirm@amazon.in, in from_any");
+    expect(third.text).toContain(
+      'Total (x:total, find money): picked "305 INR" at only 40%, below its floor, so Unsure.',
+    );
+    expect(third.text).toContain('"300 INR" 35%');
+    expect(third.text).toContain('"305 INR" 45%');
+    expect(third.text).toContain('Item (x:item, find item): picked "Something 3"');
+    const ship = await inspect(id("amazon-ship"));
+    expect(ship.text).toContain("code found no money in its text, so nothing was asked");
+    // A thread the test never tried: what code finds, nothing asked, and why the scope refuses it.
+    const calls = judge.calls.length;
+    const news = await inspect(id("news-1"));
+    expect(news.text).toContain("The test did not try it");
+    expect(news.text).toContain("Scope: does not admit it");
+    expect(news.text).toContain("started by digest@substack.com, not in from_any");
+    expect(judge.calls.length).toBe(calls);
+  });
 });

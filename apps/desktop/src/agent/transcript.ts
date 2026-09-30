@@ -143,6 +143,8 @@ function toolVerb(call: ToolCall): string {
       return done ? "Made a view and tried it" : "Making a view";
     case "revise_view":
       return done ? "Revised the view" : "Revising the view";
+    case "inspect_view_thread":
+      return done ? "Looked at a thread the view read" : "Looking at a thread the view read";
     case "update_view":
       return done ? "Changed the view" : "Change the view";
     case "delete_view":

@@ -172,6 +172,7 @@ describe("the tool catalog", () => {
       list_views: "read",
       create_view: "read",
       revise_view: "read",
+      inspect_view_thread: "read",
       update_view: "reversible",
       delete_view: "reversible",
       use_template: "reversible",

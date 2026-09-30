@@ -24,6 +24,7 @@ import type {
   ViewDoc,
   ViewTest,
   ViewThread,
+  ViewThreadDiagnosis,
   ViewTriedThread,
 } from "@monday/shared";
 import {
@@ -55,6 +56,7 @@ import { countViewThreads, loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import { eachPool } from "../signals/pool.ts";
+import { type AskedThread, coverageOf } from "./coverage.ts";
 
 export interface TestSettings {
   pool: number;
@@ -76,11 +78,15 @@ export interface TestSettings {
   preferReadable?: boolean | undefined;
   /** views.test.scan: how many in-scope Threads code looks through for them. */
   scan?: number | undefined;
+  /** views.extract.candidates_max: a Thread with this many candidates was cut short. */
+  candidatesMax?: number | undefined;
 }
 
 export interface TestRun {
   test: ViewTest;
   threadIds: Id[];
+  /** Each tried Thread explained, for inspect_view_thread (sealed in the draft). */
+  diagnosis: Record<Id, ViewThreadDiagnosis>;
   lanesOf: Map<Id, string>;
   threads: ViewThread[];
 }
@@ -247,6 +253,7 @@ export async function runViewTest(
   const extras = new Map<Id, Record<string, SignalReading>>();
   const values = new Map<Id, Record<string, ExtractedValue>>();
   const candidates = new Map<Id, Record<string, string[]>>();
+  const asked = new Map<Id, AskedThread>();
   let unanswered = false;
   if (judge) {
     // The definitions settle once before the parallel requests read them.
@@ -286,6 +293,7 @@ export async function runViewTest(
         extras.set(t.id, got);
         values.set(t.id, picked);
         candidates.set(t.id, r.candidates);
+        asked.set(t.id, r);
       } catch (error) {
         unanswered = true;
         deps.log(`view test ${t.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -310,6 +318,11 @@ export async function runViewTest(
     readings: { ...(after.get(t.id) ?? {}), ...(extras.get(t.id) ?? {}) },
     values: values.get(t.id) ?? {},
   }));
+
+  const { coverage, diagnosis } = coverageOf(doc, threads, asked, ctx, {
+    candidatesMax: settings.candidatesMax ?? 20,
+    scopeFacts: facts,
+  });
 
   // Evaluate over the tried Threads as they are (they already passed the scope, perhaps widened).
   const evalDoc: ViewDoc = {
@@ -401,12 +414,14 @@ export async function runViewTest(
       inScope,
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
       pool: { kept: kept.length, fresh: fresh.length, skipped, scanned },
+      coverage,
       changes: [],
       needsJudge: viewReadsSignals(doc) && (!judge || unanswered),
       moves: null,
       blocks,
     },
     threadIds: threads.map((t) => t.id),
+    diagnosis,
     lanesOf: lanes.lanesOf,
     threads,
   };

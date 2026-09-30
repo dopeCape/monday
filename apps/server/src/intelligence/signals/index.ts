@@ -222,6 +222,8 @@ export interface AskResult {
   picks: Record<string, ExtractPick | null>;
   /** For `extraOptions`: every span code found, the pick among them. */
   candidates: Record<string, string[]>;
+  /** For `extraOptions`: the same spans as the judge saw them, with their option keys and words around them. */
+  found?: Record<string, Array<Pick<Candidate, "key" | "span" | "line">>> | undefined;
   /** Requests made. */
   calls: number;
   /** Who answered: TypeSafe, the language model, or nobody. */
@@ -1494,6 +1496,10 @@ export function createSignals(options: SignalsOptions): Signals {
         const found = extractCandidates(loaded, kind, s);
         result.picks[id] = null;
         result.candidates[id] = found.map((c) => c.span);
+        result.found = {
+          ...result.found,
+          [id]: found.map((c) => ({ key: c.key, span: c.span, line: c.line })),
+        };
         if (found.length > 0) questions[id] = candidateOptions(q, found);
       }
       // A gated Noul is answered no; a gated Choice, not stated.

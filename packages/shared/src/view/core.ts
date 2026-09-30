@@ -446,6 +446,61 @@ export function scopeAdmits(
   return true;
 }
 
+/** A date part of the scope in words: "today", "the last 365 days", "since 2026-01-01". */
+function dateScopeWords(d: DateScope): string {
+  if ("within" in d) return d.within === "today" ? "today" : "this week";
+  if ("last_days" in d) return `the last ${d.last_days} days`;
+  return `since ${d.since}`;
+}
+
+/**
+ * Why the scope admits a Thread or not, fact by fact, in words for the Agent
+ * (inspect_view_thread): "started by auto-confirm@amazon.in, in from_any".
+ * Code only, the same tests as scopeAdmits.
+ */
+export function scopeReasons(
+  facts: ViewScopeFacts,
+  t: ViewThread,
+  ctx: Pick<ViewContext, "now" | "zone">,
+): { admitted: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const folder = facts.folder ?? "inbox";
+  const where = t.archived ? "archived" : t.snoozed ? "snoozed" : "in the inbox";
+  reasons.push(`folder ${folder}: the thread is ${where}`);
+  const received = t.receivedAt ?? t.lastActivity;
+  if (facts.received) {
+    const ok = Date.parse(received) >= dateScopeStart(facts.received, ctx.now, ctx.zone).getTime();
+    reasons.push(
+      `received ${received.slice(0, 10)}, ${ok ? "within" : "outside"} ${dateScopeWords(facts.received)}`,
+    );
+  }
+  if (facts.active) {
+    const ok =
+      Date.parse(t.lastActivity) >= dateScopeStart(facts.active, ctx.now, ctx.zone).getTime();
+    reasons.push(
+      `last active ${t.lastActivity.slice(0, 10)}, ${ok ? "within" : "outside"} ${dateScopeWords(facts.active)}`,
+    );
+  }
+  const from = t.from?.toLowerCase() ?? "";
+  if (facts.from_any?.length)
+    reasons.push(
+      `started by ${from || "nobody known"}, ${facts.from_any.includes(from) ? "in" : "not in"} from_any`,
+    );
+  if (facts.from_domain?.length)
+    reasons.push(
+      `sender domain ${domainOfAddress(from) || "none"}, ${facts.from_domain.includes(domainOfAddress(from)) ? "in" : "not in"} from_domain`,
+    );
+  if (facts.from_domain_not?.length)
+    reasons.push(
+      `sender domain ${domainOfAddress(from) || "none"}, ${facts.from_domain_not.includes(domainOfAddress(from)) ? "in" : "not in"} from_domain_not`,
+    );
+  if (facts.to_any?.length) {
+    const hit = t.recipients.find((r) => facts.to_any?.includes(r.toLowerCase()));
+    reasons.push(hit ? `sent to ${hit}, in to_any` : "sent to none of to_any");
+  }
+  return { admitted: scopeAdmits(facts, t, ctx), reasons };
+}
+
 /* ------------------------------ Three-valued evaluation ------------------------------ */
 
 /** true, false, or null for unknown (Unsure, or not read yet). */

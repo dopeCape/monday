@@ -48,6 +48,87 @@ function blockLine(b: BlockPreview): string {
   return `${head}${value}${items ? `: ${items}` : ""}${b.unsure ? ` (${b.unsure} unsure)` : ""}`;
 }
 
+const quote = (s: string, max = 60) => `"${s.length > max ? `${s.slice(0, max)}...` : s}"`;
+
+/** Before coverage was kept: each Extraction over the shown Threads. */
+function legacyValueLines(d: ViewDraft): string[] {
+  const rows = d.test?.shown ?? [];
+  if (!rows.length) return [];
+  return d.doc.extractions.map((x) => {
+    const values = rows.map((r) => r.values.find((v) => v.extraction === x.id));
+    const found = values.filter((v) => v?.state === "value").length;
+    const unsure = values.filter((v) => v?.state === "unsure").length;
+    return `${x.label || x.id}: a value on ${found} of the ${rows.length} shown threads${unsure ? `, ${unsure} unsure` : ""}.`;
+  });
+}
+
+/**
+ * What the model needs to diagnose a draft without guessing: how the tried
+ * Threads were chosen, who sent them, and how each Extraction and Signal read
+ * over all of them (a value, none of these, below the floor, or no candidate
+ * found, which means code found nothing of that kind in the text, not that
+ * the text was missing), with a few picks, and how to look closer.
+ */
+function coverageLines(d: ViewDraft, t: NonNullable<ViewDraft["test"]>): string[] {
+  const c = t.coverage;
+  if (!c) return [];
+  const out: string[] = [];
+  const p = t.pool;
+  out.push(
+    `In scope: ${t.inScope} threads.${
+      p
+        ? ` Tried ${t.tried}: ${p.kept ? `${p.kept} tried before and still in scope, ` : ""}${p.fresh} newest in scope${
+            p.skipped
+              ? `; code looked through ${p.scanned ?? 0} and passed over ${p.skipped} whose text holds none of the values the blocks add up`
+              : ""
+          }.`
+        : ""
+    }`,
+  );
+  if (c.senders.length)
+    out.push(
+      `Tried threads come from: ${c.senders.map((s) => `${s.from} ${s.count}`).join(", ")}.`,
+    );
+  for (const f of c.fields) {
+    const x = f.field.startsWith("x:")
+      ? d.doc.extractions.find((e) => e.id === f.field.slice(2))
+      : undefined;
+    const parts = x
+      ? [
+          `a value on ${f.resolved} of ${t.tried}`,
+          f.none ? `none of the candidates on ${f.none}` : "",
+          f.unsure ? `below its confidence floor on ${f.unsure}` : "",
+          f.noCandidates
+            ? `no candidates found on ${f.noCandidates} (code found no ${x.find} in their text, so nothing was asked)`
+            : "",
+          f.notRead ? `not read on ${f.notRead}` : "",
+          f.capped ? `candidates cut at the limit on ${f.capped}` : "",
+        ]
+      : [
+          `clear on ${f.resolved} of ${t.tried}`,
+          f.unsure ? `unsure on ${f.unsure}` : "",
+          f.none ? `none on ${f.none}` : "",
+          f.notRead ? `not read on ${f.notRead}` : "",
+        ];
+    const examples = f.examples.length
+      ? ` For example: ${f.examples.map((e) => quote(e)).join(", ")}.`
+      : "";
+    out.push(
+      `${f.label} (${f.field}${x ? `, find ${x.find}` : ""}): ${parts.filter(Boolean).join("; ")}.${examples}`,
+    );
+  }
+  if (t.shown.length)
+    out.push(
+      `Tried threads the card shows: ${t.shown
+        .map((r) => `${r.threadId} (${r.from}, ${quote(r.subject, 40)})`)
+        .join("; ")}.`,
+    );
+  out.push(
+    `To see why a thread read as it did (what code found in it, what the judge chose, why the scope admits it), call inspect_view_thread with draft_id ${d.id} and its thread id before revising.`,
+  );
+  return out;
+}
+
 /** The draft's test in one paragraph for the model: counts, what the card shows, what waits on the user. */
 function draftText(d: ViewDraft): string {
   const t = d.test;
@@ -76,15 +157,7 @@ function draftText(d: ViewDraft): string {
       ? `Threads that would move: ${t.moves.map((m) => `${m.threadIds.length} ${m.from} to ${m.to}`).join(", ")}.`
       : "",
     t?.blocks.length ? `It shows: ${t.blocks.map(blockLine).join("; ")}.` : "",
-    ...d.doc.extractions.map((x) => {
-      const rows = t?.shown ?? [];
-      const values = rows.map((r) => r.values.find((v) => v.extraction === x.id));
-      const found = values.filter((v) => v?.state === "value").length;
-      const unsure = values.filter((v) => v?.state === "unsure").length;
-      return rows.length
-        ? `${x.label || x.id}: a value on ${found} of the ${rows.length} shown threads${unsure ? `, ${unsure} unsure` : ""}.`
-        : "";
-    }),
+    ...(t?.coverage ? coverageLines(d, t) : legacyValueLines(d)),
     d.doc.actions.length
       ? `Buttons on its items: ${d.doc.actions.map((a) => a.label).join(", ")}.`
       : "",
@@ -195,6 +268,67 @@ const reviseView: ToolDefinition<{ draft_id: string; instruction?: string | unde
         name: draft.doc.name,
         draft,
       }),
+    };
+  },
+};
+
+/* ------------------------------ inspect_view_thread ------------------------------ */
+
+const inspectViewThread: ToolDefinition<{ draft_id: string; thread_id: string }> = {
+  name: "inspect_view_thread",
+  description:
+    "Look closely at one thread of a View draft, to diagnose a value or an answer before revising: why the scope admits it, each Extraction's candidates as code found them with the share of the judge's answer each got and what was picked, and each question's answer. For a thread the test did not try, what code finds in it (nothing is asked). Use the thread ids from create_view or revise_view, or from search_threads. Read-only.",
+  tier: "read",
+  input: z.object({ draft_id: z.string().min(1), thread_id: z.string().min(1) }),
+  summarize: (i) => i.thread_id,
+  async run(input, ctx) {
+    const seam = seamOf(ctx);
+    if (!seam) return refused("Views are not available from this host.");
+    let r: Awaited<ReturnType<ViewsSeam["drafting"]["inspect"]>>;
+    try {
+      r = await seam.drafting.inspect(input.draft_id, input.thread_id);
+    } catch (error) {
+      return refused(`The thread could not be inspected: ${message(error)}`);
+    }
+    if (r.workspaceId !== ctx.host.workspaceId)
+      return refused(`Draft ${input.draft_id} not found; create_view makes one.`);
+    const lines = [
+      `Thread ${r.threadId} from ${r.from || "unknown"}, ${quote(r.subject, 80)}${r.receivedAt ? `, received ${r.receivedAt.slice(0, 10)}` : ""}. ${
+        r.tried
+          ? "The test tried it."
+          : "The test did not try it; below is what code finds in it, nothing was asked."
+      }`,
+      `Scope: ${r.admitted ? "admits it" : "does not admit it"} (${r.scope.join("; ")}).`,
+      ...r.extractions.map((x) => {
+        const head = `${x.label} (x:${x.extraction}, find ${x.find}): `;
+        const what =
+          x.state === "value"
+            ? `picked ${quote(x.picked ?? "", 80)} at ${Math.round((x.confidence ?? 0) * 100)}% confidence`
+            : x.state === "unsure"
+              ? `picked ${quote(x.picked ?? "", 80)} at only ${Math.round((x.confidence ?? 0) * 100)}%, below its floor, so Unsure`
+              : x.state === "none"
+                ? `the judge chose none of the candidates${x.confidence !== null ? ` at ${Math.round(x.confidence * 100)}%` : ""}`
+                : x.state === "no_candidates"
+                  ? `code found no ${x.find} in its text, so nothing was asked`
+                  : r.tried
+                    ? "not read"
+                    : `${x.candidates.length} candidates`;
+        const list = x.candidates.length
+          ? ` Candidates in order${x.capped ? " (cut at the limit)" : ""}: ${x.candidates
+              .map(
+                (c) =>
+                  `${quote(c.span, 80)}${c.probability !== null ? ` ${Math.round(c.probability * 100)}%` : ""} [${c.line}]`,
+              )
+              .join("; ")}.`
+          : "";
+        return `${head}${what}.${list}`;
+      }),
+      ...r.signals.map((s) => `${s.label} (signal:${s.signal}): ${s.answer}.`),
+    ];
+    return {
+      kind: "result",
+      text: lines.join("\n"),
+      data: { threadId: r.threadId, tried: r.tried, admitted: r.admitted },
     };
   },
 };
@@ -338,4 +472,11 @@ export async function undoView(
     : `Undone: the View ${view.doc.name} is back at version ${view.version}.`;
 }
 
-export const VIEW_TOOLS = [listViews, createView, reviseView, updateView, deleteView];
+export const VIEW_TOOLS = [
+  listViews,
+  createView,
+  reviseView,
+  inspectViewThread,
+  updateView,
+  deleteView,
+];

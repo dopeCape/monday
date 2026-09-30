@@ -487,6 +487,64 @@ export interface BlockPreview {
   unsure: number;
 }
 
+/**
+ * How well each of a draft's Fields read over every tried Thread, so the
+ * Agent can see what went wrong before it rewrites anything: for an
+ * Extraction, how many Threads got a value, "none of these", an answer below
+ * its floor, or no candidate at all (code found none of its kind, so nothing
+ * was asked); for a Signal, how many answers were clear, Unsure or none.
+ */
+export interface ViewCoverage {
+  /** The tried Threads' senders, most first (at most five). */
+  senders: Array<{ from: string; count: number }>;
+  fields: Array<{
+    /** `x:<id>` or `signal:<id>`. */
+    field: string;
+    label: string;
+    /** A value above its floor; a clear answer. */
+    resolved: number;
+    /** "None of these" above the floor; a Choice's `none`. */
+    none: number;
+    /** Below the floor; inside the Unsure band. */
+    unsure: number;
+    /** Code found no candidate of its kind, so it was not asked (Extractions). */
+    noCandidates: number;
+    /** No answer at all: no judge, or the request failed. */
+    notRead: number;
+    /** Threads whose candidates were cut at views.extract.candidates_max. */
+    capped: number;
+    /** A few values picked, as written. */
+    examples: string[];
+  }>;
+}
+
+/**
+ * One tried Thread as inspect_view_thread explains it: why the scope admits
+ * it, each Extraction's candidates with the judge's share for each, and each
+ * Signal's answer. Sealed in the draft; never on the card.
+ */
+export interface ViewThreadDiagnosis {
+  threadId: Id;
+  from: string;
+  subject: string;
+  receivedAt: IsoDate | null;
+  /** Why the scope admits it, fact by fact. */
+  scope: string[];
+  extractions: Array<{
+    extraction: string;
+    label: string;
+    find: ExtractKind;
+    /** What happened: a value, none of these, below the floor, no candidates, not asked. */
+    state: "value" | "none" | "unsure" | "no_candidates" | "not_read";
+    picked: string | null;
+    confidence: number | null;
+    /** The spans code found, in order, each with the share of the judge's answer it got. */
+    candidates: Array<{ span: string; line: string; probability: number | null }>;
+    capped: boolean;
+  }>;
+  signals: Array<{ signal: string; label: string; answer: string }>;
+}
+
 /** What the test found: the Threads tried, the ones shown, the counts over all of them. */
 export interface ViewTest {
   /** Threads asked. */
@@ -508,6 +566,8 @@ export interface ViewTest {
    * no value of that kind.
    */
   pool?: { kept: number; fresh: number; skipped?: number; scanned?: number } | undefined;
+  /** How well each Field read over every tried Thread (the tool's words for the Agent). */
+  coverage?: ViewCoverage | undefined;
   /** After corrections: how many of them the View now agrees with. */
   agreement: { agree: number; total: number } | null;
   /** What a revision changed, in words. */

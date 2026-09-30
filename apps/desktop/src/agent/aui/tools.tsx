@@ -407,6 +407,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconComponent>> = {
   list_views: KanbanIcon,
   create_view: KanbanIcon,
   revise_view: KanbanIcon,
+  inspect_view_thread: KanbanIcon,
   update_view: KanbanIcon,
   delete_view: KanbanIcon,
 };
@@ -576,6 +577,7 @@ export const TOOL_UIS: Readonly<Record<string, ToolCallMessagePartComponent>> = 
   list_views: MondayTool,
   create_view: MondayTool,
   revise_view: MondayTool,
+  inspect_view_thread: MondayTool,
   update_view: MondayTool,
   delete_view: MondayTool,
   // Onboarding: the Groups proposal as its own rows, the keymap as a Setting line.
