@@ -647,6 +647,15 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
       const doc = await docAt(r, r.version);
       if (!doc) continue;
       for (const def of viewSignalDefs({ ...doc, id: r.id }, s["views.examples_in_question"])) {
+        // A per-row Signal is asked once per item or Message, in the same request.
+        const each = def.each
+          ? "item" in def.each
+            ? {
+                gate: `extract:${def.each.item}` as const,
+                optionsFrom: `each_item:${def.each.item}` as const,
+              }
+            : { optionsFrom: "each_message" as const }
+          : {};
         out.push({
           id: def.id,
           kind: def.kind,
@@ -654,6 +663,7 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
           facts: doc.scope.facts,
           viewId: r.id,
           consumer: doc.name,
+          ...each,
         });
       }
       // Each Extraction: a Choice over the candidates code finds, asked only when it finds some.
@@ -668,8 +678,14 @@ export function createViewStore(options: ViewStoreOptions): ViewStore {
           facts: doc.scope.facts,
           viewId: r.id,
           consumer: doc.name,
-          gate: `extract:${def.find}`,
-          optionsFrom: `extract:${def.find}`,
+          // One value: a Choice; many: a Noul per candidate; a message-grain View: one per Message.
+          ...(def.mode === "message" ? {} : { gate: `extract:${def.find}` as const }),
+          optionsFrom:
+            def.mode === "many"
+              ? `extract_many:${def.find}`
+              : def.mode === "message"
+                ? `extract_message:${def.find}`
+                : `extract:${def.find}`,
         });
       }
     }

@@ -355,6 +355,8 @@ const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; type: string
   { table: "calendars", column: "access", type: "text" },
   { table: "calendars", column: "shared_by", type: "text" },
   { table: "calendars", column: "error", type: "text" },
+  // Many values per Thread and per-row answers (Views V): read again with the next values read.
+  { table: "view_values", column: "items", type: "text" },
 ];
 
 async function addColumns(driver: SqlDriver): Promise<void> {

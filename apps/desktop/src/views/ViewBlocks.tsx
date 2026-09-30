@@ -31,6 +31,7 @@ import {
   formatAggregate,
   formatChange,
   formatFieldValue,
+  rowKey,
   UNSURE_LANE,
 } from "@monday/shared";
 import {
@@ -187,7 +188,8 @@ export interface ViewBlocksProps {
   /** The Inbox's row for a Thread. */
   row(thread: Thread): ReactNode;
   focus: string | null;
-  open(threadId: string): void;
+  /** Opens the row's Thread, on its Message when the row is one Message. */
+  open(threadId: string, messageId?: string | null): void;
   /** A Thread moved to another Lane by hand; null takes the user's placement back. */
   onMove?: ((threadId: string, lane: string | null) => void) | undefined;
   /** The Lane the counts Block filters to. */
@@ -371,13 +373,19 @@ function GroupRows({
   return (
     <>
       {decided.map((r) => (
-        <LaneRow key={r.thread.id} props={props} row={r} lane={group.id} actions={actions} />
+        <LaneRow key={rowKey(r.thread)} props={props} row={r} lane={group.id} actions={actions} />
       ))}
       {notRead.length ? (
         <>
           <div className="view-sub">{s["strings.views.not_read"]}</div>
           {notRead.map((r) => (
-            <LaneRow key={r.thread.id} props={props} row={r} lane={group.id} actions={actions} />
+            <LaneRow
+              key={rowKey(r.thread)}
+              props={props}
+              row={r}
+              lane={group.id}
+              actions={actions}
+            />
           ))}
         </>
       ) : null}
@@ -425,7 +433,11 @@ function ThreadLine({
       data-thread={t.id}
       data-tone={tone}
     >
-      <button type="button" className="view-line-main" onClick={() => props.open(t.id)}>
+      <button
+        type="button"
+        className="view-line-main"
+        onClick={() => props.open(t.id, t.row?.message)}
+      >
         {tone ? <span className="dot" aria-hidden="true" /> : null}
         <b>{t.thread.subject}</b>
         <span className="who">{t.thread.participants[0]?.name || t.from}</span>
@@ -533,12 +545,16 @@ function TableBlock({ props, d }: { props: ViewBlocksProps; d: Extract<Data, { t
         const tone = toneOf(props, row.lane);
         return (
           <div
-            key={row.thread.id}
+            key={rowKey(row.thread)}
             className={cx("view-tr", props.focus === row.thread.id && "focus")}
             data-thread={row.thread.id}
             data-tone={tone}
           >
-            <button type="button" className="t" onClick={() => props.open(row.thread.id)}>
+            <button
+              type="button"
+              className="t"
+              onClick={() => props.open(row.thread.id, row.thread.row?.message)}
+            >
               {tone ? <span className="dot" aria-hidden="true" /> : null}
               <b>{row.thread.thread.subject}</b>
               <span className="who">
@@ -641,7 +657,7 @@ function ChartBlock({ props, d }: { props: ViewBlocksProps; d: Extract<Data, { t
       {rows.length ? (
         <div className="view-picked">
           {rows.map((r) => (
-            <ThreadLine key={r.thread.id} props={props} row={r} actions={actions} />
+            <ThreadLine key={rowKey(r.thread)} props={props} row={r} actions={actions} />
           ))}
         </div>
       ) : null}
@@ -665,7 +681,7 @@ function TimelineBlock({ props, d }: { props: ViewBlocksProps; d: Dated }) {
           <div className="view-day-h">{formatListTime(list[0]?.date ?? day, props.now)}</div>
           {list.map((i) => (
             <ThreadLine
-              key={i.row.thread.id}
+              key={rowKey(i.row.thread)}
               props={props}
               row={i.row}
               actions={actions}
@@ -720,12 +736,15 @@ function CalendarBlock({ props, d }: { props: ViewBlocksProps; d: Dated }) {
       onNext={() => setMoved((m) => m + 1)}
       today={`${thisMonth}-${pad(now.getDate())}`}
       items={d.items.map((i) => ({
-        key: i.row.thread.id,
+        key: rowKey(i.row.thread),
         day: i.date.slice(0, 10),
         label: i.row.thread.thread.subject,
         tone: toneOf(props, i.row.lane),
       }))}
-      onPick={(id) => props.open(id)}
+      onPick={(key) => {
+        const i = d.items.find((x) => rowKey(x.row.thread) === key);
+        if (i) props.open(i.row.thread.id, i.row.thread.row?.message);
+      }}
     />
   );
 }
@@ -738,12 +757,16 @@ function CardsBlock({ props, d }: { props: ViewBlocksProps; d: Extract<Data, { t
     <div className="view-cards" data-component="cards">
       {d.cards.map((c) => (
         <div
-          key={c.row.thread.id}
+          key={rowKey(c.row.thread)}
           className={cx("view-card-item", props.focus === c.row.thread.id && "focus")}
           data-thread={c.row.thread.id}
           data-tone={toneOf(props, c.row.lane)}
         >
-          <button type="button" className="main" onClick={() => props.open(c.row.thread.id)}>
+          <button
+            type="button"
+            className="main"
+            onClick={() => props.open(c.row.thread.id, c.row.thread.row?.message)}
+          >
             <b className="title">
               {formatFieldValue(c.title, undefined, ctx, words) || c.row.thread.thread.subject}
             </b>
@@ -807,7 +830,7 @@ function PeopleBlock({
       {person ? (
         <div className="view-picked">
           {person.rows.map((r) => (
-            <ThreadLine key={r.thread.id} props={props} row={r} actions={[]} />
+            <ThreadLine key={rowKey(r.thread)} props={props} row={r} actions={[]} />
           ))}
         </div>
       ) : null}
@@ -836,7 +859,7 @@ function ChecklistBlock({
       formatFieldValue(i.item, undefined, props.base.ctx, words) || i.row.thread.thread.subject;
     return (
       <div
-        key={i.row.thread.id}
+        key={rowKey(i.row.thread)}
         className={cx("view-check", i.done && "done")}
         data-thread={i.row.thread.id}
       >
@@ -848,7 +871,11 @@ function ChecklistBlock({
             props.onDone?.(i.row.thread.id, e.currentTarget.checked, i.row.thread.messageCount)
           }
         />
-        <button type="button" className="txt" onClick={() => props.open(i.row.thread.id)}>
+        <button
+          type="button"
+          className="txt"
+          onClick={() => props.open(i.row.thread.id, i.row.thread.row?.message)}
+        >
           {text}
           <span className="who">
             {i.row.thread.thread.participants[0]?.name || i.row.thread.from}

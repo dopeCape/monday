@@ -95,21 +95,29 @@ function coverageLines(d: ViewDraft, t: NonNullable<ViewDraft["test"]>): string[
       : undefined;
     const parts = x
       ? [
-          `a value on ${f.resolved} of ${t.tried}`,
+          f.values !== undefined
+            ? `${f.values} values on ${f.resolved} of ${t.tried} threads`
+            : `a value on ${f.resolved} of ${t.tried}`,
           f.none ? `none of the candidates on ${f.none}` : "",
           f.unsure ? `below its confidence floor on ${f.unsure}` : "",
           f.noCandidates
             ? `no candidates found on ${f.noCandidates} (code found no ${x.find} in their text, so nothing was asked)`
             : "",
           f.notRead ? `not read on ${f.notRead}` : "",
-          f.capped ? `candidates cut at the limit on ${f.capped}` : "",
+          f.capped ? `candidates cut at the limit on ${f.capped} (the rest were not asked)` : "",
         ]
-      : [
-          `clear on ${f.resolved} of ${t.tried}`,
-          f.unsure ? `unsure on ${f.unsure}` : "",
-          f.none ? `none on ${f.none}` : "",
-          f.notRead ? `not read on ${f.notRead}` : "",
-        ];
+      : f.per === "row"
+        ? [
+            `asked per row: clear on ${f.resolved} rows`,
+            f.unsure ? `unsure on ${f.unsure}` : "",
+            f.none ? `none on ${f.none}` : "",
+          ]
+        : [
+            `clear on ${f.resolved} of ${t.tried}`,
+            f.unsure ? `unsure on ${f.unsure}` : "",
+            f.none ? `none on ${f.none}` : "",
+            f.notRead ? `not read on ${f.notRead}` : "",
+          ];
     const examples = f.examples.length
       ? ` For example: ${f.examples.map((e) => quote(e)).join(", ")}.`
       : "";

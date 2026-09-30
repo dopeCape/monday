@@ -209,6 +209,7 @@ export function Message({
       <button
         type="button"
         className={cx("msg", "collapsed", className)}
+        data-message={message.id}
         onClick={() => onExpand?.(message.id)}
       >
         <div className="msg-head">
@@ -221,7 +222,7 @@ export function Message({
   }
   const to = message.to.map((p) => firstName(personName(p))).join(", ");
   return (
-    <div className={cx("msg", className)}>
+    <div className={cx("msg", className)} data-message={message.id}>
       <div className="msg-head">
         <Avatar name={personName(message.from)} />
         <div className="who">

@@ -34,6 +34,69 @@ export interface AskedThread {
 const label = (x: { id: string; label?: string | undefined }) =>
   x.label?.trim() || x.id.replaceAll("_", " ");
 
+/** A per-row Signal over the rows of the tried Threads: its answer per item or per Message. */
+function eachCoverage(
+  doc: ViewDoc,
+  threads: readonly ViewThread[],
+  s: { local: string; stored: string },
+  ctx: ViewContext,
+  diagnosis: Record<Id, ViewThreadDiagnosis>,
+  examples: number,
+): ViewCoverage["fields"][number] {
+  const { noulLow, noulHigh, confidenceBelow } = ctx.rules;
+  const row: ViewCoverage["fields"][number] = {
+    field: `signal:${s.local}`,
+    label: signalName(doc, s.local),
+    resolved: 0,
+    none: 0,
+    unsure: 0,
+    noCandidates: 0,
+    notRead: 0,
+    capped: 0,
+    examples: [],
+    per: "row",
+  };
+  for (const t of threads) {
+    const answers = Object.values(t.values?.[s.stored]?.answers ?? {});
+    const tally = new Map<string, number>();
+    for (const a of answers) {
+      let word: string;
+      if (a.noul !== undefined && a.noul !== null) {
+        const clear = a.noul >= noulHigh || a.noul < noulLow;
+        if (clear) row.resolved += 1;
+        else row.unsure += 1;
+        word = clear ? (a.noul >= noulHigh ? "yes" : "no") : "unsure";
+      } else if (
+        a.confidence !== undefined &&
+        a.confidence !== null &&
+        a.confidence < confidenceBelow
+      ) {
+        row.unsure += 1;
+        word = "unsure";
+      } else if (a.choice === "none") {
+        row.none += 1;
+        word = "none";
+      } else {
+        row.resolved += 1;
+        word = a.choice ?? (a.score !== undefined && a.score !== null ? a.score.toFixed(1) : "?");
+        if (a.choice && row.examples.length < examples && !row.examples.includes(a.choice))
+          row.examples.push(a.choice);
+      }
+      tally.set(word, (tally.get(word) ?? 0) + 1);
+    }
+    diagnosis[t.id]?.signals.push({
+      signal: s.local,
+      label: row.label,
+      answer: answers.length
+        ? `asked per ${doc.grain === "message" ? "message" : "item"}: ${[...tally.entries()]
+            .map(([w, n]) => `${w} ${n}`)
+            .join(", ")}`
+        : "no rows asked",
+    });
+  }
+  return row;
+}
+
 /** The Signals the draft reads by local id: its own, then the shipped ones it uses. */
 function signalsOf(doc: ViewDoc): Array<{ local: string; stored: string }> {
   return [
@@ -47,7 +110,13 @@ export function coverageOf(
   threads: readonly ViewThread[],
   asked: ReadonlyMap<Id, AskedThread>,
   ctx: ViewContext,
-  options: { candidatesMax: number; scopeFacts: ViewDoc["scope"]["facts"]; examples?: number },
+  options: {
+    candidatesMax: number;
+    scopeFacts: ViewDoc["scope"]["facts"];
+    examples?: number;
+    /** views.extract.many.max */
+    manyMax?: number;
+  },
 ): { coverage: ViewCoverage; diagnosis: Record<Id, ViewThreadDiagnosis> } {
   const senders = new Map<string, number>();
   for (const t of threads) {
@@ -69,7 +138,7 @@ export function coverageOf(
   const fields: ViewCoverage["fields"] = [];
   for (const x of doc.extractions) {
     const sid = viewExtractionId(doc.id, x.id);
-    const row = {
+    const row: ViewCoverage["fields"][number] = {
       field: `x:${x.id}`,
       label: label(x),
       resolved: 0,
@@ -79,11 +148,13 @@ export function coverageOf(
       notRead: 0,
       capped: 0,
       examples: [] as string[],
+      ...(x.many || doc.grain === "message" ? { values: 0 } : {}),
     };
     for (const t of threads) {
       const r = asked.get(t.id);
       const spans = r?.candidates[sid];
-      const capped = (spans?.length ?? 0) >= options.candidatesMax;
+      const capped =
+        (spans?.length ?? 0) >= (x.many ? (options.manyMax ?? 30) : options.candidatesMax);
       if (capped) row.capped += 1;
       const read = readExtraction(doc, t, x.id, ctx);
       let state: ViewThreadDiagnosis["extractions"][number]["state"];
@@ -94,14 +165,19 @@ export function coverageOf(
       else state = "not_read";
       if (state === "value") {
         row.resolved += 1;
-        if (read.state === "value" && row.examples.length < (options.examples ?? 3))
-          row.examples.push(read.text);
+        if (read.state === "value" && row.values !== undefined)
+          row.values += read.items?.length ?? 1;
+        const texts = read.state === "value" ? (read.items?.map((i) => i.text) ?? [read.text]) : [];
+        for (const text of texts)
+          if (row.examples.length < (options.examples ?? 3)) row.examples.push(text);
       } else if (state === "none") row.none += 1;
       else if (state === "unsure") row.unsure += 1;
       else if (state === "no_candidates") row.noCandidates += 1;
       else row.notRead += 1;
       const answer = r?.extra[sid];
       const shares = answer?.type === "choice" ? answer.probabilities : null;
+      // Many values: each candidate's own Noul, as the judge answered it.
+      const nouls = new Map((t.values?.[sid]?.items ?? []).map((i) => [i.text, i.confidence]));
       const found =
         r?.found?.[sid] ?? (spans ?? []).map((span) => ({ key: span, span, line: span }));
       diagnosis[t.id]?.extractions.push({
@@ -119,7 +195,13 @@ export function coverageOf(
         candidates: found.map((c) => ({
           span: c.span,
           line: c.line,
-          probability: shares ? (shares[c.key] ?? 0) : null,
+          probability: x.many
+            ? r
+              ? (nouls.get(c.span) ?? 0)
+              : null
+            : shares
+              ? (shares[c.key] ?? 0)
+              : null,
         })),
         capped,
       });
@@ -128,6 +210,11 @@ export function coverageOf(
   }
   const { noulLow, noulHigh, confidenceBelow } = ctx.rules;
   for (const s of signalsOf(doc)) {
+    const own = doc.signals.find((x) => x.id === s.local);
+    if (own?.each) {
+      fields.push(eachCoverage(doc, threads, s, ctx, diagnosis, options.examples ?? 3));
+      continue;
+    }
     const row = {
       field: `signal:${s.local}`,
       label: signalName(doc, s.local),

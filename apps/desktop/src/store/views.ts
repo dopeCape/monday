@@ -46,6 +46,7 @@ export const VIEWS_SCHEMA_SQL = `
     text text not null,
     value text not null,
     confidence real not null,
+    items text,
     primary key (thread_id, signal_id)
   );
   create table if not exists view_values_stale (
@@ -103,11 +104,20 @@ export function viewValuesStatements(
         : { sql: "delete from view_values where thread_id = ?", params: [threadId] },
     );
     for (const [signalId, v] of Object.entries(values[threadId] ?? {})) {
+      // Many values, one per Message, or a per-row Signal's answers ride in `items`.
+      const extra =
+        v.items || v.answers
+          ? JSON.stringify({
+              ...(v.items ? { items: v.items } : {}),
+              ...(v.answers ? { answers: v.answers } : {}),
+            })
+          : null;
       out.push({
-        sql: `insert into view_values (thread_id, signal_id, text, value, confidence) values (?, ?, ?, ?, ?)
+        sql: `insert into view_values (thread_id, signal_id, text, value, confidence, items) values (?, ?, ?, ?, ?, ?)
               on conflict (thread_id, signal_id) do update set
-                text = excluded.text, value = excluded.value, confidence = excluded.confidence`,
-        params: [threadId, signalId, v.text, JSON.stringify(v.value), v.confidence],
+                text = excluded.text, value = excluded.value, confidence = excluded.confidence,
+                items = excluded.items`,
+        params: [threadId, signalId, v.text, JSON.stringify(v.value), v.confidence, extra],
       });
     }
     out.push({ sql: "delete from view_values_stale where thread_id = ?", params: [threadId] });
@@ -258,12 +268,27 @@ export function viewThreadsSql(
        from messages m, json_each(m.recipients) r where m.thread_id = t.id) as to_emails,
     (select group_concat(lower(json_extract(r.value, '$.email')), ' ')
        from messages m, json_each(m.cc) r where m.thread_id = t.id) as cc_emails,
-    (select json_group_object(v.signal_id, json_object('text', v.text, 'value', json(v.value), 'confidence', v.confidence))
+    (select json_group_object(v.signal_id, json_object('text', v.text, 'value', json(v.value), 'confidence', v.confidence,
+         'items', json_extract(coalesce(v.items, '{}'), '$.items'), 'answers', json_extract(coalesce(v.items, '{}'), '$.answers')))
        from view_values v where v.thread_id = t.id) as v_values,
     f.facts as f_facts,
     `,
   )} left join thread_facts f on f.thread_id = t.id where ${where.join(" and ")} ${ALL_THREADS_SQL.slice(at)} limit ${Math.max(1, Math.floor(limit))})`;
   return { sql, params };
+}
+
+/** The picked values as the View code reads them: no `items` or `answers` where there are none. */
+function valuesOf(raw: Record<string, ExtractedValue>): Record<string, ExtractedValue> {
+  const out: Record<string, ExtractedValue> = {};
+  for (const [id, v] of Object.entries(raw)) {
+    const { items, answers, ...rest } = v;
+    out[id] = {
+      ...rest,
+      ...(Array.isArray(items) ? { items } : {}),
+      ...(answers && typeof answers === "object" ? { answers } : {}),
+    };
+  }
+  return out;
 }
 
 /** One row of viewThreadsSql as the View code and the row read it. */
@@ -290,7 +315,7 @@ export function rowToViewThread(r: Row, workspaceId: Id): CachedViewThread {
     recipients: [...words(r.to_emails), ...words(r.cc_emails)],
     facts: json<Record<string, unknown> | null>(r.f_facts, null),
     readings: rowSignals(r),
-    values: json<Record<string, ExtractedValue>>(r.v_values, {}),
+    values: valuesOf(json<Record<string, ExtractedValue>>(r.v_values, {})),
     subject: thread.subject,
     snippet: thread.snippet,
     correspondent: who?.email ? { name: who.name ?? "", email: who.email.toLowerCase() } : null,

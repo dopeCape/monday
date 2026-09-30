@@ -121,9 +121,37 @@ An Extraction is a value the View needs from the text that code cannot pick alon
 
 Extractions are Signals: each is stored as a Choice Signal owned by the View (`board:<viewId>:x_<id>`, the stored prefix predates Views), gated on its kind's candidates, with per-Thread options built by code (`signals.md`, per-Thread options). Its answer row says only "picked" or "none" and the confidence; the picked value stays sealed on the Server with the Thread's Facts and reaches the Device only through `GET /views/values` (below).
 
+### Many values
+
+A Thread may hold many of the values a View wants: an order confirmation bundling nine orders has nine totals, a Dependabot digest lists seventy packages. An Extraction with `"many": true` (and at most `max` values, never more than `views.extract.many.max`) picks every one:
+
+1. **Code finds the candidates** as for one value, up to `views.extract.many.max` (30); past it the rest are not asked and the test says so.
+2. **Jev answers one Noul per candidate**: "does this span answer the question?", with the span and the words around it in the question (`views.extract.many.note`, `views.extract.many.yes`), `false` meaning the Extraction's own `none` words. The Nouls are independent questions over the same state, so they ride together in the Thread's one Signal request; a Thread is never batched with another.
+3. **Code keeps every candidate at or above `views.extract.many.threshold`** (0.7), in order of appearance, at most `max`. One in the Unsure band (from `signals.unsure.noul_low` up to the threshold) is kept as Unsure: it is never a value, and a Thread with only Unsure ones reads Unsure. None above the band: not stated.
+4. **Code adds and counts.** A Thread row reads a many-Extraction as the total of its values (money in the currency most of them use, and each currency kept apart in a Block's aggregate), shows them listed, and every aggregate takes each value: a sum adds all nine totals into the confirmation's month, `count` of the Field counts values (70 packages), `avg`, `min` and `max` over the values. Picking many is allowed; a question that asks Jev to add or count still fails validation.
+
+The answer row says only "picked" or "none" (with the least probability kept, or how clearly the best one was not it); the values stay sealed with the Thread's Facts beside the rest (`items`), reach the Device through the same routes and sit in the Cache's `view_values.items`.
+
+### Rows
+
+A View's `grain` says what one Row of its Blocks is:
+
+| `grain` | A Row is | Its values and answers | Its date |
+|---|---|---|---|
+| `thread` (default) | a Thread | as above | the Thread's |
+| `item` | each value the `item_of` many-Extraction picked | that one value, and each per-row Signal's answer for it | the Message it was found in |
+| `message` | each Message of a Thread that holds a value or an answer | each Extraction's value in that Message (one Choice per Message over that Message's candidates, up to `views.grain.max_messages` Messages), each per-row Signal's answer for it | that Message's |
+
+- **Per-row questions.** A View Signal with `"each": true` is asked once per Row instead of once per Thread, with the item (its span and the words around it) or the Message (its sender, date and first `views.grain.message_chars` characters) in the question (`views.each.item_note`, `views.each.message_note`), in the Thread's one request. For grain `item` it is asked of every candidate of the `item_of` kind, speculatively beside the Nouls that pick them (TypeSafe: independent questions ride together; code reads only the answers of the candidates picked), so one request still carries everything. This is how "vulnerabilities by severity" works: the digest's rows are its packages, and each package's severity is its own Choice.
+- A Thread whose `item_of` values are Unsure or not read yet stays one Row, counted Unsure or Not read yet; one with none has no Rows. A Thread with no Message Rows stays one Row.
+- Every Row keeps its Thread's id, so a table row, a bar or a card opens its Thread; a Message Row opens it on that Message, unfolded and scrolled to. Lanes, `where`, dedupe, groups, aggregates and sorts work on Rows exactly as on Threads; the scope and its `limit` count Threads.
+- The card shows the tried Threads (once each, whatever their Rows), and its Blocks are drawn over the Rows.
+- **Decided, severity per item.** A per-item judgment is a per-row Signal (`each`) whose question carries the item, not a sibling many-Extraction: two independent lists could not be paired item by item, and a question per item keeps each answer attached to its Row. Its cost is one question per candidate, bounded by `views.extract.many.max`.
+- A user placement ("Move to") and a checklist mark are per Thread, so they apply to all of a Thread's Rows.
+
 ### One request per Thread
 
-All of a View's Jev questions for one Thread (its Signals, the shipped ones it uses and lacks, its Extractions) ride in the **one Signal request** for that Thread (ADR 0014), beside every other Signal that applies: independent questions over the same state, answered in parallel. Many Threads are asked concurrently (the limiter's pool); nothing walks Threads one after another.
+All of a View's Jev questions for one Thread (its Signals, the shipped ones it uses and lacks, its Extractions, and for many values and per-row Signals one question per candidate or Message) ride in the **one Signal request** for that Thread (ADR 0014), beside every other Signal that applies: independent questions over the same state, answered in parallel (split into parts, all in flight, only when they outgrow TypeSafe's request budget). Many Threads are asked concurrently (the limiter's pool); nothing walks Threads one after another, and questions of two Threads never share a request.
 
 ## Queries
 
@@ -255,6 +283,10 @@ The card shows at least `views.test.shown` Threads (or all there are) before Pin
 | `views.extract.candidates_max` | 20 | Candidates per Extraction per Thread |
 | `views.extract.date_order` | `mdy` | How `10/03/2026` reads |
 | `views.extract.item_chars` | 300 | The longest line offered as an item |
+| `views.extract.many.threshold` | 0.7 | A candidate of many is kept at or above this probability |
+| `views.extract.many.max` | 30 | Candidates asked per many-Extraction or per-item Signal per Thread |
+| `views.grain.max_messages` | 20 | Messages a message-grain View reads per Thread |
+| `views.grain.message_chars` | 1500 | Characters of a Message in its own question |
 | `views.nav.show_counts` | on | Counts beside Views in the nav |
 
 A View over the limits is refused before anything is saved, with the reason in the card. `signals.max_active` also applies (a View's Signals and Extractions both count).
@@ -285,7 +317,7 @@ A View over the limits is refused before anything is saved, with the reason in t
 
 | Code | Jev | Language model |
 |---|---|---|
-| Scope Facts, candidate finding and normalizing, every comparison, count, sum and date bucket, dedupe, three-valued logic, hysteresis, Blocks, limits, the test sample, action gating | The View's Signals, the shipped ones it uses, and each Extraction's pick, per Thread, in the one Signal request | Drafting and revising the View document, its questions and its Blocks from the sentence and the corrections |
+| Scope Facts, candidate finding and normalizing, every comparison, count, sum and date bucket, dedupe, three-valued logic, hysteresis, Rows, many values kept by threshold, Blocks, limits, the test sample, action gating | The View's Signals (per Thread or per Row), the shipped ones it uses, and each Extraction's pick (one Choice, or one Noul per candidate of many), per Thread, in the one Signal request | Drafting and revising the View document, its questions and its Blocks from the sentence and the corrections |
 
 ## Acceptance criteria
 
@@ -308,3 +340,4 @@ A View over the limits is refused before anything is saved, with the reason in t
 17. A draft that names an unknown Block, Field, Extraction kind, action kind, Workflow or Lane fails validation with the reason, and the retry corrects it.
 18. **The right Threads.** A View of five order senders over a year, whose orders are older than 210 newer newsletters, is tried on every one of its orders and counts its scope exactly; the Device's View of it lists them too. A bare domain in `from_any` fails validation and names `from_domain`. A first draft over everything tries 30 newsletters; revised to the order senders it tries the orders, not the newsletters again; revised once more it keeps the same Threads. Over everything, a View that adds up totals tries every order that holds an amount before any newsletter and says how many it passed over.
 19. **Coverage.** On five order confirmations of one sender (one picked below its floor, one "none", one a shipping notice with no amount), `create_view`'s result says "a value on 2 of 5; none of the candidates on 1; below its confidence floor on 1; no candidates found on 1", the senders of the tried Threads and a few values; `inspect_view_thread` shows the candidates with Jev's share of each and why the scope admits the Thread, and for an untried newsletter shows why the scope refuses it, with no judge call.
+20. **Many values.** An order confirmation bundling three orders adds its three order totals (not the item prices, not the grand total) to its month in one Signal request with a Noul per amount; pinned, a new confirmation's totals are read back whole through the values route. A Dependabot digest of three packages is three Rows of an item View, each with its own severity asked in the same request, charted by severity. A thread of three advisories is three Rows of a message View, charted on each Message's month.

@@ -456,7 +456,32 @@ export function validateView(
     xIds.add(x.id);
     if (COUNTING.test(wordsOf(x.question)))
       errors.push(
-        `Extraction ${x.id} asks the model to count, add up or compare. It picks one value; code compares and adds.`,
+        `Extraction ${x.id} asks the model to count, add up or compare. It picks one value, or every value that answers with many: true; code counts, compares and adds.`,
+      );
+    if (x.max !== undefined && !x.many)
+      errors.push(`Extraction ${x.id} has a max but picks one value; add many: true or drop max.`);
+    if (x.many && doc.grain === "message")
+      errors.push(
+        `Extraction ${x.id} picks many, and in a message-grain View each Extraction is one value per Message; drop many.`,
+      );
+  }
+  const grain = doc.grain ?? "thread";
+  if (grain === "item") {
+    const itemOf = doc.extractions.find((x) => x.id === doc.item_of);
+    if (!doc.item_of)
+      errors.push(
+        "grain item makes a row of each value a many-Extraction picks; name it in item_of.",
+      );
+    else if (!itemOf) errors.push(`item_of names ${doc.item_of}, which the View does not declare.`);
+    else if (!itemOf.many)
+      errors.push(`item_of names ${doc.item_of}, which picks one value; give it many: true.`);
+  } else if (doc.item_of) {
+    errors.push(`item_of is only read by grain item; this View's grain is ${grain}.`);
+  }
+  for (const s of doc.signals) {
+    if (s.each && grain === "thread")
+      errors.push(
+        `Signal ${s.id} is asked per row (each), and this View's rows are Threads; use grain item or message, or drop each.`,
       );
   }
   for (const l of doc.lanes as Lane[])

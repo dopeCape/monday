@@ -63,7 +63,16 @@ export type SignalOptionsFrom =
   | "links"
   | "tracking"
   | "workflows"
-  | `extract:${ExtractKind}`;
+  /** A View's Extraction: one value, a Choice over the candidates of its kind. */
+  | `extract:${ExtractKind}`
+  /** A View's Extraction that picks many: one Noul per candidate, every one above the threshold kept. */
+  | `extract_many:${ExtractKind}`
+  /** A View's Extraction in a message-grain View: one Choice per Message over that Message's candidates. */
+  | `extract_message:${ExtractKind}`
+  /** A View's Signal asked once per item: per candidate of the item Extraction's kind (item grain). */
+  | `each_item:${ExtractKind}`
+  /** A View's Signal asked once per Message (message grain). */
+  | "each_message";
 
 export type SignalQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 

@@ -80,6 +80,8 @@ export interface TestSettings {
   scan?: number | undefined;
   /** views.extract.candidates_max: a Thread with this many candidates was cut short. */
   candidatesMax?: number | undefined;
+  /** views.extract.many.max: the same for many values. */
+  manyMax?: number | undefined;
 }
 
 export interface TestRun {
@@ -244,9 +246,28 @@ export async function runViewTest(
     ...own.map((d) => [d.id, d.question as JudgeQuestion]),
     ...pulls.map((d) => [d.id, d.question as JudgeQuestion]),
   ]);
-  const extraOptions: Record<string, SignalOptionsFrom> = Object.fromEntries(
-    pulls.map((d) => [d.id, `extract:${d.find}` as SignalOptionsFrom]),
-  );
+  // How each is asked: one value, many (a Noul per candidate), one per Message, and a Signal per row.
+  const extraOptions: Record<string, SignalOptionsFrom> = Object.fromEntries([
+    ...pulls.map((d) => [
+      d.id,
+      (d.mode === "many"
+        ? `extract_many:${d.find}`
+        : d.mode === "message"
+          ? `extract_message:${d.find}`
+          : `extract:${d.find}`) as SignalOptionsFrom,
+    ]),
+    ...own.flatMap((d) =>
+      d.each
+        ? [
+            [
+              d.id,
+              ("item" in d.each ? `each_item:${d.each.item}` : "each_message") as SignalOptionsFrom,
+            ],
+          ]
+        : [],
+    ),
+  ]);
+  const eachIds = new Set(own.filter((d) => d.each).map((d) => d.id));
   const asksOwn = own.length + pulls.length > 0;
   const stored = await deps.signals.readings(pool.map((t) => t.id));
   const judge = await deps.runtime.judgeAvailable();
@@ -279,7 +300,21 @@ export async function runViewTest(
         for (const d of pulls) {
           const p = r.picks[d.id];
           const a = r.extra[d.id];
-          if (p) {
+          if (p?.items) {
+            // Many values (or one per Message): all of them, the Unsure ones marked.
+            const any = p.items.some((i) => !i.unsure);
+            got[d.id] = {
+              choice: any ? "picked" : "none",
+              confidence: p.confidence,
+              version: 0,
+            };
+            picked[d.id] = {
+              text: p.text,
+              value: p.value,
+              confidence: p.confidence,
+              items: p.items,
+            };
+          } else if (p) {
             got[d.id] = { choice: "picked", confidence: p.confidence, version: 0 };
             picked[d.id] = { text: p.text, value: p.value, confidence: p.confidence };
           } else if (d.id in r.picks) {
@@ -289,6 +324,12 @@ export async function runViewTest(
               version: 0,
             };
           }
+        }
+        // A per-row Signal's answers ride beside the values, as the Device reads them.
+        for (const id of eachIds) {
+          const p = r.picks[id];
+          if (p?.answers)
+            picked[id] = { text: "each", value: null, confidence: 1, answers: p.answers };
         }
         extras.set(t.id, got);
         values.set(t.id, picked);
@@ -321,6 +362,7 @@ export async function runViewTest(
 
   const { coverage, diagnosis } = coverageOf(doc, threads, asked, ctx, {
     candidatesMax: settings.candidatesMax ?? 20,
+    manyMax: settings.manyMax ?? 30,
     scopeFacts: facts,
   });
 
@@ -337,13 +379,21 @@ export async function runViewTest(
     maxGroups: settings.maxGroups,
   }).map((b) => previewBlock(b, ctx, words));
   const byId = new Map(threads.map((t) => [t.id, t]));
+  // The card shows Threads: an item or Message View's rows of one Thread show as that Thread once.
+  const seenThreads = new Set<Id>();
   const tried = lanes.lanes.flatMap((l) =>
-    l.rows.map((r) => ({
-      id: r.thread.id,
-      lane: l.id,
-      certainty: placementCertainty(doc, r.thread, r.placement),
-      placement: r.placement,
-    })),
+    l.rows.flatMap((r) => {
+      if (seenThreads.has(r.thread.id)) return [];
+      seenThreads.add(r.thread.id);
+      return [
+        {
+          id: r.thread.id,
+          lane: l.id,
+          certainty: placementCertainty(doc, r.thread, r.placement),
+          placement: r.placement,
+        },
+      ];
+    }),
   );
   // Threads no Lane claims are tried too; the card may show them as others.
   for (const t of threads) {

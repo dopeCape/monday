@@ -21,7 +21,12 @@ import {
 import { navModel } from "../shell/nav.ts";
 import { bunDriver } from "../store/bun-driver.ts";
 import { createFakeStore } from "../store/fake.ts";
-import { type CachedViewThread, rowToViewThread, viewThreadsSql } from "../store/views.ts";
+import {
+  type CachedViewThread,
+  rowToViewThread,
+  viewThreadsSql,
+  viewValuesStatements,
+} from "../store/views.ts";
 import { createViewSync } from "./cache.ts";
 
 const NOW = new Date("2026-09-29T15:00:00Z");
@@ -423,6 +428,56 @@ describe("A View's scope narrows in SQL before the limit", () => {
     ]);
     // The inbox holds none of them: every one is archived.
     expect(await ids({ folder: "inbox", from_domain: ["amazon.in"] })).toEqual([]);
+
+    // Many values and per-row answers ride in view_values and come back whole.
+    const items = [
+      { key: "a", text: "1,250 INR", value: { value: 1250, currency: "INR" }, confidence: 0.95 },
+      {
+        key: "b",
+        text: "830 INR",
+        value: { value: 830, currency: "INR" },
+        confidence: 0.5,
+        unsure: true,
+        message: "m-o3",
+        at: "2026-05-01T10:00:00.000Z",
+      },
+    ];
+    await store.write(
+      viewValuesStatements(
+        {
+          o3: {
+            "board:v:x_total": {
+              text: "1,250 INR",
+              value: items[0]?.value ?? null,
+              confidence: 0.95,
+              items,
+            },
+            "board:v:severity": {
+              text: "each",
+              value: null,
+              confidence: 1,
+              answers: { a: { choice: "critical", confidence: 0.9 } },
+            },
+            "board:v:x_one": { text: "#123", value: "123", confidence: 0.8 },
+          },
+        },
+        ["o3"],
+      ),
+    );
+    const q = viewThreadsSql(
+      { folder: "any", from_domain: ["amazon.in"] },
+      null,
+      5,
+      "sam@acme.com",
+    );
+    const [o3] = (await store.query<Record<string, unknown>>(q.sql, q.params)).map((r) =>
+      rowToViewThread(r, "ws"),
+    );
+    expect(o3?.values?.["board:v:x_total"]?.items).toEqual(items);
+    expect(o3?.values?.["board:v:severity"]?.answers).toEqual({
+      a: { choice: "critical", confidence: 0.9 },
+    });
+    expect(o3?.values?.["board:v:x_one"]).toEqual({ text: "#123", value: "123", confidence: 0.8 });
     await store.close();
   });
 });

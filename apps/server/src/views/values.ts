@@ -3,7 +3,7 @@
 // content), read here decrypted for the owner's Device, which mirrors them
 // into the Cache's view_values and computes every Block from them.
 
-import type { ExtractedValue, Id, JsonValue } from "@monday/shared";
+import type { ExtractedItem, ExtractedValue, Id, JsonValue, RowAnswer } from "@monday/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { signalAnswers, threadFacts } from "../db/schema.ts";
@@ -15,7 +15,14 @@ export type ValuesByThread = Record<Id, Record<string, ExtractedValue>>;
 interface SealedPicks {
   picks?: Record<
     string,
-    { value: string; confidence: number; normalized?: unknown } | undefined
+    | {
+        value: string;
+        confidence: number;
+        normalized?: unknown;
+        items?: ExtractedItem[];
+        answers?: Record<string, RowAnswer>;
+      }
+    | undefined
   > | null;
 }
 
@@ -87,6 +94,9 @@ export async function readValues(
           text: p.value,
           value: (p.normalized ?? p.value) as JsonValue,
           confidence: p.confidence,
+          // Many values, one per Message, or a per-row Signal's answers: sealed with the rest.
+          ...(p.items ? { items: p.items } : {}),
+          ...(p.answers ? { answers: p.answers } : {}),
         };
       }
       if (Object.keys(values).length) out[r.threadId] = values;

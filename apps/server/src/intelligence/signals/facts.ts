@@ -5,7 +5,7 @@
 // amount on a bill, the parts of a date), and code assembles the result.
 // Pure, so every pattern and the date assembly are testable alone.
 
-import type { Person } from "@monday/shared";
+import type { ExtractedItem, Person, RowAnswer } from "@monday/shared";
 
 export interface FactMessage {
   from: Person;
@@ -88,6 +88,10 @@ export interface SealedFacts {
           probability?: number | undefined;
           /** A View's Extraction: the value normalized by code (money, a date, a link). */
           normalized?: unknown;
+          /** A many-Extraction's values, or one per Message (docs/spec/views.md, "Many values"). */
+          items?: ExtractedItem[] | undefined;
+          /** A View Signal asked per row: its answer per row key. */
+          answers?: Record<string, RowAnswer> | undefined;
         }
       >
     | undefined;
