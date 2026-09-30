@@ -99,6 +99,26 @@ export function viewReadsSignals(doc: ViewDoc): boolean {
   );
 }
 
+/**
+ * The Extractions a View's Blocks add up, group or chart by (local ids): a
+ * tried Thread tells the most about the View when code finds candidates for
+ * each of them. None when no Block adds one up.
+ */
+export function aggregatedExtractions(doc: ViewDoc): string[] {
+  const out: string[] = [];
+  const take = (ref: string | undefined) => {
+    if (!ref?.startsWith("x:")) return;
+    const id = ref.slice(2);
+    if (doc.extractions.some((x) => x.id === id) && !out.includes(id)) out.push(id);
+  };
+  for (const b of doc.blocks) {
+    take(b.query?.aggregate?.field);
+    take(b.query?.group_by?.field);
+    if (b.type === "chart") take(b.series?.field);
+  }
+  return out;
+}
+
 /* ------------------------------ The question as asked ------------------------------ */
 
 const EXAMPLES_NOTE =

@@ -150,6 +150,22 @@ export const VIEW_SETTINGS = {
     365,
     "When the scope holds too few threads to try (a quiet today), only its dates widen to this many days.",
   ),
+  "views.test.prefer_readable": setting({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    label: "Try a new view on threads it can read",
+    help: "When a View adds up a value (a total, an amount), its test prefers the threads in its scope where code finds that kind of value, and says how many it passed over.",
+  }),
+  "views.test.scan": limit(
+    "Threads looked through to find readable ones",
+    120,
+    10,
+    1000,
+    "How many of the newest threads in scope code looks through, without asking anything, for ones whose text holds the values the View adds up.",
+  ),
   "views.nav.show_counts": setting({
     type: z.boolean(),
     default: true,

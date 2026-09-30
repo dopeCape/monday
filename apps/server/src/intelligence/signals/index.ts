@@ -104,6 +104,7 @@ import {
 } from "./shipped.ts";
 import { type StateMessage, signalState } from "./state.ts";
 
+export type { Candidate } from "./candidates.ts";
 export { shippedSignals, type WantedSignal } from "./shipped.ts";
 export { dateInWords, ownWords, signalState } from "./state.ts";
 
@@ -289,6 +290,16 @@ export interface Signals {
   page(workspaceId: Id): Promise<SignalsPage>;
   /** Explain on a Thread: its Signals with their numbers, versions and when asked, and its Facts. */
   explain(threadId: Id): Promise<SignalsExplain | null>;
+  /**
+   * The spans code finds of each kind in a Thread, as a View's Extractions
+   * would see them: no judge, no answer written (the test's choice of Threads
+   * and inspect_view_thread read it). Decrypts the newest Messages.
+   */
+  candidates(
+    workspaceId: Id,
+    threadId: Id,
+    kinds: readonly ExtractKind[],
+  ): Promise<Partial<Record<ExtractKind, Candidate[]>>>;
   /** The Signals the arrival request would ask that this Thread version lacks. */
   missing(workspaceId: Id, threadId: Id): Promise<string[]>;
   version(threadId: Id): Promise<ThreadVersion>;
@@ -1598,6 +1609,44 @@ export function createSignals(options: SignalsOptions): Signals {
     },
 
     readings,
+
+    async candidates(workspaceId, threadId, kinds) {
+      const s = await readSettings();
+      const [owner] = await db
+        .select({ address: accounts.address })
+        .from(workspaces)
+        .innerJoin(accounts, eq(accounts.id, workspaces.accountId))
+        .where(eq(workspaces.id, workspaceId));
+      const headers = await mailstore.listMessages(threadId);
+      // The same Messages the Signal request reads: only the newest few fit its state.
+      const room = Math.max(
+        1,
+        Math.ceil(s["signals.state.thread_chars"] / Math.max(1, s["signals.state.earlier_chars"])) +
+          1,
+      );
+      const messages = [];
+      for (const h of headers.slice(-room)) {
+        const body = await mailstore.readMessageBody(h.id);
+        messages.push({
+          from: h.from,
+          to: h.to,
+          cc: h.cc,
+          date: h.date,
+          text: body.text || body.snippet,
+        });
+      }
+      const input = {
+        messages,
+        owner: (owner?.address ?? "").toLowerCase(),
+        written: headers[headers.length - 1]?.date ?? now().toISOString(),
+        dateOrder: s["views.extract.date_order"],
+      };
+      const out: Partial<Record<ExtractKind, Candidate[]>> = {};
+      for (const kind of new Set(kinds)) {
+        out[kind] = findCandidates(kind, input, s["views.extract.candidates_max"]);
+      }
+      return out;
+    },
 
     async store(workspaceId, threadId, answers, meta) {
       const s = await readSettings();

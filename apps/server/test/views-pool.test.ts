@@ -198,11 +198,11 @@ describe("The test pool is the newest Threads in scope", () => {
     expect([...revised.threadIds].sort()).toEqual([...orders].sort());
     expect(revised.test?.tried).toBe(5);
     expect(revised.test?.inScope).toBe(5);
-    expect(revised.test?.pool).toEqual({ kept: 0, fresh: 5 });
+    expect(revised.test?.pool).toMatchObject({ kept: 0, fresh: 5, skipped: 0 });
     // Revised again with the same scope: the same Threads, kept for comparison.
     const again = await intelligence.views.drafting.revise(first.id);
     expect(again.threadIds).toEqual(revised.threadIds);
-    expect(again.test?.pool).toEqual({ kept: 5, fresh: 0 });
+    expect(again.test?.pool).toMatchObject({ kept: 5, fresh: 0, skipped: 0 });
   });
 
   test("where the View lands now reads its scope in SQL too", async () => {
@@ -217,5 +217,27 @@ describe("The test pool is the newest Threads in scope", () => {
       id("amazon-3"),
       id("amazon-2"),
     ]);
+  });
+
+  test("a View that adds up totals prefers the Threads that hold amounts, and says how many it passed over", async () => {
+    await db.handle.db
+      .insert(settingsTable)
+      .values({ scope: "global", deviceId: null, key: "views.test.scan", value: 250 });
+    const broad = { ...ORDERS_DOC, scope: { facts: { folder: "any" }, limit: 50 } };
+    chat.answer(() => JSON.stringify(broad));
+    const before = judge.calls.length;
+    const draft = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    const orders = [1, 2, 3, 4].map((i) => id(`amazon-${i}`)).concat(id("myntra-1"));
+    // Every order is tried, though all are older than the newsletters; the rest fill the pool.
+    for (const o of orders) expect(draft.threadIds).toContain(o);
+    expect(draft.threadIds).toHaveLength(30);
+    expect(draft.test?.pool).toEqual({ kept: 0, fresh: 30, skipped: 185, scanned: 215 });
+    // Looking costs no judge call: only the tried Threads holding an amount are asked, once each.
+    expect(judge.calls.length - before).toBe(5);
+    await db.handle.db
+      .insert(settingsTable)
+      .values({ scope: "global", deviceId: null, key: "views.test.prefer_readable", value: false });
+    const plain = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    for (const o of orders) expect(plain.threadIds).not.toContain(o);
   });
 });

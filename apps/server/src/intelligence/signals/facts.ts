@@ -100,7 +100,11 @@ const domainOf = (address: string) => lower(address.split("@")[1] ?? "") || null
 
 const CURRENCY = "(?:[$€£¥₹]|USD|EUR|GBP|CHF|CAD|AUD|JPY|INR)";
 const NUMBER = "\\d{1,3}(?:[,.\\u00a0 ]\\d{3})*(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?";
-const AMOUNT = new RegExp(`${CURRENCY}\\s?(?:${NUMBER})|(?:${NUMBER})\\s?${CURRENCY}`, "g");
+// "Rs. 799" and "Rs 1,299" are rupees too (Indian receipts), only before the number.
+const AMOUNT = new RegExp(
+  `${CURRENCY}\\s?(?:${NUMBER})|\\bRs\\.?\\s?(?:${NUMBER})|(?:${NUMBER})\\s?${CURRENCY}`,
+  "g",
+);
 
 /** Amounts with a currency, verbatim, deduplicated, in order of appearance, at most `max`. */
 export function findAmounts(text: string, max: number): string[] {
@@ -126,7 +130,8 @@ const SYMBOL_CODE: Record<string, string> = {
 export function parseAmount(span: string): { value: number; currency: string } | null {
   const code = /USD|EUR|GBP|CHF|CAD|AUD|JPY|INR/.exec(span)?.[0];
   const symbol = /[$€£¥₹]/.exec(span)?.[0];
-  const currency = code ?? (symbol ? SYMBOL_CODE[symbol] : undefined);
+  const rupees = /^Rs\b/.test(span) ? "INR" : undefined;
+  const currency = code ?? (symbol ? SYMBOL_CODE[symbol] : rupees);
   const digits = /[\d][\d,.  ]*/.exec(span)?.[0]?.trim();
   if (!currency || !digits) return null;
   // The last separator followed by one or two digits is the decimal mark.

@@ -503,9 +503,11 @@ export interface ViewTest {
   inScope: number;
   /**
    * How the tried Threads were chosen: `kept` tried before (a revision keeps the ones its
-   * scope still admits), `fresh` the newest others in scope.
+   * scope still admits), `fresh` the newest others in scope. When a Block adds up a value,
+   * code looked through `scanned` Threads in scope and passed over `skipped` whose text holds
+   * no value of that kind.
    */
-  pool?: { kept: number; fresh: number } | undefined;
+  pool?: { kept: number; fresh: number; skipped?: number; scanned?: number } | undefined;
   /** After corrections: how many of them the View now agrees with. */
   agreement: { agree: number; total: number } | null;
   /** What a revision changed, in words. */

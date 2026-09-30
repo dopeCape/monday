@@ -40,6 +40,22 @@ describe("candidates", () => {
     expect(found[3]?.value).toEqual({ value: 50, currency: "EUR" });
   });
 
+  test("money: rupees written as ₹, INR or Rs.", () => {
+    const found = findCandidates(
+      "money",
+      input("Bag Total Rs. 1,299.00\nDiscount Rs 500\nShipping ₹ 49\nOrder Total\n848 INR"),
+      20,
+    );
+    expect(found.map((c) => c.value)).toEqual([
+      { value: 1299, currency: "INR" },
+      { value: 500, currency: "INR" },
+      { value: 49, currency: "INR" },
+      { value: 848, currency: "INR" },
+    ]);
+    // Not a currency inside a word ("Hers 20").
+    expect(findCandidates("money", input("Hers 20 pieces"), 20)).toEqual([]);
+  });
+
   test("dates: written forms to YYYY-MM-DD, the year nearest the Message, day and month by the setting", () => {
     const text =
       "Arriving Tue, Oct 7. Your return window closes 6 November 2026. Invoice date 2026-09-30, due 10/03/2026.";

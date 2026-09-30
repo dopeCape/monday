@@ -28,6 +28,7 @@ import type {
 } from "@monday/shared";
 import {
   actionShows,
+  aggregatedExtractions,
   computeBlocks,
   correctionAgreement,
   DEFAULT_VALUE_WORDS,
@@ -71,6 +72,10 @@ export interface TestSettings {
   words?: ValueWords | undefined;
   maxRows?: number | undefined;
   maxGroups?: number | undefined;
+  /** views.test.prefer_readable: prefer Threads whose text holds the values the Blocks add up. */
+  preferReadable?: boolean | undefined;
+  /** views.test.scan: how many in-scope Threads code looks through for them. */
+  scan?: number | undefined;
 }
 
 export interface TestRun {
@@ -145,7 +150,7 @@ export async function runViewTest(
   // A revision tries again the Threads it tried that its scope still admits, so the
   // corrections stay comparable; a changed scope drops the ones it no longer admits and
   // fills the rest with the newest Threads it does.
-  const kept = options.threadIds?.length
+  let kept = options.threadIds?.length
     ? (
         await loadViewThreads(db, {
           ...scoped(poolFacts),
@@ -156,12 +161,71 @@ export async function runViewTest(
     : [];
   const before = new Map((options.threadIds ?? []).map((id, i) => [id, i]));
   kept.sort((a, b) => (before.get(a.id) ?? 0) - (before.get(b.id) ?? 0));
-  const fresh = await admitted(
-    poolFacts,
-    settings.pool - kept.length,
-    kept.map((t) => t.id),
-  );
-  const pool: ViewThread[] = [...kept.slice(0, settings.pool), ...fresh];
+  kept = kept.slice(0, settings.pool);
+
+  // When a Block adds up a value, the Threads worth trying are the ones whose text holds
+  // that kind of value: code looks (no judge) through the newest views.test.scan in scope
+  // and prefers them, passing over the rest, and says how many.
+  const kinds = settings.preferReadable
+    ? [
+        ...new Set(
+          aggregatedExtractions(doc).flatMap(
+            (id) => doc.extractions.find((x) => x.id === id)?.find ?? [],
+          ),
+        ),
+      ]
+    : [];
+  const readable = new Map<Id, boolean>();
+  const check = async (list: readonly ViewThread[]) => {
+    await eachPool(
+      list.filter((t) => !readable.has(t.id)),
+      settings.concurrency,
+      async (t) => {
+        try {
+          const found = await deps.signals.candidates(workspaceId, t.id, kinds);
+          readable.set(
+            t.id,
+            kinds.every((k) => (found[k]?.length ?? 0) > 0),
+          );
+        } catch {
+          readable.set(t.id, true);
+        }
+      },
+    );
+  };
+  let skipped = 0;
+  let scanned = 0;
+  let fresh: ViewThread[];
+  if (kinds.length === 0) {
+    fresh = await admitted(
+      poolFacts,
+      settings.pool - kept.length,
+      kept.map((t) => t.id),
+    );
+  } else {
+    // A kept Thread the user corrected stays; one code can no longer read makes room.
+    const corrected = new Set(
+      Object.values(doc.examples)
+        .flat()
+        .map((e) => e.threadId),
+    );
+    await check(kept);
+    const dropped = kept.filter((t) => !corrected.has(t.id) && readable.get(t.id) === false);
+    kept = kept.filter((t) => !dropped.includes(t));
+    const need = settings.pool - kept.length;
+    const looked = await admitted(
+      poolFacts,
+      Math.max(settings.scan ?? settings.pool * 4, need),
+      [...kept, ...dropped].map((t) => t.id),
+    );
+    await check(looked);
+    scanned = looked.length + kept.length + dropped.length;
+    const good = looked.filter((t) => readable.get(t.id) !== false);
+    const rest = [...dropped, ...looked.filter((t) => readable.get(t.id) === false)];
+    fresh = [...good.slice(0, need), ...rest.slice(0, Math.max(0, need - good.length))];
+    skipped = rest.length - Math.max(0, Math.min(rest.length, need - good.length));
+  }
+  const pool: ViewThread[] = [...kept, ...fresh];
 
   // Ask: the View's own questions and Extractions ride as extras in each Thread's one request;
   // the shipped ones it uses and lacks are stored as usual.
@@ -336,7 +400,7 @@ export async function runViewTest(
       empty: threads.length === 0,
       inScope,
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
-      pool: { kept: Math.min(kept.length, settings.pool), fresh: fresh.length },
+      pool: { kept: kept.length, fresh: fresh.length, skipped, scanned },
       changes: [],
       needsJudge: viewReadsSignals(doc) && (!judge || unanswered),
       moves: null,
