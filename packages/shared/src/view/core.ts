@@ -359,6 +359,8 @@ export interface ViewThread {
   values?: Readonly<Record<string, ExtractedValue>> | undefined;
   /** The subject and snippet, when the reader of the View has them (the Device; the test's tried Threads). */
   subject?: string | undefined;
+  /** The subject's searchable prefix (the Server's clear subject_search: lowercased, 80 characters). */
+  subjectSearch?: string | undefined;
   snippet?: string | undefined;
   /** The correspondent: the newest sender who is not the owner, else the first. */
   correspondent?: { name: string; email: string } | null | undefined;

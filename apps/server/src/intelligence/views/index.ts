@@ -147,8 +147,11 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
         owner: ctx.owner,
         ...(opts.threadIds
           ? { ids: opts.threadIds }
-          : { since: scopeSince(doc.scope.facts, ctx.now, ctx.zone) }),
-        limit: opts.threadIds ? opts.threadIds.length : Math.min(doc.scope.limit * 2, 5000),
+          : {
+              since: scopeSince(doc.scope.facts, ctx.now, ctx.zone),
+              scope: { facts: doc.scope.facts, now: ctx.now, zone: ctx.zone },
+            }),
+        limit: opts.threadIds ? opts.threadIds.length : Math.min(doc.scope.limit, 5000),
       }),
     );
     return { threads, lanes: laneView(doc, threads, ctx, { placements: opts.placements }) };

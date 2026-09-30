@@ -1,0 +1,187 @@
+// The Threads a View's test tries (docs/spec/views.md, "Making a View",
+// step 3): the newest Threads its scope admits across the whole mailbox,
+// never the few of them among the newest of everything. A real session
+// narrowed "my orders" to five senders over a year and the test found
+// almost none of them among the newest 200 Threads; here the orders are
+// older than 210 newer newsletters, and every one is still tried.
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { Account, Person } from "@monday/shared";
+import { viewExtractionId } from "@monday/shared";
+import { randomKey } from "../src/crypto/aead.ts";
+import { createKeys } from "../src/crypto/keys.ts";
+import { settings as settingsTable } from "../src/db/schema.ts";
+import { createIntelligence, type Intelligence } from "../src/intelligence/index.ts";
+import { createFakeChat, createFakeJudge } from "../src/intelligence/runtime/fake/index.ts";
+import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
+import { type TestDatabase, testDatabase } from "./harness.ts";
+
+const NOW = new Date("2026-09-30T12:00:00Z");
+const owner = { name: "Sam Okafor", email: "sam@monday.test" };
+const amazon = { name: "Amazon.in", email: "auto-confirm@amazon.in" };
+const myntra = { name: "Myntra", email: "orders@myntra.com" };
+const substack = { name: "A newsletter", email: "digest@substack.com" };
+
+/** The order View the Agent wrote in the real session, narrowed to the order senders. */
+export const ORDERS_DOC = {
+  name: "Orders",
+  sentence: "a custom view for orders with a chart of how much I bought per month",
+  scope: {
+    facts: { from_any: ["auto-confirm@amazon.in"], folder: "any", received: { last_days: 365 } },
+    limit: 50,
+  },
+  signals: [],
+  uses: [],
+  extractions: [
+    {
+      id: "total",
+      label: "Total",
+      find: "money",
+      question: "The figure under the word Total: what the whole order cost.",
+    },
+  ],
+  lanes: [],
+  blocks: [
+    {
+      id: "by_month",
+      type: "chart",
+      chart: "bar",
+      title: "Spend per month",
+      query: {
+        group_by: { field: "received_at", bucket: "month" },
+        aggregate: { op: "sum", field: "x:total" },
+      },
+    },
+  ],
+  actions: [],
+  nav: { icon: "shopping-bag", count: "total" },
+};
+
+describe("The test pool is the newest Threads in scope", () => {
+  let db: TestDatabase;
+  let store: Mailstore;
+  let workspaceId: string;
+  const judge = createFakeJudge();
+  const chat = createFakeChat();
+  let intelligence: Intelligence;
+  const ids: Record<string, string> = {};
+  const id = (key: string) => ids[key] ?? key;
+
+  const addThread = async (key: string, from: Person, date: string, body: string) => {
+    const threadId = await store.upsertThread({
+      workspaceId,
+      providerThreadId: key,
+      subject: key,
+      participants: [from, owner],
+      lastActivity: date,
+    });
+    await store.upsertMessage({
+      threadId,
+      providerMessageId: `m-${key}`,
+      from,
+      to: [owner],
+      cc: [],
+      date,
+      headers: {},
+      bodyText: body,
+      bodyHtml: null,
+      snippet: body.slice(0, 80),
+    });
+    ids[key] = threadId;
+    return threadId;
+  };
+
+  beforeAll(async () => {
+    db = await testDatabase();
+    const keys = createKeys(db.handle.db);
+    await keys.unlock(randomKey());
+    store = createMailstore(db.handle.db, keys);
+    const account: Account = {
+      id: "acct-views-pool",
+      provider: "jmap",
+      address: owner.email,
+      displayName: owner.name,
+      capabilities: {
+        push: true,
+        labels: false,
+        snooze: false,
+        mute: false,
+        calendar: false,
+        meetingLink: null,
+      },
+    };
+    workspaceId = (await store.createWorkspace(account)).id;
+    await db.handle.db
+      .insert(settingsTable)
+      .values({ scope: "global", deviceId: null, key: "calendar.time_zone", value: "UTC" });
+    // A small cap, so "the newest few hundred, then filter" would miss every order below.
+    await db.handle.db
+      .insert(settingsTable)
+      .values({ scope: "global", deviceId: null, key: "views.scope.max_threads", value: 50 });
+    for (let i = 1; i <= 4; i++) {
+      await addThread(
+        `amazon-${i}`,
+        amazon,
+        `2026-0${i}-10T09:00:00.000Z`,
+        `Order placed\n* Something ${i}\n  Quantity: 1\n  ${i}00 INR\n\nTotal\n${i}05 INR`,
+      );
+    }
+    await addThread(
+      "myntra-1",
+      myntra,
+      "2026-05-10T09:00:00.000Z",
+      "Your Myntra order\nBlue shirt, size M\nRs. 799\nOrder total: Rs. 799",
+    );
+    for (let i = 0; i < 210; i++) {
+      const day = String(1 + (i % 28)).padStart(2, "0");
+      const hour = String(i % 24).padStart(2, "0");
+      await addThread(
+        `news-${i}`,
+        substack,
+        `2026-09-${day}T${hour}:00:00.000Z`,
+        "This week in reading: three essays.",
+      );
+    }
+    intelligence = createIntelligence({
+      level: async () => "automate",
+      db: db.handle.db,
+      mailstore: store,
+      chat: chat.chat,
+      judge: judge.judge,
+      keys: async (provider) =>
+        provider === "typesafe" ? "ts-key" : provider === "anthropic" ? "sk-ant-fake" : null,
+      now: () => NOW,
+    });
+  }, 240_000);
+
+  afterAll(async () => {
+    await db.drop();
+  });
+
+  test("orders older than 210 newer newsletters are all tried, and the scope's size is counted in SQL", async () => {
+    chat.answer(() => JSON.stringify(ORDERS_DOC));
+    const draft = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    const amazonIds = [1, 2, 3, 4].map((i) => id(`amazon-${i}`));
+    expect([...draft.threadIds].sort()).toEqual([...amazonIds].sort());
+    expect(draft.test?.tried).toBe(4);
+    expect(draft.test?.inScope).toBe(4);
+    expect(draft.test?.widened).toBeNull();
+    const total = viewExtractionId(draft.doc.id, "total");
+    // Each order was asked its total among the amounts code found in it.
+    const asked = judge.calls.filter((c) => c.questions.includes(total));
+    expect(asked).toHaveLength(4);
+  });
+
+  test("where the View lands now reads its scope in SQL too", async () => {
+    const draft = await intelligence.views.drafting.propose(workspaceId, ORDERS_DOC.sentence);
+    const placed = await intelligence.views.place(workspaceId, {
+      ...draft.doc,
+      scope: { ...draft.doc.scope, limit: 3 },
+    });
+    expect(placed.threads.map((t) => t.id)).toEqual([
+      id("amazon-4"),
+      id("amazon-3"),
+      id("amazon-2"),
+    ]);
+  });
+});

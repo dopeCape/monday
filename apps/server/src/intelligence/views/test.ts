@@ -50,7 +50,7 @@ import {
 } from "@monday/shared";
 import type { Db } from "../../db/client.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
-import { loadViewThreads } from "../../views/threads.ts";
+import { countViewThreads, loadViewThreads } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import { eachPool } from "../signals/pool.ts";
@@ -105,19 +105,21 @@ export async function runViewTest(
 ): Promise<TestRun> {
   const { db, context: ctx, workspaceId } = deps;
   const facts = doc.scope.facts;
+  // The scope is applied in SQL: the newest Threads it admits across the whole mailbox.
+  const scoped = (f: typeof facts) => ({
+    workspaceId,
+    owner: ctx.owner,
+    since: scopeSince(f, ctx.now, ctx.zone),
+    scope: { facts: f, now: ctx.now, zone: ctx.zone },
+  });
   const admitted = async (f: typeof facts, limit: number) =>
-    (
-      await loadViewThreads(db, {
-        workspaceId,
-        owner: ctx.owner,
-        since: scopeSince(f, ctx.now, ctx.zone),
-        limit: Math.max(limit * 4, 200),
-      })
-    ).filter((t) => scopeAdmits(f, t, ctx));
+    (await loadViewThreads(db, { ...scoped(f), limit })).filter((t) => scopeAdmits(f, t, ctx));
 
   // The Threads to try: the same ones again for a revision, else the newest in scope, widened when quiet.
-  const inScopeList = await admitted(facts, settings.maxThreads + 1);
-  const inScope = Math.min(inScopeList.length, doc.scope.limit);
+  const inScope = Math.min(
+    await countViewThreads(db, scoped(facts), settings.maxThreads + 1),
+    doc.scope.limit,
+  );
   let pool: ViewThread[];
   let widened: ViewTest["widened"] = null;
   if (options.threadIds) {
@@ -125,22 +127,23 @@ export async function runViewTest(
     pool = (
       await loadViewThreads(db, { workspaceId, owner: ctx.owner, ids: [...ids], limit: ids.size })
     ).filter((t) => !t.deleted);
-  } else if (inScopeList.length >= settings.pool || !(facts.received || facts.active)) {
-    pool = inScopeList.slice(0, settings.pool);
   } else {
-    const wide = widenScope(facts, settings.widenDays);
-    pool = (await admitted(wide, settings.pool)).slice(0, settings.pool);
-    if (pool.length > inScopeList.length) {
-      const within = (facts.received ?? facts.active) as { within?: string };
-      widened = {
-        when:
-          within.within === "today"
-            ? "today"
-            : within.within === "this_week"
-              ? "this_week"
-              : "scope",
-        count: inScopeList.length,
-      };
+    pool = await admitted(facts, settings.pool);
+    if (pool.length < settings.pool && (facts.received || facts.active)) {
+      const wide = await admitted(widenScope(facts, settings.widenDays), settings.pool);
+      if (wide.length > pool.length) {
+        const within = (facts.received ?? facts.active) as { within?: string };
+        widened = {
+          when:
+            within.within === "today"
+              ? "today"
+              : within.within === "this_week"
+                ? "this_week"
+                : "scope",
+          count: pool.length,
+        };
+        pool = wide;
+      }
     }
   }
 

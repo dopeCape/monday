@@ -165,6 +165,17 @@ describe("validation", () => {
     return r.ok ? [] : r.errors;
   };
 
+  test("a bare domain in from_any matches nothing, so it fails and names from_domain", () => {
+    const e = errorsOf({
+      ...base,
+      scope: { facts: { from_any: ["orders@shop.com", "flomattress.com"] }, limit: 100 },
+    });
+    expect(e.join(" ")).toContain("from_domain");
+    expect(
+      errorsOf({ ...base, scope: { facts: { from_any: ["orders@shop.com"] }, limit: 100 } }),
+    ).toEqual([]);
+  });
+
   test("a Block naming a Field the View does not have fails, with the reason", () => {
     const e = errorsOf({
       ...base,

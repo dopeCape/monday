@@ -218,6 +218,13 @@
       "when": 1790693188118,
       "tag": "0031_views",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790765307929,
+      "tag": "0032_view_scope_senders",
+      "breakpoints": true
     }
   ]
 }

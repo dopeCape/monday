@@ -350,3 +350,79 @@ describe("Views over the Cache", () => {
     await store.close();
   });
 });
+
+describe("A View's scope narrows in SQL before the limit", () => {
+  test("the newest Threads of a few senders are found under many newer ones of others", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const add = (id: string, from: string, at: string, to = "sam@acme.com", cc: string[] = []) => {
+      server.record({
+        kind: "thread",
+        entityId: id,
+        payload: {
+          id,
+          workspaceId: "ws",
+          subject: id,
+          participants: [{ name: "", email: from }],
+          lastActivity: at,
+          messageCount: 1,
+          unread: false,
+          starred: false,
+          archived: true,
+          snoozedUntil: null,
+          section: null,
+          group: null,
+          subgroup: null,
+          tags: [],
+          labels: [],
+          hasAttachments: false,
+          snippet: id,
+          deleted: false,
+        },
+      });
+      server.record({
+        kind: "message",
+        entityId: `m-${id}`,
+        payload: {
+          id: `m-${id}`,
+          threadId: id,
+          from: { name: "", email: from },
+          to: [{ name: "", email: to }],
+          cc: cc.map((email) => ({ name: "", email })),
+          date: at,
+          hasAttachments: false,
+        },
+      });
+    };
+    // Three orders months ago, then 250 newer newsletters from someone else.
+    add("o1", "Auto-Confirm@amazon.in", "2026-03-01T10:00:00.000Z");
+    add("o2", "orders@myntra.com", "2026-04-01T10:00:00.000Z", "sam@acme.com", ["me@home.test"]);
+    add("o3", "auto-confirm@amazon.in", "2026-05-01T10:00:00.000Z");
+    for (let i = 0; i < 250; i++) {
+      const day = String(1 + (i % 28)).padStart(2, "0");
+      add(`n${i}`, "digest@substack.com", `2026-09-${day}T0${i % 10}:00:00.000Z`);
+    }
+    await store.sync();
+    const ids = async (facts: Parameters<typeof viewThreadsSql>[0]) => {
+      const q = viewThreadsSql(facts, null, 20, "sam@acme.com");
+      const rows = await store.query<Record<string, unknown>>(q.sql, q.params);
+      return rows.map((r) => rowToViewThread(r, "ws").id);
+    };
+    expect(
+      await ids({ folder: "any", from_any: ["auto-confirm@amazon.in", "orders@myntra.com"] }),
+    ).toEqual(["o3", "o2", "o1"]);
+    expect(await ids({ folder: "any", from_domain: ["amazon.in"] })).toEqual(["o3", "o1"]);
+    expect(await ids({ folder: "any", to_any: ["me@home.test"] })).toEqual(["o2"]);
+    expect((await ids({ folder: "any", from_domain_not: ["substack.com"] })).sort()).toEqual([
+      "o1",
+      "o2",
+      "o3",
+    ]);
+    // The inbox holds none of them: every one is archived.
+    expect(await ids({ folder: "inbox", from_domain: ["amazon.in"] })).toEqual([]);
+    await store.close();
+  });
+});

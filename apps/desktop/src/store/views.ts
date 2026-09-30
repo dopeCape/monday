@@ -186,9 +186,9 @@ export type CachedViewThread = ViewThread & { thread: Thread };
  * The Threads a View looks at, newest first, as one query over the Cache:
  * each Thread row with its Signal answers (`j_signals`), its clear Facts,
  * who started it, its correspondent, every address it was sent to and the
- * values the Views picked. SQL narrows by the scope's folder and date; the
- * exact addresses, the Lanes and every Block are decided by the View code
- * over these rows.
+ * values the Views picked. SQL narrows by the scope's folder, date, senders
+ * and recipients before the limit; the View code checks the scope again
+ * exactly and decides the Lanes and every Block over these rows.
  */
 export function viewThreadsSql(
   facts: ViewScopeFacts,
@@ -214,6 +214,37 @@ export function viewThreadsSql(
     // A bound only: the View's own scope test is exact. Rounded down to the UTC day so
     // the nav count and the open View ask the same query and share its rows.
     params.push(new Date(Math.floor(since.getTime() / 86_400_000) * 86_400_000).toISOString());
+  }
+  // Who started it and who it went to narrow in SQL too, so the limit counts only Threads in
+  // scope: a View of five senders over a year shows their newest Threads, not the few of
+  // them among the newest of everything.
+  const firstFrom =
+    "(select lower(json_extract(m.sender, '$.email')) from messages m where m.thread_id = t.id order by m.date asc, m.id asc limit 1)";
+  const marks = (list: readonly string[]) => list.map(() => "?").join(", ");
+  const lower = (list: readonly string[]) => list.map((x) => x.toLowerCase());
+  const domainOf = `substr(coalesce(${firstFrom}, ''), instr(coalesce(${firstFrom}, ''), '@') + 1)`;
+  if (facts.from_any?.length) {
+    where.push(`${firstFrom} in (${marks(facts.from_any)})`);
+    params.push(...lower(facts.from_any));
+  }
+  if (facts.from_domain?.length) {
+    where.push(
+      `instr(coalesce(${firstFrom}, ''), '@') > 0 and ${domainOf} in (${marks(facts.from_domain)})`,
+    );
+    params.push(...lower(facts.from_domain));
+  }
+  if (facts.from_domain_not?.length) {
+    where.push(
+      `(instr(coalesce(${firstFrom}, ''), '@') = 0 or ${domainOf} not in (${marks(facts.from_domain_not)}))`,
+    );
+    params.push(...lower(facts.from_domain_not));
+  }
+  if (facts.to_any?.length) {
+    where.push(`(exists (select 1 from messages m, json_each(m.recipients) r where m.thread_id = t.id
+        and lower(json_extract(r.value, '$.email')) in (${marks(facts.to_any)}))
+      or exists (select 1 from messages m, json_each(m.cc) r where m.thread_id = t.id
+        and lower(json_extract(r.value, '$.email')) in (${marks(facts.to_any)})))`);
+    params.push(...lower(facts.to_any), ...lower(facts.to_any));
   }
   const at = ALL_THREADS_SQL.lastIndexOf("order by");
   const sql = `select * from (${ALL_THREADS_SQL.slice(0, at).replace(

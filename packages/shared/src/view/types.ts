@@ -589,6 +589,11 @@ const localId = z
   .regex(/^[a-z][a-z0-9_]{0,39}$/, "use lowercase letters, digits and underscores");
 const address = z.string().trim().toLowerCase().min(3).max(320);
 const domain = z.string().trim().toLowerCase().min(1).max(253);
+/** A whole address: a bare domain in from_any or to_any matches nothing, so it is refused. */
+const fullAddress = address.regex(
+  /^[^@\s]+@[^@\s]+$/,
+  "a whole address like orders@shop.com; a bare domain goes in from_domain",
+);
 const dateText = z.string().regex(/^\d{4}-\d{2}-\d{2}(T.*)?$/, "a date like 2026-10-03");
 
 const dateScope = z.union([
@@ -601,10 +606,10 @@ export const scopeFactsSchema = z
   .object({
     received: dateScope.optional(),
     active: dateScope.optional(),
-    from_any: z.array(address).max(50).optional(),
+    from_any: z.array(fullAddress).max(50).optional(),
     from_domain: z.array(domain).max(50).optional(),
     from_domain_not: z.array(domain).max(50).optional(),
-    to_any: z.array(address).max(50).optional(),
+    to_any: z.array(fullAddress).max(50).optional(),
     folder: z
       .union([
         z.enum(["inbox", "any", "archive"]),
