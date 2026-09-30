@@ -103,7 +103,7 @@ _Avoid_: summary, TL;DR, AI summary
 ### Signals and what they power
 
 **Signal**:
-A standing Judgment monday keeps answered on every Thread in its scope, such as "needs a reply", "money is involved" or "the sender is frustrated". Its answer (probability, confidence, the question version and when it was asked) is stored per Thread so lists, Boards and actions read numbers instead of asking again. Shipped with monday, or added by a Section, a Custom action, a Board or the Interruption policy.
+A standing Judgment monday keeps answered on every Thread in its scope, such as "needs a reply", "money is involved" or "the sender is frustrated". Its answer (probability, confidence, the question version and when it was asked) is stored per Thread so lists, Views and actions read numbers instead of asking again. Shipped with monday, or added by a Section, a Custom action, a View or the Interruption policy.
 _Avoid_: tag (a Tag is a marker), label, feature, attribute, flag
 
 **Fact**:
@@ -130,12 +130,24 @@ _Avoid_: canned response, snippet, macro, saved reply
 A named, typed gap in a Template (`{name}`, `{amount}`) that the user fills or that monday fills by picking a span from the Thread, never by inventing a value.
 _Avoid_: variable, merge field, token
 
-**Board**:
-A pinned, generated view the user asked for in a sentence ("today's support requests as red, yellow and green"): a scope of Threads, Lanes decided by Facts and Signals, and a layout from a fixed catalog. Lives in the nav beside Groups.
-_Avoid_: dashboard, view (a View is a saved Layout), smart folder, report
+**View**:
+A pinned, generated page the user asked for in a sentence ("all my Amazon orders with total spend per month", "today's support requests as red, yellow and green"): a scope of Threads, the Fields read about each (Facts, Signals, Extractions), and a stack of Blocks from a fixed catalog, each drawing a query over those Fields, with action buttons on its items. The Agent writes it as a JSON document; code validates, queries and draws it. Lives in the nav beside Groups. What was called a Board is a View with one lanes Block.
+_Avoid_: board, dashboard, report, smart folder, saved search
+
+**Block**:
+One piece of a View from the fixed catalog (lanes, list, counts, table, stat, chart, timeline, calendar, cards, people, checklist, heatmap, text), with typed props and a query. The Agent picks Blocks and fills their props; it never writes markup.
+_Avoid_: widget (a Panel is the Layout's widget), component, card (a card is the Agent's preview)
+
+**Field**:
+One value a View reads per Thread: a Fact, a Signal or an Extraction, named by a reference such as `received_at`, `signal:status` or `x:order_total`.
+_Avoid_: column, attribute, property
+
+**Extraction**:
+A value a View takes from a Thread's text by selection: code finds the candidates of one kind (amounts, dates, reference numbers, names, links), Jev picks the one the View's question asks for or none, and code copies and normalizes it. Below its confidence floor it is Unsure. Never written by a model.
+_Avoid_: parsing, scraping, generated value, entity
 
 **Lane**:
-One group of Threads on a Board with its condition, such as Red or Waiting on legal. Every Board ends with an Unsure Lane for Threads its Signals could not decide.
+One group of Threads in a View with its condition, such as Red or Waiting on legal, drawn by the lanes, list and counts Blocks. Every View with Lanes ends with an Unsure Lane for Threads its Signals could not decide.
 _Avoid_: column, bucket, placement (Placement is where a Workflow runs)
 
 **Interruption policy**:
@@ -310,9 +322,9 @@ The current values of the three knobs: nav (full, rail, hidden), agent (bottom, 
 A built-in named Layout: Stream, Columns, Agent left.
 _Avoid_: mode, template
 
-**View**:
-A user-saved Layout with a shortcut, shared across Workspaces.
-_Avoid_: profile, saved layout
+**Layout shortcut**:
+A user-saved Layout with a shortcut, shared across Workspaces (the `views` Setting in the config file, a name kept from before Views).
+_Avoid_: profile, saved layout, view (a View is the generated page)
 
 **Panel**:
 A small built-in widget the Agent can place in the Layout from a fixed catalog.

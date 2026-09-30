@@ -3,7 +3,6 @@
 // the events a Session streams, and the Activity log rows. Runtime-neutral so
 // the Server's tool server and a Device's ToolHost share one vocabulary.
 
-import type { BoardDraft } from "./board/types.ts";
 import type {
   CalendarDraft,
   Draft,
@@ -27,6 +26,7 @@ import type {
   TemplateInput,
   TemplateScope,
 } from "./templates/types.ts";
+import type { ViewDraft } from "./view/types.ts";
 import type { WorkflowSketch } from "./workflow/index.ts";
 
 /**
@@ -143,14 +143,14 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   create_group: "reversible",
   update_group: "reversible",
   organize_existing: "reversible",
-  // Boards (slice 40, docs/spec/boards.md): drafting and testing a Board reads
-  // and changes nothing until the user clicks Pin board or Apply on the card;
+  // Views (slice 40, docs/spec/views.md): drafting and testing a View reads
+  // and changes nothing until the user clicks Pin view or Apply on the card;
   // a name or layout change applies with Undo, and so does a delete.
-  list_boards: "read",
-  create_board: "read",
-  revise_board: "read",
-  update_board: "reversible",
-  delete_board: "reversible",
+  list_views: "read",
+  create_view: "read",
+  revise_view: "read",
+  update_view: "reversible",
+  delete_view: "reversible",
   // Tuning the judgments behind routing and Sections from the user's feedback
   // (ADR 0012): explaining and listing read what is stored, a test re-asks the
   // judge on recent Threads without changing anything, and an update or an
@@ -167,6 +167,18 @@ export const TOOL_TIERS: Readonly<Record<string, ToolTier>> = {
   create_template: "reversible",
   update_template: "reversible",
   delete_template: "reversible",
+};
+
+/**
+ * Old tool names a Session, a Workflow Step or an external caller may still
+ * use, mapped onto the tool that does it now (Boards became Views, ADR 0016).
+ */
+export const TOOL_ALIASES: Readonly<Record<string, string>> = {
+  list_boards: "list_views",
+  create_board: "create_view",
+  revise_board: "revise_view",
+  update_board: "update_view",
+  delete_board: "delete_view",
 };
 
 /** The glossary Tier a tool tier renders as. */
@@ -222,23 +234,23 @@ export type ToolPreview =
     }
   /** A Workflow the Agent creates, changes or switches: the card draws its flow and, for an edit, what changed. */
   | WorkflowPreview
-  /** A Board the Agent drafted and tried, changed or deleted: the card shows the tried Threads and Pin board or Apply. */
-  | BoardPreview
+  /** A View the Agent drafted and tried, changed or deleted: the card shows the tried Threads and Pin view or Apply. */
+  | ViewPreview
   | { kind: "text"; text: string };
 
 /**
- * The Board card (create_board, revise_board, update_board, delete_board):
+ * The View card (create_view, revise_view, update_view, delete_view):
  * the draft as tested when the call finished (the card reads the live draft
- * by id for corrections, Pin board and Apply), or the Board a name, layout
+ * by id for corrections, Pin view and Apply), or the View a name, layout
  * or delete changed.
  */
-export interface BoardPreview {
-  kind: "board";
+export interface ViewPreview {
+  kind: "view";
   action: "create" | "revise" | "update" | "delete";
   draftId: Id | null;
-  boardId: Id | null;
+  viewId: Id | null;
   name: string;
-  draft: BoardDraft | null;
+  draft: ViewDraft | null;
 }
 
 /**
@@ -346,7 +358,9 @@ export type UndoRecord =
    * or puts back the Example the Thread already was for that Group.
    */
   | { kind: "example"; threadId: Id; groupId: Id; previous: { positive: boolean } | null }
-  /** A Board the Agent changed or deleted (slice 40): Undo puts the version back, or restores it. */
+  /** A View the Agent changed or deleted (slice 40): Undo puts the version back, or restores it. */
+  | { kind: "view"; action: "update" | "delete"; viewId: Id; previous: number | null }
+  /** Recorded before Boards became Views (ADR 0016); undone as a View. */
   | { kind: "board"; action: "update" | "delete"; boardId: Id; previous: number | null }
   /**
    * Templates the Agent wrote, changed or deleted (slice 37): Undo deletes

@@ -18,6 +18,7 @@ export * from "./components/select.tsx";
 export * from "./components/settings.tsx";
 export * from "./components/title-bar.tsx";
 export * from "./components/toast.tsx";
+export * from "./components/view-charts.tsx";
 export * from "./components/virtual-list.tsx";
 export * from "./components/workflow-flow.tsx";
 export * from "./components/workflows.tsx";

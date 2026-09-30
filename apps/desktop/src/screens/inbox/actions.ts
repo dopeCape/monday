@@ -183,7 +183,11 @@ export interface ThreadReader {
     approved: { method: "one_click" | "mailto"; target: string },
   ): Promise<{ ok: boolean; text: string }>;
   /** A Workflow started on the Thread by hand. */
-  runWorkflow?(workflowId: string, threadId: string): Promise<void>;
+  runWorkflow?(
+    workflowId: string,
+    threadId: string,
+    inputs?: Record<string, string>,
+  ): Promise<void>;
   /** The Threads of a mailing list still in the Inbox, from the Cache's Facts. */
   listThreads?(listId: string): Promise<string[]>;
   /**

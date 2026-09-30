@@ -26,10 +26,10 @@ import { parseSortScope } from "../routing/scope.ts";
 import { DEFAULT_SECTION_RULES } from "../routing/sections.ts";
 import { mcpServerSchema } from "../workflow/index.ts";
 import { ACTION_SETTINGS } from "./actions.ts";
-import { BOARD_SETTINGS } from "./boards.ts";
 import { MEETING_SETTINGS } from "./meetings.ts";
 import { signalsSettings } from "./signals.ts";
 import { TEMPLATE_SETTINGS } from "./templates.ts";
+import { VIEW_SETTINGS } from "./views.ts";
 
 /* ------------------------------ Entry shape ------------------------------ */
 
@@ -387,7 +387,7 @@ const TASK_LABEL: Record<Task, string> = {
   "draft-in-voice": "Drafts in your voice",
   summarize: "Summaries",
   template: "Templates from examples",
-  board: "Boards from a sentence",
+  board: "Views from a sentence",
 };
 
 function aiTask(task: Task, r: Role, e: Effort) {
@@ -619,15 +619,15 @@ export const settingsSchema = {
     help: "Short movements when screens and panels change. Off makes every change instant; your system's reduce-motion setting also turns them off. On this computer only.",
   }),
 
-  /* Views */
+  /* Layout shortcuts (CONTEXT.md; the key predates Views, ADR 0016) */
   "views.list": setting({
     type: z.array(viewShape),
     default: [],
     scope: "global",
     section: "appearance",
-    group: "Views",
+    group: "Layout shortcuts",
     control: "views",
-    label: "Views",
+    label: "Layout shortcuts",
     help: "Saved layouts you switch between with a shortcut. Ask monday for one and it names it and picks the shortcut.",
   }),
 
@@ -7421,7 +7421,11 @@ export const settingsSchema = {
   "strings.settings.shortcuts.act": str("shortcuts", "Shortcut area: act", "Act"),
   "strings.settings.shortcuts.compose": str("shortcuts", "Shortcut area: compose", "Compose"),
   "strings.settings.shortcuts.select": str("shortcuts", "Shortcut area: select", "Select"),
-  "strings.settings.shortcuts.views": str("shortcuts", "Shortcut area: views", "Views"),
+  "strings.settings.shortcuts.views": str(
+    "shortcuts",
+    "Shortcut area: Layout shortcuts",
+    "Layout shortcuts",
+  ),
   "strings.settings.shortcuts.conflict": str(
     "shortcuts",
     "Shortcut conflict line",
@@ -8306,7 +8310,7 @@ export const settingsSchema = {
     "Approvals waiting for you",
   ),
   "strings.palette.nav.calendar": str("appearance", "Palette: Calendar", "Calendar"),
-  "strings.palette.nav.view": str("appearance", "Palette: a saved View", "View: {name}"),
+  "strings.palette.nav.view": str("appearance", "Palette: a Layout shortcut", "Layout: {name}"),
   "strings.palette.nav.settings_page": str(
     "appearance",
     "Palette: a Settings page",
@@ -9109,8 +9113,8 @@ export const settingsSchema = {
   ...TEMPLATE_SETTINGS,
   /* Signals (ADR 0014, slices 28 to 33): their own file. */
   ...signalsSettings,
-  /* Boards (docs/spec/boards.md, slices 39 and 40): their own file. */
-  ...BOARD_SETTINGS,
+  /* Views (docs/spec/views.md, slices 39 and 40): their own file. */
+  ...VIEW_SETTINGS,
   /* Recommended actions (docs/spec/actions.md, slices 34 and 35): their own file. */
   ...ACTION_SETTINGS,
 } satisfies Record<string, SettingEntry>;
@@ -9197,7 +9201,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Palette",
     "Layout",
     "Text",
-    "Views",
+    "Layout shortcuts",
     "Inbox",
     "Calendar",
     "Search",
@@ -9212,7 +9216,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Recommended actions",
     "Briefs",
     "Meetings",
-    "Boards",
+    "Views",
     "Confidence",
     "Reading",
   ],

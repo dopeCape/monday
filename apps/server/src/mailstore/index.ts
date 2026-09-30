@@ -65,9 +65,6 @@ import {
   attachments,
   blobChunks,
   blobs,
-  boardDrafts,
-  boards,
-  boardVersions,
   briefs,
   changes,
   drafts,
@@ -89,6 +86,9 @@ import {
   threadRecommendations,
   threads,
   threadTags,
+  viewDrafts,
+  views,
+  viewVersions,
   voiceProfiles,
   workspaces,
 } from "../db/schema.ts";
@@ -1597,20 +1597,20 @@ const REWRAP_SPECS: readonly RewrapSpec[] = [
     workspace: templates.workspaceId,
     keys: [templates.contentKey],
   },
-  // Boards (docs/spec/boards.md): each version's document, the drafts, the user's placements.
+  // Views (docs/spec/views.md): each version's document, the drafts, the user's placements.
   {
-    table: boardVersions,
-    id: boardVersions.id,
-    workspace: boardVersions.workspaceId,
-    keys: [boardVersions.contentKey],
+    table: viewVersions,
+    id: viewVersions.id,
+    workspace: viewVersions.workspaceId,
+    keys: [viewVersions.contentKey],
   },
   {
-    table: boardDrafts,
-    id: boardDrafts.id,
-    workspace: boardDrafts.workspaceId,
-    keys: [boardDrafts.contentKey],
+    table: viewDrafts,
+    id: viewDrafts.id,
+    workspace: viewDrafts.workspaceId,
+    keys: [viewDrafts.contentKey],
   },
-  { table: boards, id: boards.id, workspace: boards.workspaceId, keys: [boards.extrasKey] },
+  { table: views, id: views.id, workspace: views.workspaceId, keys: [views.extrasKey] },
 ];
 
 /** The (table, column) pairs the rotation re-wraps, for the test that pins them to the schema. */

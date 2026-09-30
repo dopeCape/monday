@@ -51,9 +51,6 @@ import { useLocalWorker } from "./agent/useLocalWorker.ts";
 import { ApprovalsSheet } from "./approvals/ApprovalsSheet.tsx";
 import type { ApprovalNotice } from "./approvals/notices.ts";
 import { type RunFeed, useApprovals } from "./approvals/useApprovals.ts";
-import { BoardPanel } from "./boards/BoardPanel.tsx";
-import { BoardScreen } from "./boards/BoardScreen.tsx";
-import { useBoardCounts, useBoards } from "./boards/useBoards.ts";
 import { CalendarDraftsProvider } from "./calendar/DraftsContext.tsx";
 import { createDraftStore, type DraftMemory, memoryDraftMemory } from "./calendar/drafts.ts";
 import { useEventReminders } from "./calendar/reminders.ts";
@@ -77,7 +74,7 @@ import { composeStrings } from "./screens/compose/strings.ts";
 import { useCompose } from "./screens/compose/useCompose.ts";
 import { Drafts, openDrafts } from "./screens/Drafts.tsx";
 import { windowInFront } from "./screens/first-sync/ready.ts";
-import { type BoardLens, Inbox, type SyncProgress } from "./screens/Inbox.tsx";
+import { Inbox, type SyncProgress, type ViewLens } from "./screens/Inbox.tsx";
 import type { Inbox as InboxData } from "./screens/inbox/actions.ts";
 import { type FolderKey, isStreamFolder } from "./screens/inbox/folders.ts";
 import { parseCalendarNewTarget } from "./screens/inbox/meetings.ts";
@@ -102,6 +99,9 @@ import { useShell } from "./shell/Shell.tsx";
 import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
 import { titleWithWaiting, useWindowBadge, useWindowTitle, windowTitle } from "./shell/title.ts";
 import { TemplatesBridge } from "./templates/Bridge.tsx";
+import { useViewCounts, useViews } from "./views/useViews.ts";
+import { ViewPanel } from "./views/ViewPanel.tsx";
+import { ViewScreen } from "./views/ViewScreen.tsx";
 import { useWorkspace } from "./workspace.tsx";
 
 export interface AppProps {
@@ -613,16 +613,16 @@ export function App({
     () => groupIconFor(groupIcons, groupIconFallback),
     [groupIcons, groupIconFallback],
   );
-  // Boards (docs/spec/boards.md): the pinned ones in the nav above Groups, with their counts, live.
-  const boardClock = useClock(60, nowProp);
-  const boardList = useBoards();
-  const boardCounts = useBoardCounts(boardList, boardClock);
-  const navBoards = useMemo(
+  // Views (docs/spec/views.md): the pinned ones in the nav above Groups, with their counts, live.
+  const viewClock = useClock(60, nowProp);
+  const viewList = useViews();
+  const viewCounts = useViewCounts(viewList, viewClock);
+  const navViews = useMemo(
     () =>
-      (boardList ?? [])
+      (viewList ?? [])
         .filter((b) => b.pinned)
         .map((b) => ({ id: b.id, name: b.doc.name, icon: b.doc.nav.icon })),
-    [boardList],
+    [viewList],
   );
   const nav = useMemo(
     () =>
@@ -639,14 +639,14 @@ export function App({
         sectionOrder: shell.settings["sections.order"],
         sectionsOff: !sectionsOn,
         automation: { running: approvals.running, approvals: aiOff ? null : approvals.count },
-        boards: navBoards,
-        boardCounts,
-        boardsLabel: shell.settings["strings.boards.nav"],
+        views: navViews,
+        viewCounts,
+        viewsLabel: shell.settings["strings.views.nav"],
         strings: shell.settings,
       }),
     [
-      navBoards,
-      boardCounts,
+      navViews,
+      viewCounts,
       approvals.running,
       approvals.count,
       aiOff,
@@ -706,7 +706,7 @@ export function App({
     key === "inbox" ||
     isStreamFolder(key) ||
     key.startsWith("section:") ||
-    key.startsWith("board:") ||
+    key.startsWith("views:") ||
     navGroups.some((g) => g.id === key);
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -802,7 +802,7 @@ export function App({
         setActive("inbox");
       } else if (target.startsWith("group:")) setActive(target.slice("group:".length));
       else if (target.startsWith("section:")) setActive(target);
-      else if (target.startsWith("board:")) setActive(target);
+      else if (target.startsWith("views:")) setActive(target);
       else if (target.startsWith("folder:")) setActive(target.slice("folder:".length));
       else setActive("inbox");
     },
@@ -970,8 +970,8 @@ export function App({
     if (group) return group.name;
     const placed = nav.sections.find((x) => x.key === active);
     if (placed) return placed.label;
-    const pinnedBoard = nav.boards.find((x) => x.key === active);
-    if (pinnedBoard) return pinnedBoard.label;
+    const pinnedView = nav.views.find((x) => x.key === active);
+    if (pinnedView) return pinnedView.label;
     if (active === "calendar") return s["strings.nav.calendar"];
     if (active === "workflows") return s["strings.nav.workflows"];
     if (active === "routing") return s["strings.nav.routing"];
@@ -1055,7 +1055,7 @@ export function App({
         groups={navGroups}
         groupIcon={nav.groupIcon}
         counts={nav.counts}
-        boards={nav.boards}
+        views={nav.views}
         sections={nav.sections}
         // The line waits for the runtimes to answer, so it never flashes on start.
         sectionsHint={
@@ -1195,12 +1195,12 @@ export function App({
         now={now}
         onOpen={(draftId) => void compose.openDraft(draftId, null)}
       />
-    ) : active.startsWith("board:") ? (
-      // A pinned Board in the list area, like a Section, through the Inbox's Board lens.
-      <BoardScreen
+    ) : active.startsWith("views:") ? (
+      // A pinned View in the list area, like a Section, through the Inbox's View lens.
+      <ViewScreen
         key={`screen-${active}`}
-        boardId={active.slice("board:".length)}
-        now={boardClock}
+        viewId={active.slice("views:".length)}
+        now={viewClock}
         onAsk={(text) => askHere(text)}
         onLeave={() => setActive("inbox")}
         render={(lens) => inboxView(lens)}
@@ -1209,17 +1209,15 @@ export function App({
       inboxView(undefined)
     ),
   );
-  function inboxView(board: BoardLens | undefined) {
+  function inboxView(view: ViewLens | undefined) {
     return (
       <Inbox
-        // Each view (the Inbox, a folder, a Group, a Section, a Board) is its own list: switching
+        // Each view (the Inbox, a folder, a Group, a Section, a View) is its own list: switching
         // remounts it, so rows outside the new view never linger as leaving rows.
-        key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}:${board?.id ?? ""}`}
-        board={board}
+        key={`view:${folderLens ?? ""}:${groupLens ?? ""}:${sectionLens ?? ""}:${view?.id ?? ""}`}
+        view={view}
         panels={
-          board ? undefined : (
-            <BoardPanel now={boardClock} onOpen={(id) => setActive(`board:${id}`)} />
-          )
+          view ? undefined : <ViewPanel now={viewClock} onOpen={(id) => setActive(`views:${id}`)} />
         }
         inbox={inbox}
         composer={composer}

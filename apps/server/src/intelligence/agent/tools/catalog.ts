@@ -17,15 +17,21 @@ import type {
   ToolTier,
   UndoRecord,
 } from "@monday/shared";
-import { isSettingKey, PREVIEW_LIST_MAX, settingsSchema, validateSetting } from "@monday/shared";
+import {
+  isSettingKey,
+  PREVIEW_LIST_MAX,
+  settingsSchema,
+  TOOL_ALIASES,
+  validateSetting,
+} from "@monday/shared";
 import { z } from "zod";
-import { BOARD_TOOLS } from "./boards.ts";
 import { COMPOSE_TOOLS } from "./compose.ts";
 import { EXTENSION_TOOLS, type ToolExtensions } from "./extensions.ts";
 import { ONBOARDING_TOOLS } from "./onboarding.ts";
 import { ORGANIZE_TOOLS } from "./organize.ts";
 import { TEMPLATE_TOOLS } from "./templates.ts";
 import { TUNE_TOOLS } from "./tune.ts";
+import { VIEW_TOOLS } from "./views.ts";
 
 export interface ToolSettings {
   /** A reversible batch above this many Threads previews first. */
@@ -752,11 +758,12 @@ export const TOOL_CATALOG: readonly ToolDefinition<never>[] = [
   ...ONBOARDING_TOOLS,
   ...ORGANIZE_TOOLS,
   ...TUNE_TOOLS,
-  ...BOARD_TOOLS,
+  ...VIEW_TOOLS,
   ...COMPOSE_TOOLS,
   ...TEMPLATE_TOOLS,
 ] as unknown as readonly ToolDefinition<never>[];
 
 export function findTool(name: string): ToolDefinition<unknown> | undefined {
-  return (TOOL_CATALOG as readonly ToolDefinition<unknown>[]).find((t) => t.name === name);
+  const wanted = TOOL_ALIASES[name] ?? name;
+  return (TOOL_CATALOG as readonly ToolDefinition<unknown>[]).find((t) => t.name === wanted);
 }

@@ -222,7 +222,7 @@ export const signalsSettings = {
     group: "Signals",
     tier: "advanced",
     label: "Most Signals at once",
-    help: "Every active Signal is asked about every arriving thread, so their number is bounded. Creating a Board or Section past it is refused with the count.",
+    help: "Every active Signal is asked about every arriving thread, so their number is bounded. Creating a View or Section past it is refused with the count.",
   }),
   "signals.keep_inactive_days": setting({
     type: z.int().min(0).max(365),
@@ -232,7 +232,7 @@ export const signalsSettings = {
     group: "Signals",
     tier: "advanced",
     label: "Keep answers of a removed Signal",
-    help: "Days the answers of a deleted Board's or Section's Signal are kept, so an Undo brings them back without asking again.",
+    help: "Days the answers of a deleted View's or Section's Signal are kept, so an Undo brings them back without asking again.",
   }),
   "strings.meter.judge.signals": str("ai", "Meter line: Signals on arrival", "Reading new mail"),
 

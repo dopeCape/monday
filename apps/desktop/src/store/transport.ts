@@ -116,7 +116,7 @@ export interface ContentTransport {
     approved: { method: "one_click" | "mailto"; target: string },
   ): Promise<{ ok: boolean; text: string }>;
   /** A manual Run of a Workflow on a Thread; each Step keeps its own approval. */
-  runWorkflow?(workflowId: Id, threadId: Id): Promise<void>;
+  runWorkflow?(workflowId: Id, threadId: Id, inputs?: Record<string, string>): Promise<void>;
   /** The composer's writing assist; absent on a Server without the route. */
   draftAssist?(request: DraftAssistRequest): Promise<DraftAssistResult>;
   /** Whether the assist can answer now. */
@@ -220,8 +220,8 @@ export function apiContent(api: Api): ContentTransport {
     listExit: (workspaceId, threadId) => api.recommendations.listExit(workspaceId, threadId),
     unsubscribe: (workspaceId, threadId, approved) =>
       api.recommendations.unsubscribe(workspaceId, threadId, approved),
-    runWorkflow: async (workflowId, threadId) => {
-      await api.workflows.run(workflowId, threadId);
+    runWorkflow: async (workflowId, threadId, inputs) => {
+      await api.workflows.run(workflowId, threadId, inputs);
     },
     sectionJudgments: (workspaceId, threadIds) =>
       api.routing.sectionJudgments(workspaceId, threadIds),

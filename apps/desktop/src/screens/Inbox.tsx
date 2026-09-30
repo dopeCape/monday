@@ -87,6 +87,7 @@ import { useIsActivePane } from "../shell/active.ts";
 import { useShell } from "../shell/Shell.tsx";
 import { queueTemplate, useTemplateLink } from "../templates/link.ts";
 import { useReplyTemplate } from "../templates/reply.ts";
+import type { InboxViewHost } from "../views/actions.ts";
 import { useWorkspace } from "../workspace.tsx";
 import type { CalendarSource } from "./calendar/calendar-data.ts";
 import { ComposeOverlay } from "./compose/ComposeOverlay.tsx";
@@ -256,12 +257,12 @@ export interface InboxProps {
    */
   folder?: FolderKey | undefined;
   /**
-   * A Board lens (docs/spec/boards.md): the Board's Threads in Lane order in
-   * the list area, rendered by the Board's component, with the Inbox's rows,
+   * A View lens (docs/spec/views.md): the View's Threads in Lane order in
+   * the list area, rendered by the View's component, with the Inbox's rows,
    * keys, reader, row actions and multi-select.
    */
-  board?: BoardLens | undefined;
-  /** Panels above the stream beside the Today panel: the `board` Panel (boards.panel). */
+  view?: ViewLens | undefined;
+  /** Panels above the stream beside the Today panel: the `view` Panel (views.panel). */
   panels?: ReactNode | undefined;
   /**
    * The judge behind the palette's typed sentences (slice 27, ADR 0012).
@@ -275,11 +276,11 @@ export interface InboxProps {
   meetings?: MeetingsSeam | null | undefined;
 }
 
-/** What the Board screen hands the Inbox: its Threads in Lane order, and how to draw them. */
-export interface BoardLens {
+/** What the View screen hands the Inbox: its Threads in Lane order, and how to draw them. */
+export interface ViewLens {
   id: string;
   name: string;
-  /** Every Thread the Board shows, in the order its component shows them (Lane by Lane). */
+  /** Every Thread the View shows, in the order its component shows them (Lane by Lane). */
   threads: readonly Thread[];
   /** The header's own controls: the menu, the count line. */
   header: ReactNode;
@@ -290,6 +291,8 @@ export interface BoardLens {
     row(thread: Thread): ReactNode;
     focus: string | null;
     open(threadId: string): void;
+    /** What the View's action buttons act through. */
+    host: InboxViewHost;
   }): ReactNode;
 }
 
@@ -522,7 +525,7 @@ function InboxBody({
   folder,
   judge,
   meetings,
-  board,
+  view,
   panels,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
@@ -631,8 +634,8 @@ function InboxBody({
       : { id: section, name: section };
   }, [section, settings]);
   const threads = useMemo(() => {
-    // A Board orders its own Threads, Lane by Lane.
-    if (board) return board.threads;
+    // A View orders its own Threads, Lane by Lane.
+    if (view) return view.threads;
     const list = lens
       ? allThreads.filter((t) => t.group === lens.id || t.subgroup === lens.id)
       : sectionLens
@@ -642,10 +645,10 @@ function InboxBody({
     if (folder === "snoozed") return list.map((t) => wakeSnippet(t, settings, now));
     if (folder) return list;
     return newestFirst(list);
-  }, [allThreads, lens, sectionLens, folder, settings, now, board]);
-  const boardThreads = useMemo(
-    () => (board ? new Map(board.threads.map((th) => [th.id, th])) : null),
-    [board],
+  }, [allThreads, lens, sectionLens, folder, settings, now, view]);
+  const viewThreads = useMemo(
+    () => (view ? new Map(view.threads.map((th) => [th.id, th])) : null),
+    [view],
   );
   const tagsOf = useCallback(
     (th: Thread): Tag[] => th.tags.flatMap((id) => tags.filter((t) => t.id === id)),
@@ -1012,7 +1015,7 @@ function InboxBody({
     openSearch();
   }, [searchRequest, openSearch]);
 
-  const thread = focus ? (inbox.thread(focus) ?? boardThreads?.get(focus)) : undefined;
+  const thread = focus ? (inbox.thread(focus) ?? viewThreads?.get(focus)) : undefined;
   const showReader = stream ? readerOpen && thread !== undefined : true;
   const openThreadId = showReader && thread ? thread.id : null;
   // The rows next to the one in hand stay warm, so j and k (or a click on a
@@ -1870,6 +1873,57 @@ function InboxBody({
       onNavigate,
     ],
   );
+  /**
+   * What a View's action buttons act through (docs/spec/views.md, "Actions on
+   * items"): the same InboxActions, compose, Custom action runner, Workflow
+   * runner and calendar as the reader's chips; nothing is sent from here.
+   */
+  const viewHost = useMemo((): InboxViewHost => {
+    const customOn = createCustomActionRunner({
+      inbox,
+      compose: (kind, threadId, seed) => composeOn(threadId, kind, seed),
+      groups: () => groups,
+      tags: () => tags,
+    });
+    return {
+      archive: (ids) => inbox.archive(ids),
+      markRead: (ids, read) => (read ? inbox.markRead(ids) : inbox.markUnread(ids)),
+      snooze: (ids, until) => inbox.snooze(ids, until),
+      move: (ids, groupId) => inbox.moveToGroup(ids, groupId),
+      tag: async (ids, name) => {
+        const found = tags.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+        if (!found || !inbox.setTags) return "unavailable";
+        const setTags = inbox.setTags;
+        let last: UndoToken | null = null;
+        for (const id of ids) {
+          const current = inbox.thread(id)?.tags ?? [];
+          last = await setTags([id], [...new Set([...current, found.id])]);
+        }
+        return last;
+      },
+      compose: (kind, threadId, seed) => {
+        if (seed.templateId) queueTemplate(composer, seed.templateId);
+        composeOn(threadId, kind, seed.to ? { to: seed.to } : {});
+      },
+      runWorkflow: (workflowId, threadId, inputs) =>
+        inbox.runWorkflow ? inbox.runWorkflow(workflowId, threadId, inputs) : Promise.reject(),
+      customAction: async (actionId, threadId) => {
+        const action = s["actions.custom"].find((a) => a.id === actionId);
+        const target = inbox.thread(threadId);
+        if (!action || !target) return false;
+        return (await customOn.run(action, target)).ok;
+      },
+      openLink: (url) => openExternal(url),
+      ...(calendar
+        ? {
+            createEvent: async (event: { title: string; start: string; end: string }) => {
+              await calendar.create({ ...event, timeZone: deviceZone ?? "UTC" });
+            },
+          }
+        : {}),
+      toast: (text, undo) => showToast(text, undo),
+    };
+  }, [inbox, composeOn, groups, tags, composer, s, calendar, deviceZone, showToast]);
   /** Runs a Recommended action as its tool call; a Thread that changed since is checked again first. */
   const runRecommended = useCallback(
     async (threadId: string, rec: Recommendation, option?: string) => {
@@ -2542,7 +2596,7 @@ function InboxBody({
     if (sg.layout.list) void shell.set("layout.list", sg.layout.list);
   };
   const listTitle =
-    board?.name ??
+    view?.name ??
     lens?.name ??
     sectionLens?.name ??
     (folder ? t(`strings.nav.${folder}`) : t("strings.inbox.title"));
@@ -2846,8 +2900,8 @@ function InboxBody({
       >
         {selectionBar ?? (
           <ColHead title={listTitle} count={headCount}>
-            {board ? board.header : null}
-            {board ? null : (
+            {view ? view.header : null}
+            {view ? null : (
               <>
                 <label className={`list-search${searching ? " on" : ""}`}>
                   <MagnifyingGlassIcon className="search-ic" aria-hidden="true" />
@@ -2959,13 +3013,14 @@ function InboxBody({
             onLeft={pickerExit.onEnd}
           />
         ) : null}
-        {board ? (
-          <div className="board-body" role="listbox" aria-label={listTitle} tabIndex={-1}>
-            {board.above}
-            {board.render({
+        {view ? (
+          <div className="view-body" role="listbox" aria-label={listTitle} tabIndex={-1}>
+            {view.above}
+            {view.render({
               row: (th) => renderItem({ key: th.id, row: { thread: th, leaving: false } }),
               focus,
               open: openAnywhere,
+              host: viewHost,
             })}
           </div>
         ) : (

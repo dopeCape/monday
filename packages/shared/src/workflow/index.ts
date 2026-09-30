@@ -462,7 +462,7 @@ export type RunTrigger =
   | { kind: "thread_event"; threadId: Id; event: ThreadEvent }
   | { kind: "schedule"; at: IsoDate }
   | { kind: "silence"; threadId: Id }
-  | { kind: "manual"; threadId: Id | null };
+  | { kind: "manual"; threadId: Id | null; inputs?: Record<string, string> | undefined };
 
 export interface RunStepView {
   index: number;

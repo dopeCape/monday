@@ -41,7 +41,6 @@ import type {
 } from "@monday/shared";
 import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
-import { BOARDS_SCHEMA_SQL, boardUpsert } from "./boards.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import {
   PEOPLE_DROP_SQL,
@@ -69,6 +68,7 @@ import {
   signalsStatements,
 } from "./signals.ts";
 import type { StoreTransport, WakeConnection } from "./transport.ts";
+import { VIEWS_SCHEMA_SQL, viewUpsert, viewValuesStale } from "./views.ts";
 
 export type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 
@@ -382,7 +382,7 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
   await driver.exec(schemaSql);
   await driver.exec(PEOPLE_SCHEMA_SQL);
   await driver.exec(SIGNALS_SCHEMA_SQL);
-  await driver.exec(BOARDS_SCHEMA_SQL);
+  await driver.exec(VIEWS_SCHEMA_SQL);
   await driver.exec(RECOMMENDATIONS_SCHEMA_SQL);
   const signalsRows = await driver.query("select value from meta where key = ?", [
     SIGNALS_FORMAT_KEY,
@@ -774,9 +774,12 @@ export function changeStatements(change: Change): Statement[] {
       return [];
     case "template":
       return [templateUpsert(change.payload)];
-    case "board":
-      // Headers only: the Boards module reads the sealed documents through GET /boards.
-      return [boardUpsert(change.payload)];
+    case "view":
+      // Headers only: the Views module reads the sealed documents through GET /views.
+      return [viewUpsert(change.payload)];
+    case "view_values":
+      // Headers only: the Views module reads the picked values through POST /views/values.
+      return [viewValuesStale(change.payload.threadId)];
   }
 }
 
@@ -1711,7 +1714,7 @@ export async function createStore(options: StoreOptions): Promise<Store> {
 
     live<T = Row>(sql: string, params: SqlParam[] = [], scope: LiveScope = {}): LiveQuery<T> {
       // Screens asking the same question share one query and one copy of its rows:
-      // a Board's nav count and the open Board, the nav and a screen's Board list.
+      // a View's nav count and the open View, the nav and a screen's View list.
       const key = `${scope.threadId ?? ""}\u0000${sql}\u0000${JSON.stringify(params)}`;
       let shared = shareds.get(key) as SharedLive<T> | undefined;
       if (!shared) {

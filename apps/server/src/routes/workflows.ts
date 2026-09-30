@@ -36,7 +36,11 @@ const workspaceQuery = z.object({
 const createBody = z.object({ workspace: z.string().min(1) }).and(workflowInputSchema);
 const enableBody = z.object({ enabled: z.boolean() });
 const dryRunBody = z.object({ recent: z.int().min(1).max(200).optional() });
-const runBody = z.object({ threadId: z.string().min(1).nullable().optional() });
+const runBody = z.object({
+  threadId: z.string().min(1).nullable().optional(),
+  /** What the Run's templates read as {{inputs.<name>}}: a View's button fills them. */
+  inputs: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/), z.string().max(2000)).optional(),
+});
 
 /** A body that may be absent: an empty request reads as {}. */
 async function optionalBody<S extends z.ZodType>(
@@ -159,7 +163,10 @@ export function workflowRoutes(workflows: Workflows): Hono<AppEnv> {
   app.post("/workflows/:id/run", async (c) => {
     const body = await optionalBody(c, runBody);
     if (!body.ok) return body.response;
-    return c.json(await workflows.start(c.req.param("id"), body.data.threadId ?? null), 202);
+    return c.json(
+      await workflows.start(c.req.param("id"), body.data.threadId ?? null, body.data.inputs),
+      202,
+    );
   });
 
   app.post("/workflows/:id/approvals", async (c) => {

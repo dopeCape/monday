@@ -635,8 +635,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
     workflowId: Id,
     t: ThreadRow | null,
     steps: Record<string, StepContext>,
+    /** A manual Run's inputs (a View's button), read as {{inputs.<name>}}. */
+    inputs?: Record<string, string> | undefined,
   ): Promise<TemplateContext> => {
-    if (!t) return { thread: null, run: { id: runId, workflow: workflowId }, steps };
+    const given = inputs && Object.keys(inputs).length ? { inputs } : {};
+    if (!t) return { thread: null, run: { id: runId, workflow: workflowId }, steps, ...given };
     const facts = await factsOf(t);
     return {
       thread: {
@@ -648,6 +651,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       },
       run: { id: runId, workflow: workflowId },
       steps,
+      ...given,
     };
   };
 
@@ -682,8 +686,8 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
                       ? `${preview.preview.action} workflow "${preview.preview.workflow.name}"`
                       : preview.preview.kind === "template"
                         ? `${preview.preview.action} template "${preview.preview.template.name}"`
-                        : preview.preview.kind === "board"
-                          ? `${preview.preview.action} board "${preview.preview.name}"`
+                        : preview.preview.kind === "view"
+                          ? `${preview.preview.action} view "${preview.preview.name}"`
                           : `${preview.preview.key}: ${JSON.stringify(preview.preview.to)}`;
       return { kind: "would", detail: `${would}: ${line}`, asks: preview.asks && !env.standing };
     }
@@ -1391,7 +1395,13 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       step,
       index,
       thread,
-      ctx: await templateContext(run.id, w.id, thread, run.context),
+      ctx: await templateContext(
+        run.id,
+        w.id,
+        thread,
+        run.context,
+        run.trigger.kind === "manual" ? run.trigger.inputs : undefined,
+      ),
       tools: agent.tools(run.workspaceId),
       standing: w.standingApprovals.includes(step.id),
       decision,
@@ -2021,7 +2031,7 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       return runView((await loadRun(runId)) as RunRow);
     },
 
-    async start(workflowId, threadId = null) {
+    async start(workflowId, threadId = null, inputs) {
       const w = await requireRow(workflowId);
       const doc = await document(workflowId, w.currentVersion);
       if (!doc) throw new WorkflowNotFoundError(workflowId);
@@ -2029,7 +2039,11 @@ export function createWorkflows(options: WorkflowsOptions): Workflows {
       const run = await createRun(
         w,
         doc,
-        { kind: "manual", threadId: t?.id ?? null },
+        {
+          kind: "manual",
+          threadId: t?.id ?? null,
+          ...(inputs && Object.keys(inputs).length ? { inputs } : {}),
+        },
         t,
         `run:${w.id}:manual:${crypto.randomUUID()}`,
       );

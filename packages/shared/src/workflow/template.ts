@@ -1,6 +1,6 @@
 // Templates and conditions: the one mechanism a Step uses to read what came
 // before it. A text holds {{thread.subject}}, {{thread.from}}, {{thread.id}},
-// {{run.id}} and {{steps.<id>.<field>}} holes; a condition tests a rendered
+// {{run.id}}, {{steps.<id>.<field>}} and a manual Run's {{inputs.<name>}} holes; a condition tests a rendered
 // template. Nothing here reaches a model.
 
 /** What an earlier Step reported, keyed by the field names the Step declared. */
@@ -17,6 +17,8 @@ export interface TemplateContext {
   } | null;
   run: { id: string; workflow: string };
   steps: Record<string, StepContext>;
+  /** A manual Run's inputs (a View's button fills them). */
+  inputs?: Record<string, string> | undefined;
 }
 
 /** Reads a dotted path off the context; missing parts read as undefined. */

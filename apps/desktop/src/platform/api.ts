@@ -87,8 +87,8 @@ import type {
   WorkflowInputRaw,
   WorkflowView,
 } from "@monday/shared";
-import { boardsApi } from "../boards/api.ts";
 import { templatesApi } from "../templates/api.ts";
+import { viewsApi } from "../views/api.ts";
 
 /** How a Thread's list is left, as GET /threads/:id/unsubscribe answers (docs/spec/actions.md). */
 export interface ListExit {
@@ -625,8 +625,8 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
     },
     /** Templates and their Placeholders (docs/spec/templates.md). */
     templates: templatesApi(request),
-    /** Boards (docs/spec/boards.md). */
-    boards: boardsApi(request),
+    /** Views (docs/spec/views.md). */
+    views: viewsApi(request),
     judge: {
       /**
        * The palette's typed sentence as one Judgment (slice 27): the reading
@@ -920,10 +920,10 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
           json("POST", recent ? { recent } : {}),
         ),
       /** A manual Run, on a Thread when the Workflow is about one. */
-      run: (workflowId: Id, threadId: Id | null = null) =>
+      run: (workflowId: Id, threadId: Id | null = null, inputs?: Record<string, string>) =>
         request<RunView>(
           `/workflows/${encodeURIComponent(workflowId)}/run`,
-          json("POST", { threadId }),
+          json("POST", { threadId, ...(inputs ? { inputs } : {}) }),
         ),
       /** Grants or revokes a Standing approval on one Step. */
       standing: (workflowId: Id, step: string, granted: boolean) =>

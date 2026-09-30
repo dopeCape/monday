@@ -469,23 +469,21 @@ describe("the composer in bottom-bar mode", () => {
   });
 
   test("a Server card whose last live event was lost settles from the Session when the turn ends, not Stopped", async () => {
-    const board = (status: ToolCall["status"]) =>
+    const view = (status: ToolCall["status"]) =>
       toolEvent({
         id: "bd1",
-        tool: "create_board",
+        tool: "create_view",
         tier: "read-only",
         status,
         inputSummary: "Amazon orders by shipped and delivered",
         ...(status === "done" ? { result: "Tried on 30 threads" } : {}),
       });
     const client = fakeAgentClient({
-      turns: [
-        () => [board("running"), board("done"), { kind: "text", id: "t1", text: "Drafted." }],
-      ],
+      turns: [() => [view("running"), view("done"), { kind: "text", id: "t1", text: "Drafted." }]],
       unheard: (e) => e.kind === "tool" && e.call.status === "done",
     });
     await mount(client, { kind: "local", cli: "claude-code" });
-    await typeInBar("make a board of my amazon orders");
+    await typeInBar("make a view of my amazon orders");
     await submitBar();
     await settle();
     const card = document.querySelector<HTMLElement>(".agent-thread .tool");

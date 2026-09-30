@@ -13,6 +13,7 @@ import type {
   ScoreQuestion,
   ThreadJudgments,
 } from "./judge.ts";
+import type { ExtractKind } from "./view/types.ts";
 
 export type SignalKind = "noul" | "choice" | "score";
 
@@ -22,7 +23,7 @@ export type SignalOwnerKind =
   | "section"
   | "custom_action"
   | "recommended_action"
-  | "board"
+  | "view"
   | "interruption";
 
 export interface SignalOwner {
@@ -30,7 +31,7 @@ export interface SignalOwner {
   id: string | null;
 }
 
-/** Which Threads carry a Signal: a Sort scope sentence, and a Board's exact Fact filters. */
+/** Which Threads carry a Signal: a Sort scope sentence, and a View's exact Fact filters. */
 export interface SignalScope {
   /** "last 3 months" by default; "arrival" asks only on arrival (the Interruption policy). */
   window: string;
@@ -51,10 +52,18 @@ export type SignalGate =
   | "addresses"
   | "links"
   | "tracking"
-  | "workflows";
+  | "workflows"
+  /** A View's Extraction: candidates of its kind found in the text (docs/spec/views.md). */
+  | `extract:${ExtractKind}`;
 
 /** Per-Thread options built by code (the amounts a pattern found), never versioned. */
-export type SignalOptionsFrom = "amounts" | "addresses" | "links" | "tracking" | "workflows";
+export type SignalOptionsFrom =
+  | "amounts"
+  | "addresses"
+  | "links"
+  | "tracking"
+  | "workflows"
+  | `extract:${ExtractKind}`;
 
 export type SignalQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 

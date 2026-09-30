@@ -934,14 +934,14 @@ export const threadRoutes = pgTable(
 
 /* Recommended actions (docs/spec/actions.md, slices 34 and 35): actions-schema.ts. */
 export * from "./actions-schema.ts";
-/* Boards (docs/spec/boards.md): boards, board_versions, board_drafts in boards-schema.ts. */
-export * from "./boards-schema.ts";
 /*
  * A Thread's Judgments (slice 25) and the judged Sections and custom
  * actions (slice 26) moved into the Signal store (ADR 0014, slice 30):
  * signal_defs, signal_versions and signal_answers in signals-schema.ts.
  */
 export * from "./signals-schema.ts";
+/* Views (docs/spec/views.md): views, view_versions, view_drafts in views-schema.ts. */
+export * from "./views-schema.ts";
 
 /**
  * Meetings from mail (docs/spec/meetings.md): the meeting request's reading

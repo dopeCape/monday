@@ -36,7 +36,7 @@ export type JudgeTask =
   | "judge.signals"
   /** The Signal backfill (slice 31): background, under the monthly budget. */
   | "judge.backfill"
-  /** A Board's test on the owner's Threads before it is pinned (docs/spec/boards.md). */
+  /** A View's test on the owner's Threads before it is pinned (docs/spec/views.md). */
   | "judge.board";
 
 export type JsonValue =

@@ -209,8 +209,8 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
       true: text(s, `signals.questions.${id}.true` as (typeof SHIPPED_SETTING_KEYS)[number]),
       false: text(s, `signals.questions.${id}.false` as (typeof SHIPPED_SETTING_KEYS)[number]),
     });
-  add("personal", "noul", withCriteria("personal"), ["Recommended actions", "Boards"]);
-  add("has_deadline", "noul", withCriteria("has_deadline"), ["Recommended actions", "Boards"]);
+  add("personal", "noul", withCriteria("personal"), ["Recommended actions", "Views"]);
+  add("has_deadline", "noul", withCriteria("has_deadline"), ["Recommended actions", "Views"]);
   const parts = s["signals.questions.deadline_parts"] as PartWords;
   for (const id of [
     "deadline_form",
@@ -235,7 +235,7 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
       consumers: ["The deadline's date"],
     });
   }
-  add("money_involved", "noul", withCriteria("money_involved"), ["Recommended actions", "Boards"]);
+  add("money_involved", "noul", withCriteria("money_involved"), ["Recommended actions", "Views"]);
   out.push({
     id: "money_amount",
     kind: "choice",
@@ -266,9 +266,9 @@ export function shippedSignals(s: ShippedSettings, window: string): WantedSignal
       text(s, "signals.questions.frustrated"),
       s["signals.questions.frustrated.levels"] as string[],
     ),
-    ["Boards"],
+    ["Views"],
   );
-  add("owner_promised", "noul", noul(text(s, "signals.questions.owner_promised")), ["Boards"]);
-  add("they_promised", "noul", noul(text(s, "signals.questions.they_promised")), ["Boards"]);
+  add("owner_promised", "noul", noul(text(s, "signals.questions.owner_promised")), ["Views"]);
+  add("they_promised", "noul", noul(text(s, "signals.questions.they_promised")), ["Views"]);
   return out;
 }

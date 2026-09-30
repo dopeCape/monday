@@ -31,12 +31,12 @@ import type { OrganizeSeam } from "../../organize.ts";
 import type { BacklogSeam } from "../../routing/backlog.ts";
 import type { TuneSeam } from "../../tune.ts";
 import { NoSentMailError, type VoiceSeam } from "../../voice.ts";
-import type { BoardsSeam } from "./boards.ts";
 import { CALENDAR_TOOLS, type CalendarSeam } from "./calendar.ts";
 import type { ToolDefinition, ToolPlan } from "./catalog.ts";
 import { MEETING_TOOLS, type MeetingsSeam } from "./meetings.ts";
 import { RECOMMENDED_TOOLS, type RecommendationsSeam } from "./recommended.ts";
 import type { TemplatesSeam } from "./templates.ts";
+import type { ViewsSeam } from "./views.ts";
 
 export type { CalendarSeam } from "./calendar.ts";
 
@@ -84,7 +84,12 @@ export interface WorkflowsSeam {
     decision: "approved" | "declined",
     options?: { standing?: boolean },
   ): Promise<RunView>;
-  start(workflowId: string, threadId?: string | null): Promise<RunView>;
+  /** A Run by hand; `inputs` are what the Run's templates read as {{inputs.<name>}} (a View's button fills them). */
+  start(
+    workflowId: string,
+    threadId?: string | null,
+    inputs?: Record<string, string>,
+  ): Promise<RunView>;
   /** The Setting workflows.ask_before_enable. */
   askBeforeEnable(): Promise<boolean>;
 }
@@ -123,8 +128,8 @@ export interface ToolExtensions {
   recommendations?: RecommendationsSeam | undefined;
   /** Templates (slice 37): the library, filling, drafting from examples, the duplicate check. */
   templates?: TemplatesSeam | undefined;
-  /** Boards (slice 40): the stored Boards, the drafts and their tests. */
-  boards?: BoardsSeam | undefined;
+  /** Views (slice 40): the stored Views, the drafts and their tests. */
+  views?: ViewsSeam | undefined;
 }
 
 const text = (t: string): ToolPreview => ({ kind: "text", text: t });
