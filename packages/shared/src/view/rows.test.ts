@@ -408,3 +408,22 @@ describe("rows that are Messages", () => {
     expect(validateView(ADVISORIES).ok).toBe(true);
   });
 });
+
+describe("the drafting prompt's worked examples", () => {
+  test("both validate as they are written, with the ids and version code adds", async () => {
+    const { defaultSettings } = await import("../settings/schema.ts");
+    const prompt = defaultSettings()["views.prompt"];
+    const examples = prompt
+      .split("\n")
+      .filter(
+        (l) => l.startsWith('{"name": "Orders"') || l.startsWith('{"name": "Vulnerabilities"'),
+      );
+    expect(examples).toHaveLength(2);
+    for (const line of examples) {
+      const doc = { ...JSON.parse(line), id: "v_example", version: 0, examples: {} };
+      const r = validateView(doc);
+      expect(r.ok ? [] : r.errors).toEqual([]);
+    }
+    expect(prompt).not.toContain("—");
+  });
+});
