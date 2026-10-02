@@ -157,16 +157,29 @@ describe("schema", () => {
 describe("table parsing", () => {
   test("reads come from FROM and JOIN, writes from INSERT, UPDATE and DELETE", () => {
     expect([...tablesRead(INBOX_THREADS_SQL)]).toEqual(["thread_tags", "thread_labels", "threads"]);
+    // A query that reads Messages whole also sees their bodies change.
     expect([
       ...tablesRead("select * from messages m join attachments a on a.message_id = m.id"),
-    ]).toEqual(["messages", "attachments"]);
+    ]).toEqual(["messages", "attachments", "message_bodies"]);
+    expect([...tablesRead("select id, sender from messages where thread_id = ?")]).toEqual([
+      "messages",
+    ]);
     expect([...tablesWritten("update threads set archived = 1 where id = ?")]).toEqual([
       "threads",
       "threads_fts",
       "threads_trgm",
       "messages_fts",
     ]);
+    // A body landing (or the pre-warm's mark) changes no Thread list: it is its own table.
     expect([...tablesWritten("update messages set body_text = ? where id = ?")]).toEqual([
+      "message_bodies",
+      "messages_fts",
+    ]);
+    expect([...tablesWritten("update messages set body_at = ? where body_text is null")]).toEqual([
+      "message_bodies",
+      "messages_fts",
+    ]);
+    expect([...tablesWritten("update messages set sender = ?, body_at = ? where id = ?")]).toEqual([
       "messages",
       "messages_fts",
     ]);

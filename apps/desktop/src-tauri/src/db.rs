@@ -278,8 +278,13 @@ pub async fn db_query(
 ) -> Result<tauri::ipc::Response, String> {
     trim_if_pending();
     let started = std::time::Instant::now();
-    let bytes = with_conn(&app, &state, &workspace, |c| query_packed(c, &sql, &params))?;
-    log_if_slow("query", &workspace, &sql, started);
+    let bytes = with_conn(&app, &state, &workspace, |c| {
+        let ran = std::time::Instant::now();
+        let out = query_packed(c, &sql, &params);
+        log_if_slow("query (running)", &workspace, &sql, ran);
+        out
+    })?;
+    log_if_slow("query (waiting and running)", &workspace, &sql, started);
     if bytes.len() >= TRIM_AFTER_BYTES {
         TRIM_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -294,9 +299,14 @@ pub async fn db_batch(
     statements: Vec<Statement>,
 ) -> Result<(), String> {
     let started = std::time::Instant::now();
-    let done = with_conn(&app, &state, &workspace, |c| batch(c, &statements));
-    let first = statements.first().map(|s| s.sql.as_str()).unwrap_or("");
-    log_if_slow("batch", &workspace, first, started);
+    let first_sql = statements.first().map(|s| s.sql.clone()).unwrap_or_default();
+    let done = with_conn(&app, &state, &workspace, |c| {
+        let ran = std::time::Instant::now();
+        let out = batch(c, &statements);
+        log_if_slow("batch (running)", &workspace, &first_sql, ran);
+        out
+    });
+    log_if_slow("batch (waiting and running)", &workspace, &first_sql, started);
     done
 }
 
@@ -312,7 +322,7 @@ fn log_if_slow(kind: &str, workspace: &str, sql: &str, started: std::time::Insta
         return;
     }
     let one_line: String = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-    let short: String = one_line.chars().take(400).collect();
+    let short: String = if one_line.len() > 700 { format!("{} ... {}", one_line.chars().take(120).collect::<String>(), one_line.chars().rev().take(560).collect::<String>().chars().rev().collect::<String>()) } else { one_line.clone() };
     eprintln!("[monday] slow cache {kind} {took} ms in {workspace}: {short}");
 }
 

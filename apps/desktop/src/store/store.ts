@@ -529,6 +529,13 @@ export function tablesRead(sql: string): Set<string> {
     const name = m[1]?.toLowerCase();
     if (name && name !== "select") out.add(name);
   }
+  // A query over messages sees its bodies too, unless it never reads a body column.
+  if (
+    out.has("messages") &&
+    /\bbody_(text|html|at)\b|\bm\.\*|messages\.\*|select\s+\*/i.test(sql)
+  ) {
+    out.add("message_bodies");
+  }
   return out;
 }
 
@@ -536,8 +543,23 @@ const WRITE_TABLE =
   /\b(?:insert\s+(?:or\s+\w+\s+)?into|update|delete\s+from)\s+["`]?([a-z_][a-z0-9_]*)/gi;
 
 /** The tables a statement writes; `threads` and `messages` also touch their FTS indexes. */
+/**
+ * An update of messages that sets only body columns (a body landing, the pre-warm's
+ * "tried" mark, an eviction) changes no Thread list: it is reported as `message_bodies`,
+ * which the reader's Messages watch and the lists do not.
+ */
+const BODY_ONLY_UPDATE = /^\s*update\s+messages\s+set\s+([\s\S]+?)\s+where\b/i;
+const BODY_COLUMNS = new Set(["body_text", "body_html", "body_at"]);
+function bodyOnly(sql: string): boolean {
+  const set = BODY_ONLY_UPDATE.exec(sql)?.[1];
+  if (!set) return false;
+  const columns = set.split(",").map((part) => part.split("=")[0]?.trim().toLowerCase() ?? "");
+  return columns.length > 0 && columns.every((c) => BODY_COLUMNS.has(c));
+}
+
 export function tablesWritten(sql: string): Set<string> {
   const out = new Set<string>();
+  if (bodyOnly(sql)) return new Set(["message_bodies", "messages_fts"]);
   for (const m of sql.matchAll(WRITE_TABLE)) {
     const name = m[1]?.toLowerCase();
     if (name) out.add(name);
