@@ -13,13 +13,17 @@
 
 import type {
   BlockPreview,
+  CoverageReason,
   Settings,
+  ViewCoverage,
   ViewDraft,
   ViewPreview,
+  ViewTest,
   ViewTriedThread,
 } from "@monday/shared";
-import { OTHERS_LANE, UNSURE_LANE } from "@monday/shared";
+import { COVERAGE_REASONS, fieldsShown, OTHERS_LANE, UNSURE_LANE } from "@monday/shared";
 import { BarChart, Btn, cx } from "@monday/ui";
+import { WarningIcon } from "@phosphor-icons/react";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { ComposerEnvContext } from "../agent/aui/context.tsx";
 import { Picker } from "../screens/inbox/Picker.tsx";
@@ -72,6 +76,8 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
   const [valuing, setValuing] = useState<{ threadId: string; extraction: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  /** A coverage reason the user clicked: the rows shown are the tried Threads it names. */
+  const [filter, setFilter] = useState<CoverageFilter | null>(null);
   const [applied, setApplied] = useState<{
     version: number;
     undo: (() => Promise<unknown>) | null;
@@ -120,6 +126,7 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
   const open = draft.status === "open";
   const pinReady = canPin(draft, s["views.test.shown"]);
   const over = t && t.inScope > s["views.scope.max_threads"];
+  const rows = t ? rowsFor(t, filter) : [];
 
   return (
     <div className="agent-preview view-card" data-draft={draft.id} data-status={draft.status}>
@@ -146,9 +153,21 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
           ))}
         </div>
       ) : null}
-      {t?.shown.length ? (
+      {filter ? (
+        <div className="bc-line bc-filter">
+          {fill(s["strings.views.card.filtered"], {
+            count: rows.length,
+            label: filter.label,
+            reason: filter.text,
+          })}
+          <Btn sm onClick={() => setFilter(null)}>
+            {s["strings.views.card.filter_clear"]}
+          </Btn>
+        </div>
+      ) : null}
+      {rows.length ? (
         <div className="bc-rows">
-          {t.shown.map((row) => {
+          {rows.map((row) => {
             const fixed = correctionsOf(draft, row.threadId);
             const lane = fixed.lane ?? row.lane;
             return (
@@ -310,6 +329,9 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
           ))}
         </div>
       ) : null}
+      {t && !t.empty ? (
+        <CoverageRows draft={draft} t={t} s={s} filter={filter} onFilter={setFilter} />
+      ) : null}
       {t?.agreement ? (
         <div className="bc-line">
           {fill(s["strings.views.agrees"], { n: t.agreement.agree, m: t.agreement.total })}
@@ -437,6 +459,192 @@ export function ViewCard({ preview }: { preview: ViewPreview }) {
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** A coverage reason the user clicked: its Field, its words and the tried Threads it names. */
+export interface CoverageFilter {
+  field: string;
+  reason: CoverageReason;
+  label: string;
+  text: string;
+  threadIds: readonly string[];
+}
+
+/** The rows the card lists: the shown ones, or every tried Thread a clicked reason names. */
+export function rowsFor(t: ViewTest, filter: CoverageFilter | null): ViewTriedThread[] {
+  if (!filter) return t.shown;
+  const ids = new Set(filter.threadIds);
+  const seen = new Set<string>();
+  return [...t.shown, ...(t.rest ?? [])].filter((r) => {
+    if (!ids.has(r.threadId) || seen.has(r.threadId)) return false;
+    seen.add(r.threadId);
+    return true;
+  });
+}
+
+type CoverageField = ViewCoverage["fields"][number];
+
+/** Why a Field did not read, in words, each reason with its count. */
+function reasonsOf(
+  draft: ViewDraft,
+  f: CoverageField,
+  s: Settings,
+): Array<{ reason: CoverageReason; count: number; text: string }> {
+  const x = f.field.startsWith("x:")
+    ? draft.doc.extractions.find((e) => e.id === f.field.slice(2))
+    : undefined;
+  const out: Array<{ reason: CoverageReason; count: number; text: string }> = [];
+  for (const reason of COVERAGE_REASONS) {
+    if (reason === "resolved") continue;
+    const count = f[reason];
+    if (!count) continue;
+    const text =
+      reason === "noCandidates"
+        ? fill(s["strings.views.card.reason.no_candidates"], {
+            count,
+            kind: x ? s[`strings.views.card.kind.${x.find}`] : "",
+          })
+        : reason === "notRead"
+          ? fill(s["strings.views.card.reason.not_read"], { count })
+          : fill(s[`strings.views.card.reason.${reason}`], { count });
+    out.push({ reason, count, text });
+  }
+  return out;
+}
+
+/** How the tried Threads were chosen, in one line: how many of how many, newest first, and why. */
+export function poolLine(t: ViewTest, s: Settings): string {
+  const p = t.pool;
+  const key = p?.query
+    ? t.inScopeAtLeast
+      ? "strings.views.card.pool_query_at_least"
+      : "strings.views.card.pool_query"
+    : t.inScopeAtLeast
+      ? "strings.views.card.pool_at_least"
+      : "strings.views.card.pool";
+  const parts = [fill(s[key], { tried: t.tried, count: t.inScope })];
+  if (p?.prefer?.length)
+    parts.push(
+      fill(s["strings.views.card.pool_prefer"], {
+        kinds: p.prefer.map((k) => s[`strings.views.card.kind.${k}`]).join(", "),
+      }),
+    );
+  if (p?.kept) parts.push(fill(s["strings.views.card.pool_kept"], { count: p.kept }));
+  if (p?.skipped) parts.push(fill(s["strings.views.card.pool_skipped"], { count: p.skipped }));
+  return parts.join(", ");
+}
+
+/**
+ * Under the Block previews: how the tried Threads were chosen, who sent them,
+ * and how each value and question read over all of them ("Total: 8 of 10
+ * read, 2 had no amounts"). A Field a Block shows that read on less than
+ * views.card.warn_below of them is marked; clicking a reason lists the tried
+ * Threads it names. A draft tried before coverage was kept shows none of it.
+ */
+function CoverageRows({
+  draft,
+  t,
+  s,
+  filter,
+  onFilter,
+}: {
+  draft: ViewDraft;
+  t: ViewTest;
+  s: Settings;
+  filter: CoverageFilter | null;
+  onFilter: (f: CoverageFilter | null) => void;
+}) {
+  const c = t.coverage;
+  if (!c) return null;
+  const shown = fieldsShown(draft.doc);
+  const warnBelow = s["views.card.warn_below"];
+  return (
+    <div className="bc-coverage">
+      <div className="bc-line">
+        <b>{s["strings.views.card.coverage"]}</b>
+      </div>
+      <div className="bc-line bc-pool">{poolLine(t, s)}</div>
+      {c.senders.length ? (
+        <div className="bc-line bc-senders">
+          {fill(s["strings.views.card.senders"], {
+            senders: c.senders
+              .map((x) => fill(s["strings.views.card.sender"], { from: x.from, count: x.count }))
+              .join(", "),
+          })}
+        </div>
+      ) : null}
+      {c.fields.map((f) => {
+        const out = f.per === "row" ? f.resolved + f.unsure + f.none : t.tried;
+        const warn = out > 0 && shown.has(f.field) && f.resolved / out < warnBelow;
+        const warnText = fill(s["strings.views.card.warn"], {
+          label: f.label,
+          pct: `${Math.round(warnBelow * 100)}%`,
+        });
+        const words = { label: f.label, resolved: f.resolved, tried: t.tried };
+        const main =
+          f.per === "row"
+            ? fill(s["strings.views.card.read_rows"], words)
+            : !f.field.startsWith("x:")
+              ? fill(s["strings.views.card.read_signal"], words)
+              : f.values !== undefined
+                ? fill(s["strings.views.card.read_values"], { ...words, values: f.values })
+                : fill(s["strings.views.card.read"], words);
+        return (
+          <div
+            key={f.field}
+            className={cx("bc-cov", warn && "warn")}
+            data-field={f.field}
+            data-warn={warn ? "true" : undefined}
+          >
+            {warn ? (
+              <span className="ic" role="img" aria-label={warnText} title={warnText}>
+                <WarningIcon />
+              </span>
+            ) : null}
+            <span className="lab">{main}</span>
+            {reasonsOf(draft, f, s).map((r) => {
+              const ids = f.threads?.[r.reason];
+              const on = filter?.field === f.field && filter.reason === r.reason;
+              return ids?.length ? (
+                <button
+                  key={r.reason}
+                  type="button"
+                  className={cx("bc-reason", on && "on")}
+                  data-reason={r.reason}
+                  aria-pressed={on}
+                  title={s["strings.views.card.filter_title"]}
+                  onClick={() =>
+                    onFilter(
+                      on
+                        ? null
+                        : {
+                            field: f.field,
+                            reason: r.reason,
+                            label: f.label,
+                            text: r.text,
+                            threadIds: ids,
+                          },
+                    )
+                  }
+                >
+                  {r.text}
+                </button>
+              ) : (
+                <span key={r.reason} className="bc-reason" data-reason={r.reason}>
+                  {r.text}
+                </span>
+              );
+            })}
+            {f.examples.length ? (
+              <span className="ex">
+                {fill(s["strings.views.card.examples"], { examples: f.examples.join(", ") })}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

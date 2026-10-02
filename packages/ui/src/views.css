@@ -1021,3 +1021,58 @@ button.view-tr:hover {
   color: var(--fg-faint);
   font-style: italic;
 }
+
+/* the card's coverage: how each value read over the tried threads, and the reasons as filters */
+.view-card .bc-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.view-card .bc-cov {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+.view-card .bc-cov .lab {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.view-card .bc-cov.warn .lab,
+.view-card .bc-cov .ic {
+  color: var(--warning);
+}
+.view-card .bc-cov .ic {
+  display: inline-flex;
+}
+.view-card .bc-cov .ex {
+  color: var(--fg-faint);
+}
+.view-card .bc-reason {
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  font: inherit;
+  color: var(--fg-muted);
+  background: var(--sunken);
+}
+.view-card button.bc-reason {
+  cursor: pointer;
+}
+.view-card button.bc-reason:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.view-card button.bc-reason.on {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+.view-card .bc-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -9,6 +9,7 @@
 import {
   ALL_LANE,
   evaluateLaneCondition,
+  laneSignals,
   OTHERS_LANE,
   UNSURE_LANE,
   type ViewContext,
@@ -238,6 +239,22 @@ export function blockRefs(b: ViewBlock): string[] {
       break;
   }
   return [...new Set(out)];
+}
+
+/**
+ * The Fields a View's Blocks draw (`x:<id>`, `signal:<id>` and Facts): every
+ * Block's references, and the Signals that decide the Lanes when a Block reads
+ * the Lanes. The card warns when one of these reads on few tried Threads.
+ */
+export function fieldsShown(doc: ViewDoc): Set<string> {
+  const out = new Set<string>();
+  let lanes = false;
+  for (const b of doc.blocks) {
+    for (const r of blockRefs(b)) out.add(r);
+    if (isLaneBlock(b) || b.type === "counts" || blockRefs(b).includes("lane")) lanes = true;
+  }
+  if (lanes) for (const l of doc.lanes) for (const s of laneSignals(l)) out.add(`signal:${s}`);
+  return out;
 }
 
 /** Every Field reference an action reads. */

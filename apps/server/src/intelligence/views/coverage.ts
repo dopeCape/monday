@@ -6,6 +6,7 @@
 // were missing; these counts say what actually happened. Code only.
 
 import type {
+  CoverageReason,
   Id,
   JudgeAnswer,
   ViewContext,
@@ -34,6 +35,17 @@ export interface AskedThread {
 const label = (x: { id: string; label?: string | undefined }) =>
   x.label?.trim() || x.id.replaceAll("_", " ");
 
+type FieldRow = ViewCoverage["fields"][number];
+
+/** Notes which tried Thread a count came from, once per Thread and reason. */
+function mark(row: FieldRow, reason: CoverageReason, threadId: Id): void {
+  const threads = row.threads ?? {};
+  row.threads = threads;
+  const list = threads[reason] ?? [];
+  threads[reason] = list;
+  if (!list.includes(threadId)) list.push(threadId);
+}
+
 /** A per-row Signal over the rows of the tried Threads: its answer per item or per Message. */
 function eachCoverage(
   doc: ViewDoc,
@@ -42,9 +54,9 @@ function eachCoverage(
   ctx: ViewContext,
   diagnosis: Record<Id, ViewThreadDiagnosis>,
   examples: number,
-): ViewCoverage["fields"][number] {
+): FieldRow {
   const { noulLow, noulHigh, confidenceBelow } = ctx.rules;
-  const row: ViewCoverage["fields"][number] = {
+  const row: FieldRow = {
     field: `signal:${s.local}`,
     label: signalName(doc, s.local),
     resolved: 0,
@@ -65,6 +77,7 @@ function eachCoverage(
         const clear = a.noul >= noulHigh || a.noul < noulLow;
         if (clear) row.resolved += 1;
         else row.unsure += 1;
+        mark(row, clear ? "resolved" : "unsure", t.id);
         word = clear ? (a.noul >= noulHigh ? "yes" : "no") : "unsure";
       } else if (
         a.confidence !== undefined &&
@@ -72,12 +85,15 @@ function eachCoverage(
         a.confidence < confidenceBelow
       ) {
         row.unsure += 1;
+        mark(row, "unsure", t.id);
         word = "unsure";
       } else if (a.choice === "none") {
         row.none += 1;
+        mark(row, "none", t.id);
         word = "none";
       } else {
         row.resolved += 1;
+        mark(row, "resolved", t.id);
         word = a.choice ?? (a.score !== undefined && a.score !== null ? a.score.toFixed(1) : "?");
         if (a.choice && row.examples.length < examples && !row.examples.includes(a.choice))
           row.examples.push(a.choice);
@@ -138,7 +154,7 @@ export function coverageOf(
   const fields: ViewCoverage["fields"] = [];
   for (const x of doc.extractions) {
     const sid = viewExtractionId(doc.id, x.id);
-    const row: ViewCoverage["fields"][number] = {
+    const row: FieldRow = {
       field: `x:${x.id}`,
       label: label(x),
       resolved: 0,
@@ -155,7 +171,10 @@ export function coverageOf(
       const spans = r?.candidates[sid];
       const capped =
         (spans?.length ?? 0) >= (x.many ? (options.manyMax ?? 30) : options.candidatesMax);
-      if (capped) row.capped += 1;
+      if (capped) {
+        row.capped += 1;
+        mark(row, "capped", t.id);
+      }
       const read = readExtraction(doc, t, x.id, ctx);
       let state: ViewThreadDiagnosis["extractions"][number]["state"];
       if (r && spans && spans.length === 0) state = "no_candidates";
@@ -174,6 +193,17 @@ export function coverageOf(
       else if (state === "unsure") row.unsure += 1;
       else if (state === "no_candidates") row.noCandidates += 1;
       else row.notRead += 1;
+      mark(
+        row,
+        state === "value"
+          ? "resolved"
+          : state === "no_candidates"
+            ? "noCandidates"
+            : state === "not_read"
+              ? "notRead"
+              : state,
+        t.id,
+      );
       const answer = r?.extra[sid];
       const shares = answer?.type === "choice" ? answer.probabilities : null;
       // Many values: each candidate's own Noul, as the judge answered it.
@@ -215,7 +245,7 @@ export function coverageOf(
       fields.push(eachCoverage(doc, threads, s, ctx, diagnosis, options.examples ?? 3));
       continue;
     }
-    const row = {
+    const row: FieldRow = {
       field: `signal:${s.local}`,
       label: signalName(doc, s.local),
       resolved: 0,
@@ -231,11 +261,13 @@ export function coverageOf(
       let words: string;
       if (!r) {
         row.notRead += 1;
+        mark(row, "notRead", t.id);
         words = "not read";
       } else if (r.noul !== undefined && r.noul !== null) {
         const clear = r.noul >= noulHigh || r.noul < noulLow;
         if (clear) row.resolved += 1;
         else row.unsure += 1;
+        mark(row, clear ? "resolved" : "unsure", t.id);
         words = `${Math.round(r.noul * 100)}% yes${clear ? "" : " (unsure)"}`;
       } else if (
         r.confidence !== undefined &&
@@ -243,12 +275,15 @@ export function coverageOf(
         r.confidence < confidenceBelow
       ) {
         row.unsure += 1;
+        mark(row, "unsure", t.id);
         words = `${r.choice ?? r.score?.toFixed(1) ?? "?"} at ${Math.round(r.confidence * 100)}% (unsure)`;
       } else if (r.choice === "none") {
         row.none += 1;
+        mark(row, "none", t.id);
         words = "none";
       } else {
         row.resolved += 1;
+        mark(row, "resolved", t.id);
         const what =
           r.choice ?? (r.score !== undefined && r.score !== null ? r.score.toFixed(1) : "?");
         words = `${what}${r.confidence !== undefined && r.confidence !== null ? ` at ${Math.round(r.confidence * 100)}%` : ""}`;

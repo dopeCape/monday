@@ -416,17 +416,16 @@ export async function runViewTest(
   const blockActions = [...new Set(doc.blocks.flatMap((b) => b.actions ?? []))].flatMap(
     (id) => doc.actions.find((a) => a.id === id) ?? [],
   );
-  const shown: ViewTriedThread[] = [];
-  for (const p of picked) {
+  const triedRow = (p: (typeof tried)[number]): ViewTriedThread | null => {
     const t = byId.get(p.id);
-    if (!t) continue;
+    if (!t) return null;
     const row = {
       thread: t,
       threads: [t],
       lane: doc.lanes.length ? p.lane : null,
       placement: p.placement,
     };
-    shown.push({
+    return {
       threadId: t.id,
       from: t.from ?? "",
       subject: t.subject ?? "",
@@ -455,19 +454,30 @@ export async function runViewTest(
         };
       }),
       actions: blockActions.filter((a) => actionShows(base, a, row)).map((a) => a.label),
-    });
-  }
+    };
+  };
+  const shown = picked.flatMap((p) => triedRow(p) ?? []);
+  // The rest of the tried Threads, so the card's coverage can show the ones a reason names.
+  const shownIds = new Set(shown.map((r) => r.threadId));
+  const rest = tried.filter((p) => !shownIds.has(p.id)).flatMap((p) => triedRow(p) ?? []);
   const examples = Object.values(doc.examples).flat().length;
   return {
     test: {
       tried: threads.length,
       shown,
+      rest,
       counts: lanes.counts,
       widened,
       empty: threads.length === 0,
       inScope,
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
-      pool: { kept: kept.length, fresh: fresh.length, skipped, scanned },
+      pool: {
+        kept: kept.length,
+        fresh: fresh.length,
+        skipped,
+        scanned,
+        ...(kinds.length ? { prefer: kinds } : {}),
+      },
       coverage,
       changes: [],
       needsJudge: viewReadsSignals(doc) && (!judge || unanswered),

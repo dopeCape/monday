@@ -555,6 +555,18 @@ export interface BlockPreview {
  * its floor, or no candidate at all (code found none of its kind, so nothing
  * was asked); for a Signal, how many answers were clear, Unsure or none.
  */
+/** Why a Field read as it did on a tried Thread: the coverage's counts, by name. */
+export type CoverageReason = "resolved" | "none" | "unsure" | "noCandidates" | "notRead" | "capped";
+
+export const COVERAGE_REASONS: readonly CoverageReason[] = [
+  "resolved",
+  "none",
+  "unsure",
+  "noCandidates",
+  "notRead",
+  "capped",
+];
+
 export interface ViewCoverage {
   /** The tried Threads' senders, most first (at most five). */
   senders: Array<{ from: string; count: number }>;
@@ -580,6 +592,11 @@ export interface ViewCoverage {
     values?: number | undefined;
     /** A per-row Signal: the counts are over rows (items or Messages), not Threads. */
     per?: "row" | undefined;
+    /**
+     * The tried Threads behind each count, so the card can show the rows a
+     * reason names ("2 had no amount"). Absent on drafts tried before it was kept.
+     */
+    threads?: Partial<Record<CoverageReason, Id[]>> | undefined;
   }>;
 }
 
@@ -616,6 +633,11 @@ export interface ViewTest {
   tried: number;
   /** The ones the card shows: spread across the Lanes, least confident first. */
   shown: ViewTriedThread[];
+  /**
+   * The other tried Threads, for the card's coverage filter ("show the 2 that had
+   * no amount"); absent on drafts tried before it was kept.
+   */
+  rest?: ViewTriedThread[] | undefined;
   /** Per Lane id (and unsure, others) over every tried Thread. */
   counts: Record<string, number>;
   /** When the scope held too few: only its dates were widened, and how many the scope itself holds. */
@@ -630,7 +652,23 @@ export interface ViewTest {
    * code looked through `scanned` Threads in scope and passed over `skipped` whose text holds
    * no value of that kind.
    */
-  pool?: { kept: number; fresh: number; skipped?: number; scanned?: number } | undefined;
+  pool?:
+    | {
+        kept: number;
+        fresh: number;
+        skipped?: number;
+        scanned?: number;
+        /** The kinds of value code preferred the tried Threads to hold (views.test.prefer_readable). */
+        prefer?: ExtractKind[] | undefined;
+        /** The scope has a full-search `query`: the tried Threads are the newest it matched. */
+        query?: boolean | undefined;
+      }
+    | undefined;
+  /**
+   * `inScope` is a floor, not the whole count: a `query` scope's search stopped at
+   * views.query.count_max matches or views.query.scan_max Threads looked through.
+   */
+  inScopeAtLeast?: boolean | undefined;
   /** How well each Field read over every tried Thread (the tool's words for the Agent). */
   coverage?: ViewCoverage | undefined;
   /** After corrections: how many of them the View now agrees with. */
