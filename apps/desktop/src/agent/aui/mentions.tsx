@@ -194,7 +194,7 @@ export function MentionText({ text }: { text: string }) {
         const chip = (
           <>
             <Icon icon={MENTION_ICONS[s.type]} />
-            {s.label}
+            <span className="label">{s.label}</span>
           </>
         );
         return s.type === "thread" || s.type === "reply" ? (
@@ -203,12 +203,13 @@ export function MentionText({ text }: { text: string }) {
             type="button"
             className="agent-mention"
             data-type={s.type}
+            title={s.label}
             onClick={() => actions.openThread(s.id)}
           >
             {chip}
           </button>
         ) : (
-          <span key={key} className="agent-mention" data-type={s.type}>
+          <span key={key} className="agent-mention" data-type={s.type} title={s.label}>
             {chip}
           </span>
         );

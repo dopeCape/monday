@@ -2118,8 +2118,18 @@ form.agent-bar :where(.mk) {
   line-height: 1.45;
   vertical-align: baseline;
   white-space: nowrap;
+  /* A long subject never leaves the bubble: the chip shrinks to it and its label ends in an ellipsis. */
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.agent-mention .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .agent-mention i {
+  flex: none;
   font-size: 0.9em;
   color: var(--accent);
 }
