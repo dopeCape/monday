@@ -2,9 +2,37 @@
 
 The desktop shell (`apps/desktop`) also builds for Android and iOS with Tauri 2
 mobile. A phone is a **client of a paired Server**: Bun and the embedded
-Postgres cannot run there, so there is no Sidecar on a phone. It reaches the
-Server it was paired with (the Cloud target, `platform/cloud.ts`), keeps its own
-Cache (SQLCipher, in the app's data directory) and its own keychain.
+Postgres cannot run there, so there is no Sidecar on a phone. It pairs once
+with a Pairing invite (ADR 0006) and from then on reaches that one Server (the
+remote target, `platform/remote.ts`, kept in the keychain under
+`server.remote`), with its own Cache (SQLCipher, in the app's data directory)
+and its own keychain.
+
+## Startup on a phone
+
+The Shell (`shell/Shell.tsx`) asks the platform its `kind`. On `"mobile"` it
+skips the Sidecar and the Cloud target and loads the paired Server with
+`loadRemoteTarget`:
+
+- none yet: the app shows `<Connect>` (`screens/Connect.tsx`): scan the QR code
+  the computer shows (Settings, Sync server, Devices, Add a phone), or type the
+  address and the short code. Pairing saves the target (`shell.setRemote`).
+- paired: the target picker gets `{ sidecar: null, cloud: remote }`, and the
+  api's fetch is `fetchFor(remote.baseUrl, remote.fingerprint, platform)`: an
+  https address on a private network with a pinned certificate goes through
+  the pinned fetch, anything else through the webview's own fetch.
+
+The pinned fetch (`src-tauri/src/pinned.rs`, `platform/pinned.ts`) performs
+the request natively with rustls and accepts only the certificate whose
+SHA-256 (base64url, no padding) was pinned at pairing; a different one
+rejects with an Error named `PinMismatch`. Bodies are buffered. A WebSocket
+or event stream cannot go through it, so the Changes feed to a pinned
+address falls back to polling.
+
+The QR scanner is `tauri-plugin-barcode-scanner` (`Platform.scanQr`). The
+camera's reason on iOS is `NSCameraUsageDescription` in `src-tauri/ios/Info.plist`
+(merged through `tauri.ios.conf.json`), the default text of
+`strings.mobile.connect.camera_permission`; Android asks at the first scan.
 
 ## What differs on a phone
 
@@ -26,7 +54,9 @@ keychain).
 | Bundle | Sidecar binary and Postgres resources | none (`tauri.android.conf.json`, `tauri.ios.conf.json`) |
 
 The webview learns which it is from `platform().kind` (`"desktop"` or
-`"mobile"`, from the `platform_kind` command). On a phone the platform layer
+`"mobile"`, from the `platform_kind` command) and, on a phone, `platform().os`
+(`"android"` or `"ios"`, from `platform_os`), which the phone form
+(`platform/form.ts`) reads before the user agent. On a phone the platform layer
 answers the Sidecar's methods itself (`sidecarInfo` says not running, stop and
 restart reject), has no window `frame`, and a config write tells its own
 listeners. The browser dev server says `"desktop"` unless the URL has
@@ -85,8 +115,14 @@ adb shell am start -n io.monday.desktop/.MainActivity
 adb logcat | grep -i -e monday -e RustStdoutStderr
 ```
 
-`bun tauri android dev` runs the app against the Vite dev server instead
-(the phone must reach this machine).
+Plain http: a debug build allows it only to `10.0.2.2` (the machine the
+emulator runs on), `localhost` and `127.0.0.1`
+(`gen/android/app/src/debug/res/xml/network_security_config.xml`), so an
+emulator can pair with this machine's Sidecar at `http://10.0.2.2:<port>`. A
+release build allows no plain http at all: a phone pairs over https.
+
+`bun tauri android dev` runs the app against the Vite dev server instead. With
+cleartext limited as above, reach it as localhost: `adb reverse tcp:1420 tcp:1420`.
 
 ## iOS
 

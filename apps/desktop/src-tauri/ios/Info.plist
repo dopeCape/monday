@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the iOS app's Info.plist (tauri.ios.conf.json, bundle.iOS.infoPlist).
+     The camera reason is the default of strings.mobile.connect.camera_permission
+     (packages/shared/src/settings/schema.ts): iOS reads it before any Setting is known. -->
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>monday uses the camera to scan the QR code your computer shows when you add this phone.</string>
+</dict>
+</plist>

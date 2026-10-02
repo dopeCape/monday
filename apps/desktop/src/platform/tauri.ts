@@ -3,6 +3,7 @@
 
 import type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
 import type { FetchLike } from "./cloud.ts";
+import { type InvokeLike, pinnedFetchOver } from "./pinned.ts";
 
 export type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
 
@@ -64,8 +65,16 @@ export interface WindowFrame {
  */
 export type PlatformKind = "desktop" | "mobile";
 
+/** A phone's OS, as the mobile host names it. */
+export type PhoneOs = "android" | "ios";
+
 export interface Platform {
   kind: PlatformKind;
+  /**
+   * The phone's OS, from the host (`platform_os`); present only when `kind`
+   * is "mobile". The phone form (platform/form.ts) reads it before the user agent.
+   */
+  os?: PhoneOs | undefined;
   readConfig(): Promise<ConfigFile>;
   /** Only after the user explicitly asked (ADR 0001). */
   writeConfig(text: string): Promise<void>;
@@ -159,7 +168,10 @@ async function tauriPlatform(): Promise<Platform> {
   const { listen } = await import("@tauri-apps/api/event");
   const { openUrl } = await import("@tauri-apps/plugin-opener");
   const kind = await invoke<PlatformKind>("platform_kind").catch((): PlatformKind => "desktop");
-  if (kind === "mobile") return mobilePlatform(invoke, openUrl);
+  if (kind === "mobile") {
+    const os = await invoke<string>("platform_os").catch(() => "");
+    return mobilePlatform(invoke, openUrl, os === "ios" ? "ios" : "android");
+  }
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { Command } = await import("@tauri-apps/plugin-shell");
   const spawn: ProcessRunner = async (command, options: SpawnOptions): Promise<Process> => {
@@ -275,11 +287,18 @@ const NO_SIDECAR_ON_MOBILE = "no background service on a phone: monday connects 
  * no window frame. The config file is the app's private one and nothing else
  * edits it, so a write tells this module's own listeners instead of a watcher.
  */
-function mobilePlatform(invoke: Invoke, openUrl: (url: string) => Promise<void>): Platform {
+function mobilePlatform(
+  invoke: Invoke,
+  openUrl: (url: string) => Promise<void>,
+  os: PhoneOs,
+): Platform {
   const configListeners = new Set<(file: ConfigFile) => void>();
   return {
     kind: "mobile",
+    os,
     isTauri: true,
+    pinnedFetch: pinnedFetchOver(invoke as InvokeLike),
+    scanQr,
     readConfig: () => invoke<ConfigFile>("read_config"),
     writeConfig: async (text) => {
       await invoke("write_config", { text });
@@ -316,6 +335,24 @@ function mobilePlatform(invoke: Invoke, openUrl: (url: string) => Promise<void>)
       throw new Error(`${command}: command not found`);
     },
   };
+}
+
+/**
+ * The camera scanner on a phone (the barcode scanner plugin): asks for the
+ * camera once, then resolves with the first QR code's text. Null when the
+ * camera is refused or the person backs out.
+ */
+async function scanQr(): Promise<string | null> {
+  const scanner = await import("@tauri-apps/plugin-barcode-scanner");
+  let permission = await scanner.checkPermissions();
+  if (permission !== "granted") permission = await scanner.requestPermissions();
+  if (permission !== "granted") return null;
+  try {
+    const scanned = await scanner.scan({ formats: [scanner.Format.QRCode], windowed: false });
+    return scanned.content || null;
+  } catch {
+    return null;
+  }
 }
 
 export interface FakePlatformOptions {

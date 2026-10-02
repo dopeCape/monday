@@ -4,7 +4,8 @@
     "externalBin": [],
     "resources": [],
     "iOS": {
-      "minimumSystemVersion": "15.0"
+      "minimumSystemVersion": "15.0",
+      "infoPlist": "ios/Info.plist"
     }
   }
 }

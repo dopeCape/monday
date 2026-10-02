@@ -17,6 +17,7 @@
       ]
     },
     "fs:allow-download-write",
-    "notification:default"
+    "notification:default",
+    "barcode-scanner:default"
   ]
 }

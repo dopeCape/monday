@@ -17,6 +17,13 @@ pub fn platform_kind() -> &'static str {
     kind()
 }
 
+/// The OS this build is for: "android", "ios", "linux", "macos" or "windows".
+/// The phone form reads it (src/platform/form.ts) rather than guess from the user agent.
+#[tauri::command]
+pub fn platform_os() -> &'static str {
+    std::env::consts::OS
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

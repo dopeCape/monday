@@ -42,6 +42,12 @@ import {
 } from "../platform/cloud.ts";
 import { type Form, formOf, type MobileOs, mobileOs, viewport } from "../platform/form.ts";
 import {
+  fetchFor,
+  loadRemoteTarget,
+  type RemoteTarget,
+  saveRemoteTarget,
+} from "../platform/remote.ts";
+import {
   adoptDemoTarget,
   type ConfigFile,
   type Platform,
@@ -113,6 +119,19 @@ export interface ShellState {
   api: Api;
   /** Records or forgets the Cloud target in the keychain; the picker follows at once. */
   setCloud(target: CloudTarget | null): Promise<void>;
+  /**
+   * A phone host (platform kind "mobile"), once the platform has answered:
+   * its camera scanner and pinned fetch for the Connect screen. Null on a
+   * computer and in the browser.
+   */
+  phone: PhoneHost | null;
+  /**
+   * The Server this phone paired with (platform/remote.ts), the one target its
+   * requests go to; null on a phone that has not paired yet, and on a computer.
+   */
+  remote: RemoteTarget | null;
+  /** Keeps or forgets the phone's Server in the secret store; the picker follows at once. */
+  setRemote(target: RemoteTarget | null): Promise<void>;
   /** Probes both targets now and re-picks. */
   refreshServers(): Promise<void>;
   /**
@@ -122,6 +141,12 @@ export interface ShellState {
   set<K extends SettingKey>(key: K, value: Settings[K]): Promise<SetResult>;
   /** Re-reads the Server's Settings, after the Agent changed some on the Server. */
   refresh(): Promise<void>;
+}
+
+/** What a phone host offers the Connect screen. */
+export interface PhoneHost {
+  scanQr?: Platform["scanQr"];
+  pinnedFetch?: Platform["pinnedFetch"];
 }
 
 export type SetResult =
@@ -338,6 +363,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   // so its assistant runs Hosted, on the demo server's scripted runtime.
   const [demo, setDemo] = useState(false);
   const [cloud, setCloudState] = useState<CloudTarget | null>(null);
+  // A phone: its host's hooks, and the one Server it paired with (platform/remote.ts).
+  const [phone, setPhone] = useState<PhoneHost | null>(null);
+  const [remote, setRemoteState] = useState<RemoteTarget | null>(null);
   const [server, setServer] = useState<Picked | null>(null);
   const configRef = useRef(config);
   configRef.current = config;
@@ -388,6 +416,15 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       if (!alive) return;
       setConfig((last) => parseFile(first, last));
       keep(p.onConfigChanged((f) => setConfig((last) => parseFile(f, last))));
+      if (p.isTauri && p.kind === "mobile") {
+        // A phone runs no Sidecar and keeps no Cloud target: its one Server is
+        // the one it paired with, and until then the Connect screen shows.
+        const paired = await loadRemoteTarget(p);
+        if (!alive) return;
+        setRemoteState(paired);
+        setPhone({ scanQr: p.scanQr, pinnedFetch: p.pinnedFetch });
+        return;
+      }
       setCloudState(await loadCloudTarget(p));
       const info = await p.sidecarInfo();
       if (!alive) return;
@@ -423,19 +460,30 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
 
   // A new picker (and so a new api) only when a target or the preference changes.
   const prefer = settings["server.prefer"];
+  // A phone's requests to a LAN Server with a pinned certificate go through
+  // the host's pinned fetch; everything else uses the webview's own.
+  const serverFetch = useMemo(
+    () =>
+      phone && remote
+        ? fetchFor(remote.baseUrl, remote.fingerprint, { pinnedFetch: phone.pinnedFetch })
+        : undefined,
+    [phone, remote],
+  );
   const picker = useMemo(() => {
     const sidecarTarget: ServerTarget | null = sidecar?.running
       ? { baseUrl: `http://127.0.0.1:${sidecar.port}`, token: sidecar.token }
       : null;
+    const get = serverFetch ?? ((url: string) => fetch(url));
     return createTargetPicker({
-      targets: () => ({ sidecar: sidecarTarget, cloud }),
+      // A phone has one target, its paired Server, in the Cloud's place.
+      targets: () => (phone ? { sidecar: null, cloud: remote } : { sidecar: sidecarTarget, cloud }),
       prefer: () => prefer,
       probe: (t) =>
-        fetch(`${t.baseUrl}/health`)
+        get(`${t.baseUrl}/health`)
           .then((r) => r.ok)
           .catch(() => false),
     });
-  }, [sidecar, cloud, prefer]);
+  }, [sidecar, cloud, prefer, phone, remote, serverFetch]);
 
   useEffect(() => {
     const unsubscribe = picker.subscribe(setServer);
@@ -447,8 +495,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     () =>
       createApi(() => picker.current()?.target ?? null, {
         onUnreachable: (t) => picker.markUnreachable(t),
+        ...(serverFetch ? { fetch: serverFetch } : {}),
       }),
-    [picker],
+    [picker, serverFetch],
   );
 
   // Writes the Server has not taken yet (offline, or no Server picked): they
@@ -503,17 +552,26 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     if (pendingWrites.current.size > 0) await flushPending().then(refresh);
   }, [picker, flushPending, refresh]);
   useEffect(() => {
-    if (!cloud && pendingCount === 0) return;
+    if (!cloud && !remote && pendingCount === 0) return;
     const timer = setInterval(() => void probe(), probeSeconds * 1000);
     void probe();
     return () => clearInterval(timer);
-  }, [probe, cloud, pendingCount, probeSeconds]);
+  }, [probe, cloud, remote, pendingCount, probeSeconds]);
 
   const setCloud = useCallback(
     async (target: CloudTarget | null) => {
       const p = await platformOf();
       await saveCloudTarget(p, target);
       setCloudState(target);
+    },
+    [platformOf],
+  );
+
+  const setRemote = useCallback(
+    async (target: RemoteTarget | null) => {
+      const p = await platformOf();
+      await saveRemoteTarget(p, target);
+      setRemoteState(target);
     },
     [platformOf],
   );
@@ -711,6 +769,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       server,
       api,
       setCloud,
+      phone,
+      remote,
+      setRemote,
       refreshServers,
       set,
       refresh,
@@ -735,6 +796,9 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       server,
       api,
       setCloud,
+      phone,
+      remote,
+      setRemote,
       refreshServers,
       set,
       refresh,
@@ -774,6 +838,9 @@ export function StaticShell({
           | "customPalette"
           | "form"
           | "mobile"
+          | "phone"
+          | "remote"
+          | "setRemote"
         >
       >
     | undefined;
@@ -840,6 +907,9 @@ export function StaticShell({
       cloud: null,
       server: null,
       setCloud: async () => {},
+      phone: null,
+      remote: null,
+      setRemote: async () => {},
       refreshServers: async () => {},
       ...shellOverrides,
       api,

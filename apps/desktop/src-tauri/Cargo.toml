@@ -26,6 +26,12 @@ thiserror = "2"
 # SQLCipher compiled in, with OpenSSL built from source for the target: the same
 # Cache on Linux, macOS, Windows, Android (NDK clang) and iOS (Xcode clang).
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+# The pinned fetch (src/pinned.rs): a phone's requests to a LAN Server whose
+# self-signed certificate it pinned at pairing. rustls on ring builds for every
+# target without CMake; the certificate check is monday's own.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots-no-provider", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+sha2 = "0.10"
 
 # A computer only (docs/mobile.md): the Local runtime CLIs and the Sidecar spawn
 # through the shell plugin, and the config file is watched for outside edits.
@@ -38,6 +44,10 @@ notify-debouncer-mini = "0.6"
 # it is SharedPreferences encrypted with a key held in the Android Keystore.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+# A phone pairs by scanning the QR code its computer shows (screens/Connect.tsx).
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 keyring-core = "1"
