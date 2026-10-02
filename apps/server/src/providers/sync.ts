@@ -1484,15 +1484,18 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       await jobs.enqueue(SYNC_STEP, payload, {
         id: `${SYNC_STEP}:${accountId}:initial`,
         revive: true,
+        standing: true,
       });
       await jobs.enqueue(WATCH_STEP, payload, {
         id: `${WATCH_STEP}:${accountId}`,
         needs: ["needs-process"],
         revive: true,
+        standing: true,
       });
       await jobs.enqueue(RECONCILE_STEP, payload, {
         id: `${RECONCILE_STEP}:${accountId}`,
         revive: true,
+        standing: true,
       });
     },
 

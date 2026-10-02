@@ -54,6 +54,8 @@ export interface OAuthRoutesOptions {
   fetch?: FetchLike;
   /** How long /status waits before answering pending. */
   statusWaitMs?: number;
+  /** How long a sign-in may take after the browser hands the code back (accounts.signin_timeout_seconds). */
+  completeTimeoutMs?: () => Promise<number>;
   /** The saved OAuth app per provider; an in-memory one when absent. */
   apps?: OAuthAppStore;
 }
@@ -144,9 +146,31 @@ export function oauthRoutes(options: OAuthRoutesOptions): Hono<AppEnv> {
   }
 
   async function complete(state: string, code: string): Promise<AccountView> {
-    const finished = await flow.finish(state, code);
-    const { provider, credentials } = credentialsOf(finished);
-    return accounts.add({ provider, credentials });
+    // Bounded: a token exchange or a first connection that hangs ends the wizard's
+    // wait with an error it can retry, instead of "Finish signing in" forever.
+    const limitMs = options.completeTimeoutMs ? await options.completeTimeoutMs() : 60_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new Error(`signing in took longer than ${Math.round(limitMs / 1000)} s; try again`),
+          ),
+        limitMs,
+      );
+    });
+    try {
+      return await Promise.race([
+        (async () => {
+          const finished = await flow.finish(state, code);
+          const { provider, credentials } = credentialsOf(finished);
+          return accounts.add({ provider, credentials });
+        })(),
+        timeout,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   const app = new Hono<AppEnv>();

@@ -1801,7 +1801,11 @@ export function createCalendar(options: CalendarModuleOptions): CalendarModule {
 
     async startAccount(jobs, accountId) {
       const payload = { accountId };
-      await jobs.enqueue(CALENDAR_SYNC_STEP, payload, { id: `${CALENDAR_SYNC_STEP}:${accountId}` });
+      await jobs.enqueue(CALENDAR_SYNC_STEP, payload, {
+        id: `${CALENDAR_SYNC_STEP}:${accountId}`,
+        revive: true,
+        standing: true,
+      });
       await jobs.enqueue(CALENDAR_WATCH_STEP, payload, {
         id: `${CALENDAR_WATCH_STEP}:${accountId}`,
         needs: ["needs-public-url"],

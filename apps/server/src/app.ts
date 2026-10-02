@@ -600,6 +600,12 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
             keys,
             legacy: legacyFromAccounts(db, createAccountCredentialStore(db, mailstore)),
           }),
+          completeTimeoutMs: async () =>
+            (
+              await readGlobalSettings(db, ["accounts.signin_timeout_seconds"] as const).catch(
+                () => ({ "accounts.signin_timeout_seconds": 60 }),
+              )
+            )["accounts.signin_timeout_seconds"] * 1000,
           ...options.oauth,
           accounts: options.accounts.accounts,
         }),

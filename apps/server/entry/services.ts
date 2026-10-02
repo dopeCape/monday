@@ -101,7 +101,13 @@ export async function createServices(options: ServicesOptions): Promise<Services
   const keys = createKeys(db);
   await unlockAtBoot(keys, env, log);
 
-  const jobs = createJobs(db, options.jobs);
+  const jobs = createJobs(db, {
+    standingRetryMs: async () =>
+      (await readGlobalSetting(db, "server.jobs.standing_retry_minutes").catch(() => 5)) * 60_000,
+    lockedRetryMs: async () =>
+      (await readGlobalSetting(db, "server.jobs.locked_retry_seconds").catch(() => 30)) * 1000,
+    ...options.jobs,
+  });
   const mailstore = createMailstore(db, keys);
   const credentials = createCredentialStore(db, mailstore);
   const providers = createProviderRegistry({

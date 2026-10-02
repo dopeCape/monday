@@ -227,6 +227,13 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
   // Jobs do not start locked when a key is on its way (ADR 0013).
   const waitForKey = service !== null && !keys.isUnlocked();
   if (!waitForKey) await services.startAccounts();
+  // Every unlock re-arms each Account's standing Jobs: whatever ran locked and gave up
+  // before the key came starts again now, not at the next boot.
+  keys.onUnlock(() => {
+    void services
+      .startAccounts()
+      .catch((error) => log(`re-arming accounts after unlock failed: ${error}`));
+  });
   // Drafts saved before their Provider could hold them reach its Drafts folder now.
   await backfillDraftMirrors(handle.db, jobs)
     .then((n) => n > 0 && debug(`draft mirrors queued at boot: ${n}`))

@@ -4,6 +4,7 @@
 // and reports done, again (more work, requeue now) or a sleep.
 
 import { and, arrayContained, eq, lt, lte, sql } from "drizzle-orm";
+import { LockedError } from "../crypto/keys.ts";
 import type { Db } from "../db/client.ts";
 import { type JobStatus, jobs } from "../db/schema.ts";
 
@@ -50,6 +51,12 @@ export interface EnqueueOptions {
    * to keep syncing (its sync, reconcile and watch), re-armed at every boot.
    */
   revive?: boolean;
+  /**
+   * A Job an Account needs for as long as it exists (its sync, reconcile, watch):
+   * after its attempts it backs off (server.jobs.standing_retry_minutes) and starts
+   * over, never ending failed. Kept in the payload as `_standing`.
+   */
+  standing?: boolean;
 }
 
 export interface JobsOptions {
@@ -63,6 +70,17 @@ export interface JobsOptions {
    * serverless kicker has no LISTEN connection and wakes from here instead.
    */
   onEnqueue?: (id: string) => void;
+  /**
+   * How long a standing Job (registered `standing`: what an Account needs to keep
+   * syncing) waits after it used up its attempts; it never ends failed.
+   * server.jobs.standing_retry_minutes.
+   */
+  standingRetryMs?: () => Promise<number>;
+  /**
+   * How long a Job that met a locked server waits before trying again; the wait
+   * costs no attempt, since the key comes back. server.jobs.locked_retry_seconds.
+   */
+  lockedRetryMs?: () => Promise<number>;
 }
 
 export interface Jobs {
@@ -110,12 +128,20 @@ export class NoStepError extends Error {
 
 const defaultBackoff = (attempt: number) => 1000 * 2 ** attempt;
 
+/** Whether a Job was enqueued `standing` (EnqueueOptions). */
+const isStanding = (payload: unknown): boolean =>
+  !!payload &&
+  typeof payload === "object" &&
+  (payload as { _standing?: unknown })._standing === true;
+
 export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
   const maxAttempts = options.maxAttempts ?? 3;
   const backoffMs = options.backoffMs ?? defaultBackoff;
   const now = options.now ?? (() => new Date());
   const onEnqueue = options.onEnqueue ?? (() => {});
   const steps = new Map<string, Step<never>>();
+  const standingRetryMs = options.standingRetryMs ?? (async () => 5 * 60_000);
+  const lockedRetryMs = options.lockedRetryMs ?? (async () => 30_000);
 
   const toJob = (row: typeof jobs.$inferSelect): Job => ({
     id: row.id,
@@ -140,10 +166,17 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
           id,
           class: cls,
           needs: opts.needs ?? [],
-          payload: payload ?? {},
+          payload: opts.standing ? { ...(payload ?? {}), _standing: true } : (payload ?? {}),
           runAt: opts.runAt ?? now(),
         })
         .onConflictDoNothing({ target: jobs.id });
+      if (opts.standing && opts.id) {
+        // A row from before Jobs could be standing learns it now.
+        await db
+          .update(jobs)
+          .set({ payload: sql`${jobs.payload} || '{"_standing": true}'::jsonb` })
+          .where(and(eq(jobs.id, id), sql`not (${jobs.payload} ? '_standing')`));
+      }
       if (opts.revive && opts.id) {
         await db
           .update(jobs)
@@ -205,6 +238,22 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
       const current = await api.get(id);
       if (!current || current.leaseOwner !== owner || current.status !== "running") return;
       const exhausted = current.attempts >= maxAttempts;
+      if (exhausted && isStanding(current.payload)) {
+        // A standing Job keeps the Account alive: a streak of errors (a network
+        // that timed out, a provider down) waits and starts over, never ends it.
+        await db
+          .update(jobs)
+          .set({
+            status: "queued",
+            leaseOwner: null,
+            leaseUntil: null,
+            lastError: error,
+            attempts: 0,
+            runAt: new Date(now().getTime() + (await standingRetryMs())),
+          })
+          .where(and(eq(jobs.id, id), eq(jobs.leaseOwner, owner)));
+        return;
+      }
       await db
         .update(jobs)
         .set(
@@ -341,6 +390,23 @@ export function createJobs(db: Db, options: JobsOptions = {}): Jobs {
       try {
         result = await step(job, ctx);
       } catch (error) {
+        if (error instanceof LockedError) {
+          // The key is on its way (a boot, a lock): wait for it without spending an attempt.
+          await db
+            .update(jobs)
+            .set({
+              status: "queued",
+              leaseOwner: null,
+              leaseUntil: null,
+              lastError: error.message,
+              attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+              runAt: new Date(now().getTime() + (await lockedRetryMs())),
+            })
+            .where(
+              and(eq(jobs.id, job.id), eq(jobs.leaseOwner, owner), eq(jobs.status, "running")),
+            );
+          return "failed";
+        }
         await api.fail(job.id, owner, error instanceof Error ? error.message : String(error));
         return "failed";
       } finally {

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { LockedError } from "../src/crypto/keys.ts";
 import { createJobs, type Jobs } from "../src/jobs/index.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
@@ -244,6 +245,56 @@ describe("jobs", () => {
     expect(await jobs.extend(other, "server-a", 5_000)).toBe(false);
     expect(await jobs.extend(other, "server-b", 5_000)).toBe(true);
     await jobs.complete(other, "server-b");
+  });
+
+  test("a standing job never ends failed: after its attempts it waits and starts over", async () => {
+    const id = await jobs.enqueue(
+      "reconcile-like",
+      { accountId: "a1" },
+      { id: "reconcile-like:a1", standing: true },
+    );
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const claimed = await jobs.claim("server-a", ANY, 1000);
+      expect(claimed?.id).toBe(id);
+      await jobs.fail(id, "server-a", "The operation timed out.");
+      clock.advance(10_000);
+    }
+    const row = await jobs.get(id);
+    expect(row?.status).toBe("queued");
+    expect(row?.attempts).toBe(0);
+    expect(row?.lastError).toBe("The operation timed out.");
+    // The default standing wait is five minutes from the last failure.
+    expect(row?.runAt.getTime()).toBe(clock.now().getTime() - 10_000 + 5 * 60_000);
+    clock.advance(5 * 60_000);
+    await jobs.complete((await jobs.claim("server-a", ANY, 1000))?.id ?? "", "server-a");
+  });
+
+  test("a row from before standing learns it when its owner enqueues it standing", async () => {
+    const id = await jobs.enqueue("old-reconcile", { accountId: "a2" }, { id: "old-reconcile:a2" });
+    await jobs.enqueue("old-reconcile", { accountId: "a2" }, { id, revive: true, standing: true });
+    expect((await jobs.get(id))?.payload).toEqual({ accountId: "a2", _standing: true });
+    await jobs.complete((await jobs.claim("server-a", ANY, 1000))?.id ?? "", "server-a");
+  });
+
+  test("a step that meets a locked server waits for the key without spending an attempt", async () => {
+    jobs.registerStep("needs-key", async () => {
+      throw new LockedError();
+    });
+    const id = await jobs.enqueue("needs-key", {});
+    for (let i = 0; i < 5; i++) {
+      const claimed = await jobs.claim("server-a", ANY, 1000);
+      expect(claimed?.id).toBe(id);
+      await jobs.run(claimed as NonNullable<typeof claimed>, 1000);
+      const row = await jobs.get(id);
+      expect(row?.status).toBe("queued");
+      expect(row?.attempts).toBe(0);
+      expect(row?.runAt.getTime()).toBe(clock.now().getTime() + 30_000);
+      clock.advance(30_000);
+    }
+    jobs.registerStep("needs-key", async () => "done");
+    const claimed = await jobs.claim("server-a", ANY, 1000);
+    await jobs.run(claimed as NonNullable<typeof claimed>, 1000);
+    expect((await jobs.get(id))?.status).toBe("done");
   });
 
   test("a step that throws fails the job; a missing step fails it too", async () => {
