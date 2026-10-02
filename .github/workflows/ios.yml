@@ -1,0 +1,42 @@
+# The iOS build, on demand only (docs/mobile.md): a Simulator build of the app
+# on a macOS runner, so an iOS build can be checked without a Mac. Nothing is
+# signed; the .app runs in the iOS Simulator (`xcrun simctl install`). The
+# Xcode project (src-tauri/gen/apple) is generated here, not committed.
+name: ios
+
+on:
+  workflow_dispatch:
+
+jobs:
+  simulator:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Optional: a Simulator build signs nothing, but a team in the repo's
+      # secrets is passed on when there is one (docs/mobile.md).
+      - name: Development team
+        env:
+          TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: if [ -n "$TEAM" ]; then echo "APPLE_DEVELOPMENT_TEAM=$TEAM" >> "$GITHUB_ENV"; fi
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: bun install --frozen-lockfile
+      - name: Generate the Xcode project
+        working-directory: apps/desktop
+        run: bun tauri ios init --ci
+      - name: Build for the Simulator
+        working-directory: apps/desktop
+        run: bun tauri ios build --debug --target aarch64-sim
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monday-ios-simulator
+          path: apps/desktop/src-tauri/gen/apple/build/**/*.app
+          if-no-files-found: error

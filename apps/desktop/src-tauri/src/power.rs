@@ -6,8 +6,9 @@
 //! `Mains` or `USB` supply that is `online`, or the absence of any `Battery`
 //! supply, means mains. Metered networks are asked of NetworkManager through
 //! `nmcli` when it is installed; without it a connection is assumed unmetered.
-//! Other platforms are stubs for now (see the TODOs), reporting mains and
-//! unmetered so the Job runs rather than never runs.
+//! Other computers are stubs for now (see the TODOs), reporting mains and
+//! unmetered so the Job runs rather than never runs. Phones report battery and
+//! metered until they can ask the OS, so a phone never pre-warms on a data plan.
 
 use serde::Serialize;
 
@@ -128,16 +129,31 @@ pub fn parse_nmcli(text: &str) -> NetworkInfo {
     NetworkInfo { online, metered }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn read_power() -> PowerInfo {
     // TODO: macOS via IOKit's IOPSCopyPowerSourcesInfo, Windows via GetSystemPowerStatus.
     PowerInfo { mains: true, level: None }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn read_network() -> NetworkInfo {
     // TODO: macOS via NWPathMonitor (isExpensive/isConstrained), Windows via NetworkInformation.
     NetworkInfo { online: true, metered: false }
+}
+
+// A phone is the other way round from a computer: it reads as on battery and
+// on a metered connection until the shell can ask the OS, so the pre-warm
+// waits rather than spending a data plan. Bodies still load when opened.
+// TODO: Android via BatteryManager and ConnectivityManager.isActiveNetworkMetered,
+// iOS via UIDevice.batteryState and NWPath.isExpensive.
+#[cfg(mobile)]
+fn read_power() -> PowerInfo {
+    PowerInfo { mains: false, level: None }
+}
+
+#[cfg(mobile)]
+fn read_network() -> NetworkInfo {
+    NetworkInfo { online: true, metered: true }
 }
 
 #[cfg(all(test, target_os = "linux"))]

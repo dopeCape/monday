@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capability for the main window on a phone: a client of a paired Server, so no shell, no spawn and no window frame",
+  "windows": ["main"],
+  "platforms": ["android", "iOS"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        }
+      ]
+    },
+    "fs:allow-download-write",
+    "notification:default"
+  ]
+}
