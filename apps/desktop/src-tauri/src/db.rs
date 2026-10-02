@@ -211,19 +211,16 @@ fn cache_path(app: &AppHandle, workspace: &str) -> Result<PathBuf, String> {
 
 /// The Workspace's cache key from the keychain, minted on first use.
 fn cache_key(workspace: &str) -> Result<Vec<u8>, String> {
-    let entry = keyring::Entry::new(crate::secrets::SERVICE, &format!("cache-key:{workspace}"))
-        .map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(hex) => decode_hex(&hex).ok_or_else(|| "cache key in keychain is not hex".to_string()),
-        Err(keyring::Error::NoEntry) => {
+    let name = format!("cache-key:{workspace}");
+    match crate::secrets::get(&name).map_err(|e| format!("cannot read the cache key: {e}"))? {
+        Some(hex) => decode_hex(&hex).ok_or_else(|| "cache key in keychain is not hex".to_string()),
+        None => {
             let mut bytes = [0u8; 32];
             rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
-            entry
-                .set_password(&encode_hex(&bytes))
+            crate::secrets::set(&name, &encode_hex(&bytes))
                 .map_err(|e| format!("cannot store the cache key: {e}"))?;
             Ok(bytes.to_vec())
         }
-        Err(e) => Err(format!("cannot read the cache key: {e}")),
     }
 }
 

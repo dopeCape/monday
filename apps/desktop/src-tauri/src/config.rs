@@ -4,11 +4,9 @@
 //! if it exists, then the platform's own config directory.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 pub const FILE_NAME: &str = "monday.toml";
 pub const APP_DIR: &str = "monday";
@@ -103,8 +101,14 @@ pub fn write_config(app: AppHandle, text: String) -> Result<(), String> {
 }
 
 /// Watch the config directory (not the file, so editors that replace the file are seen)
-/// and emit `config:changed` with the new contents.
+/// and emit `config:changed` with the new contents. A phone has no watcher: its
+/// config file is in the app's private directory, where nothing else edits it.
+#[cfg(desktop)]
 pub fn watch(app: AppHandle) {
+    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
+    use std::time::Duration;
+    use tauri::Emitter;
+
     let path = config_path(&app);
     let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
     if std::fs::create_dir_all(&dir).is_err() {

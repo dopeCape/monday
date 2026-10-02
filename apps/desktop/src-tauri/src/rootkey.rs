@@ -7,10 +7,6 @@ use rand::RngCore;
 
 const KEYCHAIN_KEY: &str = "root-key";
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(crate::secrets::SERVICE, KEYCHAIN_KEY).map_err(|e| e.to_string())
-}
-
 /// Base64 of 32 random bytes.
 fn generate() -> String {
     let mut bytes = [0u8; 32];
@@ -21,15 +17,14 @@ fn generate() -> String {
 /// Read the root key from the keychain, creating one on first run. Returns None when
 /// the keychain is unavailable (the Sidecar then starts locked and the UI explains).
 pub fn load_or_create() -> Result<Option<String>, String> {
-    let e = entry()?;
-    match e.get_password() {
-        Ok(k) if !k.trim().is_empty() => Ok(Some(k)),
-        Ok(_) | Err(keyring::Error::NoEntry) => {
+    match crate::secrets::get(KEYCHAIN_KEY) {
+        Ok(Some(k)) if !k.trim().is_empty() => Ok(Some(k)),
+        Ok(_) => {
             let k = generate();
-            e.set_password(&k).map_err(|err| err.to_string())?;
+            crate::secrets::set(KEYCHAIN_KEY, &k)?;
             Ok(Some(k))
         }
-        Err(keyring::Error::PlatformFailure(err)) => {
+        Err(crate::secrets::SecretError::Unavailable(err)) => {
             eprintln!("[monday] keychain unavailable: {err}");
             Ok(None)
         }
@@ -62,5 +57,5 @@ pub fn import_recovery_key(text: String) -> Result<(), String> {
     if bytes.len() != 32 {
         return Err("not a recovery key".to_string());
     }
-    entry()?.set_password(key).map_err(|e| e.to_string())
+    Ok(crate::secrets::set(KEYCHAIN_KEY, key)?)
 }

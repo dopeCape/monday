@@ -9,6 +9,14 @@
 let
   rustToolchain = pkgs.rust-bin.stable.latest.default.override {
     extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
+    # Android targets for the mobile build (docs/mobile.md). The SDK and NDK
+    # paths come from shell-android.nix; this shell alone builds the desktop app.
+    targets = [
+      "aarch64-linux-android"
+      "armv7-linux-androideabi"
+      "i686-linux-android"
+      "x86_64-linux-android"
+    ];
   };
 in
 pkgs.mkShell {
