@@ -350,6 +350,44 @@ describe("suggestions while typing", () => {
     expect(line()?.textContent).toContain("Use Thanks, received (Tab)");
   });
 
+  test("the quick ranking shows its first choice softly at once; the closer look then confirms it", async () => {
+    let confirm: (r: TemplateSuggestResult) => void = () => {};
+    const confirmed = new Promise<TemplateSuggestResult>((r) => {
+      confirm = r;
+    });
+    const asked: string[] = [];
+    const h = await mount(
+      () => null,
+      () => null,
+      {
+        suggest: async (request) => {
+          if (request.rankOnly) {
+            asked.push("rank");
+            return {
+              status: "ranked",
+              ranking: [{ templateId: "t_thanks_received", p: 0.9 }],
+              gate: 0.8,
+              maybe: { templateId: "t_thanks_received", name: "Thanks, received", p: 0.9 },
+            };
+          }
+          asked.push(request.prior ? "closer look over the ranking" : "both");
+          return confirmed;
+        },
+      },
+    );
+    await type(h.editor(), "Thanks for sending the");
+    await until(() => line() !== null);
+    // Softly, before the closer look has answered.
+    expect(line()?.getAttribute("data-soft")).toBe("true");
+    expect(asked).toEqual(["rank", "closer look over the ranking"]);
+    await act(async () => {
+      confirm(thanks("Thanks for sending the") as TemplateSuggestResult);
+      await confirmed;
+    });
+    await until(() => line()?.getAttribute("data-soft") !== "true");
+    expect(line()?.textContent).toContain("Use Thanks, received (Tab)");
+  });
+
   test("a personal paragraph suggests nothing; Esc dismisses a suggestion for this Draft", async () => {
     const h = await mount(() => null, thanks);
     await type(h.editor(), "I was so sorry to hear about your father");

@@ -56,6 +56,11 @@ export interface SuggestInput {
   jobId?: string | null;
   /** Request 1 only, for the picker: no gate, no closer look. */
   rankOnly?: boolean;
+  /**
+   * Request 1's answer from an earlier rankOnly call over the same text: the closer
+   * look runs on it at once instead of asking request 1 again.
+   */
+  prior?: { ranking: readonly TemplateRank[]; gate: number } | undefined;
 }
 
 /** What request 1 and request 2 read: the Thread (for a reply) and what the owner has started. */
@@ -126,30 +131,39 @@ export async function suggestTemplate(input: SuggestInput): Promise<TemplateSugg
   const state = suggestState(input.thread, input.draft);
   const opts = { workspaceId: input.workspaceId, jobId: input.jobId ?? null };
 
-  const { questions, chunks } = rankQuestions(library, settings);
-  const first = await input.ask(state, questions, opts);
-  if (!first) return { status: "unavailable", reason: "no judge" };
-  const answers = first.answers as Record<
-    string,
-    { type: string; noul?: number } & Partial<ChoiceAnswer>
-  >;
-  const noul = (id: string) => answers[id]?.noul ?? 0.5;
-  const gate = (noul("gate_standard") + noul("gate_purpose") + (1 - noul("gate_personal"))) / 3;
-
-  const ranked: Array<{ template: Template; p: number }> = [];
-  chunks.forEach((chunk, i) => {
-    const a = answers[chunks.length === 1 ? "which" : `which_${i}`];
-    for (const t of chunk) ranked.push({ template: t, p: a?.probabilities?.[t.id] ?? 0 });
-  });
-  const best = ranked.filter((r) => r.p > 0).sort((a, b) => b.p - a.p);
+  let gate: number;
+  let best: Array<{ template: Template; p: number }>;
+  if (input.prior) {
+    const byId = new Map(library.map((t) => [t.id, t]));
+    gate = input.prior.gate;
+    best = input.prior.ranking.flatMap((r) => {
+      const template = byId.get(r.templateId);
+      return template && r.p > 0 ? [{ template, p: r.p }] : [];
+    });
+  } else {
+    const { questions, chunks } = rankQuestions(library, settings);
+    const first = await input.ask(state, questions, opts);
+    if (!first) return { status: "unavailable", reason: "no judge" };
+    const answers = first.answers as Record<
+      string,
+      { type: string; noul?: number } & Partial<ChoiceAnswer>
+    >;
+    const noul = (id: string) => answers[id]?.noul ?? 0.5;
+    gate = (noul("gate_standard") + noul("gate_purpose") + (1 - noul("gate_personal"))) / 3;
+    const ranked: Array<{ template: Template; p: number }> = [];
+    chunks.forEach((chunk, i) => {
+      const a = answers[chunks.length === 1 ? "which" : `which_${i}`];
+      for (const t of chunk) ranked.push({ template: t, p: a?.probabilities?.[t.id] ?? 0 });
+    });
+    best = ranked.filter((r) => r.p > 0).sort((a, b) => b.p - a.p);
+  }
   const ranking: TemplateRank[] = best.map((r) => ({ templateId: r.template.id, p: r.p }));
-  if (input.rankOnly) return { status: "ranked", ranking, gate };
-
   const top = best[0];
   const maybe =
     top && top.p >= settings.hintFloor
       ? { maybe: { templateId: top.template.id, name: top.template.name, p: top.p } }
       : {};
+  if (input.rankOnly) return { status: "ranked", ranking, gate, ...maybe };
   // Below the gate the message looks personal: no confident line, but a likely template is
   // still offered softly ("Maybe: X"), since the owner may want it all the same.
   if (gate < settings.gate) return { status: "none", reason: "gate", gate, ranking, ...maybe };

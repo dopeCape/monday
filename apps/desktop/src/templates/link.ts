@@ -37,10 +37,15 @@ export interface TemplateLink {
     minIntervalMs: number;
     maxTypedChars: number;
   };
-  /** The two requests; null when the Server could not be asked. */
+  /**
+   * The two requests; null when the Server could not be asked. `rankOnly` asks the quick
+   * ranking alone; `prior` hands that answer back so only the closer look runs.
+   */
   suggest(request: {
     threadId: Id | null;
     draft: { to: Person[]; subject: string; typed: string };
+    rankOnly?: boolean | undefined;
+    prior?: { ranking: TemplateRank[]; gate: number } | undefined;
   }): Promise<TemplateSuggestResult | null>;
   /** "Save as template" and "Make a template from this": opens the sheet that writes one. */
   draftFrom(source: TemplateDraftSource): void;

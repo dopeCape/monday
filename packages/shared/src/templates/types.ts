@@ -122,6 +122,8 @@ export interface TemplateSuggestRequest {
    * Answered as `{status: "ranked"}`.
    */
   rankOnly?: boolean | undefined;
+  /** Request 1's answer from a rankOnly call over the same text: only the closer look runs. */
+  prior?: { ranking: TemplateRank[]; gate: number } | undefined;
 }
 
 /** One Template's share of request 1's `which` Choice. */
@@ -152,7 +154,13 @@ export type TemplateSuggestResult =
       maybe?: { templateId: Id; name: string; p: number };
     }
   /** The picker's ranking alone (`rankOnly`). */
-  | { status: "ranked"; ranking: TemplateRank[]; gate: number }
+  | {
+      status: "ranked";
+      ranking: TemplateRank[];
+      gate: number;
+      /** The first choice when at least `templates.suggest.hint_floor` likely: shown softly at once. */
+      maybe?: { templateId: Id; name: string; p: number };
+    }
   /** No judge answers on this Server: nothing is suggested and the window says so quietly. */
   | { status: "unavailable"; reason: string };
 

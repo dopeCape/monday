@@ -8,6 +8,7 @@ import type {
   Draft,
   DuplicateVerdict,
   Id,
+  JsonValue,
   Person,
   Template,
   TemplateDraftResult,
@@ -119,6 +120,7 @@ export interface TemplateIntelligenceOptions {
 
 const SUGGEST_KEYS = [
   "templates.enabled",
+  "templates.suggest.state_cache_ms",
   "templates.suggest.enabled",
   "templates.suggest.max_typed_chars",
   "templates.suggest.gate",
@@ -184,17 +186,30 @@ export function createTemplateIntelligence(
     };
   };
 
+  // A Thread's state, read and decrypted once for the typing that follows: every pause asks
+  // again over the same Thread (templates.suggest.state_cache_ms).
+  const states = new Map<string, { at: number; state: Record<string, JsonValue> }>();
+  const stateOf = async (threadId: Id, chars: number) => {
+    const ttl = (await readSuggest())["templates.suggest.state_cache_ms"];
+    const key = `${threadId}:${chars}`;
+    const hit = states.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.state;
+    const state = threadState(await readThread(db, mailstore, threadId), chars);
+    states.set(key, { at: Date.now(), state });
+    if (states.size > 50) states.delete(states.keys().next().value as string);
+    return state;
+  };
+
   const suggestWith = async (
     workspaceId: Id,
     threadId: Id | null,
     draft: TemplateSuggestRequest["draft"],
     s: Awaited<ReturnType<typeof readSuggest>>,
     rankOnly = false,
+    prior?: TemplateSuggestRequest["prior"],
   ): Promise<TemplateSuggestResult> => {
     const library = await store.library(workspaceId);
-    const thread = threadId
-      ? threadState(await readThread(db, mailstore, threadId), s["templates.fill.state_chars"])
-      : null;
+    const thread = threadId ? await stateOf(threadId, s["templates.fill.state_chars"]) : null;
     return suggestTemplate({
       ask,
       workspaceId,
@@ -202,6 +217,7 @@ export function createTemplateIntelligence(
       thread,
       draft,
       rankOnly,
+      prior,
       settings: {
         gate: s["templates.suggest.gate"],
         fitsFloor: s["templates.suggest.fits_floor"],
@@ -311,7 +327,14 @@ export function createTemplateIntelligence(
       if (request.draft.typed.length >= s["templates.suggest.max_typed_chars"]) {
         return { status: "none", reason: "disabled" };
       }
-      return suggestWith(request.workspace, request.threadId, request.draft, s);
+      return suggestWith(
+        request.workspace,
+        request.threadId,
+        request.draft,
+        s,
+        false,
+        request.prior,
+      );
     },
 
     async suggestOnOpen(workspaceId, threadId) {

@@ -74,6 +74,14 @@ const suggestBody = z.object({
     typed: z.string().max(20_000).default(""),
   }),
   rankOnly: z.boolean().default(false),
+  prior: z
+    .object({
+      ranking: z
+        .array(z.object({ templateId: z.string().min(1), p: z.number().min(0).max(1) }))
+        .max(1000),
+      gate: z.number().min(0).max(1),
+    })
+    .optional(),
 });
 const example = z.object({
   subject: z.string().max(1000).default(""),
@@ -132,6 +140,7 @@ export function templateRoutes(templates: TemplateIntelligence): Hono<AppEnv> {
         threadId: body.data.threadId,
         draft: body.data.draft,
         rankOnly: body.data.rankOnly,
+        ...(body.data.prior ? { prior: body.data.prior } : {}),
       }),
     );
   });

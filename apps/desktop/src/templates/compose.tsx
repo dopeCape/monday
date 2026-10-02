@@ -6,7 +6,7 @@
 // ProseMirror plugin, put first, carries the keys and the clicks; the rest is
 // React state over the Tiptap editor the surface already has.
 
-import type { Id, Person, Template, TemplateRank } from "@monday/shared";
+import type { Id, Person, Template, TemplateRank, TemplateSuggestResult } from "@monday/shared";
 import { placeholderLabel, placeholdersIn } from "@monday/shared";
 import { Btn, cx, Icon, type Placement, placeMenu } from "@monday/ui";
 import { GearSixIcon, NotepadIcon, XIcon } from "@phosphor-icons/react";
@@ -366,26 +366,44 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
       const mine = ++asking.current;
       const now = latest.current.o;
       setLooking(true);
-      void l
-        .suggest({
-          threadId: now.threadId,
-          draft: { to: [...now.to], subject: now.subject, typed: typedNow },
-        })
-        .finally(() => {
-          if (mine === asking.current) setLooking(false);
-        })
-        .then((r) => {
-          if (mine !== asking.current || dismissed.current || !r) return;
-          if (r.status === "suggested") setSuggested({ templateId: r.templateId, name: r.name });
-          else if (r.status === "none" && r.maybe) {
-            setSuggested({ templateId: r.maybe.templateId, name: r.maybe.name, soft: true });
-          } else setSuggested(null);
-          if (r.status === "unavailable" && !unavailableSaid) {
-            unavailableSaid = true;
-            setUnavailable(true);
+      const draft = { to: [...now.to], subject: now.subject, typed: typedNow };
+      const show = (r: TemplateSuggestResult | null) => {
+        if (mine !== asking.current || dismissed.current || !r) return;
+        if (r.status === "suggested") setSuggested({ templateId: r.templateId, name: r.name });
+        else if ((r.status === "none" || r.status === "ranked") && r.maybe) {
+          setSuggested({ templateId: r.maybe.templateId, name: r.maybe.name, soft: true });
+        } else if (r.status !== "ranked") setSuggested(null);
+        if (r.status === "unavailable" && !unavailableSaid) {
+          unavailableSaid = true;
+          setUnavailable(true);
+        }
+      };
+      void (async () => {
+        try {
+          // The quick ranking first: its likeliest template shows softly at once, then the
+          // closer look over that same answer confirms it (or takes it back).
+          const first = await l.suggest({ threadId: now.threadId, draft, rankOnly: true });
+          if (mine !== asking.current) return;
+          if (first?.status === "ranked") {
+            show(first);
+            setLooking(false);
+            show(
+              await l.suggest({
+                threadId: now.threadId,
+                draft,
+                prior: { ranking: first.ranking, gate: first.gate },
+              }),
+            );
+            return;
           }
-        })
-        .catch(() => {});
+          // No ranking on this Server (the picker's ranking is off): the two requests in one.
+          show(await l.suggest({ threadId: now.threadId, draft }));
+        } catch {
+          // A failed ask leaves the line as it was.
+        } finally {
+          if (mine === asking.current) setLooking(false);
+        }
+      })();
     }, wait);
     return () => clearTimeout(timer);
   }, [typedNow, enabled, suggestion]);

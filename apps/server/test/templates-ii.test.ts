@@ -235,6 +235,38 @@ describe("suggestions while typing (the two requests)", () => {
       ],
     });
   });
+
+  test("a prior ranking skips request 1: only the closer look is asked, and its Maybe came with the ranking", async () => {
+    const judge = createFakeJudge({
+      gate_standard: 0.9,
+      gate_purpose: 0.8,
+      gate_personal: 0.1,
+      which: choice({ t_offer_times: 0.6, t_reschedule: 0.25, none: 0.15 }),
+      fits_t_offer_times: 0.8,
+      fits_t_reschedule: 0.2,
+    });
+    const base = {
+      ask: askOver(judge),
+      workspaceId: "ws",
+      library: BUILTIN_TEMPLATES,
+      thread: null,
+      draft: { to: [], subject: "", typed: "can we do another time?" },
+      settings: SUGGEST,
+    };
+    const ranked = await suggestTemplate({ ...base, rankOnly: true });
+    expect(ranked).toMatchObject({
+      status: "ranked",
+      maybe: { templateId: "t_offer_times", name: "Offer other times", p: 0.6 },
+    });
+    if (ranked.status !== "ranked") throw new Error("not ranked");
+    const before = judge.calls.length;
+    const confirmed = await suggestTemplate({
+      ...base,
+      prior: { ranking: ranked.ranking, gate: ranked.gate },
+    });
+    expect(judge.calls.length - before).toBe(1);
+    expect(confirmed).toMatchObject({ status: "suggested", templateId: "t_offer_times" });
+  });
 });
 
 describe("the duplicate Score", () => {
