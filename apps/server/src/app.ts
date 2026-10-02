@@ -429,6 +429,9 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
         `[hardening] sealed ${moved.transcripts} transcript event(s), ${moved.voices} voice profile(s), ${moved.integrations} integration secret(s)`,
       );
     }
+    // Recommended actions an older version of the rules worked out, again from their stored answers.
+    const reworked = await intelligence.recommendations.recomputeOutdated();
+    if (reworked > 0) log(`[recommendations] worked out ${reworked} thread(s) again`);
   };
   const sweep = () =>
     sealLegacy().catch((error) => {
@@ -540,10 +543,7 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", peopleRoutes(db, options.now ? { now: options.now } : {}));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
-  app.route(
-    "/",
-    intelligenceRoutes(intelligence, options.now ? { now: options.now } : {}),
-  );
+  app.route("/", intelligenceRoutes(intelligence, options.now ? { now: options.now } : {}));
   app.route("/", signalsRoutes(intelligence, { mode, isLoopback }));
   app.route("/", recommendationsRoutes(intelligence));
   app.route("/", localRuntimeRoutes(localBridge));

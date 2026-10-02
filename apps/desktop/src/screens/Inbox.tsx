@@ -20,6 +20,7 @@ import type {
 } from "@monday/shared";
 import {
   customActionsFor,
+  handOverNote,
   isSettingKey,
   orderedSectionRules,
   outcomeArgs,
@@ -1844,13 +1845,32 @@ function InboxBody({
             queueTemplate(composer, replyTemplate.templateId);
           composeOn(threadId, "reply", opening ? { opening } : {});
         },
-        forward: (threadId, to) => composeOn(threadId, "forward", { to: [to] }),
+        // A forward to the person with a short note from the Brief; the user still sends.
+        forward: (threadId, to) =>
+          composeOn(threadId, "forward", {
+            to: [to],
+            opening: handOverNote(
+              {
+                note: t("strings.actions.recommended.forward_note"),
+                plain: t("strings.actions.recommended.forward_note_plain"),
+              },
+              to,
+              (threadId === shownThreadId ? brief : inbox.brief(threadId))?.bullets,
+            ),
+          }),
+        // Ask: a forward to the person asking them to answer; the user still sends.
         handOff: (threadId, to: Person) => {
-          // The "Handing this over" Template, with the person copied in; the user still sends.
-          if (templateLink?.library.some((x) => x.id === "t_handing_over")) {
-            queueTemplate(composer, "t_handing_over");
-          }
-          composeOn(threadId, "reply", { cc: [to] });
+          composeOn(threadId, "forward", {
+            to: [to],
+            opening: handOverNote(
+              {
+                note: t("strings.actions.recommended.ask_note"),
+                plain: t("strings.actions.recommended.ask_note_plain"),
+              },
+              to,
+              (threadId === shownThreadId ? brief : inbox.brief(threadId))?.bullets,
+            ),
+          });
           const until = followUpUntil(
             now,
             s["actions.delegate.follow_up_days"],
@@ -1911,7 +1931,7 @@ function InboxBody({
       composeOn,
       replyTemplate,
       composer,
-      templateLink,
+      t,
       now,
       s,
       inbox,
@@ -3221,6 +3241,8 @@ function InboxBody({
           messages={messages}
           brief={brief}
           chips={chipRow}
+          chipsAt={s["actions.recommended.position"]}
+          suggestedLabel={t("strings.actions.recommended.suggested")}
           onChipMenu={(chip, item) => {
             if (chip.kind === "recommended")
               runChipMenu(shownThread.id, chip.rec, item, shownRecs?.fromDomain ?? null);

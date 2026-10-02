@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   chooseRecommended,
   formatWhen,
+  handOverNote,
   outcomeOf,
   type Recommendation,
   recommendationLabel,
@@ -23,13 +24,13 @@ const priya = { name: "Priya Raman", email: "priya@monday.test" };
 describe("choosing the chips", () => {
   const recs: Recommendation[] = [
     { kind: "reply", fit: 0.72, rank: 0.72 },
-    { kind: "archive", fit: 0.84, rank: 0.84 },
+    { kind: "archive", fit: 0.66, rank: 0.66 },
     { kind: "snooze", fit: 0.8, rank: 0.8, until: "2026-10-05T08:00:00.000Z", anchor: "weekday" },
     { kind: "forward", fit: 0.9, rank: 0.9, to: priya, confidence: 0.8 },
   ];
   test("each action past its own threshold, likeliest first", () => {
     const shown = chooseRecommended(recs, rules(), { fromDomain: "stripe.com" });
-    // Archive needs 0.85 (it hides mail); reply 0.7, snooze 0.75, forward 0.8.
+    // Archive needs 0.7 (it hides mail); reply 0.6, snooze 0.7, forward 0.8.
     expect(shown.map((r) => r.kind)).toEqual(["forward", "snooze", "reply"]);
   });
   test("a forward shows only when the person is picked at 0.8 or more (acceptance 4)", () => {
@@ -103,9 +104,28 @@ describe("the chips' words", () => {
     ).toBe("Forward to Priya");
     expect(
       recommendationLabel({ kind: "delegate", to: priya, confidence: 0.9 }, words, now, "UTC"),
-    ).toBe("Hand to Priya");
+    ).toBe("Ask Priya");
     expect(formatWhen("2026-10-20T09:00:00.000Z", now, { zone: "UTC" })).toBe("Oct 20 09:00");
     expect(formatWhen("2026-10-01T15:00:00.000Z", now, { zone: "UTC", time: false })).toBe("Thu");
+  });
+  test("Forward to and Ask seed compose with a short note from the Brief's first bullet", () => {
+    const d = defaultSettings();
+    const forward = {
+      note: d["strings.actions.recommended.forward_note"],
+      plain: d["strings.actions.recommended.forward_note_plain"],
+    };
+    const priya = { name: "Priya Raman", email: "priya@monday.test" };
+    expect(
+      handOverNote(forward, priya, [["Hetzner sent the ", { b: "October" }, " invoice."], ["x"]]),
+    ).toBe("Hi Priya, passing this on to you: Hetzner sent the October invoice.");
+    expect(handOverNote(forward, priya, null)).toBe("Hi Priya, passing this on to you.");
+    const ask = {
+      note: d["strings.actions.recommended.ask_note"],
+      plain: d["strings.actions.recommended.ask_note_plain"],
+    };
+    expect(handOverNote(ask, { name: "", email: "kim@monday.test" }, [])).toBe(
+      "Hi kim@monday.test, could you answer this one?",
+    );
   });
   test("no em-dash in any default word", () => {
     const d = defaultSettings() as unknown as Record<string, unknown>;

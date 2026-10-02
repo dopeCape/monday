@@ -9,7 +9,7 @@
 // types and pure rules only.
 
 import { utcToZoned } from "./calendar.ts";
-import type { Id, IsoDate, Person } from "./domain.ts";
+import type { Id, IsoDate, Person, RichText } from "./domain.ts";
 
 /** The catalog, in the order the Settings page lists it. */
 export const RECOMMENDED_ACTIONS = [
@@ -305,7 +305,7 @@ export function recommendationWords(s: Readonly<Record<string, unknown>>): Recom
     snooze: w("snooze", "Snooze"),
     snoozeUntil: w("snooze_until", "Snooze until {when}"),
     forwardTo: w("forward_to", "Forward to {name}"),
-    handTo: w("hand_to", "Hand to {name}"),
+    handTo: w("hand_to", "Ask {name}"),
     accept: w("accept", "Accept"),
     maybe: w("maybe", "Maybe"),
     decline: w("decline", "Decline"),
@@ -440,6 +440,32 @@ export function recommendationLabel(
     case "workflow":
       return fillWords(words.runWorkflow, { workflow: rec.name });
   }
+}
+
+/** A Brief bullet as plain text: its runs joined, bold and italic dropped. */
+export function bulletText(bullet: RichText | undefined): string {
+  if (!bullet) return "";
+  return bullet
+    .map((r) => (typeof r === "string" ? r : "b" in r ? r.b : r.i))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * The short note a Forward to or Ask chip seeds compose with: the person's
+ * first name and, when the Thread has a Brief, its first bullet ("Hi Priya,
+ * passing this on to you: Hetzner sent the October invoice."). Words from the
+ * strings Settings; the user edits and sends it (ADR 0002).
+ */
+export function handOverNote(
+  words: { note: string; plain: string },
+  to: Person,
+  bullets: readonly RichText[] | null | undefined,
+): string {
+  const summary = bulletText(bullets?.[0]);
+  const name = shortName(to);
+  return summary ? fillWords(words.note, { name, summary }) : fillWords(words.plain, { name });
 }
 
 /** Whether two sets of arguments ask the same thing (a chip used as offered, or with other arguments). */

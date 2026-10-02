@@ -1067,7 +1067,7 @@ describe("the reader", () => {
           anchor: "weekday",
         },
         { kind: "forward", fit: 0.88, rank: 0.88, to: priya, confidence: 0.86 },
-        { kind: "archive", fit: 0.8, rank: 0.8 },
+        { kind: "archive", fit: 0.65, rank: 0.65 },
         {
           kind: "delegate",
           fit: 0.86,
@@ -1088,14 +1088,17 @@ describe("the reader", () => {
     const remount = async (open: string, settings: PartialSettings = {}) => {
       if (root) await act(async () => root?.unmount());
       host?.remove();
-      await mount({ inbox, initialOpen: open }, { "ai.level": "assist", ...settings });
+      await mount(
+        { inbox, initialOpen: open },
+        { "ai.level": "assist", "actions.recommended.position": "top", ...settings },
+      );
     };
     const chips = (selector: string) =>
       [...document.querySelectorAll<HTMLButtonElement>(`${selector} .chip`)].map((b) =>
         b.textContent?.trim(),
       );
-    // No Brief yet: the chips sit where the Brief will. Archive (0.85) and the unsure hand-off
-    // (recipient 0.5 under 0.8) are held back; the rest likeliest first.
+    // At the top, with no Brief yet: the chips sit where the Brief will. Archive (0.65 under 0.7)
+    // and the unsure Ask (recipient 0.5 under 0.8) are held back; the rest likeliest first.
     brief = () => undefined;
     await remount("e1");
     expect(has(".reader .brief ul")).toBe(false);
@@ -1146,6 +1149,55 @@ describe("the reader", () => {
     brief = () => undefined;
     await remount("e2");
     expect(has(".reader .brief")).toBe(false);
+    await remount("e2", { "actions.recommended.position": "bottom" });
+    expect(has(".reader .reader-suggested")).toBe(false);
+  });
+
+  test("by default the chips sit in a Suggested row at the end of the Thread, right above the reply box; both shows them twice", async () => {
+    const base = fixtureInbox();
+    const held = {
+      actions: [
+        { kind: "reply", fit: 0.74, rank: 0.74 },
+        { kind: "archive", fit: 0.72, rank: 0.72 },
+      ] satisfies Recommendation[],
+      messageCount: 3,
+      fromDomain: "northlight.dev",
+    };
+    const inbox: InboxData = {
+      ...base,
+      recommendations: (id) => (id === "e1" ? held : undefined),
+    };
+    const remount = async (settings: PartialSettings = {}) => {
+      if (root) await act(async () => root?.unmount());
+      host?.remove();
+      await mount({ inbox, initialOpen: "e1" }, { "ai.level": "assist", ...settings });
+    };
+    const chips = (selector: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(`${selector} .chip`)].map((b) =>
+        b.textContent?.trim(),
+      );
+    await remount();
+    expect(chips(".reader .brief .brief-actions")).toEqual([]);
+    expect(document.querySelector(".reader .reader-suggested-h")?.textContent).toBe("Suggested");
+    expect(chips(".reader .reader-suggested")).toEqual(["Reply", "Archive"]);
+    // After the last Message, before the reply box.
+    const row = document.querySelector(".reader .reader-suggested") as Element;
+    const messages = document.querySelectorAll(".reader .reader-inner > *");
+    const order = [...messages];
+    const at = order.indexOf(row);
+    expect(at).toBeGreaterThan(0);
+    expect(
+      order
+        .slice(at + 1)
+        .some((e) => e.querySelector("textarea") || e.matches(".reply, .reply-box")),
+    ).toBe(true);
+    // The keys still name them in order.
+    expect(document.querySelector<HTMLButtonElement>(".reader-suggested .chip")?.title).toContain(
+      "(Alt+1)",
+    );
+    await remount({ "actions.recommended.position": "both" });
+    expect(chips(".reader .brief .brief-actions")).toEqual(["Reply", "Archive"]);
+    expect(chips(".reader .reader-suggested")).toEqual(["Reply", "Archive"]);
   });
 
   test("Alt+1 runs the reader's first chip; in the list it runs the selected row's chip", async () => {

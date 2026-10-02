@@ -455,7 +455,7 @@ describe("slice 35 over the Store", () => {
     expect(after?.actions.find((a) => a.kind === "unsubscribe")).toBeUndefined();
   });
 
-  test("dismissing Archive on 45 of 50 Threads raises its threshold to 0.9; the Activity log shows it and Undo restores 0.85 (acceptance 5)", async () => {
+  test("dismissing Archive on 45 of 50 Threads raises its threshold to 0.75; the Activity log shows it and Undo restores 0.7 (acceptance 5)", async () => {
     const receipt = await addThread(
       "Receipt",
       { name: "Shop", email: "orders@shop.test" },
@@ -477,28 +477,28 @@ describe("slice 35 over the Store", () => {
     }
     expect(learned).toMatchObject({
       action: "archive",
-      from: 0.85,
-      to: 0.9,
-      text: "Archive suggestions: shown 50 times, used 0; now shown only when 90% sure",
+      from: 0.7,
+      to: 0.75,
+      text: "Archive suggestions: shown 50 times, used 0; now shown only when 75% sure",
     });
     const read = async () =>
       (await readGlobalSettings(db.handle.db, ["actions.recommended.archive.threshold"]))[
         "actions.recommended.archive.threshold"
       ];
-    expect(await read()).toBe(0.9);
+    expect(await read()).toBe(0.75);
     const row = await intelligence.activity.get(learned?.activityId ?? "");
-    expect(row?.inputSummary).toContain("now shown only when 90% sure");
+    expect(row?.inputSummary).toContain("now shown only when 75% sure");
     expect(row?.undo).toEqual({
       kind: "settings",
-      entries: [{ key: "actions.recommended.archive.threshold", previous: 0.85 }],
+      entries: [{ key: "actions.recommended.archive.threshold", previous: 0.7 }],
     });
     const stats = await intelligence.recommendations.stats(workspaceId);
     expect(stats.find((s) => s.action === "archive")).toMatchObject({
-      threshold: 0.9,
-      shipped: 0.85,
+      threshold: 0.75,
+      shipped: 0.7,
     });
     await intelligence.agent.undo(learned?.activityId ?? "");
-    expect(await read()).toBe(0.85);
+    expect(await read()).toBe(0.7);
     // "Not this" took Archive off this Thread version.
     expect(
       (await intelligence.recommendations.get(receipt))?.actions.map((a) => a.kind),

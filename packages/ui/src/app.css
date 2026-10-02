@@ -1059,6 +1059,21 @@ i.ph-bold > svg {
 .brief li.partly {
   color: var(--fg-faint);
 }
+/* The Suggested row at the end of the Thread, right above the draft cards and the reply box. */
+.reader-suggested {
+  margin: 20px 0 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.reader-suggested-h {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 8px;
+}
+.reader-suggested .brief-actions {
+  margin-top: 0;
+}
 /* Judged action chips before a Brief exists: the same row, no bullets above it. */
 .brief.chips {
   padding: 12px 0;

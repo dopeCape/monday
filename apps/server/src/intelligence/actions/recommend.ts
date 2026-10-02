@@ -27,6 +27,8 @@ import type {
 import {
   actionable,
   chooseRecommended,
+  companyOf,
+  fillWords,
   isIanaZone,
   isSettingKey,
   RECOMMENDED_ACTIONS,
@@ -38,9 +40,10 @@ import {
   utcToZoned,
   zonedToUtc,
 } from "@monday/shared";
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import {
+  people,
   recommendationEvents,
   settings as settingsTable,
   threadFacts,
@@ -505,6 +508,21 @@ export function eventTime(input: {
   return { day, start: start.toISOString(), end: end.toISOString(), timeConfidence };
 }
 
+/**
+ * Whether the owner left a list's newest `streakOf` issues unread in a row
+ * (docs/spec/actions.md, Unsubscribe), newest first. The issue being looked
+ * at counts as unread whatever its flag says: opening it in the reader marks
+ * it read, and that must not take away the very chip it came to show.
+ */
+export function unreadStreak(
+  newest: ReadonlyArray<{ id: string; unread: boolean }>,
+  threadId: string,
+  streakOf: number,
+): boolean {
+  const run = newest.slice(0, Math.max(1, streakOf));
+  return run.length >= streakOf && run.every((i) => i.unread || i.id === threadId);
+}
+
 /* ------------------------------ Candidates ------------------------------ */
 
 /** "Priya Raman <priya@monday.test>" or a bare address, as a Person. */
@@ -519,13 +537,26 @@ export interface CandidateWords {
   named: string;
   handoff: string;
   forwarded: string;
+  copied: string;
+  colleague: string;
+  frequent: string;
+}
+
+/** Someone the owner deals with, and how many times (forwards, copies, mails written). */
+export interface Correspondent {
+  email: string;
+  name: string;
+  count: number;
 }
 
 /**
  * The people a recipient Choice offers (docs/spec/actions.md, Forward): whom
- * the owner forwarded this sender's mail to, the addresses named in the
- * Thread, and the owner's hand-off list, never the owner, the sender or
- * someone already on the Thread, at most `max`, each with one line of Facts.
+ * the owner forwarded this sender's mail to, the owner's hand-off list, the
+ * people the owner copies on mail to this sender's domain, colleagues at the
+ * owner's own domain, the addresses named in the Thread and the people the
+ * owner writes to most; never the owner, the sender or someone already on the
+ * Thread, at most `max`, each with one line saying who they are and how they
+ * relate to the owner. Code finds every one of them; the judge only picks.
  */
 export function candidatePeople(input: {
   owner: string;
@@ -533,35 +564,64 @@ export function candidatePeople(input: {
   named: readonly string[];
   participants: readonly string[];
   handoff: readonly string[];
-  forwarded: ReadonlyArray<{ email: string; name: string; count: number }>;
+  forwarded: ReadonlyArray<Correspondent>;
+  /** People the owner copied on mail to the sender's domain. */
+  copied?: ReadonlyArray<Correspondent> | undefined;
+  /** People at the owner's own (non-personal) domain the owner writes to. */
+  colleagues?: ReadonlyArray<Correspondent> | undefined;
+  /** The people the owner writes to most. */
+  frequent?: ReadonlyArray<Correspondent> | undefined;
+  /** Names by address, for a person a source knows only by address. */
+  names?: ReadonlyMap<string, string> | undefined;
   max: number;
   words: CandidateWords;
 }): SignalCandidates["people"] {
   const skip = new Set(
     [input.owner, input.sender, ...input.participants].map((a) => a.toLowerCase()),
   );
+  const senderDomain = input.sender.split("@")[1] ?? "";
+  const ownerDomain = input.owner.split("@")[1] ?? "";
   const out: SignalCandidates["people"] = [];
   const add = (email: string, name: string, line: string) => {
-    const e = email.toLowerCase();
+    const e = email.trim().toLowerCase();
     if (!e || skip.has(e) || out.some((p) => p.email === e) || out.length >= input.max) return;
-    out.push({ email: e, name, line });
+    const known = (name || input.names?.get(e) || "").trim();
+    out.push({ email: e, name: known, line: known ? `${known}, ${line}` : line });
   };
   for (const f of input.forwarded) {
     add(
       f.email,
       f.name,
-      input.words.forwarded.replace("{count}", String(f.count)).replace("{sender}", input.sender),
+      fillWords(input.words.forwarded, { count: f.count, sender: input.sender }),
     );
   }
   for (const text of input.handoff) {
     const p = parsePerson(text);
     if (p) add(p.email, p.name, input.words.handoff);
   }
+  for (const c of input.copied ?? []) {
+    add(c.email, c.name, fillWords(input.words.copied, { count: c.count, domain: senderDomain }));
+  }
+  for (const c of input.colleagues ?? []) {
+    add(c.email, c.name, fillWords(input.words.colleague, { count: c.count, domain: ownerDomain }));
+  }
   for (const a of input.named) add(a, "", input.words.named);
+  for (const c of input.frequent ?? []) {
+    add(c.email, c.name, fillWords(input.words.frequent, { count: c.count }));
+  }
   return out;
 }
 
 /* ------------------------------ The module ------------------------------ */
+
+/**
+ * The version of the rules above. Raise it when a change in code changes what
+ * a Thread's stored answers allow (2: an issue being read no longer breaks
+ * its list's unread streak); stored rows of an older version are worked out
+ * again in the background (recomputeOutdated), from their answers, without
+ * asking the judge. Thresholds need no bump: the chips apply them at show time.
+ */
+export const RULES_VERSION = 2;
 
 const SETTING_KEYS = [
   "actions.recommended.enabled",
@@ -591,6 +651,12 @@ const SETTING_KEYS = [
   "strings.actions.recommended.candidate.named",
   "strings.actions.recommended.candidate.handoff",
   "strings.actions.recommended.candidate.forwarded",
+  "strings.actions.recommended.candidate.copied",
+  "strings.actions.recommended.candidate.colleague",
+  "strings.actions.recommended.candidate.frequent",
+  "actions.recommended.forward.max_people",
+  "actions.recommended.forward.min_written",
+  "actions.recommended.recompute_days",
   "strings.actions.recommended.learned",
 ] as const;
 
@@ -658,6 +724,13 @@ export interface Recommendations {
   stats(workspaceId: Id): Promise<RecommendationStat[]>;
   /** How the Thread's list is left (RFC 8058 one-click, mailto, or the browser), or null. */
   listExit(workspaceId: Id, threadId: Id): Promise<ListExit | null>;
+  /**
+   * Works out again, from their stored answers and without asking the judge,
+   * the recent Threads whose actions an older RULES_VERSION worked out
+   * (within actions.recommended.recompute_days), newest first. Returns how
+   * many were worked out.
+   */
+  recomputeOutdated(): Promise<number>;
 }
 
 /** Every Setting the chips are chosen and worded by: the switches, thresholds, mutes and words. */
@@ -717,21 +790,105 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
       .map((r) => ({ email: r.to, name: "", count: Number(r.n) }));
   };
 
+  /**
+   * The people the owner copied on their own mail to the sender: to the
+   * sender's domain, or to the sender alone when the domain is a personal one
+   * (gmail.com is not a company).
+   */
+  const copiedFor = async (
+    workspaceId: Id,
+    owner: string,
+    sender: string,
+    max: number,
+  ): Promise<Correspondent[]> => {
+    if (!owner || !sender) return [];
+    const domain = sender.split("@")[1] ?? "";
+    const company = companyOf(sender) !== null;
+    const match = company
+      ? sql`split_part(lower(t->>'email'), '@', 2) = ${domain}`
+      : sql`lower(t->>'email') = ${sender}`;
+    const rows = (await db.execute<{ email: string; name: string | null; n: number }>(sql`
+      select lower(c->>'email') as email, max(c->>'name') as name, count(*)::int as n
+      from messages m, jsonb_array_elements(m.cc) c
+      where m.workspace_id = ${workspaceId}
+        and lower(m."from"->>'email') = ${owner}
+        and exists (select 1 from jsonb_array_elements(m."to") t where ${match})
+      group by 1
+      order by n desc
+      limit ${max}`)) as unknown as Array<{ email: string; name: string | null; n: number }>;
+    return rows
+      .filter((r) => typeof r.email === "string" && r.email.includes("@"))
+      .map((r) => ({ email: r.email, name: r.name ?? "", count: Number(r.n) }));
+  };
+
+  /** The people the owner writes to most, at least `min` times; colleagues are those at the owner's own company domain. */
+  const writtenFor = async (workspaceId: Id, owner: string, min: number, max: number) => {
+    const domain = owner.split("@")[1] ?? "";
+    const top = async (where: SQL | undefined) =>
+      (
+        await db
+          .select({ email: people.address, name: people.name, count: people.sentCount })
+          .from(people)
+          .where(and(eq(people.workspaceId, workspaceId), gte(people.sentCount, min), where))
+          .orderBy(desc(people.sentCount), desc(people.lastAt))
+          .limit(max)
+      ).map((r) => ({ email: r.email, name: r.name, count: Number(r.count) }));
+    const colleagues =
+      domain && companyOf(owner) !== null
+        ? await top(sql`${people.address} like ${`%@${domain}`}`)
+        : [];
+    return { colleagues, frequent: await top(undefined) };
+  };
+
+  /** The names the people table holds for these addresses. */
+  const namesOf = async (workspaceId: Id, addresses: readonly string[]) => {
+    const list = [...new Set(addresses.map((a) => a.toLowerCase()).filter((a) => a !== ""))];
+    if (list.length === 0) return new Map<string, string>();
+    const rows = await db
+      .select({ address: people.address, name: people.name })
+      .from(people)
+      .where(and(eq(people.workspaceId, workspaceId), inArray(people.address, list)));
+    return new Map(rows.filter((r) => r.name.trim() !== "").map((r) => [r.address, r.name]));
+  };
+
   const candidates: CandidateSource = async (input) => {
     const s = await settings();
-    const forwarded = await forwardedFor(input.workspaceId, input.sender);
+    const owner = input.owner.toLowerCase();
+    const sender = input.sender.toLowerCase();
+    const max = s["actions.recommended.forward.max_people"];
+    const forwarded = await forwardedFor(input.workspaceId, sender);
+    const copied = await copiedFor(input.workspaceId, owner, sender, max);
+    const written = owner
+      ? await writtenFor(
+          input.workspaceId,
+          owner,
+          s["actions.recommended.forward.min_written"],
+          max,
+        )
+      : { colleagues: [], frequent: [] };
+    const names = await namesOf(input.workspaceId, [
+      ...forwarded.map((f) => f.email),
+      ...input.named,
+    ]);
     const people = candidatePeople({
-      owner: input.owner,
-      sender: input.sender,
+      owner,
+      sender,
       named: input.named,
       participants: input.participants,
       handoff: s["actions.delegate.people"],
       forwarded,
-      max: s["signals.candidates.max"],
+      copied,
+      colleagues: written.colleagues,
+      frequent: written.frequent,
+      names,
+      max,
       words: {
         named: s["strings.actions.recommended.candidate.named"],
         handoff: s["strings.actions.recommended.candidate.handoff"],
         forwarded: s["strings.actions.recommended.candidate.forwarded"],
+        copied: s["strings.actions.recommended.candidate.copied"],
+        colleague: s["strings.actions.recommended.candidate.colleague"],
+        frequent: s["strings.actions.recommended.candidate.frequent"],
       },
     });
     return {
@@ -831,7 +988,7 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
       listId,
       listName: listName(headers.headers, headers.from.name || headers.from.email),
       issues: issues.filter((i) => !i.archived).length,
-      streak: newest.length >= streakOf && newest.every((i) => i.unread),
+      streak: unreadStreak(newest, threadId, streakOf),
     };
   };
 
@@ -874,20 +1031,18 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
     const sealed = factsRow ? await readSealed(workspaceId, factsRow) : null;
     const zone = zoneOf(workspaceId, s["calendar.time_zone"]);
     const version = await signals.version(threadId);
-    const sender = typeof facts.from_address === "string" ? facts.from_address : "";
     const picks = sealed?.picks;
-    // The names of the people a recipient may be, and the Workflows, as code offered them.
-    const offered =
-      picks?.[ACTION_SIGNAL.forwardTo] !== undefined || picks?.[ACTION_SIGNAL.workflowPick]
-        ? await candidates({
-            workspaceId,
-            threadId,
-            owner: "",
-            sender,
-            named: sealed?.addresses ?? [],
-            participants: [],
-          })
-        : { people: [], forwardedTo: [], workflows: [] };
+    // The picked person's name, and the Workflows, as code offered them.
+    const pickedTo = picks?.[ACTION_SIGNAL.forwardTo]?.value;
+    const pickedNames = pickedTo
+      ? await namesOf(workspaceId, [pickedTo])
+      : new Map<string, string>();
+    const offered = {
+      people: [...pickedNames].map(([email, name]) => ({ email, name })),
+      workflows: picks?.[ACTION_SIGNAL.workflowPick]
+        ? await manualWorkflows(workspaceId, s["signals.candidates.max"])
+        : [],
+    };
     const dismissedRows = await db
       .select({ action: recommendationEvents.action })
       .from(recommendationEvents)
@@ -957,6 +1112,7 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
       contentEnc,
       contentKey: stored.key,
       computedAt,
+      rules: RULES_VERSION,
     };
     await db
       .insert(threadRecommendations)
@@ -1294,6 +1450,47 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
     return rest;
   };
 
+  /** One walk at a time: a second unlock while one runs joins it. */
+  let recomputing: Promise<number> | null = null;
+  const recomputeOutdated = (): Promise<number> => {
+    if (recomputing) return recomputing;
+    recomputing = (async () => {
+      if ((await level()) === "off") return 0;
+      const days = (await settings())["actions.recommended.recompute_days"];
+      if (days <= 0) return 0;
+      const since = new Date(now().getTime() - days * 86_400_000);
+      const rows = await db
+        .select({
+          threadId: threadRecommendations.threadId,
+          workspaceId: threadRecommendations.workspaceId,
+        })
+        .from(threadRecommendations)
+        .innerJoin(threads, eq(threads.id, threadRecommendations.threadId))
+        .where(
+          and(
+            lt(threadRecommendations.rules, RULES_VERSION),
+            gte(threads.lastActivity, since),
+            eq(threads.deleted, false),
+          ),
+        )
+        .orderBy(desc(threads.lastActivity));
+      let done = 0;
+      for (const r of rows) {
+        try {
+          if (await refresh(r.workspaceId, r.threadId)) done += 1;
+        } catch (error) {
+          log(
+            `recommendations recompute ${r.threadId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return done;
+    })().finally(() => {
+      recomputing = null;
+    });
+    return recomputing;
+  };
+
   return {
     refresh,
     get,
@@ -1302,6 +1499,7 @@ export function createRecommendations(options: RecommendationsOptions): Recommen
     record: recordEvents,
     stats,
     listExit,
+    recomputeOutdated,
     async open(workspaceId, threadId, opts = {}) {
       if (opts.zone && isIanaZone(opts.zone)) deviceZones.set(workspaceId, opts.zone);
       if ((await level()) === "off") return null;

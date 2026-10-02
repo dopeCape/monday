@@ -78,7 +78,10 @@ describe("settings schema", () => {
     expect(d["routing.lookback_days"]).toBe(90);
     expect(d["briefs.bullets_max"]).toBe(3);
     expect(d["actions.recommended.max_in_reader"]).toBe(3);
-    expect(d["actions.recommended.archive.threshold"]).toBe(0.85);
+    expect(d["actions.recommended.archive.threshold"]).toBe(0.7);
+    expect(d["actions.recommended.reply.threshold"]).toBe(0.6);
+    expect(d["actions.recommended.snooze.threshold"]).toBe(0.7);
+    expect(d["actions.recommended.position"]).toBe("bottom");
     expect(d["briefs.policy"]).toContain("Needs your reply and Waiting on you always");
     expect(d["send.delay_seconds"]).toBe(30);
     expect(d["search.cache_window_days"]).toBe(730);

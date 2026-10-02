@@ -52,7 +52,7 @@ export type ReaderChip =
       /** An RSVP is one grouped control: its three answers, each a button. */
       options?: ReadonlyArray<{ key: string; label: string }> | undefined;
     }
-  /** The follow-up a hand-off offers: snooze the Thread to check it was done. */
+  /** The follow-up an Ask offers: snooze the Thread to check it was answered. */
   | {
       key: string;
       kind: "follow_up";
@@ -319,7 +319,7 @@ export interface RecommendationRunnerDeps {
   reply(threadId: string, opening: string | null): void;
   /** Opens a forward with the person filled; nothing is sent. */
   forward(threadId: string, to: Person): void;
-  /** Opens the hand-off reply (the "Handing this over" Template) with the person copied in; nothing is sent. */
+  /** Ask: opens a forward to the person with a note asking them to answer; nothing is sent. */
   handOff(threadId: string, to: Person): void;
   archive(threadId: string): Promise<UndoToken | null>;
   snooze(threadId: string, until: Date): Promise<UndoToken | null>;

@@ -1,8 +1,10 @@
 // The reader: toolbar, title, Brief, the Messages with collapsed history
 // that expands on click, and the reply box. Toolbar actions go through
 // InboxActions via the callbacks so they get the same undo toasts as the list.
-// The chip row under the Brief, or at the top of the Thread before any Brief
-// is written, is one row the screen builds (recommended.ts): the Custom
+// The chip row is one row the screen builds (recommended.ts), shown where
+// actions.recommended.position says: a Suggested row at the end of the
+// Thread right above the draft cards and the reply box (the default), under
+// the Brief (or at the top before any Brief is written), or both: the Custom
 // actions first (CONTEXT.md "Custom action"), then the meeting chips, then
 // the Recommended actions (docs/spec/actions.md), each with its Tier's
 // affordance and its key; the same Custom actions render in the toolbar
@@ -136,6 +138,10 @@ export interface ReaderProps {
    * or at the top of the Thread before any Brief exists.
    */
   chips?: readonly ReaderChip[] | undefined;
+  /** Where the chip row shows (actions.recommended.position): under the Brief, above the reply box, or both. */
+  chipsAt?: "top" | "bottom" | "both" | undefined;
+  /** The bottom row's heading ("Suggested"). */
+  suggestedLabel?: string | undefined;
   /** The keys that run the chips in order (actions.recommended.keys), for their tooltips. */
   chipKeys?: readonly string[] | undefined;
   tags: readonly Tag[];
@@ -196,6 +202,8 @@ export function Reader({
   focusMessage,
   brief,
   chips,
+  chipsAt = "top",
+  suggestedLabel,
   chipKeys,
   tags,
   sheet,
@@ -344,6 +352,25 @@ export function Reader({
       })
     : null;
   const openMenu = chips?.find((c) => c.key === menuFor);
+  const atTop = chipsAt !== "bottom";
+  const atBottom = chipsAt !== "top";
+  // The chip's menu and the unsubscribe card sit by the row nearest the reply box.
+  const chipExtras = (
+    <>
+      {openMenu && openMenu.kind === "recommended" && openMenu.menu?.length ? (
+        <Picker
+          label={strings.chipMenu ?? openMenu.label}
+          items={openMenu.menu}
+          onPick={(item) => {
+            setMenuFor(null);
+            onChipMenu?.(openMenu, item);
+          }}
+          onClose={() => setMenuFor(null)}
+        />
+      ) : null}
+      {chipCard}
+    </>
+  );
 
   return (
     <section
@@ -444,23 +471,12 @@ export function Reader({
               brief={brief}
               source={strings.briefSource}
               updating={strings.briefUpdating}
-              chips={chipNodes}
+              chips={atTop ? chipNodes : null}
             />
-          ) : (
+          ) : atTop ? (
             <ActionChips chips={chipNodes} />
-          )}
-          {openMenu && openMenu.kind === "recommended" && openMenu.menu?.length ? (
-            <Picker
-              label={strings.chipMenu ?? openMenu.label}
-              items={openMenu.menu}
-              onPick={(item) => {
-                setMenuFor(null);
-                onChipMenu?.(openMenu, item);
-              }}
-              onClose={() => setMenuFor(null)}
-            />
           ) : null}
-          {chipCard}
+          {atBottom ? null : chipExtras}
           {banner}
           {messages.map((m, i) => (
             <Message
@@ -478,6 +494,13 @@ export function Reader({
               now={now}
             />
           ))}
+          {atBottom && chipNodes ? (
+            <section className="reader-suggested" aria-label={suggestedLabel}>
+              {suggestedLabel ? <div className="reader-suggested-h">{suggestedLabel}</div> : null}
+              <div className="brief-actions">{chipNodes}</div>
+            </section>
+          ) : null}
+          {atBottom ? chipExtras : null}
           {drafts}
           {reply ?? (
             <ReplyBox
