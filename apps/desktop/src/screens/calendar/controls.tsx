@@ -7,6 +7,7 @@
 // picks, Escape closes the panel without closing what holds it.
 
 import {
+  anchoredStyle,
   cx,
   Icon,
   MONTH_SHORT,
@@ -28,6 +29,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useShellForm } from "../../shell/Shell.tsx";
 import { addDays, addMonths, dayKey, fromDayKey, sameDay, startOfMonth } from "./dates.ts";
 import { monthWeeks } from "./layout.ts";
 
@@ -46,6 +48,8 @@ interface FloatingProps {
 function Floating({ anchor, onClose, label, className, children, onKeyDown }: FloatingProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const [place, setPlace] = useState<Placement | null>(null);
+  // In the phone form the panel is a sheet along the bottom.
+  const sheet = useShellForm() === "phone";
   const close = useRef(onClose);
   close.current = onClose;
   useLayoutEffect(() => {
@@ -80,13 +84,9 @@ function Floating({ anchor, onClose, label, className, children, onKeyDown }: Fl
       ref={host}
       role="dialog"
       aria-label={label}
-      className={cx("pop anchored cal-float", place?.above && "above", className)}
-      style={{
-        top: place?.top ?? 0,
-        left: place?.left ?? 0,
-        minWidth: anchor ? anchor.getBoundingClientRect().width : undefined,
-        visibility: place ? undefined : "hidden",
-      }}
+      className={cx("pop anchored cal-float", place?.above && "above", sheet && "sheet", className)}
+      data-placement={sheet ? "sheet" : undefined}
+      style={anchoredStyle(place, sheet, anchor ? anchor.getBoundingClientRect().width : undefined)}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.stopPropagation();

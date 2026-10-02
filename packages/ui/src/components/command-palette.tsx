@@ -3,7 +3,7 @@
 // for the Agent. The keys are handled here on the input: arrows move, Enter
 // selects, Tab hands the text to the Agent, Escape closes.
 import type { Thread } from "@monday/shared";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import {
   type AnimationEvent,
   type ChangeEvent,
@@ -77,6 +77,8 @@ export interface CommandPaletteStrings {
   ask: string;
   /** Shown under the input when a section has no items, such as a search with no hits. */
   empty?: string | undefined;
+  /** A back arrow before the input that closes the palette, where there is no Escape key (a phone). */
+  back?: string | undefined;
 }
 
 const DEFAULT_STRINGS: CommandPaletteStrings = {
@@ -160,7 +162,19 @@ export function CommandPalette({
     <Scrim onClose={onClose} leaving={leaving} onLeft={onLeft}>
       <div className={cx("cmdk", className)} role="dialog" aria-label={s.placeholder}>
         <div className="cmdk-in">
-          <Icon icon={MagnifyingGlassIcon} />
+          {s.back && onClose ? (
+            <button
+              type="button"
+              className="cmdk-back"
+              aria-label={s.back}
+              title={s.back}
+              onClick={onClose}
+            >
+              <Icon icon={ArrowLeftIcon} />
+            </button>
+          ) : (
+            <Icon icon={MagnifyingGlassIcon} />
+          )}
           <input
             ref={input}
             // biome-ignore lint/a11y/noAutofocus: the palette opens to take typing

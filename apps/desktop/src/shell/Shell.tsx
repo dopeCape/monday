@@ -55,6 +55,7 @@ import {
   platform,
   type SidecarInfo,
 } from "../platform/tauri.ts";
+import { watchKeyboard } from "./keyboard.ts";
 
 export interface ConfigState {
   file: ConfigFile | null;
@@ -159,6 +160,11 @@ export function useShell(): ShellState {
   const s = useContext(ShellContext);
   if (!s) throw new Error("useShell outside Shell");
   return s;
+}
+
+/** The form in effect, or the desktop's where no Shell holds the part (a test of one piece). */
+export function useShellForm(): Form {
+  return useContext(ShellContext)?.form ?? "desktop";
 }
 
 /** The tokens the base size scales; the schema default (14) is the comfortable --fs-md. */
@@ -628,6 +634,12 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     form,
     mobile,
   ]);
+
+  // The phone form keeps what sits along the bottom above the software keyboard.
+  useEffect(() => {
+    if (form !== "phone" || typeof window === "undefined") return;
+    return watchKeyboard(document.documentElement);
+  }, [form]);
 
   // Light to dark and back crossfade: the root carries data-theme-fade for one
   // slow beat after the mode flips, and app.css transitions colors under it.

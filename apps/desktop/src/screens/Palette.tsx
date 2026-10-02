@@ -379,7 +379,7 @@ export function Palette({
   templates = NO_TEMPLATES,
   chips = NO_CHIPS,
 }: PaletteProps) {
-  const { settings } = useShell();
+  const { settings, form } = useShell();
   const mac = isMac();
   const t = (k: keyof Settings) => String(settings[k]);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -636,6 +636,8 @@ export function Palette({
         select: t("strings.palette.foot.select"),
         ask: t("strings.palette.foot.ask"),
         empty: model.mode === "search" ? t("strings.search.empty") : undefined,
+        // A phone has no Escape: the full-screen palette shows a back arrow.
+        back: form === "phone" ? t("strings.phone.back") : undefined,
       }}
     />,
     document.body,

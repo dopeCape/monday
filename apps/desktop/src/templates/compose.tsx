@@ -8,7 +8,7 @@
 
 import type { Id, Person, Template, TemplateRank, TemplateSuggestResult } from "@monday/shared";
 import { placeholderLabel, placeholdersIn } from "@monday/shared";
-import { Btn, cx, Icon, type Placement, placeMenu } from "@monday/ui";
+import { anchoredStyle, Btn, cx, Icon, type Placement, placeMenu } from "@monday/ui";
 import { GearSixIcon, NotepadIcon, XIcon } from "@phosphor-icons/react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import { chordLabel, chordOf, normalizeChord } from "../keyboard/keymaps.ts";
 import type { Composer } from "../screens/compose/composer.ts";
 import { AnchoredMenu } from "../screens/compose/Menu.tsx";
+import { useShellForm } from "../shell/Shell.tsx";
 import { type TemplateLink, takeQueuedTemplate } from "./link.ts";
 import { filterTemplates, type RankedItems, rankTemplates, triggerAt } from "./picker.ts";
 import {
@@ -675,6 +676,8 @@ function TemplatePicker({
 }: TemplatePickerProps) {
   const host = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<Placement | null>(null);
+  // In the phone form the picker is a sheet along the bottom.
+  const sheet = useShellForm() === "phone";
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -768,14 +771,11 @@ function TemplatePicker({
   return createPortal(
     <div
       ref={host}
-      className={cx("pop anchored tpl-picker", place?.above && "above")}
+      className={cx("pop anchored tpl-picker", place?.above && "above", sheet && "sheet")}
       role="listbox"
       aria-label={strings.title}
-      style={{
-        top: place?.top ?? 0,
-        left: place?.left ?? 0,
-        visibility: place ? undefined : "hidden",
-      }}
+      data-placement={sheet ? "sheet" : undefined}
+      style={anchoredStyle(place, sheet)}
     >
       {mode === "key" ? (
         <div className="pop-pick">

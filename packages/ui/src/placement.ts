@@ -41,3 +41,38 @@ export function placeMenu(
   const left = Math.min(Math.max(EDGE, wanted), Math.max(EDGE, viewport.width - EDGE - size.width));
   return { top, left, above };
 }
+
+/**
+ * Whether a menu opens as a sheet along the bottom instead of beside its
+ * button: in the phone form (data-form="phone" on the root, set by the shell
+ * under appearance.mobile_breakpoint), where an anchored menu would cover
+ * what it belongs to or run off the screen.
+ */
+export function opensAsSheet(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.dataset.form === "phone";
+}
+
+export interface AnchoredStyle {
+  top?: number;
+  left?: number;
+  minWidth?: number;
+  visibility?: "hidden";
+}
+
+/**
+ * The inline position of an anchored menu: its placement, hidden until
+ * measured so it never flashes at the wrong spot; nothing as a sheet, which
+ * the stylesheet puts along the bottom.
+ */
+export function anchoredStyle(
+  place: Placement | null,
+  sheet: boolean,
+  minWidth?: number,
+): AnchoredStyle {
+  if (sheet) return {};
+  const style: AnchoredStyle = { top: place?.top ?? 0, left: place?.left ?? 0 };
+  if (minWidth) style.minWidth = minWidth;
+  if (!place) style.visibility = "hidden";
+  return style;
+}

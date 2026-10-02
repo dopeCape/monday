@@ -9,6 +9,7 @@ import type { RecurrenceScope, Settings } from "@monday/shared";
 import { Btn, useEscape, useFocusTrap } from "@monday/ui";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useShellForm } from "../../shell/Shell.tsx";
 
 export interface AnchorRect {
   left: number;
@@ -57,10 +58,12 @@ export interface PopoverProps {
 export function Popover({ anchor, onClose, label, className, children }: PopoverProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // In the phone form the popover is a sheet along the bottom, over a scrim.
+  const sheet = useShellForm() === "phone";
   useEscape(onClose);
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || sheet) return;
     const place = () =>
       setPos(
         placeBeside(
@@ -73,7 +76,7 @@ export function Popover({ anchor, onClose, label, className, children }: Popover
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
     observer?.observe(el);
     return () => observer?.disconnect();
-  }, [anchor]);
+  }, [anchor, sheet]);
   useLayoutEffect(() => {
     const onDown = (e: PointerEvent) => {
       const el = ref.current;
@@ -94,8 +97,11 @@ export function Popover({ anchor, onClose, label, className, children }: Popover
       ref={ref}
       role="dialog"
       aria-label={label}
-      className={`cal-pop${className ? ` ${className}` : ""}`}
-      style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: -9999 }}
+      className={`cal-pop${sheet ? " sheet" : ""}${className ? ` ${className}` : ""}`}
+      data-placement={sheet ? "sheet" : undefined}
+      style={
+        sheet ? undefined : pos ? { left: pos.left, top: pos.top } : { left: -9999, top: -9999 }
+      }
     >
       {children}
     </div>,
