@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod links;
 mod notify;
+mod pinned;
 mod platform;
 mod power;
 mod rootkey;
@@ -36,6 +37,8 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar::SidecarState::default());
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     builder
         .invoke_handler(handlers())
         .setup(|app| {
@@ -64,6 +67,7 @@ pub fn run() {
 fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         platform::platform_kind,
+        platform::platform_os,
         config::read_config,
         config::write_config,
         config::read_palette_file,
@@ -94,6 +98,7 @@ fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         platform::platform_kind,
+        platform::platform_os,
         config::read_config,
         config::write_config,
         config::read_palette_file,
@@ -109,5 +114,6 @@ fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         power::power_info,
         power::network_info,
         notify::notify,
+        pinned::pinned_fetch,
     ]
 }

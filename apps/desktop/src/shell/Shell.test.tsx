@@ -320,3 +320,75 @@ describe("transitions", () => {
     });
   });
 });
+
+describe("a phone", () => {
+  /** A phone host over the fake: the platform says mobile and pins its fetch. */
+  function phoneHost(pinnedCalls: string[]) {
+    const p = fakePlatform("", { kind: "mobile" });
+    p.isTauri = true;
+    p.os = "android";
+    p.sidecarInfo = async () => {
+      throw new Error("a phone has no Sidecar");
+    };
+    p.pinnedFetch = (fingerprint) => async (input) => {
+      pinnedCalls.push(`${fingerprint} ${String(input)}`);
+      if (String(input).endsWith("/settings")) return Response.json({ global: {}, device: {} });
+      return Response.json({ ok: true });
+    };
+    return p;
+  }
+
+  async function mountHost(p: ReturnType<typeof fakePlatform>) {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <Shell host={p}>
+          <Probe />
+        </Shell>,
+      );
+    });
+    await settle();
+  }
+
+  test("before pairing it has no Server and offers its scanner; pairing makes the paired one the target", async () => {
+    const calls: string[] = [];
+    const p = phoneHost(calls);
+    p.scanQr = async () => "monday-pair";
+    await mountHost(p);
+    expect(seen?.phone?.scanQr).toBeDefined();
+    expect(seen?.remote).toBeNull();
+    expect(seen?.server).toBeNull();
+    await act(async () => {
+      await seen?.setRemote({
+        baseUrl: "https://192.168.1.20:47820",
+        token: "tok",
+        deviceId: "d1",
+        name: "Desk",
+        fingerprint: "FP",
+      });
+    });
+    await settle();
+    // Kept in the secret store under server.remote, and the only target.
+    expect(JSON.parse((await p.secretGet("server.remote")) ?? "{}").deviceId).toBe("d1");
+    expect(seen?.server?.target.baseUrl).toBe("https://192.168.1.20:47820");
+    // Every request to that LAN address goes through the pinned fetch.
+    await act(async () => {
+      await seen?.api.settings.all();
+    });
+    expect(calls).toContain("FP https://192.168.1.20:47820/settings");
+  });
+
+  test("a phone paired before starts on its Server, never the Sidecar", async () => {
+    const p = phoneHost([]);
+    await p.secretSet(
+      "server.remote",
+      JSON.stringify({ baseUrl: "http://10.0.2.2:47820", token: "t", deviceId: "d", name: "Desk" }),
+    );
+    await mountHost(p);
+    expect(seen?.remote?.name).toBe("Desk");
+    expect(seen?.sidecar).toBeNull();
+    expect(seen?.server?.target.baseUrl).toBe("http://10.0.2.2:47820");
+  });
+});

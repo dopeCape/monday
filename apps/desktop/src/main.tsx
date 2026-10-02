@@ -11,6 +11,7 @@ import { newMailNotice } from "./notifications/new-mail.ts";
 import { sidecarToldOnce } from "./notifications/sidecar-told.ts";
 import type { AccountView } from "./platform/api.ts";
 import { platform, platformNotifier } from "./platform/tauri.ts";
+import { Connect } from "./screens/Connect.tsx";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { FirstSyncGate } from "./screens/FirstSync.tsx";
@@ -457,6 +458,25 @@ function Gate(): ReactNode {
   if (shell.host === "browser" && !server) {
     const q = new URLSearchParams(location.search);
     if (q.get("screen") === "first-sync") return <FirstSyncFixture state={q.get("state")} />;
+  }
+  // A phone that has not paired yet: "Connect to your monday" (docs/mobile.md).
+  if (shell.phone && !shell.remote) {
+    const phone = shell.phone;
+    return (
+      <Connect
+        deviceName={
+          shell.settings[
+            shell.mobile === "ios"
+              ? "strings.mobile.connect.device_name.ios"
+              : "strings.mobile.connect.device_name.android"
+          ]
+        }
+        onConnected={(target) => void shell.setRemote(target)}
+        scanQr={phone.scanQr}
+        pinnedFetch={phone.pinnedFetch}
+        settings={shell.settings}
+      />
+    );
   }
   if (shell.host === "tauri" && !server) {
     if (!waited && !shell.sidecarError) return null;

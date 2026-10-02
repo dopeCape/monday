@@ -9385,6 +9385,16 @@ export const settingsSchema = {
   ),
   "strings.mobile.connect.submit": str("server", "Phone: connect button", "Connect"),
   "strings.mobile.connect.working": str("server", "Phone: connecting", "Connecting"),
+  "strings.mobile.connect.device_name.android": str(
+    "server",
+    "Phone: this phone's name on an Android phone, as the computer's Devices panel lists it",
+    "Android phone",
+  ),
+  "strings.mobile.connect.device_name.ios": str(
+    "server",
+    "Phone: this phone's name on an iPhone, as the computer's Devices panel lists it",
+    "iPhone",
+  ),
   "strings.mobile.connect.camera_permission": str(
     "server",
     "Phone: camera permission reason",
