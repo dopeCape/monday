@@ -12111,3 +12111,30 @@ button.appr-link:focus-visible {
   opacity: 1;
   transition: opacity var(--t-fast) var(--ease);
 }
+
+/* "Looking for a template" while a suggestion is worked out. */
+.tpl-suggest.looking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tpl-looking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  animation: tpl-pulse 1s var(--ease) infinite alternate;
+}
+@keyframes tpl-pulse {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tpl-looking-dot {
+    animation: none;
+  }
+}

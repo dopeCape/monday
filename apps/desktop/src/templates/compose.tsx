@@ -149,6 +149,8 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
 
   // Suggestions while typing (slice 37): the Template suggested, the replace question, the quiet line.
   const [suggested, setSuggested] = useState<Suggested | null>(null);
+  /** A suggestion is being worked out: the line says so, so the owner knows to wait. */
+  const [looking, setLooking] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const dismissed = useRef(false);
@@ -352,6 +354,7 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
       /data-(placeholder|filled)=/.test(opts.bodyHtml)
     ) {
       setSuggested(null);
+      setLooking(false);
       return;
     }
     const wait = Math.max(
@@ -362,10 +365,14 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
       lastAsked.current = Date.now();
       const mine = ++asking.current;
       const now = latest.current.o;
+      setLooking(true);
       void l
         .suggest({
           threadId: now.threadId,
           draft: { to: [...now.to], subject: now.subject, typed: typedNow },
+        })
+        .finally(() => {
+          if (mine === asking.current) setLooking(false);
         })
         .then((r) => {
           if (mine !== asking.current || dismissed.current || !r) return;
@@ -552,6 +559,13 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
           <Btn icon sm title={s.dismiss} onClick={dismiss}>
             <XIcon />
           </Btn>
+        </div>
+      );
+    } else if (looking && !dismissed.current) {
+      suggestionLine = (
+        <div className="tpl-suggest quiet looking" role="status" data-suggest="looking">
+          <span className="tpl-looking-dot" aria-hidden="true" />
+          {s.suggestLooking}
         </div>
       );
     } else if (unavailable) {

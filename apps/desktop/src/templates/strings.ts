@@ -76,6 +76,7 @@ export interface TemplateUiStrings {
   hintTrigger: string;
   hintDismiss: string;
   suggestMaybe: string;
+  suggestLooking: string;
   pickerSuggested: string;
   pickerFit: string;
   pickerFitTitle: string;
@@ -167,6 +168,7 @@ export function templateStrings(s: Settings): TemplateUiStrings {
     hintTrigger: s["strings.templates.hint.trigger"],
     hintDismiss: s["strings.templates.hint.dismiss"],
     suggestMaybe: s["strings.templates.suggest.maybe"],
+    suggestLooking: s["strings.templates.suggest.looking"],
     pickerSuggested: s["strings.templates.picker.suggested"],
     pickerFit: s["strings.templates.picker.fit"],
     pickerFitTitle: s["strings.templates.picker.fit_title"],

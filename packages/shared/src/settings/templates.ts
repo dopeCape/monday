@@ -732,6 +732,10 @@ export const TEMPLATE_SETTINGS = regroup({
   "strings.templates.hint.trigger": str("One-time compose hint", "Type {trigger} for templates"),
   "strings.templates.hint.dismiss": str("One-time compose hint, dismiss", "Got it"),
   "strings.templates.suggest.maybe": str("Softer suggestion line", "Maybe: {name} (Tab)"),
+  "strings.templates.suggest.looking": str(
+    "While a suggestion is being worked out",
+    "Looking for a template",
+  ),
   "strings.templates.picker.suggested": str("Picker, suggested templates", "Suggested"),
   "strings.templates.picker.fit": str("Picker, how well it fits", "{percent}%"),
   "strings.templates.picker.fit_title": str(

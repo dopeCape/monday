@@ -299,7 +299,8 @@ describe("suggestions while typing", () => {
           gate: 0.8,
         }
       : { status: "none", reason: "gate", gate: 0.1 };
-  const line = () => document.body.querySelector(".tpl-suggest");
+  const line = () => document.body.querySelector(".tpl-suggest:not(.looking)");
+  const looking = () => document.body.querySelector('.tpl-suggest[data-suggest="looking"]');
 
   test("Thanks for sending the ... suggests Thanks, received after the pause; Tab replaces the line typed", async () => {
     const h = await mount(
@@ -321,6 +322,32 @@ describe("suggestions while typing", () => {
     expect(h.editor().getText()).not.toContain("Thanks for sending the");
     expect(h.editor().getText()).toContain("Hi Sofia,");
     expect(h.editor().getText()).toContain("Thanks for sending");
+  });
+
+  test("while the suggestion is worked out the line says Looking for a template, then the answer replaces it", async () => {
+    let answer: (r: TemplateSuggestResult) => void = () => {};
+    const slow = new Promise<TemplateSuggestResult>((r) => {
+      answer = r;
+    });
+    const h = await mount(
+      () => null,
+      () => null,
+      {
+        suggest: () => slow,
+      },
+    );
+    await type(h.editor(), "Thanks for sending the");
+    await until(() => looking() !== null);
+    expect(looking()?.textContent).toContain("Looking for a template");
+    expect(line()).toBeNull();
+    const result = thanks("Thanks for sending the");
+    await act(async () => {
+      answer(result as TemplateSuggestResult);
+      await slow;
+    });
+    await until(() => line() !== null);
+    expect(looking()).toBeNull();
+    expect(line()?.textContent).toContain("Use Thanks, received (Tab)");
   });
 
   test("a personal paragraph suggests nothing; Esc dismisses a suggestion for this Draft", async () => {
