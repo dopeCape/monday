@@ -1,0 +1,2 @@
+CREATE INDEX "changes_workspace_entity_idx" ON "changes" USING btree ("workspace_id","entity_id");--> statement-breakpoint
+CREATE INDEX "changes_workspace_thread_idx" ON "changes" USING btree ("workspace_id",("payload"->>'threadId'));

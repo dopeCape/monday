@@ -9,6 +9,7 @@ import type {
   BriefTrigger,
   Capabilities,
   ChangesPage,
+  ChangesSnapshot,
   Draft,
   DraftAssistRequest,
   DraftAssistResult,
@@ -43,6 +44,12 @@ export interface WakeConnection {
 
 export interface StoreTransport {
   changes(workspaceId: Id, since: number, limit: number): Promise<ChangesPage>;
+  /**
+   * The newest Threads as they are now, paged back in time, so a new Cache
+   * fills newest first (ChangesSnapshot). Absent on a transport whose Server
+   * has no snapshot; the Cache then fills from the feed alone.
+   */
+  snapshot?(workspaceId: Id, before: string | null, limit: number): Promise<ChangesSnapshot>;
   intent(intent: Intent): Promise<IntentResult>;
   /** A Draft or send intent to its route (ADR 0010). */
   draftIntent(workspaceId: Id, intent: DraftIntent): Promise<IntentResult>;
@@ -162,6 +169,7 @@ export function apiTransport(api: Api, options: ApiTransportOptions): StoreTrans
   let failedWithoutOpen = 0;
   return {
     changes: (workspaceId, since, limit) => api.changes.list(workspaceId, since, limit),
+    snapshot: (workspaceId, before, limit) => api.changes.snapshot(workspaceId, before, limit),
     intent: (intent) => api.threads.intent(intent),
     draftIntent: (workspaceId, intent) => api.drafts.intent(workspaceId, intent),
     brief: (threadId) => api.briefs.get(threadId),

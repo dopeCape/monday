@@ -16,6 +16,7 @@ import type {
   CalendarStatus,
   Capabilities,
   ChangesPage,
+  ChangesSnapshot,
   CorrectionResult,
   DeploymentMode,
   Device,
@@ -290,6 +291,15 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
             workspace: workspaceId,
             since: String(since),
             limit: String(limit),
+          })}`,
+        ),
+      /** The newest Threads as they are now, for a new Cache's first fill (ChangesSnapshot). */
+      snapshot: (workspaceId: Id, before: string | null, limit = 100) =>
+        request<ChangesSnapshot>(
+          `/changes/snapshot?${new URLSearchParams({
+            workspace: workspaceId,
+            limit: String(limit),
+            ...(before ? { before } : {}),
           })}`,
         ),
     },

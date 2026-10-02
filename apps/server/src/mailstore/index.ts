@@ -22,6 +22,7 @@ import type {
   ChangeKind,
   ChangePayload,
   ChangesPage,
+  ChangesSnapshot,
   ContentRef,
   FieldWrites,
   FullSearchEvent,
@@ -40,6 +41,7 @@ import type {
   Workspace,
 } from "@monday/shared";
 import {
+  ADDITIVE_THREAD_KINDS,
   FIELD_GROUP_OF,
   resolveWrite,
   SUBJECT_SEARCH_CHARS as SHARED_SUBJECT_SEARCH_CHARS,
@@ -256,6 +258,13 @@ export interface ThreadPatch {
 /** What a module appends to the Changes feed; seq and at are assigned on insert. */
 export type ChangeInput = ChangePayload & { workspaceId: Id; entityId: Id };
 
+export interface SnapshotOptions {
+  /** The `before` of the previous page; absent for the newest. */
+  before?: string | null | undefined;
+  /** Threads per page. */
+  limit: number;
+}
+
 export interface ListChangesOptions {
   /** Return rows with seq greater than this; 0 for everything. */
   since: number;
@@ -282,6 +291,12 @@ export interface Mailstore extends ContentStore {
   listChanges(workspaceId: Id, options: ListChangesOptions): Promise<ChangesPage>;
   /** The newest seq in the Workspace; 0 when the feed is empty. */
   latestSeq(workspaceId: Id): Promise<number>;
+  /**
+   * The newest Threads as they are now, as feed rows (ChangesSnapshot), paged
+   * backwards by last activity: what a new Cache applies first so it fills
+   * newest first.
+   */
+  snapshotChanges(workspaceId: Id, options: SnapshotOptions): Promise<ChangesSnapshot>;
   /**
    * Applies one Outbox intent under per-field last-writer-wins (ADR 0005). A
    * winning intent updates the row and records a change; a losing one is
@@ -416,6 +431,22 @@ export function headersTsQuery(q: string): string {
     .map((t) => `${t}:*`)
     .join(" & ");
 }
+
+/** Full-state kinds whose entity is a Thread: a snapshot carries the newest row of each. */
+const SNAPSHOT_THREAD_KINDS: ChangeKind[] = [
+  "thread",
+  "thread_tags",
+  "thread_labels",
+  "brief",
+  "decision",
+  "meeting",
+  "recommendations",
+  "facts",
+];
+/** Full-state kinds with an id of their own whose payload names the Thread. */
+const SNAPSHOT_OWN_KINDS: ChangeKind[] = ["message", "invite", "draft"];
+/** What the first snapshot page carries for the whole Workspace. */
+const SNAPSHOT_WORKSPACE_KINDS: ChangeKind[] = ["label", "tag", "group", "signal_def"];
 
 function encodeCursor(lastActivity: Date, id: string): string {
   return btoa(`${lastActivity.getTime()}:${id}`).replaceAll("=", "");
@@ -748,6 +779,102 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
         .from(changes)
         .where(eq(changes.workspaceId, workspaceId));
       return Number(row?.seq ?? 0);
+    },
+
+    async snapshotChanges(workspaceId, options) {
+      const limit = Math.max(1, Math.min(options.limit, 500));
+      const after = options.before ? decodeCursor(options.before) : null;
+      if (options.before && !after) throw new RangeError("bad cursor");
+      // Read first: a row recorded while the page is read is newer than the
+      // head, so the client applies it again from the feed, which is harmless.
+      const head = await store.latestSeq(workspaceId);
+      const conditions = [eq(threads.workspaceId, workspaceId)];
+      if (after) {
+        conditions.push(
+          or(
+            lt(threads.lastActivity, after.lastActivity),
+            and(eq(threads.lastActivity, after.lastActivity), lt(threads.id, after.id)),
+          ) ?? sql`false`,
+        );
+      }
+      const threadRows = await db
+        .select({ id: threads.id, lastActivity: threads.lastActivity })
+        .from(threads)
+        .where(and(...conditions))
+        .orderBy(desc(threads.lastActivity), desc(threads.id))
+        .limit(limit + 1);
+      const page = threadRows.slice(0, limit);
+      const ids = page.map((r) => r.id);
+      const last = page[page.length - 1];
+      const before =
+        threadRows.length > limit && last ? encodeCursor(last.lastActivity, last.id) : null;
+
+      const inWorkspace = eq(changes.workspaceId, workspaceId);
+      const newestPer = (where: ReturnType<typeof and>) =>
+        db
+          .selectDistinctOn([changes.kind, changes.entityId])
+          .from(changes)
+          .where(and(inWorkspace, where))
+          .orderBy(changes.kind, changes.entityId, desc(changes.seq));
+      const rows: Array<typeof changes.$inferSelect> = [];
+      if (ids.length > 0) {
+        // The kinds whose entity is the Thread itself: the newest row of each.
+        rows.push(
+          ...(await newestPer(
+            and(inArray(changes.kind, SNAPSHOT_THREAD_KINDS), inArray(changes.entityId, ids)),
+          )),
+        );
+        // The kinds that add answers: every row, in order.
+        rows.push(
+          ...(await db
+            .select()
+            .from(changes)
+            .where(
+              and(
+                inWorkspace,
+                inArray(changes.kind, [...ADDITIVE_THREAD_KINDS]),
+                inArray(changes.entityId, ids),
+              ),
+            )),
+        );
+        // Entities of their own that name a Thread (Messages, Invites, Drafts):
+        // the newest row of each, kept when it still names one of these Threads.
+        const threadOf = sql<string>`${changes.payload}->>'threadId'`;
+        const named = await db
+          .selectDistinct({ entityId: changes.entityId })
+          .from(changes)
+          .where(
+            and(inWorkspace, inArray(changes.kind, SNAPSHOT_OWN_KINDS), inArray(threadOf, ids)),
+          );
+        const wanted = new Set(ids);
+        for (let i = 0; i < named.length; i += 5000) {
+          const entityIds = named.slice(i, i + 5000).map((r) => r.entityId);
+          const newest = await newestPer(
+            and(inArray(changes.kind, SNAPSHOT_OWN_KINDS), inArray(changes.entityId, entityIds)),
+          );
+          for (const r of newest) {
+            const threadId = (r.payload as { threadId?: unknown }).threadId;
+            if (typeof threadId === "string" && wanted.has(threadId)) rows.push(r);
+          }
+        }
+      }
+      if (!options.before) {
+        // The first page carries what every list needs to name things.
+        rows.push(...(await newestPer(inArray(changes.kind, SNAPSHOT_WORKSPACE_KINDS))));
+      }
+      rows.sort((a, b) => a.seq - b.seq);
+      const list = rows.map(
+        (r) =>
+          ({
+            seq: r.seq,
+            workspaceId: r.workspaceId,
+            kind: r.kind as ChangeKind,
+            entityId: r.entityId,
+            payload: r.payload,
+            at: r.at.toISOString(),
+          }) as Change,
+      );
+      return { head, changes: list, threads: ids, before };
     },
 
     setIntentObserver(observer) {

@@ -566,7 +566,12 @@ export const changes = pgTable(
     payload: jsonb("payload").notNull(),
     at: timestamp("at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
-  (t) => [index("changes_workspace_seq_idx").on(t.workspaceId, t.seq)],
+  (t) => [
+    index("changes_workspace_seq_idx").on(t.workspaceId, t.seq),
+    // The snapshot (GET /changes/snapshot) finds a Thread's rows by entity and by the Thread a payload names.
+    index("changes_workspace_entity_idx").on(t.workspaceId, t.entityId),
+    index("changes_workspace_thread_idx").on(t.workspaceId, sql`(${t.payload}->>'threadId')`),
+  ],
 );
 
 /**

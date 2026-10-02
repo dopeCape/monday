@@ -84,6 +84,10 @@ export function StorePoolProvider({ children }: { children: ReactNode }) {
               log,
             }),
             log,
+            // A new device fills its newest Threads first (sync.seed_*).
+            seedThreads: () => settingsRef.current["sync.seed_threads"],
+            seedPageSize: () => settingsRef.current["sync.seed_page_size"],
+            seedAfterChanges: () => settingsRef.current["sync.seed_after_changes"],
             // The Agent changed a Setting on the Server: read them again so it shows now.
             onSettingsChanged: () => void refreshRef.current(),
             onNewMessages: hooks.onNewMessages,

@@ -260,6 +260,13 @@
       "when": 1790947553651,
       "tag": "0037_phone_pairing",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790953052219,
+      "tag": "0038_changes_snapshot",
+      "breakpoints": true
     }
   ]
 }

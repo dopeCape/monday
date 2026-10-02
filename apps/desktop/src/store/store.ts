@@ -16,6 +16,7 @@ import type {
   BriefChange,
   CalendarChange,
   Change,
+  ChangesSnapshot,
   DecisionChange,
   Draft,
   DraftChange,
@@ -39,7 +40,13 @@ import type {
   ThreadChange,
   ThreadRecommendations,
 } from "@monday/shared";
-import { isDraftIntentKind, isInviteIntentKind } from "@monday/shared";
+import {
+  ADDITIVE_THREAD_KINDS,
+  changeKey,
+  FULL_STATE_KINDS,
+  isDraftIntentKind,
+  isInviteIntentKind,
+} from "@monday/shared";
 import { ApiError } from "../platform/api.ts";
 import type { Row, SqlDriver, SqlParam, Statement } from "./driver.ts";
 import {
@@ -273,6 +280,19 @@ export interface StoreOptions {
   changesPageSize?: number;
   /** How many Briefs one pull warms at most; the rest wait for the next. */
   briefWarmLimit?: number;
+  /**
+   * Newest first (ChangesSnapshot): how many of the newest Threads a new
+   * Cache fills from the snapshot before the feed (sync.seed_threads); 0 or
+   * absent fills from the feed alone.
+   */
+  seedThreads?: () => number;
+  /** Threads per snapshot request (sync.seed_page_size). */
+  seedPageSize?: () => number;
+  /**
+   * A Cache this many changes behind fills newest first again
+   * (sync.seed_after_changes); 0 or absent only when it is new.
+   */
+  seedAfterChanges?: () => number;
   log?: (message: string) => void;
   /** Told when the feed says Settings changed on the Server (the Agent's change_setting). */
   onSettingsChanged?: ((keys: string[]) => void) | undefined;
@@ -292,6 +312,8 @@ export interface NewMessage {
 }
 
 const CURSOR_KEY = "cursor";
+/** The feed's head when the Cache last filled newest first; no new fill until the cursor passes it. */
+const SEED_HEAD_KEY = "seed_head";
 const SCHEMA_VERSION_KEY = "schema_version";
 /**
  * Bumped when a table changes shape. Version 2 gave `messages` its rowid alias
@@ -381,7 +403,9 @@ const REBUILD_SQL = `
   drop table if exists thread_judgments;
   drop table if exists thread_meetings;
   drop table if exists thread_recommendations;
+  drop table if exists applied_seq;
   delete from meta where key = 'cursor';
+  delete from meta where key = 'seed_head';
 `;
 
 /**
@@ -1349,7 +1373,52 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     return rows.map(intentOf);
   };
 
-  const applyChanges = async (changes: Change[], cursor: number) => {
+  /**
+   * Whether applied_seq may hold a row: true from a newest-first fill until a
+   * pull passes every row in it, so an ordinary pull skips the lookup.
+   */
+  let mayHaveApplied = (await driver.query("select 1 as one from applied_seq limit 1")).length > 0;
+
+  /**
+   * The newest snapshot seq the Cache applied for each key of these
+   * changes; only the kinds a snapshot carries can have one.
+   */
+  const appliedSeqs = async (changes: readonly Change[]): Promise<Map<string, number>> => {
+    const out = new Map<string, number>();
+    if (!mayHaveApplied) return out;
+    const keys = [
+      ...new Set(
+        changes
+          .filter((c) => FULL_STATE_KINDS.has(c.kind) || ADDITIVE_THREAD_KINDS.has(c.kind))
+          .map(changeKey),
+      ),
+    ];
+    for (let i = 0; i < keys.length; i += 400) {
+      const chunk = keys.slice(i, i + 400);
+      const rows = await driver.query(
+        `select key, seq from applied_seq where key in (${chunk.map(() => "?").join(", ")})`,
+        chunk,
+      );
+      for (const r of rows) out.set(String(r.key), Number(r.seq));
+    }
+    return out;
+  };
+
+  /**
+   * Applies feed rows in order. A row whose key a newest-first fill already
+   * applied at the same seq or a newer one is skipped: it has nothing left
+   * to add. `cursor` is where the feed now stands, or null for snapshot rows,
+   * which leave the cursor alone and are recorded in applied_seq instead.
+   */
+  const applyChanges = async (all: Change[], cursor: number | null) => {
+    const applied = await appliedSeqs(all);
+    const changes =
+      applied.size === 0
+        ? all
+        : all.filter((c) => {
+            const seq = applied.get(changeKey(c));
+            return seq === undefined || c.seq > seq;
+          });
     // Which Messages are new to the Cache, asked before the write lands.
     const incoming = options.onNewMessages
       ? changes.flatMap((c) => (c.kind === "message" && !c.payload.removed ? [c.payload] : []))
@@ -1395,10 +1464,22 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       if ("threadId" in intent) named.add(intent.threadId);
       else anyThread = true;
     }
-    statements.push({
-      sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
-      params: [CURSOR_KEY, String(cursor)],
-    });
+    if (cursor === null) {
+      for (const c of changes) {
+        statements.push({
+          sql: `insert into applied_seq (key, seq) values (?, ?)
+                on conflict (key) do update set seq = max(applied_seq.seq, excluded.seq)`,
+          params: [changeKey(c), c.seq],
+        });
+      }
+      if (changes.length > 0) mayHaveApplied = true;
+    } else {
+      statements.push({
+        sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+        params: [CURSOR_KEY, String(cursor)],
+      });
+    }
+    if (statements.length === 0) return;
     await write(statements, anyThread ? undefined : [...named]);
     await driver.exec(FTS_MERGE_SQL);
     const settingKeys = changes.flatMap((c) => (c.kind === "settings" ? c.payload.keys : []));
@@ -1458,8 +1539,64 @@ export async function createStore(options: StoreOptions): Promise<Store> {
     invalidate(["outbox"]);
   };
 
+  const readMeta = async (key: string): Promise<number> => {
+    const rows = await driver.query("select value from meta where key = ?", [key]);
+    return Number(rows[0]?.value ?? 0) || 0;
+  };
+
+  /**
+   * Newest first (ChangesSnapshot): a new Cache, or one far behind, takes the
+   * newest Threads as they are now before the feed, a page at a time, so
+   * today's mail shows first. The feed then runs from the cursor as ever and
+   * skips what the snapshot already said. Once per catch-up: no new fill
+   * until the cursor passes the head this one saw. A Server without the
+   * snapshot route leaves the fill to the feed. Never throws.
+   */
+  const seedNewestFirst = async (cursor: number, result: SyncResult) => {
+    const snapshot = transport.snapshot;
+    const target = options.seedThreads?.() ?? 0;
+    if (!snapshot || target <= 0 || closed) return;
+    const after = options.seedAfterChanges?.() ?? 0;
+    const behind = cursor === 0 || (after > 0 && latestSeq - cursor > after);
+    if (!behind) return;
+    const seedHead = await readMeta(SEED_HEAD_KEY);
+    if (seedHead > 0 && cursor < seedHead) return;
+    const pageSize = Math.max(1, options.seedPageSize?.() ?? 100);
+    let before: string | null = null;
+    let seeded = 0;
+    let head = 0;
+    try {
+      do {
+        const page: ChangesSnapshot = await snapshot.call(
+          transport,
+          workspaceId,
+          before,
+          Math.min(pageSize, target - seeded),
+        );
+        head = Math.max(head, page.head);
+        if (page.head > latestSeq) latestSeq = page.head;
+        if (page.changes.length > 0) {
+          await applyChanges(page.changes, null);
+          result.pulled += page.changes.length;
+        }
+        seeded += page.threads.length;
+        before = page.before;
+        if (before && seeded < target) setProgress({ done: seeded, total: target });
+      } while (before && seeded < target && !closed);
+      if (head > 0) {
+        await driver.exec(
+          "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+          [SEED_HEAD_KEY, String(head)],
+        );
+      }
+    } catch (error) {
+      log(`newest first: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const pullChanges = async (result: SyncResult) => {
     let cursor = await readCursor();
+    await seedNewestFirst(cursor, result);
     const start = cursor;
     try {
       for (;;) {
@@ -1477,6 +1614,13 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       }
     } finally {
       setProgress(null);
+      if (mayHaveApplied) {
+        // A snapshot row at or below the cursor can skip nothing that is still to come.
+        await driver.exec("delete from applied_seq where seq <= ?", [cursor]).catch(() => {});
+        mayHaveApplied =
+          (await driver.query("select 1 as one from applied_seq limit 1").catch(() => [])).length >
+          0;
+      }
     }
   };
 

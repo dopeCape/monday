@@ -496,6 +496,73 @@ export interface ChangesPage {
   cursor: number;
 }
 
+/**
+ * GET /changes/snapshot: the newest Threads as they are now, so a new Cache
+ * fills newest first instead of replaying the feed from its oldest row.
+ *
+ * `changes` are feed rows, each with its own seq: for every Thread in the
+ * page, the latest row of each full-state kind per entity (the Thread, its
+ * Messages, links, Brief, decision, meeting chip, Recommended actions,
+ * Facts, Invites, Drafts), and every row of the kinds that only add to what
+ * is there (`signals`, `judgments`). The first page also carries the
+ * Workspace's labels, tags, Groups and Signal definitions. Ascending seq,
+ * so applying them in order gives the same rows the feed would.
+ *
+ * A client that applied a snapshot row may skip any later feed row for the
+ * same kind and entity whose seq is not above it (`changeKey`).
+ */
+export interface ChangesSnapshot {
+  /** The feed's newest seq when the page was read. */
+  head: number;
+  changes: Change[];
+  /** The page's Threads, newest first. */
+  threads: Id[];
+  /** Pass as `before` for the next, older page; null when there are no older Threads. */
+  before: string | null;
+}
+
+/**
+ * The kinds whose newest row for an entity says everything about it, so an
+ * older row for the same entity has nothing left to add. `signals` and
+ * `judgments` rows add answers to what is there and are not among them;
+ * `view_members` adds and removes ids; `view_values` only marks; `settings`
+ * and `run` store nothing.
+ */
+export const FULL_STATE_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>([
+  "thread",
+  "message",
+  "label",
+  "tag",
+  "thread_labels",
+  "thread_tags",
+  "draft",
+  "send",
+  "brief",
+  "group",
+  "decision",
+  "meeting",
+  "recommendations",
+  "signal_def",
+  "facts",
+  "calendar",
+  "event",
+  "invite",
+  "template",
+  "view",
+  "view_reading",
+]);
+
+/** The snapshot kinds that add to a Thread's rows: every row is carried, in order. */
+export const ADDITIVE_THREAD_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>([
+  "signals",
+  "judgments",
+]);
+
+/** One entity of one kind: what a snapshot row and a later feed row are compared by. */
+export function changeKey(change: Pick<Change, "kind" | "entityId">): string {
+  return `${change.kind}:${change.entityId}`;
+}
+
 /** What the wake transport sends; the client then fetches from its cursor. */
 export interface WakeMessage {
   seq: number;
