@@ -451,6 +451,74 @@ describe("the Calendar screen", () => {
     expect(standups()).toHaveLength(4);
   });
 
+  test("dragging across days on the grid draws one span over each day and makes a multi-day Event", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    layOut(el);
+    const body = el.querySelector(".cal-tg-body") as Element;
+    // Tuesday 15:00 (second column, x 250) to Thursday 10:00 (fourth column, x 450).
+    await pointer(body, "pointerdown", 250, 15 * 48);
+    await pointer(window, "pointermove", 350, 12 * 48);
+    await pointer(window, "pointermove", 450, 10 * 48);
+    // Wednesday is covered whole; the label names the far end's day.
+    expect(el.querySelectorAll(".cal-ghost")).toHaveLength(3);
+    expect(el.querySelector(".cal-ghost span")?.textContent).toContain("15:00");
+    await pointer(window, "pointerup", 450, 10 * 48);
+    await act(tick);
+    const form = document.querySelector<HTMLFormElement>(".cal-quick");
+    expect(form).not.toBeNull();
+    await typeInto(form?.querySelector(".cal-quick-title"), "Sprint block");
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(tick);
+    const made = source.events().find((e) => e.title === "Sprint block");
+    expect(made?.allDay).toBe(false);
+    expect(new Date(made?.start ?? "").getDate()).toBe(15);
+    expect(new Date(made?.start ?? "").getHours()).toBe(15);
+    expect(new Date(made?.end ?? "").getDate()).toBe(17);
+    expect(new Date(made?.end ?? "").getHours()).toBe(10);
+  });
+
+  test("dragging across the all-day row picks several days for one all-day Event", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    layOut(el);
+    const row = el.querySelector(".cal-allday-cells") as HTMLElement;
+    row.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        right: 800,
+        top: 0,
+        bottom: 30,
+        width: 700,
+        height: 30,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+    // Monday to Wednesday.
+    await pointer(row, "pointerdown", 150, 10);
+    await pointer(window, "pointermove", 250, 10);
+    await pointer(window, "pointermove", 350, 10);
+    expect(el.querySelectorAll(".cal-allday-cell.ghosted")).toHaveLength(3);
+    await pointer(window, "pointerup", 350, 10);
+    await act(tick);
+    const form = document.querySelector<HTMLFormElement>(".cal-quick");
+    await typeInto(form?.querySelector(".cal-quick-title"), "Expo trip span");
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(tick);
+    const made = source.events().find((e) => e.title === "Expo trip span");
+    expect(made?.allDay).toBe(true);
+    expect(new Date(made?.start ?? "").getDate()).toBe(14);
+    // An all-day span ends at the start of the day after its last.
+    expect(new Date(made?.end ?? "").getDate()).toBe(17);
+  });
+
   test("dragging an Event moves it on the grid, snapped; Undo puts it back", async () => {
     const source = fixtureCalendar({ calendars, events, invites });
     await mount(<Calendar source={source} now={NOW} />);

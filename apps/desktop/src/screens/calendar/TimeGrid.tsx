@@ -65,6 +65,7 @@ export interface TimeGridProps {
 
 type Drag =
   | { kind: "create"; day: number; min: number; curDay: number; curMin: number; moved: boolean }
+  | { kind: "create-all-day"; day: number; curDay: number; moved: boolean }
   | {
       kind: "move";
       occ: Occurrence;
@@ -180,6 +181,8 @@ export function TimeGrid({
       if (d.kind === "create") {
         if (!far && !d.moved) return;
         setDrag({ ...d, curDay: p.day, curMin: p.min, moved: true });
+      } else if (d.kind === "create-all-day") {
+        if (p.day !== d.curDay) setDrag({ ...d, curDay: p.day, moved: true });
       } else if (d.kind === "move") {
         if (d.locked || (!far && !d.moved)) return;
         const dDay = p.day - d.day;
@@ -202,9 +205,41 @@ export function TimeGrid({
       setDrag(null);
       origin.current = null;
       if (!d) return;
+      if (d.kind === "create-all-day") {
+        const a = Math.min(d.day, d.curDay);
+        const b = Math.max(d.day, d.curDay);
+        const first = days[a];
+        const last = days[b];
+        if (!first || !last) return;
+        onCreate(
+          { start: startOfDay(first), end: addDays(startOfDay(last), 1), allDay: true },
+          allDayRect(a, b),
+        );
+        return;
+      }
       if (d.kind === "create") {
         const day = days[d.day];
         if (!day) return;
+        if (d.moved && d.curDay !== d.day) {
+          // Across days: from the earlier press point to the later one, snapped outward.
+          const span = createSpan(d);
+          const from = days[span.startDay];
+          const to = days[span.endDay];
+          if (!from || !to) return;
+          onCreate(
+            {
+              start: atMinutes(from, span.startMin),
+              end: atMinutes(to, span.endMin),
+              allDay: false,
+            },
+            colRect(
+              span.startDay,
+              span.startMin,
+              span.startDay === span.endDay ? span.endMin : 24 * 60,
+            ),
+          );
+          return;
+        }
         if (!d.moved) {
           const from = Math.floor(d.min / step) * step;
           const start = atMinutes(day, from);
@@ -243,6 +278,25 @@ export function TimeGrid({
       window.removeEventListener("pointercancel", onUp);
     };
   }, [drag !== null]);
+
+  /** A drag that crossed days, ordered by time and snapped outward to the step. */
+  const createSpan = (d: { day: number; min: number; curDay: number; curMin: number }) => {
+    const a = d.day * 1440 + d.min;
+    const b = d.curDay * 1440 + d.curMin;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const startDay = Math.floor(lo / 1440);
+    const startMin = Math.floor((lo - startDay * 1440) / step) * step;
+    let endDay = Math.floor(hi / 1440);
+    let endMin = Math.ceil((hi - endDay * 1440) / step) * step;
+    if (endMin === 0 && endDay > startDay) {
+      endDay -= 1;
+      endMin = 24 * 60;
+    }
+    return { startDay, startMin, endDay, endMin };
+  };
+  const dayLabel = (d: Date) =>
+    d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
 
   const pressGrid = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -297,16 +351,29 @@ export function TimeGrid({
     const p = pointAt(e.clientX, 0);
     const day = p ? days[p.day] : undefined;
     if (!p || !day) return;
-    const cell = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    allDayRow.current = e.currentTarget as HTMLElement;
+    e.preventDefault();
+    origin.current = { x: e.clientX, y: e.clientY };
+    // A press picks one day; dragging across the row picks several (an all-day span).
+    setDrag({ kind: "create-all-day", day: p.day, curDay: p.day, moved: false });
+  };
+  const allDayRow = useRef<HTMLElement | null>(null);
+  /** Where the all-day cells from day a to day b sit, for the form's popover. */
+  const allDayRect = (a: number, b: number): AnchorRect => {
+    const cell = allDayRow.current?.getBoundingClientRect();
+    if (!cell) return { left: 0, top: 0, width: 0, height: 0 };
     const width = cell.width / days.length;
-    onCreate(
-      { start: startOfDay(day), end: addDays(startOfDay(day), 1), allDay: true },
-      { left: cell.left + p.day * width, top: cell.top, width, height: cell.height },
-    );
+    return {
+      left: cell.left + a * width,
+      top: cell.top,
+      width: width * (b - a + 1),
+      height: cell.height,
+    };
   };
 
   // What the drag shows in place of the Event it moves.
-  const moving = drag && drag.kind !== "create" && drag.moved ? drag : null;
+  const moving =
+    drag && drag.kind !== "create" && drag.kind !== "create-all-day" && drag.moved ? drag : null;
   const shownItems = moving
     ? items.map((o) =>
         o.key === moving.occ.key
@@ -317,25 +384,53 @@ export function TimeGrid({
   const shownTimed = moving ? days.map((d) => layoutDay(shownItems, d, minMinutes)) : timed;
   const shownLanes = moving ? allDayLanes(shownItems, days) : lanes;
 
+  // The new Event's span as the drag draws it, or the one the open form holds.
   const creating =
     drag && drag.kind === "create" && drag.moved
       ? (() => {
+          if (drag.curDay !== drag.day) return createSpan(drag);
           const a = Math.floor(Math.min(drag.min, drag.curMin) / step) * step;
           const b = Math.max(a + step, Math.ceil(Math.max(drag.min, drag.curMin) / step) * step);
-          return { day: drag.day, from: a, to: b };
+          return { startDay: drag.day, startMin: a, endDay: drag.day, endMin: b };
         })()
       : null;
-  const ghostTimed =
+  const ghostSpan =
     creating ??
     (ghost && !ghost.allDay
       ? (() => {
-          const day = days.findIndex((d) => sameDay(d, ghost.start));
-          if (day < 0) return null;
-          const to = sameDay(ghost.end, ghost.start) ? minutesOfDay(ghost.end) : 24 * 60;
-          return { day, from: minutesOfDay(ghost.start), to };
+          const startDay = days.findIndex((d) => sameDay(d, ghost.start));
+          const endsAtMidnight = minutesOfDay(ghost.end) === 0 && !sameDay(ghost.end, ghost.start);
+          const lastDay = endsAtMidnight ? addMinutes(ghost.end, -1) : ghost.end;
+          const endDay = days.findIndex((d) => sameDay(d, lastDay));
+          if (startDay < 0 && endDay < 0) return null;
+          return {
+            startDay: startDay < 0 ? 0 : startDay,
+            startMin: startDay < 0 ? 0 : minutesOfDay(ghost.start),
+            endDay: endDay < 0 ? days.length - 1 : endDay,
+            endMin: endDay < 0 || endsAtMidnight ? 24 * 60 : minutesOfDay(ghost.end),
+          };
         })()
       : null);
-  const ghostAllDay = ghost?.allDay ? days.findIndex((d) => sameDay(d, ghost.start)) : -1;
+  /** The part of the span in day column i, if any. */
+  const ghostIn = (i: number): { from: number; to: number } | null => {
+    const g = ghostSpan;
+    if (!g || i < g.startDay || i > g.endDay) return null;
+    return { from: i === g.startDay ? g.startMin : 0, to: i === g.endDay ? g.endMin : 24 * 60 };
+  };
+  const allDayDrag = drag && drag.kind === "create-all-day" ? drag : null;
+  const ghostAllDay = (i: number): boolean => {
+    if (allDayDrag) {
+      return (
+        i >= Math.min(allDayDrag.day, allDayDrag.curDay) &&
+        i <= Math.max(allDayDrag.day, allDayDrag.curDay)
+      );
+    }
+    if (!ghost?.allDay) return false;
+    const d = days[i];
+    return (
+      !!d && d.getTime() >= startOfDay(ghost.start).getTime() && d.getTime() < ghost.end.getTime()
+    );
+  };
 
   const gutter = secondOk ? 112 : 56;
   const style = {
@@ -387,7 +482,7 @@ export function TimeGrid({
           {days.map((d, i) => (
             <div
               key={d.toISOString()}
-              className={`cal-allday-cell${sameDay(d, now) ? " today" : ""}${ghostAllDay === i ? " ghosted" : ""}`}
+              className={`cal-allday-cell${sameDay(d, now) ? " today" : ""}${ghostAllDay(i) ? " ghosted" : ""}`}
               style={{ gridColumn: i + 1 }}
             />
           ))}
@@ -497,21 +592,31 @@ export function TimeGrid({
                     </button>
                   );
                 })}
-                {ghostTimed && ghostTimed.day === i ? (
-                  <div
-                    className="cal-ghost"
-                    style={{
-                      top: (ghostTimed.from / 60) * hour,
-                      height:
-                        Math.max(hour / 4, ((ghostTimed.to - ghostTimed.from) / 60) * hour) - 2,
-                    }}
-                  >
-                    <span>
-                      {clock(atMinutes(d, ghostTimed.from))} {s["strings.calendar.to"]}{" "}
-                      {clock(atMinutes(d, ghostTimed.to))}
-                    </span>
-                  </div>
-                ) : null}
+                {(() => {
+                  const g = ghostIn(i);
+                  if (!g || !ghostSpan) return null;
+                  const first = i === ghostSpan.startDay;
+                  const multi = ghostSpan.endDay !== ghostSpan.startDay;
+                  const end = days[ghostSpan.endDay];
+                  return (
+                    <div
+                      className="cal-ghost"
+                      style={{
+                        top: (g.from / 60) * hour,
+                        height: Math.max(hour / 4, ((g.to - g.from) / 60) * hour) - 2,
+                      }}
+                    >
+                      {first ? (
+                        <span>
+                          {clock(atMinutes(d, g.from))} {s["strings.calendar.to"]}{" "}
+                          {multi && end
+                            ? `${dayLabel(end)} ${clock(atMinutes(end, ghostSpan.endMin))}`
+                            : clock(atMinutes(d, g.to))}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 {today ? (
                   <div
                     className="cal-now"
