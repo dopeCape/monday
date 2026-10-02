@@ -462,6 +462,12 @@ export function Reader({
           ) : null}
           {chipCard}
           {banner}
+          {messages.length === 0 ? (
+            // The Thread's Messages are on their way: a steady block, not an empty sheet that fills in.
+            <div className="reader-loading" role="status">
+              {messageStrings?.loading ?? "Loading"}
+            </div>
+          ) : null}
           {messages.map((m, i) => (
             <Message
               key={m.id}

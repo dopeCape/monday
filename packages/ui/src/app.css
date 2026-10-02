@@ -12079,3 +12079,18 @@ button.appr-link:focus-visible {
 .draft-row .draft-check {
   opacity: 1;
 }
+
+/* The reader while a Thread's Messages arrive, and a mail frame until it has its height. */
+.reader-loading {
+  min-height: 160px;
+  padding: 18px var(--pad);
+  color: var(--fg-faint);
+  font-size: var(--fs-sm);
+}
+.msg-frame:not([data-ready]) {
+  opacity: 0;
+}
+.msg-frame[data-ready] {
+  opacity: 1;
+  transition: opacity var(--t-fast) var(--ease);
+}

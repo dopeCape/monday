@@ -58,6 +58,8 @@ function prepare(
     if (done) return;
     const height = contentHeight(doc);
     if (height > 0) frame.style.height = `${height}px`;
+    // Shown once it has its real height: a first layout of a few pixels then a jump reads as a flicker.
+    if (height >= 24 || doc.readyState === "complete") frame.setAttribute("data-ready", "");
   };
 
   for (const img of doc.querySelectorAll<HTMLImageElement>("img[data-attachment]")) {

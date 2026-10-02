@@ -53,6 +53,7 @@ import {
 import {
   Fragment,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -1029,12 +1030,32 @@ function InboxBody({
   // The rows next to the one in hand stay warm, so j and k (or a click on a
   // neighbour) show a Thread without waiting on the Cache.
   const prefetchAround = openThreadIdForPrefetch(showReader, thread?.id ?? null, focus);
+  // The row the pointer rests on is read ahead too, so the click that follows opens it whole.
+  const [hovered, setHovered] = useState<string | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverDelay = settings["inbox.prefetch_hover_ms"];
+  const onListPointerOver = useCallback(
+    (e: ReactPointerEvent<HTMLElement>) => {
+      if (hoverDelay < 0) return;
+      const id = (e.target as Element).closest?.("[data-thread]")?.getAttribute("data-thread");
+      if (!id) return;
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      hoverTimer.current = setTimeout(() => setHovered(id), hoverDelay);
+    },
+    [hoverDelay],
+  );
+  useEffect(
+    () => () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
-    if (!inbox.prefetch || prefetchReach <= 0 || !prefetchAround) return;
-    const at = order.indexOf(prefetchAround);
-    if (at < 0) return;
-    const ids: string[] = [];
-    for (let d = 1; d <= prefetchReach; d++) {
+    if (!inbox.prefetch) return;
+    const at = prefetchAround && prefetchReach > 0 ? order.indexOf(prefetchAround) : -1;
+    if (at < 0 && !hovered) return;
+    const ids: string[] = hovered ? [hovered] : [];
+    for (let d = 1; at >= 0 && d <= prefetchReach; d++) {
       const next = order[at + d];
       const prev = order[at - d];
       if (next) ids.push(next);
@@ -1042,7 +1063,7 @@ function InboxBody({
     }
     const timer = setTimeout(() => inbox.prefetch?.(ids), 80);
     return () => clearTimeout(timer);
-  }, [inbox, order, prefetchAround, prefetchReach]);
+  }, [inbox, order, prefetchAround, prefetchReach, hovered]);
   cursor.current = { focus, open: openThreadId, selection };
   // The sheet slides out over the Thread it showed, so that Thread's rows are
   // held until the leave ends; the split reader never leaves.
@@ -1455,14 +1476,14 @@ function InboxBody({
   const draftWithAgent = useCallback(() => {
     if (!thread) return;
     setAgentOpen(true);
-    composerAttach.attach([
+    composerAttach.attach(workspaceId, [
       {
         id: thread.id,
         type: "reply",
         label: `${t("strings.agent.reply_chip")} ${cleanLabel(thread.subject)}`,
       },
     ]);
-  }, [thread, t]);
+  }, [thread, t, workspaceId]);
   // The open Thread's Judgments (slice 25), for the on-open Template suggestion.
   const judgments = useThreadJudgments(inbox, shownThreadId);
 
@@ -2949,6 +2970,7 @@ function InboxBody({
         className={`col list${selecting ? " selecting" : ""}`}
         data-fields={fields}
         aria-label={listTitle}
+        onPointerOver={onListPointerOver}
       >
         {selectionBar ?? (
           <ColHead title={listTitle} count={headCount}>

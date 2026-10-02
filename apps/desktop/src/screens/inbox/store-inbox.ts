@@ -137,6 +137,8 @@ export interface StoreInboxOptions {
    * its window follows in the background, so a folder opens at once.
    */
   firstPage?: (() => number) | undefined;
+  /** Bodies of one Thread fetched at once when the Cache lacks them (inbox.body_concurrency). */
+  bodyConcurrency?: (() => number) | undefined;
   /** The inbox.memory_lookups Setting: Threads read by id kept once nothing shows them. */
   memoryLookups?: (() => number) | undefined;
   log?: ((message: string) => void) | undefined;
@@ -256,19 +258,31 @@ export async function createStoreInbox(
     if (!content) return;
     let why: BodyUnavailable | null = null;
     let pending = false;
-    for (const id of ids) {
+    // Newest first (the one the reader shows open), a few at once, not one after another.
+    const order = await store.query<{ id: string }>(
+      `select id from messages where id in (${ids.map(() => "?").join(", ")}) order by date desc`,
+      [...ids],
+    );
+    const queue = order.length === ids.length ? order.map((r) => r.id) : [...ids];
+    const one = async (id: string) => {
       try {
         const body = await content.body(id, { images: options.remoteImages?.() ?? false });
         if (body.bodyState !== undefined && body.bodyState !== "fetched") {
           pending = true;
-          continue;
+          return;
         }
         await store.cacheBody(id, { text: body.text, html: body.display.html });
       } catch (error) {
         why ??= classify(error);
         log(`body ${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
-    }
+    };
+    const width = Math.max(1, options.bodyConcurrency?.() ?? 4);
+    await Promise.all(
+      Array.from({ length: Math.min(width, queue.length) }, async () => {
+        for (let id = queue.shift(); id !== undefined; id = queue.shift()) await one(id);
+      }),
+    );
     if (pending) waiting.add(threadId);
     else waiting.delete(threadId);
     setUnavailable(threadId, why);

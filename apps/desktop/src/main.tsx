@@ -168,6 +168,7 @@ function Root() {
         // Each list holds its newest Threads, not the whole Cache (per Workspace, and every one stays open).
         memoryWindow: () => settingsRef.current["inbox.memory_window"],
         firstPage: () => settingsRef.current["inbox.first_page"],
+        bodyConcurrency: () => settingsRef.current["inbox.body_concurrency"],
         memoryLookups: () => settingsRef.current["inbox.memory_lookups"],
         // The Section rules run here, on the client, over the Cache (CONTEXT.md "Section rule").
         sections: {
