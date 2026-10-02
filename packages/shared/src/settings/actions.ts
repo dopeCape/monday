@@ -115,7 +115,27 @@ export const ACTION_SETTINGS = {
     group: GROUP,
     tier: "more",
     label: "Suggest actions",
-    help: "Chips under the Brief and on a row's hover that do the likely next thing: reply, archive, snooze, forward. Each is an ordinary action with its own approval.",
+    help: "Chips in the reader and on a row's hover that do the likely next thing: reply, archive, snooze, forward. Each is an ordinary action with its own approval.",
+  }),
+  "actions.recommended.position": setting({
+    type: z.enum(["top", "bottom", "both"]),
+    default: "bottom",
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "more",
+    label: "Where the reader shows them",
+    help: "Bottom: a Suggested row at the end of the thread, right above the reply box, where you decide what to do. Top: under the Brief. Both: in both places. The keys run them wherever they show.",
+  }),
+  "actions.recommended.recompute_days": setting({
+    type: z.int().min(0).max(365),
+    default: 30,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Rework recent suggestions after an update",
+    help: "When an update changes how monday turns a thread's answers into suggestions, threads active in this many days are worked out again in the background from the answers already stored. Nothing is asked again. 0 leaves them until you open them.",
   }),
   "actions.recommended.max_in_reader": setting({
     type: z.int().min(0).max(6),
@@ -125,7 +145,7 @@ export const ACTION_SETTINGS = {
     group: GROUP,
     tier: "more",
     label: "Chips in the reader",
-    help: "The most chips the reader shows under the Brief, your own Custom actions first.",
+    help: "The most chips the reader shows in its Suggested row, your own Custom actions first.",
   }),
   "actions.recommended.max_in_list": setting({
     type: z.int().min(0).max(2),
@@ -162,8 +182,8 @@ export const ACTION_SETTINGS = {
   "actions.recommended.reply.enabled": enabled("Reply"),
   "actions.recommended.reply.threshold": threshold(
     "Reply",
-    0.7,
-    "It only opens the reply; a wrong one costs a click.",
+    0.6,
+    "It only opens the reply; a wrong one costs a click. Measured on real mail, the reply fit's median is 0.56 and its 75th percentile 0.75, so 0.6 shows it on somewhat under half the threads.",
   ),
   "actions.recommended.reply.muted_senders": muted("Reply"),
 
@@ -171,8 +191,8 @@ export const ACTION_SETTINGS = {
   "actions.recommended.archive.enabled": enabled("Archive"),
   "actions.recommended.archive.threshold": threshold(
     "Archive",
-    0.85,
-    "It hides mail; Undo exists but a wrong one may go unnoticed.",
+    0.7,
+    "It hides mail; Undo exists but a wrong one may go unnoticed. Measured on real mail, the archive fit's median is 0.65, its 75th percentile 0.72 and its highest 0.87, so 0.85 showed it almost never; 0.7 shows it on roughly the surest third.",
   ),
   "actions.recommended.archive.muted_senders": muted("Archive"),
   "actions.recommended.archive.question": question(
@@ -192,7 +212,11 @@ export const ACTION_SETTINGS = {
 
   /* ------------------------------ Snooze ------------------------------ */
   "actions.recommended.snooze.enabled": enabled("Snooze"),
-  "actions.recommended.snooze.threshold": threshold("Snooze", 0.75, "It hides mail until a time."),
+  "actions.recommended.snooze.threshold": threshold(
+    "Snooze",
+    0.7,
+    "It hides mail until a time. Measured on real mail, the snooze fit's median is 0.64 and its 75th percentile 0.81, so 0.7 shows it on roughly the surest third to half.",
+  ),
   "actions.recommended.snooze.muted_senders": muted("Snooze"),
   "actions.recommended.snooze.question": question(
     "snooze",
@@ -297,35 +321,55 @@ export const ACTION_SETTINGS = {
     group: GROUP,
     tier: "more",
     label: "Forward: how sure of the person",
-    help: "Forward to and Hand to show a person only when monday is at least this sure it is the right one.",
+    help: "Forward to and Ask show a person only when monday is at least this sure it is the right one.",
   }),
   "actions.recommended.forward.muted_senders": muted("Forward"),
   "actions.recommended.forward.question": question(
     "forward",
-    "The mailbox owner will want to send this thread on to someone else so they have it, such as an accountant, an assistant or a colleague who keeps records.",
+    "The mailbox owner would hand this thread to someone else rather than act on it alone: send it on to a colleague, an assistant, an accountant or whoever else should have it.",
   ),
-  "actions.recommended.delegate.enabled": enabled("Hand to someone"),
+  "actions.recommended.delegate.enabled": enabled("Ask someone"),
   "actions.recommended.delegate.threshold": threshold(
-    "Hand to someone",
+    "Ask someone",
     0.85,
-    "It passes responsibility on.",
+    "It asks someone else to answer for you; it opens compose and sends nothing.",
   ),
-  "actions.recommended.delegate.muted_senders": muted("Hand to someone"),
+  "actions.recommended.delegate.muted_senders": muted("Ask someone"),
   "actions.recommended.delegate.question": question(
-    "hand to someone",
-    "The mailbox owner will want someone else to handle what this thread asks, rather than doing it themselves.",
+    "ask someone",
+    "The thread asks the mailbox owner a question or for something that someone else the owner works with should answer or handle, rather than the owner alone.",
   ),
   "actions.recommended.forward.to_question": setting({
     type: z.string().min(1),
     default:
-      "If the owner sends this thread on, to whom? Choose from the people listed; use what the owner did with earlier mail from this sender.",
+      "If the owner hands this thread to someone, to whom? Choose from the people listed, each described by how they relate to the owner; use what the owner did with earlier mail from this sender and who the thread is about.",
     scope: "global",
     section: "routing",
     group: GROUP,
     control: "sentence",
     tier: "advanced",
     label: "Question: to whom",
-    help: "Asked when code finds people to offer: those you forwarded this sender's mail to, people named in the Thread, and your hand-off list.",
+    help: "Asked when code finds people to offer: those you forwarded this sender's mail to, your hand-off list, people you copy on mail to this sender's domain, colleagues at your own domain, people you write to often, and people named in the Thread.",
+  }),
+  "actions.recommended.forward.max_people": setting({
+    type: z.int().min(1).max(20),
+    default: 8,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Forward: people offered",
+    help: "The most people code offers the judge for Forward to and Ask. More people dilute the pick.",
+  }),
+  "actions.recommended.forward.min_written": setting({
+    type: z.int().min(1).max(1000),
+    default: 3,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    tier: "advanced",
+    label: "Forward: people you write to",
+    help: "A colleague or a frequent correspondent is offered for Forward to and Ask only once you have written to them at least this many times.",
   }),
   "actions.recommended.forward.to_none": setting({
     type: z.string().min(1),
@@ -345,7 +389,7 @@ export const ACTION_SETTINGS = {
     group: GROUP,
     tier: "more",
     label: "People you hand work to",
-    help: "Addresses (or Name <address>) monday may suggest for Forward and Hand to, beside the people it learns from your mail.",
+    help: "Addresses (or Name <address>) monday may suggest for Forward to and Ask, beside the people it learns from your mail.",
   }),
   "actions.delegate.follow_up_days": setting({
     type: z.int().min(0).max(60),
@@ -354,8 +398,8 @@ export const ACTION_SETTINGS = {
     section: "routing",
     group: GROUP,
     tier: "advanced",
-    label: "Hand to: follow up after",
-    help: "After a hand-off is sent, offer to snooze the Thread this many days so you see whether it was done. 0 offers nothing.",
+    label: "Ask: follow up after",
+    help: "After asking someone, offer to snooze the Thread this many days so you see whether it was done. 0 offers nothing.",
   }),
 
   /* ------------------------------ RSVP (slice 35) ------------------------------ */
@@ -713,7 +757,24 @@ export const ACTION_SETTINGS = {
   "strings.actions.recommended.snooze": s("snooze, no time", "Snooze"),
   "strings.actions.recommended.snooze_until": s("snooze until", "Snooze until {when}"),
   "strings.actions.recommended.forward_to": s("forward", "Forward to {name}"),
-  "strings.actions.recommended.hand_to": s("hand to someone", "Hand to {name}"),
+  "strings.actions.recommended.hand_to": s("ask someone", "Ask {name}"),
+  "strings.actions.recommended.suggested": s("the reader's row", "Suggested"),
+  "strings.actions.recommended.forward_note": s(
+    "forward note",
+    "Hi {name}, passing this on to you: {summary}",
+  ),
+  "strings.actions.recommended.forward_note_plain": s(
+    "forward note, no Brief",
+    "Hi {name}, passing this on to you.",
+  ),
+  "strings.actions.recommended.ask_note": s(
+    "ask note",
+    "Hi {name}, could you answer this one? {summary}",
+  ),
+  "strings.actions.recommended.ask_note_plain": s(
+    "ask note, no Brief",
+    "Hi {name}, could you answer this one?",
+  ),
   "strings.actions.recommended.accept": s("RSVP accept", "Accept"),
   "strings.actions.recommended.maybe": s("RSVP maybe", "Maybe"),
   "strings.actions.recommended.decline": s("RSVP decline", "Decline"),
@@ -778,7 +839,7 @@ export const ACTION_SETTINGS = {
   "strings.actions.recommended.name.archive": s("name: archive", "Archive"),
   "strings.actions.recommended.name.snooze": s("name: snooze", "Snooze"),
   "strings.actions.recommended.name.forward": s("name: forward", "Forward"),
-  "strings.actions.recommended.name.delegate": s("name: hand to someone", "Hand to someone"),
+  "strings.actions.recommended.name.delegate": s("name: ask someone", "Ask someone"),
   "strings.actions.recommended.name.rsvp": s("name: RSVP", "RSVP"),
   "strings.actions.recommended.name.calendar": s("name: add to calendar", "Add to calendar"),
   "strings.actions.recommended.name.pay": s("name: pay or file", "Pay or file"),
@@ -807,7 +868,19 @@ export const ACTION_SETTINGS = {
   ),
   "strings.actions.recommended.candidate.forwarded": s(
     "person line: forwarded before",
-    "Forwarded {count} threads from {sender}",
+    "you forwarded {count} of {sender}'s threads to them",
+  ),
+  "strings.actions.recommended.candidate.copied": s(
+    "person line: copied on mail to the sender",
+    "you copied them on {count} of your mails to {domain}",
+  ),
+  "strings.actions.recommended.candidate.colleague": s(
+    "person line: colleague",
+    "colleague at {domain}, you wrote {count} times",
+  ),
+  "strings.actions.recommended.candidate.frequent": s(
+    "person line: frequent correspondent",
+    "you wrote to them {count} times",
   ),
   "strings.actions.recommended.page.title": s("page title", "Recommended actions"),
   "strings.actions.recommended.page.intro": s(

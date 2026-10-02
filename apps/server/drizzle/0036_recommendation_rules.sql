@@ -1,0 +1,1 @@
+ALTER TABLE "thread_recommendations" ADD COLUMN "rules" integer DEFAULT 0 NOT NULL;

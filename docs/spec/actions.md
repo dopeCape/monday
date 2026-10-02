@@ -4,7 +4,7 @@ Behaviors a tester can check. Recommended action, Signal, Fact and Unsure are de
 
 ## What the user sees
 
-- The reader shows up to `actions.recommended.max_in_reader` (3) chips under the Brief, or at the top of the Thread when there is no Brief, before any Brief is written: "Reply", "Snooze until Mon 09:00", "Forward to Priya". Custom actions that apply come first; Recommended actions fill the rest, likeliest first.
+- The reader shows up to `actions.recommended.max_in_reader` (3) chips: "Reply", "Snooze until Mon 09:00", "Forward to Priya". Custom actions that apply come first; Recommended actions fill the rest, likeliest first. Where they show is `actions.recommended.position`: `bottom` (default), a "Suggested" row at the end of the Thread right above the draft cards and the reply box, where the user decides what to do; `top`, under the Brief (or at the top of the Thread before any Brief is written); `both`. The keys and the palette run them wherever they show.
 - In the list, a row's hover (and the selected row) shows the top Recommended action beside archive and snooze (`actions.recommended.in_list`: `hover`, default; `always`; `off`), at most `actions.recommended.max_in_list` (1). Nothing is added to a row at rest, so the calm row rule holds (`inbox.md`, Rows).
 - Keys: `actions.recommended.keys` (default Alt+1, Alt+2, Alt+3) run the chips in reader order; in the list the key runs the hovered or selected row's chip. The palette lists them for the open Thread ("Snooze until Mon 09:00").
 - Each chip is an ordinary Tool call with its Tier, unchanged (ADR 0002): a reply, forward or hand-off opens compose and sends nothing; an RSVP, an unsubscribe and anything else that reaches a third party shows its approval card with the exact payload; archive and snooze apply with Undo; opening a link or a carrier's page is read-only.
@@ -50,20 +50,20 @@ Each action has a **fit** Signal (a Noul, owned by the Recommended action, shipp
 - Code: `deadline` reuses `deadline_at` minus `actions.snooze.before_deadline_hours` (24); `date` reuses the `deadline_*` parts; parts of day map to the snooze presets (`inbox.snooze.*`); `none` or low confidence falls back to the first preset and the chip reads "Snooze" and opens the picker.
 - Tool: `thread.snooze` (reversible).
 
-### Forward and Hand to someone
+### Forward and Ask someone
 ```json
 { "forward_fits": { "type": "noul",
-    "instructions": "The mailbox owner will want to send this thread on to someone else so they have it, such as an accountant, an assistant or a colleague who keeps records." },
+    "instructions": "The mailbox owner would hand this thread to someone else rather than act on it alone: send it on to a colleague, an assistant, an accountant or whoever else should have it." },
   "delegate_fits": { "type": "noul",
-    "instructions": "The mailbox owner will want someone else to handle what this thread asks, rather than doing it themselves." },
+    "instructions": "The thread asks the mailbox owner a question or for something that someone else the owner works with should answer or handle, rather than the owner alone." },
   "forward_to": { "type": "choice",
-    "instructions": "If the owner sends this thread on, to whom? Choose from the people listed; use what the owner did with earlier mail from this sender.",
-    "criteria": { "accounts@monday.test": "Forwarded 9 threads from billing@hetzner.com",
-                  "priya@monday.test": "Priya Raman, same company, often copied on invoices",
+    "instructions": "If the owner hands this thread to someone, to whom? Choose from the people listed, each described by how they relate to the owner; use what the owner did with earlier mail from this sender and who the thread is about.",
+    "criteria": { "accounts@monday.test": "Accounts, you forwarded 9 of billing@hetzner.com's threads to them",
+                  "priya@genai-labs.io": "Priya Raman, colleague at genai-labs.io, you wrote 40 times",
                   "none": "None of these people." } } }
 ```
-- Candidates for `forward_to`, built by code: the addresses the owner forwarded this sender's mail to, the addresses the owner handed similar mail to, the addresses named in the Thread's text, and `actions.delegate.people` (the user's own list of people they hand work to), at most `signals.candidates.max`, each with one line of Facts as its description. The gate asks it only when there is a candidate.
-- The chip shows "Forward to Priya" when `forward_fits` clears its threshold and `forward_to` picks a person with confidence at or above `actions.recommended.forward.to_confidence`; "Hand to Priya" when `delegate_fits` does. A hand-off opens compose with the "Handing this over" Template and, if `actions.delegate.follow_up_days` is set, offers to snooze the Thread until then after sending.
+- Candidates for `forward_to`, built by code, in this order: the addresses the owner forwarded this sender's mail to, `actions.delegate.people` (the user's own list of people they hand work to), the people the owner copied on their own mail to the sender's domain (to the sender alone when the domain is a personal one), colleagues at the owner's own company domain the owner wrote to at least `actions.recommended.forward.min_written` (3) times, the addresses named in the Thread's text, and the people the owner writes to most (the same floor); never the owner, the sender or someone already on the Thread; at most `actions.recommended.forward.max_people` (8). Each carries one line naming who they are and how they relate ("Priya Raman, colleague at genai-labs.io, you wrote 40 times"). The gate asks it only when there is a candidate; it rides in the Thread's one Signal request.
+- The chip shows "Forward to Priya" when `forward_fits` clears its threshold and `forward_to` picks a person with confidence at or above `actions.recommended.forward.to_confidence`; "Ask Priya" when `delegate_fits` does (the Thread asks something Priya should answer). Both open compose as a forward to that person with a short note from the Brief's first bullet ("Hi Priya, passing this on to you: ...", "Hi Priya, could you answer this one? ..."); nothing is sent. After an Ask, if `actions.delegate.follow_up_days` is set, monday offers to snooze the Thread until then.
 - Tool: `compose.forward` (always-ask; opens compose with the recipient filled, sends nothing).
 
 ### RSVP
@@ -103,7 +103,7 @@ Meeting requests and proposed times have their own actions, specced and built ah
 - Tools: `open.link` (read-only, the domain shown first), `thread.snooze` (reversible).
 
 ### Unsubscribe
-- No Jev question. Code shows it when the Fact `list_unsubscribe` exists, `newsletter` holds, and the owner left the last `actions.unsubscribe.unread_streak` (5) issues from the same `list_id` unread.
+- No Jev question. Code shows it when the Fact `list_unsubscribe` exists, `newsletter` holds, and the owner left the last `actions.unsubscribe.unread_streak` (5) issues from the same `list_id` unread. The issue being looked at counts as unread whatever its flag: opening it in the reader marks it read, and that must not take the chip away.
 - The action is RFC 8058 one-click (a `POST` with `List-Unsubscribe=One-Click`) when `List-Unsubscribe-Post` is present, else the `mailto:` address as a Message sent through the Account. An `https:` link without one-click is never fetched by monday; the chip opens it in the browser instead.
 - Tool: `list.unsubscribe` (new, always-ask: it reaches a third party). The card names the list and the exact request or address. Afterwards, offer "Archive the 23 issues from this list" (reversible).
 
@@ -133,11 +133,11 @@ Meeting requests and proposed times have their own actions, specced and built ah
 
 | Action | Setting | Default | Why |
 |---|---|---|---|
-| Reply | `actions.recommended.reply.threshold` | 0.7 | Opens compose; a wrong one costs a click |
-| Archive | `…archive.threshold` | 0.85 | Hides mail; Undo exists but the user may not notice |
-| Snooze | `…snooze.threshold` | 0.75 | Hides mail until a time |
+| Reply | `actions.recommended.reply.threshold` | 0.6 | Opens compose; a wrong one costs a click. Measured fit: median 0.56, 75th percentile 0.75 |
+| Archive | `…archive.threshold` | 0.7 | Hides mail; Undo exists but the user may not notice. Measured fit: median 0.65, 75th percentile 0.72, highest 0.87 (0.85 showed almost none) |
+| Snooze | `…snooze.threshold` | 0.7 | Hides mail until a time. Measured fit: median 0.64, 75th percentile 0.81 |
 | Forward | `…forward.threshold`, `…forward.to_confidence` | 0.8, 0.8 | A wrong recipient is embarrassing even if it asks |
-| Hand to someone | `…delegate.threshold`, same recipient floor | 0.85, 0.8 | Passes responsibility |
+| Ask someone | `…delegate.threshold`, same recipient floor | 0.85, 0.8 | Asks someone else to answer |
 | Add to calendar | `…calendar.threshold`, `…calendar.time_confidence` | 0.75, 0.7 | A wrong time is worse than no time |
 | Meetings | `meetings.offer.threshold`, `meetings.schedule.threshold`, `meetings.schedule.time_confidence`, `meetings.suggest.threshold`, `meetings.pick.threshold` | 0.7, 0.8, 0.7, 0.75, 0.5 | By risk, in `meetings.md` |
 | Pay or file | `…pay.threshold`, `…pay.amount_confidence` | 0.8, 0.8 | Money; the amount must be right |
@@ -167,11 +167,11 @@ The action Signals ride in the Signal request: about 12 questions, about 1,200 t
 
 ## Settings
 
-Beyond the thresholds above: `actions.recommended.enabled` (on), `actions.recommended.max_in_reader` (3), `actions.recommended.max_in_list` (1), `actions.recommended.in_list` (`hover`), `actions.recommended.keys` (Alt+1..3), `actions.recommended.<action>.enabled` (on for each), `actions.recommended.<action>.question` (the words above), `actions.recommended.<action>.muted_senders` ([]), `actions.snooze.before_deadline_hours` (24), `actions.calendar.default_minutes` (30), `actions.pay.remind_days_before` (2), `actions.pay.trusted_domains` (shipped list), `actions.unsubscribe.unread_streak` (5), `actions.delegate.people` ([]), `actions.delegate.follow_up_days` (3), `actions.learning.window` (50), `actions.learning.min_use_rate` (0.1), `actions.learning.high_use_rate` (0.6), `actions.learning.enabled` (on).
+Beyond the thresholds above: `actions.recommended.enabled` (on), `actions.recommended.position` (`bottom`), `actions.recommended.max_in_reader` (3), `actions.recommended.forward.max_people` (8), `actions.recommended.forward.min_written` (3), `actions.recommended.recompute_days` (30: when a new version of the code's rules changes what stored answers allow, Threads active in that window are worked out again in the background from those answers, the judge not asked; thresholds need none of this, the chips apply them at show time), `actions.recommended.max_in_list` (1), `actions.recommended.in_list` (`hover`), `actions.recommended.keys` (Alt+1..3), `actions.recommended.<action>.enabled` (on for each), `actions.recommended.<action>.question` (the words above), `actions.recommended.<action>.muted_senders` ([]), `actions.snooze.before_deadline_hours` (24), `actions.calendar.default_minutes` (30), `actions.pay.remind_days_before` (2), `actions.pay.trusted_domains` (shipped list), `actions.unsubscribe.unread_streak` (5), `actions.delegate.people` ([]), `actions.delegate.follow_up_days` (3), `actions.learning.window` (50), `actions.learning.min_use_rate` (0.1), `actions.learning.high_use_rate` (0.6), `actions.learning.enabled` (on).
 
 ## Strings (examples)
 
-"Reply", "Reply with {template}", "Archive", "Snooze until {when}", "Snooze", "Forward to {name}", "Hand to {name}", "Accept", "Maybe", "Decline", "Clashes with {event}", "Add {when} to calendar", "Pay {amount} by {date}", "Remind me to pay", "Unsubscribe", "Archive the {count} issues from this list", "Track package", "Run {workflow}", "Not this", "Not for mail from {domain}", "{action} suggestions: shown {shown} times, used {used}; now shown only when {percent} sure".
+"Reply", "Reply with {template}", "Archive", "Snooze until {when}", "Snooze", "Forward to {name}", "Ask {name}", "Suggested", "Hi {name}, passing this on to you: {summary}", "Hi {name}, could you answer this one? {summary}", "Accept", "Maybe", "Decline", "Clashes with {event}", "Add {when} to calendar", "Pay {amount} by {date}", "Remind me to pay", "Unsubscribe", "Archive the {count} issues from this list", "Track package", "Run {workflow}", "Not this", "Not for mail from {domain}", "{action} suggestions: shown {shown} times, used {used}; now shown only when {percent} sure".
 
 ## Edge cases
 
@@ -194,7 +194,7 @@ Beyond the thresholds above: `actions.recommended.enabled` (on), `actions.recomm
 2. The fixture podcast invite from Sofia shows "Reply"; a fixture meeting proposal "Thursday at 3pm" shows "Add Thu 15:00 to calendar", and adding it creates the event only on the owner's calendar.
 3. A newsletter left unread five issues running shows "Unsubscribe"; approving sends the RFC 8058 POST, which a fake list server records.
 4. Forward to a person appears only when the fake judge's `forward_to` confidence is at or above 0.8; the compose opens with that person and nothing is sent.
-5. Dismissing Archive on 45 of 50 fixture Threads raises its threshold to 0.9, the Activity log shows the change, and Undo restores 0.85.
+5. Dismissing Archive on 45 of 50 fixture Threads raises its threshold to 0.75, the Activity log shows the change, and Undo restores 0.7.
 6. A Thread whose `hidden_instructions` holds shows no Recommended action except RSVP or Unsubscribe.
 7. The reader never shows more than three chips and a row never more than one, on hover only by default.
 8. `CHIP_NAMES`, `chip_*` questions and the Brief's action choice are gone; the Brief's reply line reaches the Reply chip.

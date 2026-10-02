@@ -17,15 +17,24 @@ import type {
   SignalReading,
 } from "@monday/shared";
 import { chooseRecommended, defaultSettings, recommendationRules } from "@monday/shared";
+import { eq } from "drizzle-orm";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
-import { settings as settingsTable, signalAnswers } from "../src/db/schema.ts";
+import {
+  people as peopleTable,
+  settings as settingsTable,
+  signalAnswers,
+  threadRecommendations,
+  threads as threadsTable,
+} from "../src/db/schema.ts";
 import {
   candidatePeople,
   parsePerson,
   type RecommendSettings,
+  RULES_VERSION,
   recommendFor,
   snoozeUntil,
+  unreadStreak,
 } from "../src/intelligence/actions/recommend.ts";
 import { ACTION_SIGNAL } from "../src/intelligence/actions/signals.ts";
 import { recommendationText } from "../src/intelligence/agent/tools/recommended.ts";
@@ -36,6 +45,14 @@ import { recommendationsRoutes } from "../src/routes/recommendations.ts";
 import { type TestDatabase, testDatabase } from "./harness.ts";
 
 const NOW = new Date("2026-09-29T12:00:00Z");
+const WORDS = {
+  named: defaultSettings()["strings.actions.recommended.candidate.named"],
+  handoff: defaultSettings()["strings.actions.recommended.candidate.handoff"],
+  forwarded: defaultSettings()["strings.actions.recommended.candidate.forwarded"],
+  copied: defaultSettings()["strings.actions.recommended.candidate.copied"],
+  colleague: defaultSettings()["strings.actions.recommended.candidate.colleague"],
+  frequent: defaultSettings()["strings.actions.recommended.candidate.frequent"],
+};
 const owner = { name: "Sam Okafor", email: "sam@monday.test" };
 
 const SETTINGS: RecommendSettings = {
@@ -197,13 +214,64 @@ describe("which actions a Thread's answers allow", () => {
       handoff: ["Priya Raman <Priya@monday.test>", "not an address"],
       forwarded: [],
       max: 12,
-      words: { named: "Named", handoff: "Hand-off list", forwarded: "Forwarded {count}" },
+      words: { ...WORDS, named: "Named", handoff: "Hand-off list", forwarded: "Forwarded {count}" },
     });
     expect(people).toEqual([
-      { email: "priya@monday.test", name: "Priya Raman", line: "Hand-off list" },
+      { email: "priya@monday.test", name: "Priya Raman", line: "Priya Raman, Hand-off list" },
       { email: "accounts@monday.test", name: "", line: "Named" },
     ]);
     expect(parsePerson("x@y.test")).toEqual({ name: "", email: "x@y.test" });
+  });
+  test("an unread streak counts the issue being read as unread, so opening it keeps Unsubscribe", () => {
+    const issues = [
+      { id: "n5", unread: false },
+      { id: "n4", unread: true },
+      { id: "n3", unread: true },
+    ];
+    // The newest issue was just opened in the reader (marked read): the streak holds for it.
+    expect(unreadStreak(issues, "n5", 3)).toBe(true);
+    // Seen from another issue, the read one breaks the streak.
+    expect(unreadStreak(issues, "n4", 3)).toBe(false);
+    // Fewer issues than the streak asks for is no streak.
+    expect(unreadStreak(issues.slice(1), "n4", 3)).toBe(false);
+  });
+  test("the people offered beyond past forwards: copied, colleagues, frequent, each saying how they relate", () => {
+    const people = candidatePeople({
+      owner: "sam@genai-labs.io",
+      sender: "billing@hetzner.com",
+      named: ["named@else.test"],
+      participants: [],
+      handoff: [],
+      forwarded: [{ email: "accounts@genai-labs.io", name: "", count: 3 }],
+      copied: [{ email: "priya@genai-labs.io", name: "Priya Raman", count: 4 }],
+      colleagues: [
+        { email: "priya@genai-labs.io", name: "Priya Raman", count: 40 },
+        { email: "jo@genai-labs.io", name: "Jo Park", count: 12 },
+        { email: "sam@genai-labs.io", name: "Sam", count: 99 },
+      ],
+      frequent: [{ email: "mum@gmail.com", name: "", count: 30 }],
+      names: new Map([["accounts@genai-labs.io", "Accounts"]]),
+      max: 4,
+      words: WORDS,
+    });
+    expect(people).toEqual([
+      {
+        email: "accounts@genai-labs.io",
+        name: "Accounts",
+        line: "Accounts, you forwarded 3 of billing@hetzner.com's threads to them",
+      },
+      {
+        email: "priya@genai-labs.io",
+        name: "Priya Raman",
+        line: "Priya Raman, you copied them on 4 of your mails to hetzner.com",
+      },
+      {
+        email: "jo@genai-labs.io",
+        name: "Jo Park",
+        line: "Jo Park, colleague at genai-labs.io, you wrote 12 times",
+      },
+      { email: "named@else.test", name: "", line: "Named in this thread" },
+    ]);
   });
 });
 
@@ -312,6 +380,62 @@ describe("Recommended actions over the Store", () => {
 
   afterAll(async () => {
     await db.drop();
+  });
+
+  test("Forward candidates come from the owner's mail: copied on mail to the sender's domain, colleagues, people written to often", async () => {
+    await db.handle.db.insert(peopleTable).values([
+      { workspaceId, address: "dana@monday.test", name: "Dana Lee", sentCount: 40 },
+      { workspaceId, address: "rare@monday.test", name: "Rare One", sentCount: 1 },
+      { workspaceId, address: "mum@example.org", name: "Mum", sentCount: 25 },
+    ]);
+    const earlier = await store.upsertThread({
+      workspaceId,
+      providerThreadId: "owner-to-hetzner",
+      subject: "Our invoice address",
+      participants: [owner, { name: "Hetzner Billing", email: "billing@hetzner.com" }],
+      lastActivity: "2026-09-01T09:00:00.000Z",
+    });
+    await store.upsertMessage({
+      threadId: earlier,
+      providerMessageId: "m-owner-to-hetzner",
+      from: owner,
+      to: [{ name: "Hetzner Support", email: "support@hetzner.com" }],
+      cc: [{ name: "Kim Finance", email: "kim@monday.test" }],
+      date: "2026-09-01T09:00:00.000Z",
+      headers: {},
+      bodyText: "Please use our new address.",
+      bodyHtml: null,
+      snippet: "Please use our new address.",
+    });
+    const found = await intelligence.recommendations.candidates({
+      workspaceId,
+      threadId: earlier,
+      owner: owner.email,
+      sender: "billing@hetzner.com",
+      named: [],
+      participants: [],
+    });
+    expect(found.people).toEqual([
+      {
+        email: "priya@monday.test",
+        name: "Priya Raman",
+        line: "Priya Raman, On your hand-off list",
+      },
+      {
+        email: "kim@monday.test",
+        name: "Kim Finance",
+        line: "Kim Finance, you copied them on 1 of your mails to hetzner.com",
+      },
+      {
+        email: "dana@monday.test",
+        name: "Dana Lee",
+        line: "Dana Lee, colleague at monday.test, you wrote 40 times",
+      },
+      { email: "mum@example.org", name: "Mum", line: "Mum, you wrote to them 25 times" },
+    ]);
+    // The rest of the suite starts from an owner with no such history.
+    await db.handle.db.delete(peopleTable);
+    await db.handle.db.delete(threadsTable).where(eq(threadsTable.id, earlier));
   });
 
   test("one Signal request carries the action Signals; the recipient Choice offers the people code found", async () => {
@@ -437,6 +561,25 @@ describe("Recommended actions over the Store", () => {
     const text = recommendationText(view as NonNullable<typeof view>);
     expect(text).toContain("archive_threads");
     expect(text).toContain("Nothing was done.");
+  });
+
+  test("rows an older version of the rules worked out are worked out again from their answers, the judge not asked", async () => {
+    const receipt = (await db.handle.db.query.threads.findFirst({
+      where: (t, { eq }) => eq(t.providerThreadId, "receipt"),
+    })) as { id: string };
+    await db.handle.db
+      .update(threadRecommendations)
+      .set({ rules: 0, computedAt: new Date("2026-09-01T00:00:00Z") });
+    const before = judge.calls.length;
+    expect(await intelligence.recommendations.recomputeOutdated()).toBeGreaterThan(0);
+    expect(judge.calls.length).toBe(before);
+    const row = await db.handle.db.query.threadRecommendations.findFirst({
+      where: (t, { eq }) => eq(t.threadId, receipt.id),
+    });
+    expect(row?.rules).toBe(RULES_VERSION);
+    expect(row?.computedAt.toISOString()).toBe(NOW.toISOString());
+    // Nothing older is left: a second walk works out nothing.
+    expect(await intelligence.recommendations.recomputeOutdated()).toBe(0);
   });
 
   test("a new Message makes the answers stale: nothing acts on them until they are read again", async () => {

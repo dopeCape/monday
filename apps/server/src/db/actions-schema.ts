@@ -45,6 +45,12 @@ export const threadRecommendations = pgTable(
     contentEnc: bytea("content_enc").notNull(),
     contentKey: bytea("content_key").notNull(),
     computedAt: timestamp("computed_at", { withTimezone: true, mode: "date" }).notNull(),
+    /**
+     * The version of the code's rules the row was worked out under
+     * (recommend.ts RULES_VERSION): an older row is worked out again in the
+     * background from its stored answers, without asking the judge.
+     */
+    rules: integer("rules").notNull().default(0),
   },
   (t) => [index("thread_recommendations_workspace_idx").on(t.workspaceId, t.computedAt)],
 );

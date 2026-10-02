@@ -871,7 +871,8 @@ describe("judgments over the fixture mailbox", () => {
     // not stated: 23 shipped; 8 for archive, snooze, forward and hand to someone (slice 34); 15 for
     // add to calendar (the fit, 8 date parts, the minute), pay, track and run a Workflow (slice 35).
     expect(digestChange?.answers).toHaveLength(46);
-    expect(answer("action:forward.to")).toMatchObject({ choice: "none" });
+    // The owner's correspondents are offered, so the recipient Choice is asked; the person stays sealed.
+    expect(answer("action:forward.to")).toMatchObject({ choice: "picked" });
     expect(answer("newsletter")).toMatchObject({ version: 1, noul: 0.93, stale: false });
     expect(answer("urgency")).toMatchObject({ score: 1, noul: null });
     expect(answer("chip_snooze")).toBeUndefined();
