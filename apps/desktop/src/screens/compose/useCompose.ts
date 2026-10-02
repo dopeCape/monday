@@ -114,6 +114,10 @@ export interface ComposeController {
   minimize(draftId: string): void;
   /** Brings a docked or stacked window back. */
   restore(draftId: string): void;
+  /** Throws a saved Draft away from outside its surface (a draft card): Undo saves it back. */
+  discardDraft(draftId: string): void;
+  /** Sends a saved Draft as it stands (a draft card's Send), with the usual undo window. */
+  sendDraft(draftId: string): Promise<void>;
   /** The cycle shortcut: the next open or minimized Draft. */
   cycle(): void;
   /** The reply-all toggle: recomputes To and Cc and remembers the choice for the Thread. */
@@ -617,6 +621,16 @@ export function useCompose(o: UseComposeOptions): ComposeController {
     }
   }, [discarded, composer, inline, show]);
 
+  const discardDraft = useCallback(
+    (draftId: string) => {
+      const draft = composer.draft(draftId);
+      if (!draft) return;
+      const s = surfaces.current.get(draftId)?.read();
+      discard(draftId, s?.content ?? contentOf(draft));
+    },
+    [composer, discard],
+  );
+
   const setReplyAll = useCallback(
     (replyAll: boolean) => {
       const current = replyRef.current;
@@ -637,6 +651,26 @@ export function useCompose(o: UseComposeOptions): ComposeController {
       if (replyRef.current?.draftId === sent.draftId) setReply(null);
     },
     [setW, setReply],
+  );
+
+  const sendDraft = useCallback(
+    async (draftId: string) => {
+      const draft = composer.draft(draftId);
+      if (draft?.status !== "open") return;
+      if (draft.to.length + draft.cc.length + draft.bcc.length === 0) {
+        notify(strings.noRecipients);
+        return;
+      }
+      try {
+        const result = await composer.send(draftId, {
+          delaySeconds: settings["send.delay_seconds"],
+        });
+        onSent({ ...result, draftId });
+      } catch (error) {
+        notify(strings.sendFailed.replace("{error}", String(error)));
+      }
+    },
+    [composer, settings, notify, strings, onSent],
   );
 
   const undo = useCallback(
@@ -821,6 +855,8 @@ export function useCompose(o: UseComposeOptions): ComposeController {
     closeReply,
     minimize: (draftId) => minimize(draftId),
     restore,
+    discardDraft,
+    sendDraft,
     cycle,
     setReplyAll,
     onSent,

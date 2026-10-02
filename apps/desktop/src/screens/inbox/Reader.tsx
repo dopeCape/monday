@@ -151,6 +151,11 @@ export interface ReaderProps {
   loadRemoteImages?: boolean | undefined;
   /** The reply box, once a reply is open; the mock's textarea otherwise. */
   reply?: ReactNode | undefined;
+  /**
+   * The Thread's open Drafts not open in the reply box, as draft cards: after
+   * the last Message and before the reply box, never looking like a Message.
+   */
+  drafts?: ReactNode | undefined;
   onClose: () => void;
   onAsk: () => void;
   /** The reply box's Draft a reply: a turn about this Thread; the bare Ask when absent. */
@@ -201,6 +206,7 @@ export function Reader({
   collapseQuoted,
   loadRemoteImages,
   reply,
+  drafts,
   onClose,
   onAsk,
   onDraftReply,
@@ -472,6 +478,7 @@ export function Reader({
               now={now}
             />
           ))}
+          {drafts}
           {reply ?? (
             <ReplyBox
               recipient={recipient}

@@ -234,6 +234,19 @@ export interface SendResult {
 export interface DraftResult {
   /** The Provider's id for the mirrored Draft. */
   id: string;
+  /**
+   * The Provider's id for the Message holding it, where that differs from
+   * `id` (Gmail: a draft id, and a message id that changes on every update).
+   */
+  messageId?: string | null | undefined;
+}
+
+/** A draft as a Provider that names drafts apart from their messages lists it. */
+export interface ProviderDraftRef {
+  /** The draft id drafts.update, drafts.delete and drafts.send take. */
+  id: string;
+  /** The id of the Message that holds it now, as sync yields it. */
+  messageId: string;
 }
 
 /* ------------------------------ Watch ------------------------------ */
@@ -397,6 +410,13 @@ export interface Session {
   putDraft?(mime: Uint8Array, previousId: string | null): Promise<DraftResult>;
   /** Removes a mirrored Draft, after a send or a delete. Missing ids are not an error. */
   deleteDraft?(id: string): Promise<void>;
+  /**
+   * Every draft with the Message that holds it, where drafts have ids of
+   * their own (Gmail drafts.list). The import pass asks only when a Drafts
+   * Message matched no Server Draft by its own ids. Absent elsewhere: there
+   * the Message id is the draft id.
+   */
+  listDrafts?(): Promise<ProviderDraftRef[]>;
   watch(mailboxIds: string[]): Watch;
   /**
    * The Account's calendar API (slice 18): Google Calendar for Gmail, Graph
@@ -476,6 +496,14 @@ export const MIRROR_MESSAGE_ID_PREFIX = "monday-draft.";
 
 export function isMirrorMessageId(value: string | null | undefined): boolean {
   return normalizeMessageId(value)?.startsWith(MIRROR_MESSAGE_ID_PREFIX) ?? false;
+}
+
+/** The Draft id a mirror's Message-ID names, or null for any other Message-ID. */
+export function mirrorDraftIdOf(value: string | null | undefined): string | null {
+  const id = normalizeMessageId(value);
+  if (!id?.startsWith(MIRROR_MESSAGE_ID_PREFIX)) return null;
+  const draftId = id.slice(MIRROR_MESSAGE_ID_PREFIX.length).split("@")[0] ?? "";
+  return draftId.length > 0 ? draftId : null;
 }
 
 /** Splits a References header into normalized ids. */

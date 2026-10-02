@@ -57,6 +57,7 @@ describe("migrations", () => {
       "oauth_refresh_tokens",
       "pairing_codes",
       "people",
+      "provider_drafts",
       "provider_keys",
       "recommendation_events",
       "routing_backlogs",

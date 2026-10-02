@@ -23,6 +23,7 @@ import {
   accounts,
   labels,
   messages,
+  providerDrafts,
   settings,
   syncMessages,
   syncState,
@@ -56,6 +57,8 @@ export const CHANGE_STEP = "provider.change";
 /** Mailboxes the engine keeps out: duplicates of everything (Gmail All Mail), views, spam. */
 const SKIPPED_ROLES = new Set(["all", "junk", "flagged", "important", "subscribed"]);
 const ROLE_ORDER = ["inbox", "archive", "sent", "drafts", "trash"];
+/** Mailboxes a Message lives in, so one that is also there is never only a draft. */
+const PLACES = new Set(["inbox", "archive", "sent", "trash", "junk", "all"]);
 
 /** How long the watcher waits after a burst of push events before it enqueues one sync. */
 export const WATCH_DEBOUNCE_MS = 1_500;
@@ -127,12 +130,29 @@ export type EngineChangeTarget = { threadId: string } | { messageIds: string[] }
 export interface ProviderDraft {
   accountId: string;
   workspaceId: string;
+  /** The Provider's Message id. */
   providerId: string;
+  /** The Provider's draft id where it names drafts apart from messages (Gmail); else null. */
+  providerDraftId: string | null;
+  /** The Thread it answers, from In-Reply-To, References or the Provider's Thread. */
+  threadId: string | null;
+  /** The Message it answers, when In-Reply-To names one the Server holds. */
+  inReplyToMessageId: string | null;
   summary: MessageSummary;
   raw: RawMessage;
 }
 
-export type DraftImporter = (draft: ProviderDraft) => Promise<void>;
+/** What a Drafts Message is known by, for matching it to the Server Draft it mirrors. */
+export interface ProviderDraftKeys {
+  providerId: string;
+  providerDraftId: string | null;
+  rfcMessageId: string | null;
+}
+
+/** Turns a Provider draft into a Server Draft; answers the Draft's id. */
+export type DraftImporter = (draft: ProviderDraft) => Promise<string>;
+/** The Server Draft a Drafts Message mirrors, or null: a draft written elsewhere. */
+export type DraftMatcher = (workspaceId: string, keys: ProviderDraftKeys) => Promise<string | null>;
 
 /**
  * Told once per pass about each Thread whose Messages or bodies changed and
@@ -179,14 +199,20 @@ export interface SyncEngine {
    */
   pacing(accountId: string): Promise<boolean>;
   /**
-   * Registers who turns Provider drafts into Server Drafts. The engine calls it
-   * once per Draft it finds in the Drafts mailbox that `knownProviderIds` did
-   * not list; the Drafts module owns the rest (ADR 0010).
+   * Registers who turns Provider drafts into Server Drafts. A Message only in
+   * the Drafts mailbox never becomes a Thread Message; the engine asks `match`
+   * whether a Server Draft mirrors it (its Message id, its draft id, monday's
+   * own Message-ID) and calls `importer` once for each that none does. The
+   * Drafts module owns the rest (ADR 0010).
    */
-  setDraftImporter(
-    importer: DraftImporter,
-    knownProviderIds: (workspaceId: string) => Promise<Set<string>>,
-  ): void;
+  setDraftImporter(importer: DraftImporter, match: DraftMatcher): void;
+  /**
+   * Moves Messages synced before Drafts were kept apart out of their Threads:
+   * a mirror row whose mailboxes are exactly the Drafts mailbox becomes a
+   * Provider draft for the import pass, and its Message leaves the Thread.
+   * Idempotent; never touches a Message in any other mailbox. Answers how many.
+   */
+  repairDraftMessages(): Promise<number>;
   /** Registers who hears about Threads whose content changed (the Briefs module). One at a time. */
   setThreadObserver(observer: ThreadObserver | null): void;
   /** Registers who sees each body as it lands (the calendar module's Invites). One at a time. */
@@ -315,7 +341,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
   const watchers = new Map<string, Watcher>();
   let jobsRef: Jobs | null = null;
   let draftImporter: DraftImporter | null = null;
-  let knownDraftIds: ((workspaceId: string) => Promise<Set<string>>) | null = null;
+  let draftMatcher: DraftMatcher | null = null;
   let threadObserver: ThreadObserver | null = null;
   let bodyObserver: BodyObserver | null = null;
   /** Per Account, the Threads a pass touched, drained into the observer at the end of the pass. */
@@ -552,17 +578,140 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     await mailstore.setLabels(threadId, labelIds);
   }
 
+  /* ------------------------------ Provider drafts ------------------------------ */
+
+  /**
+   * A Message only the Drafts mailbox holds: monday's own mirror or a draft
+   * written in the Provider's client. Neither is a Thread Message (ADR 0010).
+   * Strict: the Drafts mailbox and nothing that is a place mail lives.
+   */
+  function draftsOnly(mailboxIds: readonly string[], map: MailboxMap): boolean {
+    if (mailboxIds.length === 0) return false;
+    let drafts = false;
+    for (const id of mailboxIds) {
+      const role = map.mailboxes.find((m) => m.id === id)?.role ?? null;
+      if (role === "drafts") drafts = true;
+      else if (role === null || PLACES.has(role)) return false;
+    }
+    return drafts;
+  }
+
+  /** The first id the Server holds a Message for, In-Reply-To first: the Message a draft answers. */
+  async function parentOf(
+    workspaceId: string,
+    ids: readonly (string | null | undefined)[],
+  ): Promise<{ messageId: string; threadId: string } | null> {
+    for (const id of new Set(ids)) {
+      if (!id) continue;
+      const row = await db.query.syncMessages.findFirst({
+        where: and(eq(syncMessages.workspaceId, workspaceId), eq(syncMessages.rfcMessageId, id)),
+      });
+      if (row) return { messageId: row.messageId, threadId: row.threadId };
+    }
+    return null;
+  }
+
+  /** Records a Drafts Message for the import pass; a repeat keeps the Draft it was matched to. */
+  async function keepProviderDraft(workspaceId: string, summary: MessageSummary): Promise<void> {
+    const parent = await parentOf(workspaceId, [summary.inReplyTo, ...summary.references]);
+    let threadId = parent?.threadId ?? null;
+    if (!threadId && summary.threadId) {
+      threadId = (await mailstore.findThread(workspaceId, summary.threadId))?.id ?? null;
+    }
+    const values = {
+      providerThreadId: summary.threadId,
+      threadId,
+      inReplyToMessageId: parent?.messageId ?? null,
+      rfcMessageId: summary.messageId,
+      references: [
+        ...new Set([summary.inReplyTo, ...summary.references].filter((r): r is string => !!r)),
+      ],
+      to: summary.to,
+      cc: summary.cc,
+      mailboxIds: summary.mailboxIds,
+      date: new Date(summary.date),
+      updatedAt: now(),
+    };
+    await db
+      .insert(providerDrafts)
+      .values({ workspaceId, providerId: summary.id, ...values })
+      .onConflictDoUpdate({
+        target: [providerDrafts.workspaceId, providerDrafts.providerId],
+        set: values,
+      });
+  }
+
+  /**
+   * A mirror row that turned out to be a draft (synced before Drafts were
+   * kept apart, or moved into the Drafts): its facts go to provider_drafts
+   * and its Message leaves the Thread, as a removal would take it.
+   */
+  async function moveToProviderDrafts(
+    workspaceId: string,
+    row: MirrorRow,
+    map: MailboxMap,
+  ): Promise<void> {
+    const message = await db.query.messages.findFirst({ where: eq(messages.id, row.messageId) });
+    const parent = await parentOf(workspaceId, row.references);
+    const values = {
+      providerThreadId: row.threadKey,
+      threadId: parent?.threadId ?? row.threadId,
+      inReplyToMessageId: parent?.messageId ?? null,
+      rfcMessageId: row.rfcMessageId,
+      references: row.references,
+      to: message?.to ?? [],
+      cc: message?.cc ?? [],
+      mailboxIds: row.mailboxIds,
+      date: row.date,
+      updatedAt: now(),
+    };
+    await db
+      .insert(providerDrafts)
+      .values({ workspaceId, providerId: row.providerId, ...values })
+      .onConflictDoUpdate({
+        target: [providerDrafts.workspaceId, providerDrafts.providerId],
+        set: values,
+      });
+    await db
+      .delete(syncMessages)
+      .where(
+        and(eq(syncMessages.workspaceId, workspaceId), eq(syncMessages.providerId, row.providerId)),
+      );
+    const [others] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(syncMessages)
+      .where(eq(syncMessages.messageId, row.messageId));
+    if ((others?.count ?? 0) > 0) {
+      await refreshThread(row.threadId, map);
+      return;
+    }
+    if (message) {
+      const result = await mailstore.deleteMessage(row.messageId);
+      if (!result.threadDeleted) await refreshThread(row.threadId, map);
+    }
+  }
+
   async function applyAdded(
     acct: AccountRow,
     summary: MessageSummary,
     map: MailboxMap,
-  ): Promise<"added" | "changed"> {
+  ): Promise<"added" | "changed" | "draft"> {
     const workspaceId = acct.workspaceId;
     const existing = await mirror(workspaceId, summary.id);
     if (existing) {
       await applyChanged(acct, summary.id, summary.flags, summary.mailboxIds, map, existing);
       return "changed";
     }
+    if (draftsOnly(summary.mailboxIds, map)) {
+      await keepProviderDraft(workspaceId, summary);
+      return "draft";
+    }
+    // Left the Drafts (sent from the Provider's own client): an ordinary Message now.
+    await db
+      .delete(providerDrafts)
+      .where(
+        and(eq(providerDrafts.workspaceId, workspaceId), eq(providerDrafts.providerId, summary.id)),
+      );
 
     const participants = participantsOf(summary, acct.address);
     const from: Person = summary.from ?? { name: "", email: "" };
@@ -700,7 +849,24 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     row?: MirrorRow | null,
   ): Promise<boolean> {
     const existing = row ?? (await mirror(acct.workspaceId, providerId));
-    if (!existing) return false;
+    if (!existing) {
+      const kept = await db
+        .update(providerDrafts)
+        .set({ mailboxIds, updatedAt: now() })
+        .where(
+          and(
+            eq(providerDrafts.workspaceId, acct.workspaceId),
+            eq(providerDrafts.providerId, providerId),
+          ),
+        )
+        .returning({ providerId: providerDrafts.providerId });
+      return kept.length > 0;
+    }
+    if (draftsOnly(mailboxIds, map)) {
+      // Moved into the Drafts: it leaves its Thread and waits for the import pass.
+      await moveToProviderDrafts(acct.workspaceId, { ...existing, mailboxIds }, map);
+      return true;
+    }
     await db
       .update(syncMessages)
       .set({ seen: flags.seen, flagged: flags.flagged, mailboxIds, stale: false, updatedAt: now() })
@@ -720,7 +886,18 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
     map: MailboxMap,
   ): Promise<boolean> {
     const existing = await mirror(acct.workspaceId, providerId);
-    if (!existing) return false;
+    if (!existing) {
+      const dropped = await db
+        .delete(providerDrafts)
+        .where(
+          and(
+            eq(providerDrafts.workspaceId, acct.workspaceId),
+            eq(providerDrafts.providerId, providerId),
+          ),
+        )
+        .returning({ providerId: providerDrafts.providerId });
+      return dropped.length > 0;
+    }
     await db
       .delete(syncMessages)
       .where(
@@ -873,7 +1050,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       case "added": {
         const outcome = await applyAdded(acct, event.message, map);
         if (outcome === "added") report.added += 1;
-        else report.changed += 1;
+        else if (outcome === "changed") report.changed += 1;
         return;
       }
       case "changed":
@@ -1015,66 +1192,84 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
 
   /**
    * Drafts the Provider holds that no Server Draft mirrors become Server
-   * Drafts (ADR 0010: Drafts are Server-owned). Runs after the header pass so
-   * the mirror rows are current; bodies are fetched here because the Drafts
-   * mailbox is small and a Draft is useless without its text.
+   * Drafts (ADR 0010: Drafts are Server-owned). Each Drafts Message the
+   * header pass kept apart is matched first, by its own ids and monday's
+   * Message-ID, then by the Provider's draft ids where it names drafts
+   * apart (Gmail drafts.list, asked once and only when something is left);
+   * what matches nothing is imported on the Thread it answers. Bodies are
+   * fetched here only for imports: the Drafts mailbox is small and a Draft is
+   * useless without its text.
    */
-  async function importDrafts(acct: AccountRow, s: Session, map: MailboxMap): Promise<number> {
-    if (!draftImporter || !knownDraftIds) return 0;
-    const draftsBox = map.mailboxes.find((m) => m.role === "drafts");
-    if (!draftsBox) return 0;
-    const known = await knownDraftIds(acct.workspaceId);
+  async function importDrafts(acct: AccountRow, s: Session): Promise<number> {
+    if (!draftImporter || !draftMatcher) return 0;
     const rows = await db
-      .select({
-        providerId: syncMessages.providerId,
-        messageId: syncMessages.messageId,
-        rfcMessageId: syncMessages.rfcMessageId,
-      })
-      .from(syncMessages)
-      .where(
-        and(
-          eq(syncMessages.workspaceId, acct.workspaceId),
-          eq(syncMessages.stale, false),
-          sql`${draftsBox.id} = any(${syncMessages.mailboxIds})`,
-        ),
-      )
-      .orderBy(desc(syncMessages.date))
+      .select()
+      .from(providerDrafts)
+      .where(and(eq(providerDrafts.workspaceId, acct.workspaceId), isNull(providerDrafts.draftId)))
+      .orderBy(desc(providerDrafts.date))
       .limit(200);
+    if (rows.length === 0) return 0;
+    let listed: Map<string, string> | null = null;
     let imported = 0;
     for (const row of rows) {
-      if (known.has(row.providerId)) continue;
-      // monday's own mirror, under a Provider id the Draft row does not hold (a Gmail draft id).
-      if (isMirrorMessageId(row.rfcMessageId)) continue;
-      const message = await db.query.messages.findFirst({ where: eq(messages.id, row.messageId) });
-      if (!message) continue;
-      const raw = await s.fetchMessage(row.providerId);
-      const summary: MessageSummary = {
-        id: row.providerId,
-        threadId: null,
-        mailboxIds: [draftsBox.id],
-        flags: { seen: true, flagged: false, answered: false, draft: true, keywords: [] },
-        from: message.from,
-        to: message.to,
-        cc: message.cc,
-        subject: raw.headers.subject ?? "",
-        date: message.date.toISOString(),
-        receivedAt: message.date.toISOString(),
-        messageId: null,
-        inReplyTo: null,
-        references: [],
-        headers: message.headers,
-        size: 0,
-        hasAttachments: raw.attachments.length > 0,
-        preview: null,
-      };
-      await draftImporter({
-        accountId: acct.id,
-        workspaceId: acct.workspaceId,
+      const keys: ProviderDraftKeys = {
         providerId: row.providerId,
-        summary,
-        raw,
-      });
-      imported += 1;
+        providerDraftId: null,
+        rfcMessageId: row.rfcMessageId,
+      };
+      let draftId = await draftMatcher(acct.workspaceId, keys);
+      if (!draftId && s.listDrafts) {
+        listed ??= new Map((await s.listDrafts()).map((d) => [d.messageId, d.id]));
+        const providerDraftId = listed.get(row.providerId) ?? null;
+        if (providerDraftId) {
+          keys.providerDraftId = providerDraftId;
+          draftId = await draftMatcher(acct.workspaceId, keys);
+        }
+      }
+      if (!draftId) {
+        // monday's own mirror whose Draft row is gone: never a new Draft.
+        if (isMirrorMessageId(row.rfcMessageId)) continue;
+        const raw = await s.fetchMessage(row.providerId);
+        const summary: MessageSummary = {
+          id: row.providerId,
+          threadId: row.providerThreadId,
+          mailboxIds: row.mailboxIds,
+          flags: { seen: true, flagged: false, answered: false, draft: true, keywords: [] },
+          from: { name: "", email: acct.address },
+          to: row.to,
+          cc: row.cc,
+          subject: raw.headers.subject ?? "",
+          date: row.date.toISOString(),
+          receivedAt: row.date.toISOString(),
+          messageId: row.rfcMessageId,
+          inReplyTo: row.references[0] ?? null,
+          references: row.references,
+          headers: {},
+          size: 0,
+          hasAttachments: raw.attachments.length > 0,
+          preview: null,
+        };
+        draftId = await draftImporter({
+          accountId: acct.id,
+          workspaceId: acct.workspaceId,
+          providerId: row.providerId,
+          providerDraftId: keys.providerDraftId,
+          threadId: row.threadId,
+          inReplyToMessageId: row.inReplyToMessageId,
+          summary,
+          raw,
+        });
+        imported += 1;
+      }
+      await db
+        .update(providerDrafts)
+        .set({ draftId, updatedAt: now() })
+        .where(
+          and(
+            eq(providerDrafts.workspaceId, acct.workspaceId),
+            eq(providerDrafts.providerId, row.providerId),
+          ),
+        );
     }
     return imported;
   }
@@ -1258,7 +1453,7 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
           const bodies = await fetchBodies(acct, s, settingsNow.bodyWindowDays, deadline, report);
           if (bodies.more) report.more = true;
         }
-        if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s, map);
+        if (!opts.headersOnly && !outOfTime()) await importDrafts(acct, s);
         await notifyTouched(acct);
         if (!report.more) {
           const fresh = await loadState(acct);
@@ -1326,9 +1521,35 @@ export function createSyncEngine(options: SyncEngineOptions): SyncEngine {
       arrivalHook = hook;
     },
 
-    setDraftImporter(importer, known) {
+    setDraftImporter(importer, match) {
       draftImporter = importer;
-      knownDraftIds = known;
+      draftMatcher = match;
+    },
+
+    async repairDraftMessages() {
+      const boxes = await db
+        .select({ workspaceId: labels.workspaceId, providerId: labels.providerId })
+        .from(labels)
+        .where(eq(labels.role, "drafts"));
+      let moved = 0;
+      for (const box of boxes) {
+        const rows = await db
+          .select()
+          .from(syncMessages)
+          .where(
+            and(
+              eq(syncMessages.workspaceId, box.workspaceId),
+              sql`${syncMessages.mailboxIds} = array[${box.providerId}]::text[]`,
+            ),
+          );
+        if (rows.length === 0) continue;
+        const map = await mailboxMapFromLabels(box.workspaceId);
+        for (const row of rows) {
+          await moveToProviderDrafts(box.workspaceId, row, map);
+          moved += 1;
+        }
+      }
+      return moved;
     },
 
     setThreadObserver(observer) {

@@ -7,7 +7,7 @@
 
 import type { DraftAttachment, DraftContent, Person } from "@monday/shared";
 import { Btn, Icon, ReplyBox } from "@monday/ui";
-import { MinusIcon, TrashIcon } from "@phosphor-icons/react";
+import { MinusIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTemplateCompose } from "../../templates/compose.tsx";
@@ -43,6 +43,8 @@ export interface ReplyComposeProps {
   onDraft?: (() => void) | undefined;
   onSent: (sent: { sendId: string; runAt: string; draftId: string }) => void;
   onError: (message: string) => void;
+  /** Discard without a compose controller: the Draft is gone, the parent closes the reply. */
+  onDiscarded?: (() => void) | undefined;
 }
 
 export function ReplyCompose({
@@ -60,6 +62,7 @@ export function ReplyCompose({
   onDraft,
   onSent,
   onError,
+  onDiscarded,
 }: ReplyComposeProps) {
   const link = linkOf(composer);
   const editor = useDraftEditor({ composer, draftId, initial, idleMs });
@@ -203,42 +206,43 @@ export function ReplyCompose({
               </Btn>
             ) : null}
             {link ? (
-              <>
-                <Btn
-                  icon
-                  sm
-                  title={strings.overlay.minimize}
-                  onClick={() =>
-                    link.minimize(draftId, {
-                      content: state.current.content,
-                      dirty: editor.saving,
-                    })
-                  }
-                >
-                  <Icon icon={MinusIcon} />
-                </Btn>
-                <Btn
-                  icon
-                  sm
-                  title={strings.overlay.discard}
-                  onClick={() => {
-                    editor.stop();
-                    link.discard(draftId, state.current.content);
-                  }}
-                >
-                  <Icon icon={TrashIcon} />
-                </Btn>
-              </>
+              <Btn
+                icon
+                sm
+                title={strings.overlay.minimize}
+                onClick={() =>
+                  link.minimize(draftId, {
+                    content: state.current.content,
+                    dirty: editor.saving,
+                  })
+                }
+              >
+                <Icon icon={MinusIcon} />
+              </Btn>
             ) : null}
+            <Btn
+              sm
+              className="reply-discard"
+              title={strings.overlay.discard}
+              onClick={() => {
+                editor.stop();
+                // The controller offers Undo; a reply rendered on its own just throws the Draft away.
+                if (link) link.discard(draftId, state.current.content);
+                else void editor.discard().then(onDiscarded);
+              }}
+            >
+              <Icon icon={TrashIcon} /> {strings.overlay.discard}
+            </Btn>
           </>
         }
         editor={
           <>
-            {author ? (
-              <div className="c-byline" data-author={author}>
-                {author === "agent" ? strings.draftedByAgent : strings.draftedByYou}
-              </div>
-            ) : null}
+            <div className="c-byline" data-author={author ?? "user"}>
+              <span className="draft-badge">
+                <Icon icon={NotePencilIcon} /> {strings.draftBadge}
+              </span>
+              <span>{author === "agent" ? strings.draftedByAgent : strings.draftedByYou}</span>
+            </div>
             <div className="reply-meta">
               <span>{strings.overlay.to}</span>
               <Recipients

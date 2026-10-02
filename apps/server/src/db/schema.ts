@@ -690,6 +690,13 @@ export const drafts = pgTable(
     attachments: jsonb("attachments").$type<DraftAttachment[]>().notNull().default([]),
     /** The Provider's id for the mirrored copy; replaced on every mirror. */
     providerDraftId: text("provider_draft_id"),
+    /**
+     * The Provider's id for the Message that holds the mirrored copy, where it
+     * names drafts apart from their messages (Gmail mints a new one on every
+     * update). Kept after a delete or a send, so a copy the Provider still
+     * holds is matched, never imported back as a second Draft.
+     */
+    providerMessageId: text("provider_message_id"),
     /** The content hash the last mirror wrote, so an unchanged Draft is not re-appended. */
     mirroredHash: text("mirrored_hash"),
     status: text("status").$type<DraftStatus>().notNull().default("open"),
@@ -701,6 +708,44 @@ export const drafts = pgTable(
   (t) => [
     index("drafts_workspace_idx").on(t.workspaceId, t.deleted, t.updatedAt),
     index("drafts_thread_idx").on(t.threadId),
+  ],
+);
+
+/**
+ * A Message the Provider holds only in its Drafts mailbox (Gmail's DRAFT
+ * label, an IMAP Drafts folder, a Graph isDraft item). It never becomes a
+ * Thread Message (ADR 0010: Drafts are Server-owned); the engine keeps the
+ * header facts here so the import pass can match it to the Draft it mirrors,
+ * or turn it into a Server Draft on the Thread it answers.
+ */
+export const providerDrafts = pgTable(
+  "provider_drafts",
+  {
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** The Provider's Message id (Gmail's message id, not its draft id). */
+    providerId: text("provider_id").notNull(),
+    /** The Provider's Thread id, where it has Threads. */
+    providerThreadId: text("provider_thread_id"),
+    /** The Thread the draft answers, from In-Reply-To, References or the Provider's Thread. */
+    threadId: text("thread_id").references(() => threads.id, { onDelete: "set null" }),
+    inReplyToMessageId: text("in_reply_to_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    rfcMessageId: text("rfc_message_id"),
+    references: text("references").array().notNull().default(sql`'{}'::text[]`),
+    to: jsonb("to").$type<Person[]>().notNull().default([]),
+    cc: jsonb("cc").$type<Person[]>().notNull().default([]),
+    mailboxIds: text("mailbox_ids").array().notNull().default(sql`'{}'::text[]`),
+    date: timestamp("date", { withTimezone: true, mode: "date" }).notNull(),
+    /** The Server Draft it mirrors or became; null until the import pass has seen it. */
+    draftId: text("draft_id").references(() => drafts.id, { onDelete: "set null" }),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.providerId] }),
+    index("provider_drafts_draft_idx").on(t.workspaceId, t.draftId),
   ],
 );
 

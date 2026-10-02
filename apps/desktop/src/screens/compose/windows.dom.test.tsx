@@ -447,7 +447,131 @@ describe("Drafts you can find", () => {
     expect(document.querySelector(".reply .tiptap")?.textContent).toContain(
       "Thursday at 15:00 works",
     );
-    expect(document.querySelector(".reply .c-byline")?.textContent).toBe("Drafted by monday");
+    const byline = document.querySelector(".reply .c-byline");
+    expect(byline?.querySelector(".draft-badge")?.textContent?.trim()).toBe("Draft");
+    expect(byline?.textContent).toContain("Drafted by monday");
+  });
+
+  const card = () => document.querySelector<HTMLElement>(".reader .draft-card");
+  const cardButton = (label: string) =>
+    [...(card()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (b) => b.textContent?.trim() === label,
+    );
+
+  test("a Draft not open in the reply shows at the end of its Thread as a draft card", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    // Open in the reply box: no card twice.
+    expect(card()).toBeNull();
+    await press("Escape");
+    await until(() => card() !== null);
+    const c = card();
+    expect(c?.dataset.draft).toBe("dr-agent");
+    expect(c?.querySelector(".draft-badge")?.textContent?.trim()).toBe("Draft");
+    expect(c?.querySelector(".draft-by")?.textContent).toBe("Drafted by monday");
+    expect(c?.querySelector(".draft-to")?.textContent).toBe("To Aoife Brennan");
+    expect(c?.querySelector(".draft-text")?.textContent).toContain("Thursday at 15:00 works");
+    // After the last Message, not one of them.
+    expect(c?.closest(".msg")).toBeNull();
+    const inner = document.querySelector(".reader-inner");
+    const last = [...(inner?.querySelectorAll("[data-message]") ?? [])].at(-1);
+    expect(
+      last
+        ? (last.compareDocumentPosition(c as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        : true,
+    ).toBe(true);
+  });
+
+  test("a Draft the Agent writes while its Thread is open shows there at once", async () => {
+    const composer = fixtureComposer({ now: () => NOW });
+    await mount({ composer, initialOpen: "e1" });
+    expect(card()).toBeNull();
+    await act(async () => {
+      const {
+        id: _id,
+        workspaceId: _w,
+        attachmentBlobIds: _b,
+        status: _s,
+        updatedAt: _u,
+        updatedBy: _y,
+        ...content
+      } = agentReply;
+      (composer as ReturnType<typeof fixtureComposer>).agentSave("dr-late", content);
+    });
+    await until(() => card() !== null);
+    expect(card()?.dataset.draft).toBe("dr-late");
+  });
+
+  test("Edit on the draft card opens it in the inline reply", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    await press("Escape");
+    await until(() => card() !== null);
+    await click(cardButton("Edit"));
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    expect(document.querySelector(".reply .tiptap")?.textContent).toContain("Thursday");
+    expect(card()).toBeNull();
+  });
+
+  test("Discard on the draft card throws the Draft away, and Undo brings it back", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    await press("Escape");
+    await until(() => card() !== null);
+    await click(cardButton("Discard"));
+    await until(() => card() === null && document.querySelector("[data-discard-undo]") !== null);
+    expect(composer.drafts()).toHaveLength(0);
+    await click(document.querySelector("[data-discard-undo] .btn"));
+    await until(() => composer.drafts().length === 1);
+    expect(composer.drafts()[0]?.bodyText).toContain("Thursday");
+  });
+
+  test("Send on the draft card sends it with the undo window", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    await press("Escape");
+    await until(() => card() !== null);
+    await click(cardButton("Send"));
+    await until(() => composer.sends().length === 1);
+    expect(composer.sends()[0]).toMatchObject({ draftId: "dr-agent", status: "scheduled" });
+    await until(() => card() === null);
+  });
+
+  test("the inline reply over a Draft has a visible Discard", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    const discard = document.querySelector<HTMLButtonElement>(".reply .reply-discard");
+    expect(discard?.textContent?.trim()).toBe("Discard");
+    await click(discard);
+    await until(() => document.querySelector(".reply .tiptap") === null);
+    expect(composer.drafts()).toHaveLength(0);
+    expect(document.querySelector("[data-discard-undo]")).not.toBeNull();
+  });
+
+  test("a Thread with an open Draft is marked in the list, by Setting", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer });
+    await until(() => document.querySelector('.row[data-thread="e1"]') !== null);
+    expect(document.querySelector('.row[data-thread="e1"] .draft-mark')?.textContent).toBe("Draft");
+    expect(document.querySelectorAll(".row .draft-mark")).toHaveLength(1);
+    await unmount();
+    await mount({ composer }, { "inbox.draft_marker": false });
+    await until(() => document.querySelector('.row[data-thread="e1"]') !== null);
+    expect(document.querySelector(".row .draft-mark")).toBeNull();
+  });
+
+  test("reader.show_drafts off: no draft card", async () => {
+    const composer = fixtureComposer({ now: () => NOW, drafts: [agentReply] });
+    await mount({ composer, initialOpen: "e1" }, { "reader.show_drafts": false });
+    await until(() => document.querySelector(".reply .tiptap") !== null);
+    await press("Escape");
+    await until(() => document.querySelector(".reply .tiptap") === null);
+    expect(card()).toBeNull();
   });
 
   test("R on that Thread continues the saved reply instead of starting a second one", async () => {

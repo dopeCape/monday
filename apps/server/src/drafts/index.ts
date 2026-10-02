@@ -25,7 +25,7 @@ import type {
   VoiceProfile,
 } from "@monday/shared";
 import { settingsSchema } from "@monday/shared";
-import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { ALWAYS_ON_NEED } from "../capabilities.ts";
 import { LockedError } from "../crypto/keys.ts";
 import type { Db, Tx } from "../db/client.ts";
@@ -34,6 +34,7 @@ import {
   activity,
   drafts,
   messages,
+  providerDrafts,
   scheduledSends,
   syncMessages,
   voiceProfiles,
@@ -43,9 +44,10 @@ import type { Jobs } from "../jobs/index.ts";
 import { type Mailstore, NotFoundError } from "../mailstore/index.ts";
 import { recordSend as recordPeopleSend } from "../people/index.ts";
 import { composeMime, textFromHtml } from "../providers/mime.ts";
-import type { ProviderDraft, SyncEngine } from "../providers/sync.ts";
+import type { ProviderDraft, ProviderDraftKeys, SyncEngine } from "../providers/sync.ts";
 import {
   MIRROR_MESSAGE_ID_PREFIX,
+  mirrorDraftIdOf,
   normalizeMessageId,
   ProviderError,
   parseReferences,
@@ -129,10 +131,22 @@ export interface Drafts {
     options?: { lastAttempt?: boolean },
   ): Promise<ScheduledSend>;
   registerSteps(jobs: Jobs): void;
-  /** Turns a Provider draft the engine found into a Server Draft. */
+  /** Turns a Provider draft the engine found into a Server Draft, on the Thread it answers. */
   importProviderDraft(draft: ProviderDraft): Promise<Draft>;
-  /** Provider ids the Workspace's Drafts already mirror, for the engine's import pass. */
-  knownProviderDraftIds(workspaceId: string): Promise<Set<string>>;
+  /**
+   * The Draft a Provider's Drafts Message mirrors: by the Message id or the
+   * draft id the mirror stored, or by monday's own Message-ID. Deleted and
+   * sent Drafts count, so a copy the Provider still holds never comes back as
+   * a new Draft. Remembers the Message id on the match. Null: written elsewhere.
+   */
+  matchProviderDraft(workspaceId: string, keys: ProviderDraftKeys): Promise<string | null>;
+  /**
+   * Drops Drafts an older import pass made from monday's own mirrors (a
+   * Provider that renamed the mirror's Message-ID, Gmail): an untouched
+   * import whose Provider Message sits on a Thread where a mirrored Draft
+   * with the same subject and recipients lives. Idempotent. Answers how many.
+   */
+  mergeImportedDuplicates(): Promise<number>;
   /** The Voice profile in the clear. Throws LockedError once the row is sealed. */
   getVoice(workspaceId: string): Promise<VoiceProfile>;
   /** Seals the merged profile under the "voice" kind. Throws LockedError. */
@@ -688,7 +702,11 @@ export function createDrafts(options: DraftsOptions): Drafts {
       }
       await db
         .update(drafts)
-        .set({ providerDraftId: result.id, mirroredHash: hash })
+        .set({
+          providerDraftId: result.id,
+          providerMessageId: result.messageId ?? result.id,
+          mirroredHash: hash,
+        })
         .where(eq(drafts.id, draftId));
       return "mirrored";
     },
@@ -824,14 +842,13 @@ export function createDrafts(options: DraftsOptions): Drafts {
 
     async importProviderDraft(found) {
       const id = crypto.randomUUID();
-      const to = found.summary.to;
-      const cc = found.summary.cc;
       const content: DraftContent = {
-        threadId: null,
-        kind: "new",
-        inReplyToMessageId: null,
-        to,
-        cc,
+        threadId: found.threadId,
+        // A draft that answers a Thread the Server holds is a reply on it.
+        kind: found.threadId ? "reply" : "new",
+        inReplyToMessageId: found.threadId ? found.inReplyToMessageId : null,
+        to: found.summary.to,
+        cc: found.summary.cc,
         bcc: [],
         subject: found.summary.subject,
         bodyText: found.raw.text,
@@ -849,17 +866,118 @@ export function createDrafts(options: DraftsOptions): Drafts {
       const hash = await contentHash(saved.draft);
       await db
         .update(drafts)
-        .set({ providerDraftId: found.providerId, mirroredHash: hash })
+        .set({
+          providerDraftId: found.providerDraftId ?? found.providerId,
+          providerMessageId: found.providerId,
+          mirroredHash: hash,
+        })
         .where(eq(drafts.id, id));
       return saved.draft;
     },
 
-    async knownProviderDraftIds(workspaceId) {
-      const rows = await db
-        .select({ providerDraftId: drafts.providerDraftId })
+    async matchProviderDraft(workspaceId, keys) {
+      const ids = [
+        eq(drafts.providerMessageId, keys.providerId),
+        eq(drafts.providerDraftId, keys.providerId),
+      ];
+      if (keys.providerDraftId) ids.push(eq(drafts.providerDraftId, keys.providerDraftId));
+      let row = await db.query.drafts.findFirst({
+        where: and(eq(drafts.workspaceId, workspaceId), or(...ids)),
+        orderBy: desc(drafts.updatedAt),
+      });
+      const own = mirrorDraftIdOf(keys.rfcMessageId);
+      if (!row && own) {
+        row = await db.query.drafts.findFirst({
+          where: and(eq(drafts.workspaceId, workspaceId), eq(drafts.id, own)),
+        });
+      }
+      if (!row) return null;
+      if (row.providerMessageId !== keys.providerId) {
+        await db
+          .update(drafts)
+          .set({ providerMessageId: keys.providerId })
+          .where(eq(drafts.id, row.id));
+      }
+      return row.id;
+    },
+
+    async mergeImportedDuplicates() {
+      // Untouched imports: written by the import pass and never saved since.
+      const imports = await db
+        .select()
         .from(drafts)
-        .where(eq(drafts.workspaceId, workspaceId));
-      return new Set(rows.map((r) => r.providerDraftId).filter((v): v is string => v !== null));
+        .where(
+          and(
+            eq(drafts.updatedBy, "provider"),
+            eq(drafts.deleted, false),
+            eq(drafts.status, "open"),
+            isNotNull(drafts.providerDraftId),
+          ),
+        );
+      let merged = 0;
+      for (const dup of imports) {
+        const held = await db.query.providerDrafts.findFirst({
+          where: and(
+            eq(providerDrafts.workspaceId, dup.workspaceId),
+            eq(providerDrafts.providerId, dup.providerDraftId ?? ""),
+          ),
+        });
+        if (!held) continue;
+        let original: DraftRow | undefined;
+        const own = mirrorDraftIdOf(held.rfcMessageId);
+        if (own && own !== dup.id) {
+          original = await db.query.drafts.findFirst({
+            where: and(eq(drafts.workspaceId, dup.workspaceId), eq(drafts.id, own)),
+          });
+        } else if (held.threadId) {
+          const candidates = await db
+            .select()
+            .from(drafts)
+            .where(
+              and(
+                eq(drafts.workspaceId, dup.workspaceId),
+                eq(drafts.threadId, held.threadId),
+                isNotNull(drafts.mirroredHash),
+                sql`${drafts.id} <> ${dup.id}`,
+                sql`${drafts.updatedBy} <> 'provider'`,
+              ),
+            );
+          const dupDraft = await decrypt(dup);
+          for (const c of candidates) {
+            if (sameDraft(await decrypt(c), dupDraft)) {
+              original = c;
+              break;
+            }
+          }
+        }
+        if (!original) continue;
+        const at = now();
+        await db.transaction(async (tx) => {
+          // The Provider's copy is the original's mirror: dropping the import must not delete it.
+          const rows = await tx
+            .update(drafts)
+            .set({ deleted: true, providerDraftId: null, updatedAt: at, updatedBy: "server" })
+            .where(eq(drafts.id, dup.id))
+            .returning();
+          const stored = rows[0];
+          if (stored) await recordDraft(tx, stored);
+          await tx
+            .update(drafts)
+            .set({ providerMessageId: held.providerId })
+            .where(eq(drafts.id, original.id));
+          await tx
+            .update(providerDrafts)
+            .set({ draftId: original.id, updatedAt: at })
+            .where(
+              and(
+                eq(providerDrafts.workspaceId, held.workspaceId),
+                eq(providerDrafts.providerId, held.providerId),
+              ),
+            );
+        });
+        merged += 1;
+      }
+      return merged;
     },
 
     async getVoice(workspaceId) {
@@ -924,6 +1042,17 @@ export function createDrafts(options: DraftsOptions): Drafts {
   return api;
 }
 
+/** Two Drafts say the same thing to the same people: one is the other's mirror coming back. */
+function sameDraft(a: Draft, b: Draft): boolean {
+  const emails = (d: Draft) =>
+    [...d.to, ...d.cc]
+      .map((p) => p.email.trim().toLowerCase())
+      .sort()
+      .join(",");
+  const subject = (d: Draft) => d.subject.trim().toLowerCase();
+  return subject(a) === subject(b) && emails(a) === emails(b);
+}
+
 /** Plain text to the simplest HTML alternative when a Draft has no HTML of its own. */
 export function textToSimpleHtml(text: string): string {
   const escapeText = (s: string) =>
@@ -966,6 +1095,23 @@ export async function backfillDraftMirrors(
     );
   }
   return rows.length;
+}
+
+/**
+ * The one-time repair for mail synced before Drafts were kept apart: Thread
+ * Messages that exist only in the Provider's Drafts leave their Threads, then
+ * the Drafts an import made from monday's own mirrors are dropped in favour of
+ * the Draft they copy. Both halves are idempotent and leave sent mail alone.
+ * The merge reads subjects under the envelope, so it waits for the key: run it
+ * at boot when unlocked and again on unlock.
+ */
+export async function repairDraftMirrors(
+  sync: SyncEngine,
+  drafts: Drafts,
+): Promise<{ messages: number; drafts: number }> {
+  const messages = await sync.repairDraftMessages();
+  const merged = await drafts.mergeImportedDuplicates();
+  return { messages, drafts: merged };
 }
 
 /** For tests and diagnostics: the Draft rows of a Workspace. */

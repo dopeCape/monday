@@ -21,7 +21,12 @@ import { createAuth } from "../src/auth/index.ts";
 import { claimableNeeds } from "../src/capabilities.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
-import { activity, jobs as jobsTable, people } from "../src/db/schema.ts";
+import {
+  activity,
+  jobs as jobsTable,
+  messages as messagesTable,
+  people,
+} from "../src/db/schema.ts";
 import {
   createDrafts,
   DELIVER_STEP,
@@ -199,8 +204,8 @@ describe("drafts and scheduled sends", () => {
     });
     drafts.registerSteps(jobs);
     engine.setDraftImporter(
-      (found) => drafts.importProviderDraft(found).then(() => {}),
-      (ws) => drafts.knownProviderDraftIds(ws),
+      (found) => drafts.importProviderDraft(found).then((d) => d.id),
+      (ws, keys) => drafts.matchProviderDraft(ws, keys),
     );
     const auth = createAuth({ db: db.handle.db, sidecarToken: SIDECAR_TOKEN });
     app = createApp({
@@ -736,7 +741,19 @@ describe("drafts and scheduled sends", () => {
     expect(imported?.bodyText).toBe("Started on my phone.");
     expect(imported?.to[0]?.email).toBe("mateus@ferreira.design");
     expect(imported?.updatedBy).toBe("provider");
-    expect(await drafts.knownProviderDraftIds(workspaceId)).toContain(providerId);
+    // A Message only in the Drafts folder is never a Thread Message.
+    const asMessage = await db.handle.db
+      .select()
+      .from(messagesTable)
+      .where(eq(messagesTable.providerMessageId, providerId));
+    expect(asMessage).toHaveLength(0);
+    expect(
+      await drafts.matchProviderDraft(workspaceId, {
+        providerId,
+        providerDraftId: null,
+        rfcMessageId: null,
+      }),
+    ).toBe(imported?.id ?? "missing");
     const before = fake.calls.putDraft;
     expect(await drafts.mirror(imported?.id ?? "")).toBe("unchanged");
     expect(fake.calls.putDraft).toBe(before);

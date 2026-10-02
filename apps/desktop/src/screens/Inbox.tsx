@@ -29,6 +29,7 @@ import {
 import {
   Btn,
   ColHead,
+  DraftCard,
   Kbd,
   MessageRow,
   personName,
@@ -1110,6 +1111,33 @@ function InboxBody({
 
   const s = settings;
   const t = useCallback(<K extends keyof Settings>(k: K) => String(settings[k]), [settings]);
+
+  /* ------------------------------ Drafts on Threads ------------------------------ */
+
+  // The Cache's open Drafts: a Thread with one is marked in the list, and its
+  // reader ends with each one as a draft card (the one in the reply box aside).
+  const allDrafts = useSyncExternalStore(composer.subscribe, composer.drafts, composer.drafts);
+  const openThreadDrafts = useMemo(
+    () => allDrafts.filter((d) => d.status === "open" && d.threadId !== null),
+    [allDrafts],
+  );
+  const draftThreads = useMemo(
+    () =>
+      s["inbox.draft_marker"]
+        ? new Set(openThreadDrafts.map((d) => d.threadId as string))
+        : new Set<string>(),
+    [openThreadDrafts, s],
+  );
+  const replyDraftId = compose.reply?.draftId ?? null;
+  const shownDrafts = useMemo(
+    () =>
+      shownThreadId && s["reader.show_drafts"]
+        ? openThreadDrafts
+            .filter((d) => d.threadId === shownThreadId && d.id !== replyDraftId)
+            .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+        : [],
+    [openThreadDrafts, shownThreadId, replyDraftId, s],
+  );
 
   /* ------------------------------ Actions ------------------------------ */
 
@@ -2690,6 +2718,7 @@ function InboxBody({
       <MessageRow
         key={th.id}
         thread={th}
+        draft={draftThreads.has(th.id) ? t("strings.drafts.badge") : undefined}
         tags={tagsOf(th)}
         selected={th.id === focus}
         className={
@@ -3237,6 +3266,34 @@ function InboxBody({
           onOpenAttachment={(id) => void openAttachment(id)}
           onOpenLink={(href) => void openExternal(href)}
           attachmentSrc={attachmentSrc}
+          drafts={shownDrafts.map((d) => (
+            <DraftCard
+              key={d.id}
+              draftId={d.id}
+              recipients={[...d.to, ...d.cc]}
+              bodyText={d.bodyText}
+              updatedAt={d.updatedAt}
+              author={d.updatedBy === "agent" ? "agent" : "user"}
+              now={now}
+              strings={{
+                badge: t("strings.drafts.badge"),
+                byline:
+                  d.updatedBy === "agent"
+                    ? t("strings.compose.drafted_by_agent")
+                    : t("strings.compose.drafted_by_you"),
+                to: t("strings.drafts.to"),
+                noRecipient: t("strings.drafts.no_recipient"),
+                saved: t("strings.drafts.saved"),
+                emptyBody: t("strings.drafts.empty_body"),
+                edit: t("strings.drafts.edit"),
+                send: t("strings.compose.send"),
+                discard: t("strings.compose.discard"),
+              }}
+              onEdit={(id) => void compose.openDraft(id, shownThread.id)}
+              onSend={(id) => void compose.sendDraft(id)}
+              onDiscard={compose.discardDraft}
+            />
+          ))}
           reply={
             compose.reply && compose.reply.threadId === shownThread.id ? (
               <ReplyCompose

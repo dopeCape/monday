@@ -261,8 +261,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       if (options.jobs) created.registerSteps(options.jobs);
       if (options.sync) {
         options.sync.setDraftImporter(
-          (found) => created.importProviderDraft(found).then(() => {}),
-          (workspaceId) => created.knownProviderDraftIds(workspaceId),
+          (found) => created.importProviderDraft(found).then((d) => d.id),
+          (workspaceId, keys) => created.matchProviderDraft(workspaceId, keys),
         );
       }
       return created;

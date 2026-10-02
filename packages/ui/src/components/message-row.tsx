@@ -45,6 +45,8 @@ export interface MessageRowProps {
   action?:
     | { label: string; title?: string | undefined; always?: boolean | undefined; onRun: () => void }
     | undefined;
+  /** The Thread has an open Draft: the marker's word ("Draft") beside the sender. */
+  draft?: string | undefined;
 }
 
 /** Text with the matched words in <mark>. */
@@ -75,6 +77,7 @@ export function MessageRow({
   checked,
   checkLabel,
   action,
+  draft,
 }: MessageRowProps) {
   const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
@@ -121,6 +124,7 @@ export function MessageRow({
       <span className="from">
         {marked(thread.messageCount > 1 ? `${from} ` : from, highlight)}
         {thread.messageCount > 1 ? <span className="cnt">{thread.messageCount}</span> : null}
+        {draft ? <span className="draft-mark">{draft}</span> : null}
       </span>
       <span className="subj">
         <b>{marked(thread.subject, highlight)}</b>

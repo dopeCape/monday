@@ -11895,3 +11895,114 @@ button.appr-link:focus-visible {
   font-size: var(--fs-xs);
   color: var(--accent);
 }
+
+/* A Draft at the end of its Thread: dashed and tinted, never a Message. */
+.draft-card {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--accent-ring);
+  border-radius: var(--r-lg);
+  background: var(--accent-soft);
+}
+.draft-card-head,
+.draft-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.draft-card-head .sp,
+.draft-card-actions .sp {
+  flex: 1;
+}
+.draft-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--r-xs);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.draft-by,
+.draft-when,
+.draft-to {
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+}
+.draft-when {
+  font-variant-numeric: tabular-nums;
+}
+.draft-to {
+  margin-top: 8px;
+}
+.draft-to.none,
+.draft-text.none {
+  color: var(--fg-faint);
+}
+.draft-text {
+  display: block;
+  width: 100%;
+  margin: 6px 0 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  cursor: text;
+}
+.draft-card .draft-discard:hover {
+  color: var(--danger);
+}
+/* The inline reply over a Draft says it is one. */
+.c-byline .draft-badge + span {
+  flex: 1;
+}
+/* A Thread in the list with an open Draft. */
+.row .draft-mark {
+  margin-left: 6px;
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+/* The Drafts list's multi-select. */
+.draft-row .draft-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: var(--pad);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--accent-fg);
+  flex: none;
+}
+.draft-row .draft-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.drafts-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px var(--pad);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+.drafts-bar .sp {
+  flex: 1;
+}
+.draft-row .draft-check + .draft-open {
+  padding-left: 4px;
+}
+/* The selection checkbox stays visible, unlike the row's hover delete. */
+.draft-row .draft-check {
+  opacity: 1;
+}
