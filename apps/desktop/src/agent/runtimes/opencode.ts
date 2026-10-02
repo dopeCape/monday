@@ -20,7 +20,7 @@ import type {
   SessionStartContext,
   TurnOutcome,
 } from "@monday/shared";
-import { withHandover } from "@monday/shared";
+import { openLines, withHandover } from "@monday/shared";
 import type { Process } from "./process.ts";
 import {
   builtinCall,
@@ -314,7 +314,8 @@ export function createOpencodeSession(deps: LocalRuntimeDeps): AgentSession {
       const user: AgentEvent = { kind: "user", id: newId(), text };
       onEvent(user);
       await deps.link.append(ctx.sessionId, user);
-      const prompt = fresh && ctx.transcript.length > 0 ? withHandover(text, ctx.transcript) : text;
+      // What the reader and the composer have open rides with the words, so "this thread" points somewhere.
+      const prompt = `${fresh && ctx.transcript.length > 0 ? withHandover(text, ctx.transcript) : text}${openLines(ctx)}`;
       const outcome = r.begin(onEvent);
       void request("session/prompt", {
         sessionId: acpSessionId,

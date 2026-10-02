@@ -735,3 +735,22 @@ export interface LocalAnnounce {
 
 /** The Device's answer to one LocalCall. */
 export type LocalAnswer = { text: string; model?: string | null | undefined } | { error: string };
+
+/**
+ * What the Device has open, told to the model with each turn: the Thread the
+ * reader shows and the Draft in the composer, so "this thread" and "make this
+ * shorter" have something to point at.
+ */
+export function openLines(ctx: {
+  threadId?: string | null | undefined;
+  draftId?: string | null | undefined;
+}): string {
+  const lines: string[] = [];
+  if (ctx.threadId) lines.push(`The reader shows Thread ${ctx.threadId}.`);
+  if (ctx.draftId) {
+    lines.push(
+      `The composer has Draft ${ctx.draftId} open. When the user says "this", "this draft" or "the message" about writing, they mean it: read it with read_draft and change it with update_draft.`,
+    );
+  }
+  return lines.length ? `\n${lines.join("\n")}` : "";
+}

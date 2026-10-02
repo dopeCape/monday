@@ -1418,6 +1418,19 @@ function InboxBody({
     },
     [focusAgent],
   );
+  /**
+   * Draft a reply, under the open Thread or in the inline reply: a turn about this
+   * Thread (its id rides in the turn context), not an empty agent bar.
+   */
+  const draftWithAgent = useCallback(
+    (inReply: boolean) => {
+      setAgentOpen(true);
+      void agent.send(
+        t(inReply ? "strings.compose.draft_prompt_open" : "strings.compose.draft_prompt"),
+      );
+    },
+    [agent, t],
+  );
   // The open Thread's Judgments (slice 25), for the on-open Template suggestion.
   const judgments = useThreadJudgments(inbox, shownThreadId);
 
@@ -3248,7 +3261,7 @@ function InboxBody({
                       }))
                     : []
                 }
-                onDraft={focusAgent}
+                onDraft={() => draftWithAgent(true)}
                 onSent={compose.onSent}
                 onError={compose.onError}
               />
@@ -3287,6 +3300,7 @@ function InboxBody({
           }}
           onClose={() => setReaderOpen(false)}
           onAsk={focusAgent}
+          onDraftReply={() => draftWithAgent(false)}
           onArchive={() => request("archive", [shownThread.id])}
           onSnooze={() => openPicker("snooze", [shownThread.id])}
           onMove={() => openPicker("move", [shownThread.id])}

@@ -14,7 +14,7 @@ import type {
   SessionSummary,
   TurnOutcome,
 } from "@monday/shared";
-import { withHandover } from "@monday/shared";
+import { openLines, withHandover } from "@monday/shared";
 import type { ActivityLog, ActivityRow } from "./activity.ts";
 import type { AgentGraph, RunContext } from "./graph.ts";
 import type { SessionStore } from "./sessions.ts";
@@ -55,25 +55,6 @@ export class TurnBusyError extends Error {
     super(`session ${sessionId} is already running a turn`);
     this.name = "TurnBusyError";
   }
-}
-
-/**
- * What the Device has open, told to the model with each turn: the Thread the
- * reader shows and the Draft in the composer, so "this thread" and "make this
- * shorter" have something to point at.
- */
-export function openLines(ctx: {
-  threadId?: string | null | undefined;
-  draftId?: string | null | undefined;
-}): string {
-  const lines: string[] = [];
-  if (ctx.threadId) lines.push(`The reader shows Thread ${ctx.threadId}.`);
-  if (ctx.draftId) {
-    lines.push(
-      `The composer has Draft ${ctx.draftId} open. When the user says "this", "this draft" or "the message" about writing, they mean it: read it with read_draft and change it with update_draft.`,
-    );
-  }
-  return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
 /** The graph thread a Session runs on: its id, suffixed once it switched Runtime. */

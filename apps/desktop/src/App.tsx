@@ -67,6 +67,7 @@ import { platform, platformNotifier } from "./platform/tauri.ts";
 import { Calendar } from "./screens/Calendar.tsx";
 import type { CalendarSource } from "./screens/calendar/calendar-data.ts";
 import { dayKey } from "./screens/calendar/dates.ts";
+import { composeBus } from "./screens/compose/bus.ts";
 import { ComposeLayer } from "./screens/compose/ComposeLayer.tsx";
 import { type Composer, fixtureComposer } from "./screens/compose/composer.ts";
 import { Scheduled } from "./screens/compose/Scheduled.tsx";
@@ -353,7 +354,13 @@ export function App({
   const agentSession = useAgentSession({
     client: aiOff ? null : client,
     workspaceId: ws.id,
-    context: () => ({ pinned: [...pinned] }),
+    // The Thread the reader shows and the Draft open in the composer ride with every turn,
+    // so "this thread" and "make this shorter" point somewhere.
+    context: () => ({
+      pinned: [...pinned],
+      threadId: composeBus.shownThread(),
+      draftId: composeBus.openDraft(),
+    }),
     newAfterHours: shell.settings["ai.session.new_after_hours"],
     runtime: wantedRuntime,
     developerModeDefault: shell.settings["ai.developer_mode_default"],

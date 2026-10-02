@@ -80,7 +80,15 @@ const archiveTurn = (): AgentEvent[] => [
 
 const navigated: string[] = [];
 
-function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runtime | undefined }) {
+function Harness({
+  client,
+  runtime,
+  open = null,
+}: {
+  client: FakeAgentClient;
+  runtime?: Runtime | undefined;
+  open?: string | null;
+}) {
   const agent = useAgentSession({
     client,
     workspaceId: "ws-genai",
@@ -93,7 +101,7 @@ function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runti
     <Inbox
       inbox={fixtureInbox()}
       now={NOW}
-      initialOpen={null}
+      initialOpen={open}
       timing={{ collapse: 0, toast: 60_000 }}
       agent={agent}
       onNavigate={(target) => navigated.push(target)}
@@ -101,7 +109,7 @@ function Harness({ client, runtime }: { client: FakeAgentClient; runtime?: Runti
   );
 }
 
-async function mount(client: FakeAgentClient, runtime?: Runtime) {
+async function mount(client: FakeAgentClient, runtime?: Runtime, open: string | null = null) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -109,7 +117,7 @@ async function mount(client: FakeAgentClient, runtime?: Runtime) {
   await act(async () =>
     r.render(
       <StaticShell settings={{ "ai.level": "automate" }}>
-        <Harness client={client} runtime={runtime} />
+        <Harness client={client} runtime={runtime} open={open} />
       </StaticShell>,
     ),
   );
@@ -489,6 +497,16 @@ describe("the composer in bottom-bar mode", () => {
     const card = document.querySelector<HTMLElement>(".agent-thread .tool");
     expect(card?.classList.contains("stopped")).toBe(false);
     expect(card?.classList.contains("fail")).toBe(false);
+  });
+
+  test("Draft a reply under a Thread sends a turn about that Thread, not an empty agent bar", async () => {
+    const client = fakeAgentClient();
+    await mount(client, undefined, "e1");
+    const draft = [...document.querySelectorAll<HTMLElement>(".reply button")].find((b) =>
+      b.textContent?.includes("Draft a reply"),
+    );
+    await click(draft);
+    expect(client.sent.at(-1)?.text).toContain("Draft a reply to the thread I have open");
   });
 
   test("switching the Runtime mid-Session puts a line in the thread before the next turn", async () => {

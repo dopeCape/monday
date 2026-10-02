@@ -7,12 +7,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ApprovalDecision } from "@monday/shared";
+import { openLines } from "@monday/shared";
 import {
   createMemoryActivityLog,
   createToolServer,
   toolCallOf,
 } from "../src/intelligence/agent/index.ts";
-import { openLines } from "../src/intelligence/agent/session-runtime.ts";
 import { createFakeToolHost } from "../src/intelligence/agent/tools/fake-host.ts";
 
 const NOW = new Date("2026-09-17T10:00:00Z");

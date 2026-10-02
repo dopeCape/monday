@@ -153,6 +153,8 @@ export interface ReaderProps {
   reply?: ReactNode | undefined;
   onClose: () => void;
   onAsk: () => void;
+  /** The reply box's Draft a reply: a turn about this Thread; the bare Ask when absent. */
+  onDraftReply?: (() => void) | undefined;
   onArchive: () => void;
   onSnooze: () => void;
   onMove: () => void;
@@ -201,6 +203,7 @@ export function Reader({
   reply,
   onClose,
   onAsk,
+  onDraftReply,
   onArchive,
   onSnooze,
   onMove,
@@ -492,7 +495,7 @@ export function Reader({
                 />
               }
               onSend={() => onReply?.("reply")}
-              onDraft={onAsk}
+              onDraft={onDraftReply ?? onAsk}
               onAttach={() => onReply?.("reply")}
               onReplyAll={() => onReply?.("reply", true)}
               onForward={() => onReply?.("forward")}

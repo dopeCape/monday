@@ -7649,6 +7649,16 @@ export const settingsSchema = {
     "Include {n} attachments",
   ),
   "strings.compose.draft_reply": str("accounts", "Draft a reply button", "Draft a reply"),
+  "strings.compose.draft_prompt": str(
+    "accounts",
+    "What Draft a reply asks the agent, about the Thread the reader shows",
+    "Draft a reply to the thread I have open. Read it first, write the reply in my voice with draft_message as a reply to that thread, then open the draft with open_draft so I can review it. Do not send it.",
+  ),
+  "strings.compose.draft_prompt_open": str(
+    "accounts",
+    "What Draft a reply asks the agent when a reply is already open",
+    "Write my reply to the thread I have open into the draft open in the composer. Read the thread and the draft first, then fill the draft with update_draft in my voice, keeping anything I already wrote. Do not send it.",
+  ),
   "strings.compose.uploading": str("accounts", "Upload progress", "Uploading {pct}%"),
   "strings.compose.remove_attachment": str("accounts", "Remove attachment", "Remove"),
   "strings.compose.bold": str("accounts", "Toolbar: bold", "Bold"),
