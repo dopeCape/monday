@@ -146,6 +146,10 @@ _Avoid_: column, attribute, property
 A value a View takes from a Thread's text by selection: code finds the candidates of one kind (amounts, dates, reference numbers, names, links), Jev picks the one the View's question asks for or none, and code copies and normalizes it. Below its confidence floor it is Unsure. Never written by a model. An Extraction with `many` picks every candidate that answers (each order total in a confirmation of nine orders), one Jev yes or no per candidate; code still does every sum and count.
 _Avoid_: parsing, scraping, generated value, entity
 
+**Member**:
+A Thread a View's full-search scope (`query`) matched. The Server finds Members by reading the mail in memory with the full search's matcher and keeps only their ids; the Changes feed carries the ids to the Cache, where they stand in for the search, so the View opens offline.
+_Avoid_: hit, result (a search's), match list
+
 **Row**:
 What one line of a View's Blocks is: a Thread by default; with the View's grain `item`, each value a many-Extraction picked (one Row per package in a digest); with grain `message`, each Message of a Thread (one Row per advisory). Every Row opens its Thread, a Message Row on that Message.
 _Avoid_: record, entry, line item (a line item is the `item` Extraction kind)

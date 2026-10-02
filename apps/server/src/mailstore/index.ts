@@ -33,6 +33,7 @@ import type {
   IsoDate,
   MessageBodiesPage,
   Person,
+  SearchQuery,
   Section,
   Thread,
   ThreadChange,
@@ -99,7 +100,12 @@ import {
 } from "../db/schema.ts";
 import { ownerLookup, recordMessage } from "../people/index.ts";
 import { type ContentStore, createContentStore } from "./content.ts";
-import { type FullSearchOptions, prepareFullSearch } from "./full-search.ts";
+import {
+  type FullSearchOptions,
+  matchThreads,
+  prepareFullSearch,
+  type ThreadQueryMatch,
+} from "./full-search.ts";
 
 export type { ContentStore } from "./content.ts";
 export { CONTENT_KINDS, createContentStore, isContentKind } from "./content.ts";
@@ -359,6 +365,17 @@ export interface Mailstore extends ContentStore {
    * anything streams when the query needs text and no root key is in memory.
    */
   searchFull(workspaceId: Id, options: FullSearchOptions): Promise<AsyncGenerator<FullSearchEvent>>;
+  /**
+   * Whether a query matches each of these Threads, with the full search's rules
+   * (full-search.ts matchThreads): a View's search scope finds its members a page
+   * or an arriving Thread at a time. Throws LockedError when locked.
+   */
+  matchThreads(
+    workspaceId: Id,
+    query: SearchQuery,
+    ids: readonly Id[],
+    options?: { where?: SQL | undefined; explain?: boolean | undefined },
+  ): Promise<Map<Id, ThreadQueryMatch>>;
   /** New K_ws; every wrapped data key in the Workspace is re-wrapped, no ciphertext is read. */
   rotateWorkspaceKey(workspaceId: Id): Promise<{ version: number; rewrapped: number }>;
 }
@@ -1470,6 +1487,10 @@ export function createMailstore(db: Db, keys: Keys, options: MailstoreOptions = 
 
     searchFull(workspaceId, options) {
       return prepareFullSearch({ db, content }, workspaceId, options);
+    },
+
+    matchThreads(workspaceId, query, ids, options) {
+      return matchThreads({ db, content }, workspaceId, query, ids, options);
     },
 
     async rotateWorkspaceKey(workspaceId) {

@@ -537,3 +537,154 @@ describe("a pinned View's reading", () => {
     await store.close();
   });
 });
+
+describe("a View whose scope is a full search, over the Cache", () => {
+  test("its members stand in for the search: read whole once, then kept by the feed, and read offline", async () => {
+    const { store, server } = await createFakeStore({
+      driver: bunDriver(),
+      seed: null,
+      workspaceId: "ws",
+    });
+    const add = (id: string, from: string, at: string) => {
+      server.record({
+        kind: "thread",
+        entityId: id,
+        payload: {
+          id,
+          workspaceId: "ws",
+          subject: `Update ${id}`,
+          participants: [{ name: "", email: from }],
+          lastActivity: at,
+          messageCount: 1,
+          unread: false,
+          starred: false,
+          archived: true,
+          snoozedUntil: null,
+          section: null,
+          group: null,
+          subgroup: null,
+          tags: [],
+          labels: [],
+          hasAttachments: false,
+          snippet: id,
+          deleted: false,
+        },
+      });
+      server.record({
+        kind: "message",
+        entityId: `m-${id}`,
+        payload: {
+          id: `m-${id}`,
+          threadId: id,
+          from: { name: "", email: from },
+          to: [{ name: "", email: "sam@acme.com" }],
+          cc: [],
+          date: at,
+          hasAttachments: false,
+        },
+      });
+    };
+    // Two refunds months ago, under thirty newer newsletters; the words are only in their bodies.
+    add("r1", "support@shop.test", "2026-04-01T10:00:00.000Z");
+    add("r2", "support@shop.test", "2026-05-01T10:00:00.000Z");
+    for (let i = 0; i < 30; i++)
+      add(
+        `n${i}`,
+        "news@paper.test",
+        `2026-09-${String(1 + (i % 28)).padStart(2, "0")}T08:00:00.000Z`,
+      );
+    await store.sync();
+    const doc = {
+      ...AMAZON_ORDERS_VIEW,
+      id: "v_refunds",
+      scope: { facts: { query: '"refund approved"', folder: "any" as const }, limit: 100 },
+      nav: { icon: "receipt", count: "total" },
+    };
+    const view: View = { ...VIEW, id: doc.id, doc };
+    let online = true;
+    let memberReads = 0;
+    const sync = createViewSync(store, {
+      list: async () => {
+        if (!online) throw new Error("offline");
+        return [view];
+      },
+      members: async () => {
+        memberReads += 1;
+        return ["r1"];
+      },
+    });
+    await sync.refresh();
+    await sync.refresh();
+    expect(memberReads).toBe(1);
+    const read = async () => {
+      const q = viewThreadsSql(doc.scope.facts, null, 20, "sam@acme.com", doc.id);
+      const rows = await store.query<Record<string, unknown>>(q.sql, q.params);
+      return rows.map((r) => rowToViewThread(r, "ws"));
+    };
+    expect((await read()).map((t) => t.id)).toEqual(["r1"]);
+    // The feed adds a member the walk found, and takes one out.
+    server.record({
+      kind: "view_members",
+      entityId: doc.id,
+      payload: { viewId: doc.id, added: ["r2"], removed: [] },
+    });
+    await store.sync();
+    expect((await read()).map((t) => t.id)).toEqual(["r2", "r1"]);
+    // Offline: the View still opens from the Cache, with its count.
+    online = false;
+    expect(await sync.refresh()).toBe(false);
+    const threads = await read();
+    expect(threads.map((t) => t.id)).toEqual(["r2", "r1"]);
+    expect(laneView(doc, threads, ctx).navCount).toBe(2);
+    // Another View's members are not this one's.
+    const other = viewThreadsSql(doc.scope.facts, null, 20, "sam@acme.com", "v_other");
+    expect(await store.query(other.sql, other.params)).toEqual([]);
+    server.record({
+      kind: "view_members",
+      entityId: doc.id,
+      payload: { viewId: doc.id, added: [], removed: ["r1"] },
+    });
+    await store.sync();
+    expect((await read()).map((t) => t.id)).toEqual(["r2"]);
+    // A new query: the reset empties it before its own members come.
+    server.record({
+      kind: "view_members",
+      entityId: doc.id,
+      payload: { viewId: doc.id, added: [], removed: [], reset: true },
+    });
+    await store.sync();
+    expect(await read()).toEqual([]);
+    // The bar while it searches: done of total, and how many match so far.
+    server.record({
+      kind: "view_reading",
+      entityId: doc.id,
+      payload: {
+        viewId: doc.id,
+        status: "running",
+        reason: null,
+        done: 200,
+        total: 1200,
+        phase: "search",
+        found: 4,
+      },
+    });
+    await store.sync();
+    expect(
+      (await store.query<Record<string, unknown>>(VIEW_READING_SQL, [doc.id])).map(
+        rowToViewReading,
+      ),
+    ).toEqual([
+      {
+        viewId: doc.id,
+        status: "running",
+        reason: null,
+        done: 200,
+        total: 1200,
+        phase: "search",
+        found: 4,
+      },
+    ]);
+    sync.stop();
+    await store.close();
+  });
+});

@@ -4,13 +4,20 @@
 // and the View panel read them offline. The values the Views' Extractions
 // picked follow the same way: after a list is read each View's values are
 // read once, and a `view_values` feed row marks its Thread stale until
-// POST /views/values reads it again. One sync per Store; a failure
-// (offline, locked) waits for the next write.
+// POST /views/values reads it again. A View whose scope is a full search has
+// its members read whole once per version (GET /views/:id/members); the feed's
+// `view_members` rows keep them current after that. One sync per Store; a
+// failure (offline, locked) waits for the next write.
 
 import type { ExtractedValue, Id, View } from "@monday/shared";
 import { viewExtractionId } from "@monday/shared";
 import type { Store } from "../store/store.ts";
-import { VIEW_VALUES_STALE_SQL, viewStatements, viewValuesStatements } from "../store/views.ts";
+import {
+  VIEW_VALUES_STALE_SQL,
+  viewMembersStatements,
+  viewStatements,
+  viewValuesStatements,
+} from "../store/views.ts";
 
 export interface ViewSync {
   /** Reads the Server's list now and writes it; resolves false when the read failed. */
@@ -25,6 +32,8 @@ export interface ViewSource {
   list(workspaceId: Id): Promise<View[]>;
   values?: ((viewId: Id) => Promise<Values>) | undefined;
   valuesFor?: ((workspaceId: Id, threadIds: readonly Id[]) => Promise<Values>) | undefined;
+  /** A search scope's members, ids only. */
+  members?: ((viewId: Id) => Promise<Id[]>) | undefined;
 }
 
 /** How many stale Threads one read of POST /views/values covers. */
@@ -41,6 +50,21 @@ export function createViewSync(
   let stopped = false;
   /** The version of each View whose values were read, so a list read reads them once per version. */
   const valuesRead = new Map<Id, number>();
+  /** The version of each search View whose members were read whole. */
+  const membersRead = new Map<Id, number>();
+
+  const readMembers = async (views: readonly View[]) => {
+    if (!src.members) return;
+    for (const v of views) {
+      if (!v.doc.scope.facts.query || membersRead.get(v.id) === v.version) continue;
+      const ids = await src.members(v.id);
+      if (stopped) return;
+      await store.write(
+        viewMembersStatements({ viewId: v.id, added: ids, removed: [], reset: true }),
+      );
+      membersRead.set(v.id, v.version);
+    }
+  };
 
   const readValues = async (views: readonly View[]) => {
     if (!src.values) return;
@@ -59,6 +83,7 @@ export function createViewSync(
       const views = await src.list(store.workspaceId);
       if (stopped) return false;
       await store.write(viewStatements(views));
+      await readMembers(views);
       await readValues(views);
       return true;
     } catch (error) {

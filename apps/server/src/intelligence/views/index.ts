@@ -29,6 +29,7 @@ import type { HostedRuntime } from "../runtime/index.ts";
 import type { Signals } from "../signals/index.ts";
 import { createViewBackfills, type ViewBackfills } from "./backfill.ts";
 import { createViewDrafting, type ViewDrafting } from "./drafting.ts";
+import { createViewMembership, type ViewMembership } from "./members.ts";
 
 export type { DraftCorrection, UpdateProposal, ViewDrafting } from "./drafting.ts";
 
@@ -39,6 +40,8 @@ const READING_KEYS = [
   "views.scope.max_threads",
   "signals.budget.background_monthly_usd",
   "routing.wait_seconds",
+  "views.query.page_size",
+  "views.query.scan_max",
 ] as const;
 
 const CONTEXT_KEYS = [
@@ -93,6 +96,10 @@ export interface ViewIntelligence {
   valuesFor(workspaceId: Id, threadIds: readonly Id[]): Promise<ValuesByThread>;
   /** Each pinned View reading its own scope (docs/spec/views.md, "Reading a pinned View"). */
   reading: ViewBackfills;
+  /** The members of each pinned View whose scope is a full search (docs/spec/views.md, "Scope by a search"). */
+  members: ViewMembership;
+  /** A Thread arrived or changed: the pinned search Views test it (a Job, never on the caller's path). */
+  threadReady(workspaceId: Id, threadId: Id): Promise<void>;
   /**
    * The Signal store's new or reworded definitions: a View's go to its own reading,
    * the rest are returned for the Workspace's backfill.
@@ -166,6 +173,8 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
       await loadViewThreads(db, {
         workspaceId,
         owner: ctx.owner,
+        // A search scope reads its members (the View's id is its document's).
+        ...(doc.scope.facts.query ? { members: doc.id } : {}),
         ...(opts.threadIds
           ? { ids: opts.threadIds }
           : {
@@ -178,13 +187,37 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     return { threads, lanes: laneView(doc, threads, ctx, { placements: opts.placements }) };
   };
 
+  /** Set below, once the reading exists: a search scope finds its members again when it moved. */
+  let ensureMembers: (workspaceId: Id) => Promise<void> = async () => {};
+
   const changed = async (workspaceId: Id) => {
     try {
       await signals.defs(workspaceId);
     } catch (error) {
       log(`views ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    try {
+      await ensureMembers(workspaceId);
+    } catch (error) {
+      log(`view members ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
+
+  const members = createViewMembership({
+    db,
+    mailstore: options.mailstore,
+    store,
+    context,
+    now,
+    log,
+    waitSeconds: async () =>
+      (await readGlobalSettings(db, ["routing.wait_seconds"] as const))["routing.wait_seconds"],
+  });
+  // The Signal request asks a View's questions only inside its scope; a search scope's
+  // query is answered by its members, or matched there and then for a Thread not seen yet.
+  signals.setQueryScope((workspaceId, threadId, viewId) =>
+    members.admits(workspaceId, threadId, viewId),
+  );
 
   const reading = createViewBackfills({
     db,
@@ -192,6 +225,7 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     signals,
     store,
     context,
+    members,
     now,
     log,
     ...(options.level ? { level: options.level } : {}),
@@ -205,9 +239,17 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
         maxThreads: s["views.scope.max_threads"],
         budgetUsd: s["signals.budget.background_monthly_usd"],
         waitSeconds: s["routing.wait_seconds"],
+        queryPageSize: s["views.query.page_size"],
+        queryScanMax: s["views.query.scan_max"],
       };
     },
   });
+
+  ensureMembers = async (workspaceId) => {
+    for (const v of await store.list(workspaceId)) {
+      if (v.pinned && !v.deletedAt) await reading.ensure(workspaceId, v.id);
+    }
+  };
 
   const drafting = createViewDrafting({
     db,
@@ -228,7 +270,12 @@ export function createViewIntelligence(options: ViewIntelligenceOptions): ViewIn
     changed,
     drafting,
     reading,
-    registerSteps: (jobs) => reading.registerSteps(jobs),
+    members,
+    threadReady: (workspaceId, threadId) => members.threadReady(workspaceId, threadId),
+    registerSteps: (jobs) => {
+      reading.registerSteps(jobs);
+      members.registerSteps(jobs);
+    },
     async readNew(workspaceId, signalIds) {
       // A View's stored ids are board:<viewId>:<local>; each View reads its own scope.
       const byView = new Map<string, string[]>();

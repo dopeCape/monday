@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { Id, IsoDate } from "../domain.ts";
 import type { JsonValue } from "../judge.ts";
 import type { SignalQuestion } from "../signals.ts";
+import { scopeQueryErrors } from "./scope-query.ts";
 
 /* ------------------------------ The closed lists ------------------------------ */
 
@@ -265,6 +266,13 @@ export interface ViewScopeFacts {
    * characters (the Server's clear subject index, ADR 0015): "order confirmation".
    */
   subject_any?: string[] | undefined;
+  /**
+   * A full search (the search box's and search_threads' query language, ADR 0015):
+   * a Thread is in scope when the search matches its subject, people or bodies, as
+   * well as every other fact. Run on the Server, which keeps the View's members
+   * (ids only) and sends them to the Device.
+   */
+  query?: string | undefined;
   folder?: ViewFolder | undefined;
 }
 
@@ -748,11 +756,32 @@ export interface ViewValuesChange {
 export interface ViewReadingChange {
   viewId: Id;
   status: "running" | "waiting" | "paused" | "done" | "cancelled";
-  /** Why it waits: the monthly background budget, no judge, or the AI level. */
-  reason: "budget" | "no_judge" | "level" | null;
+  /**
+   * Why it waits: the monthly background budget, no judge, the AI level, or a
+   * locked Server (a search scope's members are found by reading the mail).
+   */
+  reason: "budget" | "no_judge" | "level" | "locked" | null;
   /** Threads of the scope walked so far, of `total`. */
   done: number;
   total: number;
+  /**
+   * A search scope: `search` while the walk finds the View's members (`done` of
+   * `total` Threads its other facts admit, `found` matching so far), `read` while
+   * it asks the members its questions. Absent for a scope without a search.
+   */
+  phase?: "search" | "read" | undefined;
+  found?: number | undefined;
+}
+
+/**
+ * The Changes feed's `view_members` row: which Threads joined or left a search
+ * scope's View (ids only). `reset` empties the View's members first (a new query).
+ */
+export interface ViewMembersChange {
+  viewId: Id;
+  added: Id[];
+  removed: Id[];
+  reset?: boolean | undefined;
 }
 
 /** The Changes feed's `view` row: headers only; the document is sealed and read through GET /views. */
@@ -804,6 +833,15 @@ export const scopeFactsSchema = z
           .pipe(z.string().min(2).max(80)),
       )
       .max(20)
+      .optional(),
+    query: z
+      .string()
+      .trim()
+      .min(2)
+      .max(500)
+      .superRefine((text, ctx) => {
+        for (const message of scopeQueryErrors(text)) ctx.addIssue({ code: "custom", message });
+      })
       .optional(),
     folder: z
       .union([

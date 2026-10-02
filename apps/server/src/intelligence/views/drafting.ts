@@ -21,6 +21,7 @@ import {
   type LaneComponent,
   lanesChanged,
   laneView,
+  parseScopeQuery,
   scopeReasons,
   showAs,
   signalName,
@@ -62,6 +63,10 @@ const KEYS = [
   "views.test.widen_days",
   "views.test.prefer_readable",
   "views.test.scan",
+  "views.query.count_max",
+  "views.query.scan_max",
+  "search.full_page_size",
+  "search.full_concurrency",
   "views.extract.candidates_max",
   "views.extract.many.max",
   "views.examples_in_question",
@@ -233,6 +238,12 @@ export function createViewDrafting(deps: {
     scan: s["views.test.scan"],
     candidatesMax: s["views.extract.candidates_max"],
     manyMax: s["views.extract.many.max"],
+    query: {
+      countMax: s["views.query.count_max"],
+      scanMax: s["views.query.scan_max"],
+      pageSize: s["search.full_page_size"],
+      concurrency: Math.max(1, s["search.full_concurrency"]),
+    },
     maxThreads: s["views.scope.max_threads"],
     examplesMax: s["views.examples_in_question"],
     notRead: s["strings.views.not_read"].toLowerCase(),
@@ -582,9 +593,28 @@ export function createViewDrafting(deps: {
         limit: 1,
       });
       if (!t) throw new ViewNotFoundError(`${draftId} thread ${threadId}`);
+      const query = draft.doc.scope.facts.query;
+      if (query) {
+        // A search scope: the search run on this one Thread, with what it matched in words.
+        const m = (
+          await deps.mailstore.matchThreads(draft.workspaceId, parseScopeQuery(query), [threadId], {
+            explain: true,
+          })
+        ).get(threadId);
+        t.inQuery = m?.matched === true;
+        t.queryTerms = m?.terms ?? [];
+      }
       const { admitted, reasons } = scopeReasons(draft.doc.scope.facts, t, ctx);
       const tried = (await drafts.diagnosis(draftId))[threadId];
-      if (tried) return { ...tried, tried: true, admitted, workspaceId: draft.workspaceId };
+      if (tried)
+        return {
+          ...tried,
+          // Why the scope admits it, as matched now: the search's words included.
+          scope: reasons,
+          tried: true,
+          admitted,
+          workspaceId: draft.workspaceId,
+        };
       // Not tried: what code finds in it, no judge and nothing written.
       const s = await settings();
       const kinds = [...new Set(draft.doc.extractions.map((x) => x.find))];

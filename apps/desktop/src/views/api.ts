@@ -58,6 +58,8 @@ export function viewsApi(request: Requester) {
         "/views/values",
         body("POST", { workspace: workspaceId, threadIds }),
       ).then((r) => r.values),
+    /** A search scope's members, ids only (they stand in for its query on the Device). */
+    members: (id: Id) => request<{ threadIds: Id[] }>(`${at(id)}/members`).then((r) => r.threadIds),
     /** How far the pinned View has read its scope; pause, resume or stop it. */
     reading: (id: Id) =>
       request<{ reading: ViewReadingChange | null }>(`${at(id)}/reading`).then((r) => r.reading),

@@ -53,6 +53,7 @@ import {
   questionLabel,
   SHIPPED_SECTION_SIGNALS,
   scopeAdmits,
+  scopeWithoutQuery,
   sectionSignalId,
 } from "@monday/shared";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
@@ -360,6 +361,14 @@ export interface Signals {
   setAnsweredListener(listener: ((workspaceId: Id, threadId: Id) => Promise<unknown>) | null): void;
   /** Where the per-Thread people and history come from (the Recommended actions). */
   setCandidateSource(source: CandidateSource | null): void;
+  /**
+   * Whether a pinned View's full-search scope admits a Thread (its members, or the
+   * search run on it there and then): a View Signal whose scope has a `query` is
+   * asked only of its members. Without it such a Signal is asked of none.
+   */
+  setQueryScope(
+    check: ((workspaceId: Id, threadId: Id, viewId: Id) => Promise<boolean>) | null,
+  ): void;
 }
 
 /** Which Setting words each shipped Signal. */
@@ -907,6 +916,7 @@ export function createSignals(options: SignalsOptions): Signals {
   let defsListener: ((workspaceId: Id, signalIds: string[]) => Promise<unknown>) | null = null;
   let answeredListener: ((workspaceId: Id, threadId: Id) => Promise<unknown>) | null = null;
   let candidateSource: CandidateSource | null = null;
+  let queryScope: ((workspaceId: Id, threadId: Id, viewId: Id) => Promise<boolean>) | null = null;
   /** Tells the listener a Thread's answers changed; a failing listener never fails the request. */
   const answered = async (workspaceId: Id, threadId: Id) => {
     if (!answeredListener) return;
@@ -1370,11 +1380,24 @@ export function createSignals(options: SignalsOptions): Signals {
     if (scoped.length === 0) return new Set();
     const [thread] = await loadViewThreads(db, { workspaceId, ids: [threadId], limit: 1 });
     const ctx = { now: now(), zone: s["calendar.time_zone"] };
-    return new Set(
-      scoped
-        .filter((d) => !thread || !scopeAdmits(d.facts as ViewScopeFacts, thread, ctx))
-        .map((d) => d.id),
-    );
+    // A search scope: the View's members answer for its query (one check per View).
+    const inQuery = new Map<string, boolean>();
+    const admits = async (d: StoredDef): Promise<boolean> => {
+      const facts = d.facts as ViewScopeFacts;
+      if (!thread || !scopeAdmits(scopeWithoutQuery(facts), thread, ctx)) return false;
+      if (!facts.query) return true;
+      const viewId = /^board:([^:]+):/.exec(d.id)?.[1];
+      if (!viewId || !queryScope) return false;
+      let member = inQuery.get(viewId);
+      if (member === undefined) {
+        member = await queryScope(workspaceId, threadId, viewId);
+        inQuery.set(viewId, member);
+      }
+      return member;
+    };
+    const out = new Set<string>();
+    for (const d of scoped) if (!(await admits(d))) out.add(d.id);
+    return out;
   };
 
   /** Whether code lets a gated Signal be asked of this Thread. */
@@ -1623,6 +1646,10 @@ export function createSignals(options: SignalsOptions): Signals {
 
     setCandidateSource(source) {
       candidateSource = source;
+    },
+
+    setQueryScope(check) {
+      queryScope = check;
     },
 
     async defs(workspaceId) {

@@ -19,6 +19,7 @@
 import {
   compileMatcher,
   excerpt,
+  explainMatch,
   type FullSearchEvent,
   type MatchMessage,
   type Person,
@@ -27,6 +28,7 @@ import {
   type SearchQuery,
   searchTokens,
   type Thread,
+  type ThreadMatch,
   textNeeds,
 } from "@monday/shared";
 import { type SQL, sql } from "drizzle-orm";
@@ -47,6 +49,16 @@ export interface FullSearchOptions {
   /** Pages read from Postgres at once (search.full_concurrency). */
   concurrency: number;
   signal?: AbortSignal | undefined;
+  /**
+   * More clear predicates over `threads t`, ANDed with the query's own: a View's
+   * scope facts (folder, dates, senders, subject words) narrow a search scope.
+   */
+  where?: SQL | undefined;
+  /**
+   * Stop after examining this many Threads, as at the hit limit (a cursor, reason
+   * "limit"): a View's search scope reads at most views.query.scan_max.
+   */
+  maxScan?: number | undefined;
 }
 
 interface Cursor {
@@ -91,8 +103,14 @@ function addressPatterns(text: string): string[] {
 }
 
 /** The clear-text predicates over `t` (threads), ANDed. */
-function filters(workspaceId: string, q: SearchQuery, before: string | null): SQL {
+function filters(
+  workspaceId: string,
+  q: SearchQuery,
+  before: string | null,
+  extra?: SQL | undefined,
+): SQL {
   const where: SQL[] = [sql`t.workspace_id = ${workspaceId}`, sql`t.deleted = false`];
+  if (extra) where.push(extra);
   const upper = [q.before, before].filter((x): x is string => x !== null).sort()[0];
   if (upper) where.push(sql`t.last_activity < ${upper}::timestamptz`);
   if (q.after !== null) where.push(sql`t.last_activity >= ${q.after}::timestamptz`);
@@ -180,6 +198,133 @@ export interface FullSearchDeps {
   content: ContentStore;
 }
 
+const idList = (ids: readonly string[]) =>
+  sql`(${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )})`;
+
+/** Reads the rows a page's matching needs: ciphertext only when a term reaches it. */
+function pageReader(db: Db, needs: { any: boolean; body: boolean }) {
+  return async (ids: string[]): Promise<Page> => {
+    const threadRows = await db.execute<ThreadRow>(sql`
+      select t.id, t.workspace_id, t.last_activity::text as at, t.subject_enc, t.subject_key, t.participants, t.last_activity,
+        t.message_count, t.unread, t.starred, t.archived, t.snoozed_until, t.section,
+        t.group_id, t.subgroup_id, t.has_attachments, t.bulk,
+        (select array_agg(tag_id) from thread_tags where thread_id = t.id) as tag_ids,
+        (select array_agg(label_id) from thread_labels where thread_id = t.id) as label_ids
+      from threads t where t.id in ${idList(ids)}`);
+    const byId = new Map(threadRows.map((r) => [r.id, r]));
+    const messages = new Map<string, MessageRow[]>();
+    if (needs.any) {
+      const bodyCols = needs.body ? sql`, m.body_enc, m.body_key` : sql``;
+      const rows = await db.execute<MessageRow>(sql`
+        select m.thread_id, m."from", m."to", m.cc${bodyCols}
+        from messages m where m.thread_id in ${idList(ids)}
+        order by m.date desc, m.id desc`);
+      for (const r of rows) {
+        const list = messages.get(r.thread_id) ?? [];
+        list.push(r);
+        messages.set(r.thread_id, list);
+      }
+    }
+    return {
+      threads: ids.flatMap((id) => {
+        const r = byId.get(id);
+        return r ? [r] : [];
+      }),
+      messages,
+    };
+  };
+}
+
+type Opener = (kind: "subject" | "body", key: Uint8Array, envelope: Uint8Array) => string;
+
+/**
+ * One Thread of a page as the matcher reads it: the subject and each body
+ * decrypted lazily, at most once, only when a term reaches them.
+ */
+function matchInput(row: ThreadRow, page: Page, open: Opener) {
+  let subject: string | null = null;
+  const subjectOf = () => {
+    subject ??= open("subject", row.subject_key, row.subject_enc);
+    return subject;
+  };
+  const bodies = new Map<number, string>();
+  const list = page.messages.get(row.id) ?? [];
+  const docs: MatchMessage[] = list.map((m, i) => ({
+    sender: `${m.from?.name ?? ""} ${m.from?.email ?? ""}`,
+    recipients: `${peopleText(m.to ?? [])} ${peopleText(m.cc ?? [])}`,
+    body: () => {
+      let text = bodies.get(i);
+      if (text === undefined) {
+        text = m.body_enc && m.body_key ? bodyText(open("body", m.body_key, m.body_enc)) : "";
+        bodies.set(i, text);
+      }
+      return text;
+    },
+  }));
+  return {
+    thread: {
+      subject: subjectOf,
+      participants: peopleText(row.participants ?? []),
+      messages: docs,
+    },
+    subjectOf,
+    bodies,
+  };
+}
+
+/** What a search scope's matching says of one Thread: matched or not, and what it matched. */
+export interface ThreadQueryMatch {
+  matched: boolean;
+  /** At the Thread's version (its message count) when it was read. */
+  messageCount: number;
+  /** In words, when `explain` was asked: "invoice in a message's text". */
+  terms: string[];
+}
+
+/**
+ * Whether a query matches each of these Threads, with the full search's rules
+ * (its clear filters in SQL, then subjects and bodies decrypted in memory only
+ * as far as a term needs, and dropped). A View's search scope reads its members
+ * this way, a page or an arriving Thread at a time. Throws LockedError when the
+ * Server holds no root key and the query needs text. Threads the SQL refuses,
+ * or that are gone, come back unmatched.
+ */
+export async function matchThreads(
+  deps: FullSearchDeps,
+  workspaceId: string,
+  q: SearchQuery,
+  ids: readonly string[],
+  options: { where?: SQL | undefined; explain?: boolean | undefined } = {},
+): Promise<Map<string, ThreadQueryMatch>> {
+  const out = new Map<string, ThreadQueryMatch>();
+  if (ids.length === 0) return out;
+  const needs = textNeeds(q);
+  const open = needs.any ? await deps.content.textOpener(workspaceId) : null;
+  const where = filters(workspaceId, q, null, options.where);
+  const kept = await deps.db.execute<{ id: string; message_count: number }>(
+    sql`select t.id, t.message_count from threads t where ${where} and t.id in ${idList([...ids])}`,
+  );
+  const counts = new Map(kept.map((r) => [r.id, Number(r.message_count)]));
+  const page = await pageReader(deps.db, needs)(kept.map((r) => r.id));
+  const match = compileMatcher(q);
+  const fail = (): string => {
+    throw new Error("unreachable: a query that needs no text opened some");
+  };
+  for (const row of page.threads) {
+    const input = matchInput(row, page, open ?? fail);
+    const matched = match(input.thread).matched;
+    out.set(row.id, {
+      matched,
+      messageCount: counts.get(row.id) ?? Number(row.message_count),
+      terms: matched && options.explain ? explainMatch(q, input.thread) : [],
+    });
+  }
+  return out;
+}
+
 /**
  * Prepares a scan: counts the Threads the SQL leaves and resolves the
  * Workspace key when the query needs text (throws LockedError when locked,
@@ -196,10 +341,11 @@ export async function prepareFullSearch(
   // Every hit carries its decrypted subject, so even a query over clear
   // headers alone needs the key: a locked Server refuses before streaming.
   const open = await content.textOpener(workspaceId);
-  const where = filters(workspaceId, q, options.before ?? null);
+  const where = filters(workspaceId, q, options.before ?? null, options.where);
   const [count] = await db.execute<{ n: number }>(
     sql`select count(*)::int as n from threads t where ${where}`,
   );
+  const maxScan = options.maxScan !== undefined ? Math.max(1, options.maxScan) : null;
   const total = Number(count?.n ?? 0);
   const start = options.cursor ? decodeFullCursor(options.cursor) : null;
   const pageSize = Math.max(1, options.pageSize);
@@ -219,43 +365,7 @@ export async function prepareFullSearch(
     );
   };
 
-  /** The rows a page's matching needs: ciphertext only when a term reaches it. */
-  const readPage = async (ids: string[]): Promise<Page> => {
-    const threadRows = await db.execute<ThreadRow>(sql`
-      select t.id, t.workspace_id, t.last_activity::text as at, t.subject_enc, t.subject_key, t.participants, t.last_activity,
-        t.message_count, t.unread, t.starred, t.archived, t.snoozed_until, t.section,
-        t.group_id, t.subgroup_id, t.has_attachments, t.bulk,
-        (select array_agg(tag_id) from thread_tags where thread_id = t.id) as tag_ids,
-        (select array_agg(label_id) from thread_labels where thread_id = t.id) as label_ids
-      from threads t where t.id in ${sql`(${sql.join(
-        ids.map((id) => sql`${id}`),
-        sql`, `,
-      )})`}`);
-    const byId = new Map(threadRows.map((r) => [r.id, r]));
-    const messages = new Map<string, MessageRow[]>();
-    if (needs.any) {
-      const bodyCols = needs.body ? sql`, m.body_enc, m.body_key` : sql``;
-      const rows = await db.execute<MessageRow>(sql`
-        select m.thread_id, m."from", m."to", m.cc${bodyCols}
-        from messages m where m.thread_id in ${sql`(${sql.join(
-          ids.map((id) => sql`${id}`),
-          sql`, `,
-        )})`}
-        order by m.date desc, m.id desc`);
-      for (const r of rows) {
-        const list = messages.get(r.thread_id) ?? [];
-        list.push(r);
-        messages.set(r.thread_id, list);
-      }
-    }
-    return {
-      threads: ids.flatMap((id) => {
-        const r = byId.get(id);
-        return r ? [r] : [];
-      }),
-      messages,
-    };
-  };
+  const readPage = pageReader(db, needs);
 
   async function* run(): AsyncGenerator<FullSearchEvent> {
     const started = performance.now();
@@ -302,33 +412,22 @@ export async function prepareFullSearch(
       if (aborted()) return;
       for (const row of page.threads) {
         if (aborted()) return;
-        let subject: string | null = null;
-        const subjectOf = () => {
-          subject ??= decryptText("subject", row.subject_key, row.subject_enc);
-          return subject;
-        };
-        const bodies = new Map<number, string>();
-        const list = page.messages.get(row.id) ?? [];
-        const docs: MatchMessage[] = list.map((m, i) => ({
-          sender: `${m.from?.name ?? ""} ${m.from?.email ?? ""}`,
-          recipients: `${peopleText(m.to ?? [])} ${peopleText(m.cc ?? [])}`,
-          body: () => {
-            let text = bodies.get(i);
-            if (text === undefined) {
-              text =
-                m.body_enc && m.body_key
-                  ? bodyText(decryptText("body", m.body_key, m.body_enc))
-                  : "";
-              bodies.set(i, text);
-            }
-            return text;
-          },
-        }));
-        const result = match({
-          subject: subjectOf,
-          participants: peopleText(row.participants ?? []),
-          messages: docs,
-        });
+        if (maxScan !== null && scanned - (start?.scanned ?? 0) >= maxScan) {
+          // The scan cap: stop as at the hit limit, resumable below the last Thread read.
+          yield {
+            type: "done",
+            scanned,
+            total,
+            hits,
+            cursor: last ? encodeFullCursor({ ...last, scanned }) : null,
+            reason: "limit",
+            decrypted,
+            elapsedMs: Math.round(performance.now() - started),
+          };
+          return;
+        }
+        const { thread, subjectOf, bodies } = matchInput(row, page, decryptText);
+        const result: ThreadMatch = match(thread);
         scanned += 1;
         last = { at: row.at, id: row.id };
         if (!result.matched) continue;

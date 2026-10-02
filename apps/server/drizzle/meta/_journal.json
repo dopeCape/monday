@@ -232,6 +232,13 @@
       "when": 1790772223809,
       "tag": "0033_view_backfills",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790930079921,
+      "tag": "0034_view_members",
+      "breakpoints": true
     }
   ]
 }

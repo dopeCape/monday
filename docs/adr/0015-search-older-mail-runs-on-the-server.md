@@ -32,4 +32,5 @@ Measured on a synthetic encrypted mailbox (`apps/server/test/full-search.bench.t
 - The Server holds no search index of body text; the headers index (`/search/headers`) is unchanged.
 - The bulk body route stays for the pre-warm Job alone; `search.older_batch` and its strings are gone.
 - The Agent's `search_threads` takes `full` for questions about older mail or words inside messages, and runs the same scan through the same Mailstore call as the route.
+- A View's scope may be such a search (ADR 0016, amendment "a search as a scope"): the same matcher, run a page at a time by the View's background walk and once per arriving Thread version, keeps only which Threads matched (ids), never the text.
 - ADR 0011's "Older mail is reachable through an explicit 'search older mail' that pulls candidate bodies by date range into the Cache" is replaced by this ADR; the rest of ADR 0011 stands.

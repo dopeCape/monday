@@ -218,7 +218,7 @@ const searchThreads: ToolDefinition<{
 }> = {
   name: "search_threads",
   description:
-    "Find Threads in the current Workspace. Filters combine: free text over subject and participants, a Section (needs-reply, waiting, fyi, newsletters), a Group, only Threads older than N days, unread only. With full, the query is searched over the whole mailbox on the server, message bodies and older mail included, with the search operators (from:, to:, subject:, quoted phrases, has:attachment, before:, after:, older_than:, -word); use it when asked about older mail or words inside messages. Returns ids to act on with the other tools.",
+    "Find Threads in the current Workspace. Filters combine: free text over subject and participants, a Section (needs-reply, waiting, fyi, newsletters), a Group, only Threads older than N days, unread only. With full, the query is searched over the whole mailbox on the server, message bodies and older mail included, with the search operators (from:, to:, subject:, quoted phrases, has:attachment, before:, after:, older_than:, -word); use it when asked about older mail or words inside messages. A full search that found exactly the right threads can be a View's scope: its query text goes in the scope as query. Returns ids to act on with the other tools.",
   tier: "read",
   input: z.object({
     query: z.string().max(500).optional().describe("Words from the subject or a participant"),

@@ -10,6 +10,11 @@
 // (folder, dates, who started it, who it went to) reads the clear header
 // projections (threads, messages.from/to/cc) through the expression
 // indexes on the sender; the View code's scopeAdmits checks each row again.
+//
+// A scope's full-search `query` is not SQL: a pinned View's members are found
+// by reading the mail (intelligence/views/members.ts) and kept as ids in
+// view_members, which a query naming the View (`members`) joins. Without it
+// the query is left to the caller (the try runs the full search itself).
 
 import type { Id, SignalReadings, ViewScopeFacts, ViewThread } from "@monday/shared";
 import { dateScopeStart } from "@monday/shared";
@@ -30,6 +35,11 @@ export interface ViewThreadQuery {
   exclude?: readonly Id[] | undefined;
   /** Only Threads strictly older than this place in the newest-first order (a walk's cursor). */
   before?: { at: Date; id: Id } | null | undefined;
+  /**
+   * The pinned View whose search scope's members stand in for its `query`: a scope
+   * with a query admits only them, and every row says whether it is one (`inQuery`).
+   */
+  members?: Id | undefined;
   limit: number;
 }
 
@@ -52,8 +62,13 @@ export function scopeConditions(
   facts: ViewScopeFacts,
   now: Date,
   zone: string,
+  members?: Id | undefined,
 ): SQL[] {
   const out: SQL[] = [];
+  if (facts.query && members) {
+    // The search was run when the members were found; here they stand in for it.
+    out.push(sql`t.id in (select vm.thread_id from view_members vm where vm.view_id = ${members})`);
+  }
   const folder = facts.folder ?? "inbox";
   if (folder === "inbox") out.push(sql`t.archived = false and t.snoozed_until is null`);
   else if (folder === "archive") out.push(sql`t.archived = true`);
@@ -132,7 +147,13 @@ function whereOf(query: Omit<ViewThreadQuery, "limit">): SQL {
   }
   if (query.scope) {
     where.push(
-      ...scopeConditions(query.workspaceId, query.scope.facts, query.scope.now, query.scope.zone),
+      ...scopeConditions(
+        query.workspaceId,
+        query.scope.facts,
+        query.scope.now,
+        query.scope.zone,
+        query.members,
+      ),
     );
   }
   return sql.join(where, sql` and `);
@@ -170,6 +191,7 @@ interface Row {
   facts: Record<string, unknown> | null;
   correspondent: { name?: string; email?: string } | null;
   subject_search: string | null;
+  in_query?: boolean | null;
 }
 
 const iso = (v: Date | string | null) =>
@@ -189,6 +211,11 @@ export async function loadViewThreads(
       (select coalesce(jsonb_agg(distinct lower(r->>'email')), '[]'::jsonb)
          from messages m, jsonb_array_elements(m."to" || m.cc) r where m.thread_id = t.id) as recipients,
       (select m."from" from messages m where m.thread_id = t.id and lower(m."from"->>'email') <> ${(query.owner ?? "").toLowerCase()} order by m.date desc, m.id desc limit 1) as correspondent,
+      ${
+        query.members
+          ? sql`exists (select 1 from view_members vm where vm.view_id = ${query.members} and vm.thread_id = t.id) as in_query,`
+          : sql``
+      }
       f.facts
     from threads t left join thread_facts f on f.thread_id = t.id
     where ${whereOf(query)}
@@ -217,6 +244,7 @@ export async function loadViewThreads(
       ? { name: r.correspondent.name ?? "", email: r.correspondent.email.toLowerCase() }
       : null,
     subjectSearch: r.subject_search ?? "",
+    ...(query.members ? { inQuery: r.in_query === true } : {}),
     readings: {},
   }));
 }

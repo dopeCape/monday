@@ -64,6 +64,7 @@ export function useViews(): View[] | undefined {
         list: (workspaceId) => api.list(workspaceId),
         values: (viewId) => api.values(viewId),
         valuesFor: (workspaceId, threadIds) => api.valuesFor(workspaceId, threadIds),
+        members: (viewId) => api.members(viewId),
       });
     }
     const live = store.live<Record<string, unknown>>(VIEWS_SQL, []);
@@ -103,14 +104,21 @@ function useViewThreads(
   doc: ViewDoc | null,
   since: Date | null,
   owner: string,
+  viewId: string | null,
 ): CachedViewThread[] | undefined {
   const [threads, setThreads] = useState<CachedViewThread[] | undefined>(undefined);
   const query = useMemo(
     () =>
       doc
-        ? viewThreadsSql(doc.scope.facts, since, Math.min(doc.scope.limit * 2, 5000), owner)
+        ? viewThreadsSql(
+            doc.scope.facts,
+            since,
+            Math.min(doc.scope.limit * 2, 5000),
+            owner,
+            viewId ?? doc.id,
+          )
         : null,
-    [doc, since, owner],
+    [doc, since, owner, viewId],
   );
   useEffect(() => {
     if (!store || !query) {
@@ -157,7 +165,7 @@ export function useViewBase(
   );
   const doc = view?.doc ?? null;
   const since = useScopeSince(doc, ctx);
-  const threads = useViewThreads(store, doc, since, ws.address);
+  const threads = useViewThreads(store, doc, since, ws.address, view?.id ?? null);
   const previous = useRef<{ id: string; lanes: Map<string, string> } | null>(null);
   const base = useMemo(() => {
     if (!view || !threads) return undefined;
@@ -209,6 +217,7 @@ export function useViewCounts(
         scopeSince(b.doc.scope.facts, ctx.now, ctx.zone),
         Math.min(b.doc.scope.limit * 2, 5000),
         ws.address,
+        b.id,
       );
       const live = store.live<Record<string, unknown>>(q.sql, q.params);
       const off = live.subscribe((rows) => {

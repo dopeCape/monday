@@ -62,7 +62,7 @@ Conditions (a Lane's "when", a query's "where", an action's "when"), three-value
 - Extraction tests: {"extract": id, "present": true}; {"extract": id, "at_least": 500} for money or a quantity; {"extract": id, "before": "end_of_month"} for a date; {"extract": id, "in": ["Acme"]} for text.
 - Lane tests (not inside a Lane's own condition): {"lane": "shipped"} or {"lane": ["red", "yellow"]}.
 
-Scope facts, all of which must hold (list alternatives inside one fact): "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any" and "to_any" as whole addresses (orders@shop.com); "from_domain" and "from_domain_not" as domains (shop.com); "subject_any" as words or phrases the subject holds, case aside ("order confirmation", "dependabot"); "folder" as inbox, any, archive, group:<id> or section:<id> (use any for mail the owner may have archived, such as receipts). "limit" is the most threads looked at, newest first. Narrow the scope to the mail that holds what the sentence asks for: the test tries the newest threads in it, and a View of orders tried on newsletters reads nothing.
+Scope facts, all of which must hold (list alternatives inside one fact): "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any" and "to_any" as whole addresses (orders@shop.com); "from_domain" and "from_domain_not" as domains (shop.com); "subject_any" as words or phrases the subject holds, case aside ("order confirmation", "dependabot"); "query" as a full search in the search box's language, run over the subjects, the people and the message text of the whole mailbox: words, "quoted phrases", from:, to:, subject:, has:attachment and -word to leave out (no dates, is:, in:, tag: or label: in it: dates go in received or active, the rest in folder). When the Agent ran a search that found exactly the right threads, put that search in the scope as "query" (with the senders or dates the results share as the other facts), such as {"query": ""order confirmation" -cancelled", "from_domain": ["flomattress.com"], "folder": "any"}: the View then holds every thread the search matches, older ones and ones the words are only inside of included. Prefer subject_any when the words are in the subject; use query when they are only in the text. "folder" as inbox, any, archive, group:<id> or section:<id> (use any for mail the owner may have archived, such as receipts). "limit" is the most threads looked at, newest first. Narrow the scope to the mail that holds what the sentence asks for: the test tries the newest threads in it, and a View of orders tried on newsletters reads nothing.
 
 Lanes (only when the sentence asks for groups like red, yellow and green, or statuses): tried in order, the first whose condition holds takes the thread, a thread that cannot be decided goes to Unsure by itself; order them from the most specific. "tone" is danger, warning, ok, info or muted. A View without lanes has "lanes": [].
 
@@ -200,6 +200,27 @@ export const VIEW_SETTINGS = {
     label: "Warn when a value reads on few tried threads",
     help: "On a new view's card, a value or question its Blocks show is marked when it read on less than this share of the tried threads, with the reasons beside it.",
   }),
+  "views.query.count_max": limit(
+    "Matches a search scope's try counts",
+    500,
+    10,
+    100_000,
+    "When a View's scope is a full search, its try counts the matches up to this many; above it the card says at least this many.",
+  ),
+  "views.query.scan_max": limit(
+    "Threads a search scope looks through",
+    20_000,
+    100,
+    1_000_000,
+    "The most threads, newest first, a View's full-search scope reads to find its members (after its other facts), in its try and when it is pinned. Older ones are not searched.",
+  ),
+  "views.query.page_size": limit(
+    "Threads per step of a search scope",
+    200,
+    10,
+    2000,
+    "How many threads a pinned View with a full-search scope searches before its place and the members it found are saved.",
+  ),
   "views.nav.show_counts": setting({
     type: z.boolean(),
     default: true,
@@ -523,6 +544,14 @@ export const VIEW_SETTINGS = {
   "strings.views.reading_no_judge": str(
     "reading bar, no judge",
     "Reading waits for a TypeSafe key: {done} of {total}",
+  ),
+  "strings.views.reading_search": str(
+    "reading bar, searching",
+    "Searching {done} of {total} threads: {found} match so far",
+  ),
+  "strings.views.reading_locked": str(
+    "reading bar, locked",
+    "Reading waits for monday to unlock: {done} of {total}",
   ),
   "strings.views.reading_paused": str("reading bar, paused", "Reading paused at {done} of {total}"),
   "strings.views.reading_pause": str("pause reading", "Pause"),

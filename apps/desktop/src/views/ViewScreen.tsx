@@ -366,9 +366,13 @@ export function ViewScreen({ viewId, now, onAsk, onLeave, render }: ViewScreenPr
                     ? "strings.views.reading_budget"
                     : reading.reason === "no_judge"
                       ? "strings.views.reading_no_judge"
-                      : "strings.views.reading"
+                      : reading.reason === "locked"
+                        ? "strings.views.reading_locked"
+                        : reading.phase === "search"
+                          ? "strings.views.reading_search"
+                          : "strings.views.reading"
               ],
-              { done: reading.done, total: reading.total },
+              { done: reading.done, total: reading.total, found: reading.found ?? 0 },
             )}
           </span>
           {reading.total > 0 ? <progress value={reading.done} max={reading.total} /> : null}

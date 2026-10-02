@@ -220,6 +220,41 @@ export function compileMatcher(q: SearchQuery): (thread: MatchThread) => ThreadM
   };
 }
 
+/** Where a column is, in words for the Agent. */
+const COLUMN_WORDS: Record<Column, string> = {
+  subject: "the subject",
+  sender: "the sender",
+  recipients: "the recipients",
+  body: "a message's text",
+};
+
+/**
+ * What a query matched in a Thread, in words for the Agent ("invoice in a
+ * message's text", "from:stripe in the sender"): each positive term and the
+ * first column of the matching Message it was found in. Empty when the
+ * Thread does not match. Reads the text like matchThread does.
+ */
+export function explainMatch(q: SearchQuery, thread: MatchThread): string[] {
+  const result = matchThread(q, thread);
+  if (!result.matched) return [];
+  const t = compileText(q);
+  if (result.message < 0) {
+    return t.trigram.length ? t.trigram.map((w) => `${w} in the subject or the people`) : [];
+  }
+  const m = thread.messages[result.message];
+  if (!m) return [];
+  const doc = new Doc({
+    subject: thread.subject,
+    sender: m.sender,
+    recipients: m.recipients,
+    body: m.body,
+  });
+  return t.positive.map((p) => {
+    const where = p.columns.find((c) => matches(doc, { ...p, columns: [c] }));
+    return `${p.tokens.join(" ")} in ${where ? COLUMN_WORDS[where] : "the thread"}`;
+  });
+}
+
 /**
  * A passage of `width` words around the first term that occurs in `body`:
  * a hit's preview. Terms are matched by prefix.
