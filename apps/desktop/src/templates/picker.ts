@@ -49,3 +49,38 @@ export function filterTemplates(library: readonly Template[], query: string): Te
   }
   return groups.flat();
 }
+
+/** The picker's list once Jev's ranking is in: the Suggested first, the rest in their own order. */
+export interface RankedItems {
+  items: Template[];
+  /** How many of `items`, from the top, are marked Suggested. */
+  suggested: number;
+  /** Each ranked Template's share of request 1's Choice, for the subtle fit. */
+  p: ReadonlyMap<string, number>;
+}
+
+/**
+ * Puts at most `max` of the filtered Templates that the ranking gives at
+ * least `floor` first, likeliest first; every other Template keeps the order
+ * filterTemplates gave it. With no ranking (not asked, not back yet) the list
+ * is unchanged, so the picker never waits on it.
+ */
+export function rankTemplates(
+  items: readonly Template[],
+  ranking: ReadonlyArray<{ templateId: string; p: number }> | null,
+  options: { max: number; floor: number },
+): RankedItems {
+  const p = new Map((ranking ?? []).map((r) => [r.templateId, r.p] as const));
+  if (!ranking || options.max <= 0) return { items: [...items], suggested: 0, p };
+  const share = (t: Template) => p.get(t.id) ?? 0;
+  const top = items
+    .filter((t) => share(t) > 0 && share(t) >= options.floor)
+    .sort((a, b) => share(b) - share(a))
+    .slice(0, options.max);
+  const chosen = new Set(top.map((t) => t.id));
+  return {
+    items: [...top, ...items.filter((t) => !chosen.has(t.id))],
+    suggested: top.length,
+    p,
+  };
+}

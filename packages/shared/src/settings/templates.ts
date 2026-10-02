@@ -11,8 +11,35 @@ function entry<T extends z.ZodType>(e: SettingEntry<T>): SettingEntry<T> {
   return e;
 }
 
-const SECTION: SettingSection = "accounts";
+const SECTION: SettingSection = "templates";
 const GROUP = "Templates";
+
+/**
+ * The group a key sits under on Settings › Templates, by its prefix. Keys
+ * written with the plain GROUP move here; the section's own group keeps the
+ * switch, the scope, the hidden built-ins and the panel.
+ */
+const GROUP_BY_PREFIX: ReadonlyArray<readonly [string, string]> = [
+  ["templates.trigger", "In compose"],
+  ["compose.templates.", "In compose"],
+  ["templates.hint.", "In compose"],
+  ["templates.picker.", "In compose"],
+  ["templates.suggest.", "Suggestions"],
+  ["templates.fill.", "Filling"],
+  ["templates.author.", "Writing templates"],
+  ["templates.duplicate.", "Writing templates"],
+  ["templates.verify.", "Checks"],
+  ["templates.step.", "Checks"],
+];
+
+function regroup<T extends Record<string, { group?: string }>>(entries: T): T {
+  for (const [key, e] of Object.entries(entries)) {
+    if (e.group !== GROUP) continue;
+    const found = GROUP_BY_PREFIX.find(([prefix]) => key.startsWith(prefix));
+    if (found) e.group = found[1];
+  }
+  return entries;
+}
 
 function str(label: string, value: string) {
   return entry({
@@ -43,13 +70,14 @@ const unit = z.number().min(0).max(1);
 
 /* ------------------------------ Slice 36: storage, picker, Placeholders ------------------------------ */
 
-export const TEMPLATE_SETTINGS = {
+export const TEMPLATE_SETTINGS = regroup({
   "templates.enabled": entry({
     type: z.boolean(),
     default: true,
     scope: "global",
     section: SECTION,
     group: GROUP,
+    tier: "primary",
     label: "Templates",
     help: "Offer your Templates in compose: the picker, the insert shortcut and suggestions while you type.",
   }),
@@ -59,6 +87,7 @@ export const TEMPLATE_SETTINGS = {
     scope: "global",
     section: SECTION,
     group: GROUP,
+    tier: "primary",
     label: "Picker trigger",
     help: "Typed at the start of a line in compose, opens the Template picker at the caret.",
   }),
@@ -68,6 +97,7 @@ export const TEMPLATE_SETTINGS = {
     scope: "global",
     section: SECTION,
     group: GROUP,
+    tier: "primary",
     label: "Picker key",
     help: "The key chord that opens the Template picker in compose. Mod is Command on macOS and Control elsewhere.",
   }),
@@ -159,6 +189,7 @@ export const TEMPLATE_SETTINGS = {
     scope: "global",
     section: SECTION,
     group: GROUP,
+    tier: "primary",
     label: "Suggest a template while I type",
     help: "After a pause at the start of a message, one quiet line offers the template that fits, when one clearly does. Tab uses it, Esc dismisses it.",
   }),
@@ -629,4 +660,83 @@ export const TEMPLATE_SETTINGS = {
   ),
   "strings.templates.empty": str("No templates yet", "No templates of your own yet."),
   "strings.meter.judge.template": str("Meter line: templates", "Templates"),
-};
+
+  /* Finding templates: the compose button, the one-time hint, Jev in the picker, the softer line */
+
+  "templates.hint.trigger_seen": entry({
+    type: z.boolean(),
+    default: false,
+    scope: "device",
+    section: SECTION,
+    group: GROUP,
+    hidden: "Kept by compose; the hint shows until it is dismissed or a template is used.",
+    label: "Template hint seen",
+    help: "Whether compose has shown, once, how to open the template picker on this device.",
+  }),
+  "templates.picker.rank": entry({
+    type: z.boolean(),
+    default: true,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "primary",
+    label: "Put the templates that fit first",
+    help: "In a reply, or with something typed, the picker opens at once in its usual order and then moves the templates that fit this thread to the top, marked Suggested.",
+  }),
+  "templates.picker.suggested_max": entry({
+    type: z.int().min(0).max(10),
+    default: 3,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "advanced",
+    label: "Suggested in the picker",
+    help: "The most templates the picker marks Suggested.",
+  }),
+  "templates.picker.suggested_floor": entry({
+    type: unit,
+    default: 0.15,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "advanced",
+    label: "Suggested from",
+    help: "A template is marked Suggested in the picker only when the ranking gives it at least this much.",
+  }),
+  "templates.picker.rank_cache_ms": entry({
+    type: z.int().min(0).max(3_600_000),
+    default: 60_000,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "advanced",
+    label: "Remember a ranking for",
+    help: "How long, in milliseconds, the picker reuses a ranking for the same thread and the same typed text.",
+  }),
+  "templates.suggest.hint_floor": entry({
+    type: unit,
+    default: 0.35,
+    scope: "global",
+    section: SECTION,
+    group: GROUP,
+    tier: "advanced",
+    label: "Softer suggestion from",
+    help: "When the closer look rejects every template but the ranking's first choice is at least this likely, a softer line offers it: Maybe: Offer other times (Tab).",
+  }),
+
+  "strings.templates.button": str("Compose toolbar button", "Templates"),
+  "strings.templates.button_tip": str(
+    "Compose toolbar button tooltip",
+    "Insert a template. Type {trigger} at the start of a line, or press {key}",
+  ),
+  "strings.templates.hint.trigger": str("One-time compose hint", "Type {trigger} for templates"),
+  "strings.templates.hint.dismiss": str("One-time compose hint, dismiss", "Got it"),
+  "strings.templates.suggest.maybe": str("Softer suggestion line", "Maybe: {name} (Tab)"),
+  "strings.templates.picker.suggested": str("Picker, suggested templates", "Suggested"),
+  "strings.templates.picker.fit": str("Picker, how well it fits", "{percent}%"),
+  "strings.templates.picker.fit_title": str(
+    "Picker, how well it fits, tooltip",
+    "How likely this template fits, from the ranking",
+  ),
+  "strings.templates.picker.manage": str("Picker, open Settings", "Manage templates"),
+});

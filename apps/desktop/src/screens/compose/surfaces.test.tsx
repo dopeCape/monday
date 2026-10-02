@@ -7,10 +7,13 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { PartialSettings } from "@monday/shared";
+import { BUILTIN_TEMPLATES, defaultSettings } from "@monday/shared";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { StaticShell } from "../../shell/Shell.tsx";
+import { setTemplateLink, type TemplateLink } from "../../templates/link.ts";
+import { templateStrings } from "../../templates/strings.ts";
 import { Inbox, type InboxProps } from "../Inbox.tsx";
 import { fixtureInbox } from "../inbox/actions.ts";
 import { Attachments } from "./Attachments.tsx";
@@ -206,6 +209,63 @@ describe("Recommended action chips (docs/spec/actions.md)", () => {
     expect(document.querySelector(".reply .quoted")).not.toBeNull();
     expect(composer.sends()).toEqual([]);
   });
+});
+
+describe("Templates in both compose surfaces", () => {
+  /** A Template link as the Bridge sets it, with the Server's answers scripted. */
+  function linkFor(composer: ReturnType<typeof fixtureComposer>, typedSeen: string[]) {
+    const link: TemplateLink = {
+      enabled: true,
+      trigger: ";;",
+      openKey: "mod+;",
+      library: BUILTIN_TEMPLATES,
+      strings: templateStrings(defaultSettings()),
+      fill: async () => null,
+      suggestion: { enabled: true, debounceMs: 20, minIntervalMs: 0, maxTypedChars: 200 },
+      suggest: async (request) => {
+        typedSeen.push(request.draft.typed);
+        return {
+          status: "suggested",
+          templateId: "t_thanks_received",
+          name: "Thanks, received",
+          fits: 0.9,
+          gate: 0.8,
+        };
+      },
+      draftFrom: () => {},
+      onOpen: { enabled: false, needsReplyAt: 0.6, suggest: async () => null },
+      ranking: { enabled: false, suggestedMax: 3, suggestedFloor: 0.15, rank: async () => null },
+      hint: { show: false, dismiss: () => {} },
+    };
+    setTemplateLink(composer, link);
+  }
+  const editorIn = (scope: string) =>
+    (document.querySelector(`${scope} .tiptap`) as (HTMLElement & { editor?: TiptapEditor }) | null)
+      ?.editor ?? null;
+
+  for (const surface of ["compose window", "inline reply"] as const) {
+    test(`the ${surface} has the Templates button and shows "Use Thanks, received (Tab)" when the Server suggests it`, async () => {
+      const composer = fixtureComposer({ now: () => NOW });
+      const typed: string[] = [];
+      linkFor(composer, typed);
+      const scope = surface === "compose window" ? ".compose" : ".reply";
+      await mount(surface === "compose window" ? { composer } : { composer, initialOpen: "e1" });
+      await press(surface === "compose window" ? "c" : "r");
+      await until(() => editorIn(scope) !== null);
+      const button = document.querySelector<HTMLButtonElement>(`${scope} .tpl-open`);
+      expect(button?.textContent?.trim()).toBe("Templates");
+      expect(button?.title).toContain(";;");
+      await act(async () => {
+        editorIn(scope)?.chain().focus("start").insertContent("Thanks for sending the").run();
+      });
+      await until(() => document.querySelector(`${scope} .tpl-suggest`) !== null);
+      expect(document.querySelector(`${scope} .tpl-suggest`)?.textContent).toContain(
+        "Use Thanks, received (Tab)",
+      );
+      expect(typed.at(-1)).toBe("Thanks for sending the");
+      setTemplateLink(composer, null);
+    });
+  }
 });
 
 describe("send and undo", () => {

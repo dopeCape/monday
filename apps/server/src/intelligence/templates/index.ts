@@ -123,6 +123,8 @@ const SUGGEST_KEYS = [
   "templates.suggest.max_typed_chars",
   "templates.suggest.gate",
   "templates.suggest.fits_floor",
+  "templates.suggest.hint_floor",
+  "templates.picker.rank",
   "templates.suggest.shortlist",
   "templates.suggest.choice_max",
   "templates.suggest.on_open",
@@ -187,6 +189,7 @@ export function createTemplateIntelligence(
     threadId: Id | null,
     draft: TemplateSuggestRequest["draft"],
     s: Awaited<ReturnType<typeof readSuggest>>,
+    rankOnly = false,
   ): Promise<TemplateSuggestResult> => {
     const library = await store.library(workspaceId);
     const thread = threadId
@@ -198,9 +201,11 @@ export function createTemplateIntelligence(
       library,
       thread,
       draft,
+      rankOnly,
       settings: {
         gate: s["templates.suggest.gate"],
         fitsFloor: s["templates.suggest.fits_floor"],
+        hintFloor: s["templates.suggest.hint_floor"],
         shortlist: s["templates.suggest.shortlist"],
         choiceMax: s["templates.suggest.choice_max"],
         questions: {
@@ -290,6 +295,18 @@ export function createTemplateIntelligence(
       const s = await readSuggest();
       if (!s["templates.enabled"] || !s["templates.suggest.enabled"]) {
         return { status: "none", reason: "disabled" };
+      }
+      if (request.rankOnly) {
+        // The picker's order: request 1 alone, over at most the text the judge reads.
+        if (!s["templates.picker.rank"]) return { status: "none", reason: "disabled" };
+        const typed = request.draft.typed.slice(0, s["templates.fill.state_chars"]);
+        return suggestWith(
+          request.workspace,
+          request.threadId,
+          { ...request.draft, typed },
+          s,
+          true,
+        );
       }
       if (request.draft.typed.length >= s["templates.suggest.max_typed_chars"]) {
         return { status: "none", reason: "disabled" };

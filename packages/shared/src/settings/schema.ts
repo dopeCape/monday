@@ -36,11 +36,12 @@ import { VIEW_SETTINGS } from "./views.ts";
 /** Where a Setting is stored: shared across every Device, or per Device (ADR 0001). */
 export type SettingScope = "global" | "device";
 
-/** The eight sections of the Settings screen (docs/spec/settings.md). */
+/** The nine sections of the Settings screen (docs/spec/settings.md). */
 export type SettingSection =
   | "accounts"
   | "appearance"
   | "routing"
+  | "templates"
   | "ai"
   | "workflows"
   | "server"
@@ -51,6 +52,7 @@ export const SETTING_SECTIONS: readonly SettingSection[] = [
   "accounts",
   "appearance",
   "routing",
+  "templates",
   "ai",
   "workflows",
   "server",
@@ -6018,6 +6020,7 @@ export const settingsSchema = {
   "strings.settings.section.accounts": str("accounts", "Section: Accounts", "Accounts"),
   "strings.settings.section.appearance": str("appearance", "Section: Appearance", "Appearance"),
   "strings.settings.section.routing": str("routing", "Section: Routing", "Routing"),
+  "strings.settings.section.templates": str("templates", "Section: Templates", "Templates"),
   "strings.settings.section.ai": str("ai", "Section: AI and agent", "AI and agent"),
   "strings.settings.section.workflows": str("workflows", "Section: Workflows", "Workflows"),
   "strings.settings.section.server": str("server", "Section: Sync server", "Sync server"),
@@ -6037,6 +6040,11 @@ export const settingsSchema = {
     "routing",
     "Routing intro",
     "How mail lands in Groups and Sections, and which threads get a Brief. The agent can change any of it when you ask.",
+  ),
+  "strings.settings.intro.templates": str(
+    "templates",
+    "Templates intro",
+    "Messages you send often, with Placeholders monday fills from the thread. In compose, use the Templates button, type the picker trigger (;; unless you change it below) at the start of a line, or press the picker key.",
   ),
   "strings.settings.intro.ai": str(
     "ai",
@@ -9307,6 +9315,7 @@ export const SETTING_GROUPS: Readonly<Record<SettingSection, readonly string[]>>
     "Confidence",
     "Reading",
   ],
+  templates: ["Templates", "In compose", "Suggestions", "Filling", "Writing templates", "Checks"],
   ai: [
     "Level",
     "Runtime",

@@ -10,6 +10,7 @@ import type {
   Person,
   Template,
   TemplateFillResult,
+  TemplateRank,
   TemplateSuggestResult,
 } from "@monday/shared";
 import { useSyncExternalStore } from "react";
@@ -49,6 +50,25 @@ export interface TemplateLink {
     needsReplyAt: number;
     suggest(threadId: Id): Promise<TemplateSuggestResult | null>;
   };
+  /**
+   * Jev's order for the picker (templates.picker.*): request 1's ranking for a
+   * Thread and what was typed, remembered briefly; off when `enabled` is false.
+   */
+  ranking: {
+    enabled: boolean;
+    /** The most Templates marked Suggested, and the least share that marks one. */
+    suggestedMax: number;
+    suggestedFloor: number;
+    /** Null when the Server could not be asked or gave no ranking. */
+    rank(request: {
+      threadId: Id | null;
+      draft: { to: Person[]; subject: string; typed: string };
+    }): Promise<TemplateRank[] | null>;
+  };
+  /** The one-time "Type ;; for templates" line (templates.hint.trigger_seen on this device). */
+  hint: { show: boolean; dismiss(): void };
+  /** Opens Settings › Templates; absent where there is no Settings to open. */
+  manage?: (() => void) | undefined;
 }
 
 /** Where a Template is written from: sent Messages, or a Draft's text. */

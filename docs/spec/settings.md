@@ -44,6 +44,12 @@ The Routing page itself is `routing.md`; this section of Settings holds the same
 - Brief policy editor: the current rule sentence, per-Group and per-Section overrides, and an optional custom prompt.
 - Global thresholds, re-evaluation policy and lookback.
 
+### Templates
+Its own section (`settings:templates`, opened by the compose picker's "Manage templates"); `templates.md` holds the behavior:
+- The Templates panel: the Workspace's own Templates and the built-ins, New, Edit, Delete with Undo, Hide and Show, Export and Import, with the on switch and where new Templates belong.
+- In compose: the trigger, the picker key, and the picker's ranking (on, how many Suggested, from what share).
+- Suggestions, Filling, Writing templates and Checks: the thresholds and the judge's questions, mostly under Advanced.
+
 ### AI and agent
 - The three level cards first (`ai.level`: just mail, mail with an assistant, mail that sorts and acts for me), exactly as onboarding shows them; the rest of this section is hidden under `off` and the automation parts under `assist`.
 - Runtime mode: Local CLI or Hosted, with the detected CLIs and their status, and the Hosted providers with key state.

@@ -11694,6 +11694,49 @@ button.appr-link:focus-visible {
 .tpl-picker .tpl-name {
   font-size: var(--fs-md);
 }
+/* Jev's Suggested rows: the name with its fit, quietly, at the end of the line */
+.tpl-picker .tpl-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.tpl-picker .tpl-share {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+.tpl-picker .tpl-h-suggested {
+  color: var(--accent);
+}
+.tpl-picker-foot {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.tpl-manage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  transition: background var(--t-fast);
+}
+.tpl-manage:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+/* the compose toolbar's Templates button */
+.c-tools .tpl-open {
+  gap: 4px;
+}
 .tpl-picker .tpl-fit {
   max-width: 100%;
   overflow: hidden;
@@ -11861,6 +11904,24 @@ button.appr-link:focus-visible {
 }
 .tpl-suggest-use:hover {
   background: var(--hover);
+}
+/* the softer Maybe line: the same action, less sure, so less loud */
+.tpl-suggest.maybe .tpl-suggest-use {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--fg-muted);
+}
+.tpl-suggest.maybe .tpl-suggest-use:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+/* the one-time "Type ;; for templates" */
+.tpl-hint {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+.tpl-hint .btn {
+  margin-left: 2px;
 }
 /* a Template shown whole: the Agent's card and the sheet */
 .tpl-body-view {

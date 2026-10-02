@@ -296,6 +296,7 @@ export function ReplyCompose({
               hidden={link ? !link.toolbar : false}
               linkOpen={linkOpen}
               onLinkOpen={setLinkOpen}
+              templates={templates.button}
               assist={
                 <AssistMenu
                   assist={assist}

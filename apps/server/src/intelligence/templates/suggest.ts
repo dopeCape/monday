@@ -5,7 +5,10 @@
 //      (gate_personal inverted) decides whether a Template is wanted at all.
 //   2. A close look at the top three with their full text: a Choice among
 //      them and one "does it fit" Noul each, which may reject all of them.
-// Nothing is suggested below the gate or below the reject-all floor.
+// Nothing is suggested below the gate or below the reject-all floor; below
+// the floor (not the gate), request 1's first choice, when it is at least the
+// hint floor, comes back as `maybe` for the softer line. Every answer after request 1 carries its
+// ranking, which the picker orders by; `rankOnly` stops after request 1.
 
 import type {
   ChoiceAnswer,
@@ -15,6 +18,7 @@ import type {
   NoulQuestion,
   Person,
   Template,
+  TemplateRank,
   TemplateSuggestResult,
 } from "@monday/shared";
 import type { Ask } from "./ask.ts";
@@ -24,6 +28,8 @@ export const NONE = "none";
 export interface SuggestSettings {
   gate: number;
   fitsFloor: number;
+  /** Request 1's first choice at least this likely is offered softly when nothing is suggested. */
+  hintFloor: number;
   /** How many of request 1's best go to request 2. */
   shortlist: number;
   /** The most options one Choice carries; a larger library is split. */
@@ -48,6 +54,8 @@ export interface SuggestInput {
   draft: { to: readonly Person[]; subject: string; typed: string };
   settings: SuggestSettings;
   jobId?: string | null;
+  /** Request 1 only, for the picker: no gate, no closer look. */
+  rankOnly?: boolean;
 }
 
 /** What request 1 and request 2 read: the Thread (for a reply) and what the owner has started. */
@@ -127,33 +135,41 @@ export async function suggestTemplate(input: SuggestInput): Promise<TemplateSugg
   >;
   const noul = (id: string) => answers[id]?.noul ?? 0.5;
   const gate = (noul("gate_standard") + noul("gate_purpose") + (1 - noul("gate_personal"))) / 3;
-  if (gate < settings.gate) return { status: "none", reason: "gate", gate };
 
   const ranked: Array<{ template: Template; p: number }> = [];
   chunks.forEach((chunk, i) => {
     const a = answers[chunks.length === 1 ? "which" : `which_${i}`];
     for (const t of chunk) ranked.push({ template: t, p: a?.probabilities?.[t.id] ?? 0 });
   });
-  const shortlist = ranked
-    .filter((r) => r.p > 0)
-    .sort((a, b) => b.p - a.p)
-    .slice(0, settings.shortlist)
-    .map((r) => r.template);
-  if (shortlist.length === 0) return { status: "none", reason: "floor", gate };
+  const best = ranked.filter((r) => r.p > 0).sort((a, b) => b.p - a.p);
+  const ranking: TemplateRank[] = best.map((r) => ({ templateId: r.template.id, p: r.p }));
+  if (input.rankOnly) return { status: "ranked", ranking, gate };
+
+  const top = best[0];
+  const maybe =
+    top && top.p >= settings.hintFloor
+      ? { maybe: { templateId: top.template.id, name: top.template.name, p: top.p } }
+      : {};
+  // Below the gate no template is wanted at all, so not even softly.
+  if (gate < settings.gate) return { status: "none", reason: "gate", gate, ranking };
+
+  const shortlist = best.slice(0, settings.shortlist).map((r) => r.template);
+  if (shortlist.length === 0) return { status: "none", reason: "floor", gate, ranking };
 
   const second = await input.ask(state, rerankQuestions(shortlist, settings), opts);
   if (!second) return { status: "unavailable", reason: "no judge" };
   const b = second.answers as Record<string, { noul?: number; choice?: string }>;
   const fits = shortlist.map((t) => b[`fits_${t.id}`]?.noul ?? 0);
-  const best = Math.max(...fits);
-  if (best < settings.fitsFloor) return { status: "none", reason: "floor", gate };
-  const winner = shortlist.find((t) => t.id === b.which?.choice) ?? shortlist[fits.indexOf(best)];
-  if (!winner) return { status: "none", reason: "floor", gate };
+  const fit = Math.max(...fits);
+  if (fit < settings.fitsFloor) return { status: "none", reason: "floor", gate, ranking, ...maybe };
+  const winner = shortlist.find((t) => t.id === b.which?.choice) ?? shortlist[fits.indexOf(fit)];
+  if (!winner) return { status: "none", reason: "floor", gate, ranking, ...maybe };
   return {
     status: "suggested",
     templateId: winner.id,
     name: winner.name,
-    fits: fits[shortlist.indexOf(winner)] ?? best,
+    fits: fits[shortlist.indexOf(winner)] ?? fit,
     gate,
+    ranking,
   };
 }

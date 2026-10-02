@@ -608,8 +608,14 @@ describe("Settings pages come from the schema", () => {
   });
 
   test("Settings › Templates lists the built-ins with Hide, and search finds the panel", async () => {
-    await mountOpen({ initialSection: "accounts" }, { api: scriptedApi().api });
+    // Its own section in the nav, not a panel inside Accounts.
+    await mountOpen({ initialSection: "templates" }, { api: scriptedApi().api });
     await settle();
+    expect(q(".settings-in")?.dataset.section).toBe("templates");
+    expect(
+      [...document.querySelectorAll(".settings-nav .nav-item")].map((b) => b.textContent),
+    ).toContain("Templates");
+    expect(q('[data-setting="templates.trigger"]')).not.toBeNull();
     const panel = q('[data-panel="templates"]');
     expect(panel?.querySelectorAll("[data-template]").length).toBe(21);
     expect(panel?.textContent).toContain("No templates of your own yet.");

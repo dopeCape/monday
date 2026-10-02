@@ -9,7 +9,7 @@
 //   DELETE /templates/:id?everywhere=1           ->  {removed}
 //   POST   /templates/restore                    {ids}  ->  {templates}   (Undo of a delete)
 //   POST   /templates/:id/fill                   {workspace, threadId?, to?}  ->  TemplateFillResult
-//   POST   /templates/suggest                    {workspace, threadId, draft: {to, subject, typed}}  ->  TemplateSuggestResult
+//   POST   /templates/suggest                    {workspace, threadId, draft: {to, subject, typed}, rankOnly?}  ->  TemplateSuggestResult
 //   GET    /threads/:id/template-suggestion?workspace=   the on-open suggestion for the Reply chip
 //   POST   /templates/draft                      {workspace, messageIds?, texts?}  ->  {template, duplicate}
 //   POST   /templates/duplicates                 {workspace, template}  ->  {duplicate}
@@ -73,6 +73,7 @@ const suggestBody = z.object({
     subject: z.string().max(1000).default(""),
     typed: z.string().max(20_000).default(""),
   }),
+  rankOnly: z.boolean().default(false),
 });
 const example = z.object({
   subject: z.string().max(1000).default(""),
@@ -130,6 +131,7 @@ export function templateRoutes(templates: TemplateIntelligence): Hono<AppEnv> {
         workspace: body.data.workspace,
         threadId: body.data.threadId,
         draft: body.data.draft,
+        rankOnly: body.data.rankOnly,
       }),
     );
   });

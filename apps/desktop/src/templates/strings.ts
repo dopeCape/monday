@@ -71,6 +71,15 @@ export interface TemplateUiStrings {
   duplicateReplace: string;
   duplicateKeep: string;
   saved: string;
+  button: string;
+  buttonTip: string;
+  hintTrigger: string;
+  hintDismiss: string;
+  suggestMaybe: string;
+  pickerSuggested: string;
+  pickerFit: string;
+  pickerFitTitle: string;
+  pickerManage: string;
 }
 
 export function templateStrings(s: Settings): TemplateUiStrings {
@@ -153,6 +162,15 @@ export function templateStrings(s: Settings): TemplateUiStrings {
     duplicateReplace: s["strings.templates.duplicate.replace"],
     duplicateKeep: s["strings.templates.duplicate.keep"],
     saved: s["strings.templates.saved"],
+    button: s["strings.templates.button"],
+    buttonTip: s["strings.templates.button_tip"],
+    hintTrigger: s["strings.templates.hint.trigger"],
+    hintDismiss: s["strings.templates.hint.dismiss"],
+    suggestMaybe: s["strings.templates.suggest.maybe"],
+    pickerSuggested: s["strings.templates.picker.suggested"],
+    pickerFit: s["strings.templates.picker.fit"],
+    pickerFitTitle: s["strings.templates.picker.fit_title"],
+    pickerManage: s["strings.templates.picker.manage"],
   };
 }
 
