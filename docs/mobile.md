@@ -34,6 +34,29 @@ camera's reason on iOS is `NSCameraUsageDescription` in `src-tauri/ios/Info.plis
 (merged through `tauri.ios.conf.json`), the default text of
 `strings.mobile.connect.camera_permission`; Android asks at the first scan.
 
+## Status and navigation bars
+
+The webview draws edge to edge (`enableEdgeToEdge` in `MainActivity`), so the
+system bars sit over monday's own background, and the content keeps clear of
+them through the `--safe-*` tokens (`env(safe-area-inset-*)`). The bars'
+icons follow monday's resolved appearance, not the system's: the Shell calls
+`platform().setSystemBars(dark)` whenever it changes, which is the
+`set_system_bars` command and, on Android, `SystemBarsPlugin`
+(`WindowInsetsControllerCompat`, light icons over the dark appearance). On
+iOS the status bar still follows the system appearance; setting it needs a
+view controller override in the generated Xcode project, not done yet.
+
+## A new device fills newest first
+
+A new Cache does not replay the Changes feed from its oldest row first: it
+asks `GET /changes/snapshot` for the newest Threads as they are now (the
+`sync.seed_threads` newest, `sync.seed_page_size` at a time), then runs the
+feed from 0 and skips each row whose kind and entity the snapshot already
+applied at the same seq or a newer one (`applied_seq` in the Cache,
+`changeKey` and `FULL_STATE_KINDS` in `@monday/shared`). A Cache more than
+`sync.seed_after_changes` changes behind does the same. This holds on a
+computer too.
+
 ## What differs on a phone
 
 The Rust side splits on Tauri's `desktop` / `mobile` cfg, so Android and iOS

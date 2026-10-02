@@ -7,6 +7,8 @@ mod platform;
 mod power;
 mod rootkey;
 mod secrets;
+#[cfg(mobile)]
+mod system_bars;
 
 // The desktop shell runs and owns things a phone does not have (docs/mobile.md):
 // the Sidecar as a background service, the Local runtime CLIs, a config file
@@ -38,7 +40,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(sidecar::SidecarState::default());
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    let builder = builder
+        .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(system_bars::init());
     builder
         .invoke_handler(handlers())
         .setup(|app| {
@@ -115,5 +119,6 @@ fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         power::network_info,
         notify::notify,
         pinned::pinned_fetch,
+        system_bars::set_system_bars,
     ]
 }

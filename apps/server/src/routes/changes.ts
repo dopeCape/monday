@@ -1,6 +1,7 @@
 // The Changes feed (docs/spec/architecture.md, "API shape"; ADR 0005).
 //   GET /changes?workspace=&since=<seq>&limit=   {changes: [...], cursor}, ordered by seq
 //   GET /changes/sse?workspace=                  text/event-stream of `{seq}` wake messages
+//   GET /changes/snapshot?workspace=&before=&limit=   the newest Threads as they are now (ChangesSnapshot)
 // The wake carries only a seq; the client fetches from its own cursor. SSE is
 // the transport for Vercel (research 22); WebSocket lives in the Bun entry
 // because upgrades are a Bun.serve matter, and polling needs nothing here.
@@ -22,6 +23,12 @@ const feedQuery = z.object({
 
 const sseQuery = z.object({ workspace: z.string().min(1) });
 
+const snapshotQuery = z.object({
+  workspace: z.string().min(1),
+  before: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
 export interface ChangesRouteOptions {
   bus: ChangeBus;
   /** SSE keepalive comment interval. */
@@ -41,6 +48,23 @@ export function changesRoutes(mailstore: Mailstore, options: ChangesRouteOptions
     }
     const q = parsed.data;
     return c.json(await mailstore.listChanges(q.workspace, { since: q.since, limit: q.limit }));
+  });
+
+  // A new Cache's first fill, newest Threads first (ChangesSnapshot).
+  app.get("/changes/snapshot", async (c) => {
+    const parsed = snapshotQuery.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "invalid_query", issues: parsed.error.issues }, 400);
+    }
+    const q = parsed.data;
+    try {
+      return c.json(
+        await mailstore.snapshotChanges(q.workspace, { before: q.before, limit: q.limit }),
+      );
+    } catch (error) {
+      if (error instanceof RangeError) return c.json({ error: "bad_cursor" }, 400);
+      throw error;
+    }
   });
 
   app.get("/changes/sse", async (c) => {

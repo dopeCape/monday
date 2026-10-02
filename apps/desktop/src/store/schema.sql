@@ -544,3 +544,12 @@ create table if not exists templates (
   deleted integer not null default 0,
   content_stale integer not null default 1
 );
+
+-- A new Cache fills newest first (ChangesSnapshot): the seq of every snapshot
+-- row it applied, by `kind:entity` (changeKey). A feed row for the same key at
+-- or below that seq has nothing left to add and is skipped. Rows at or below
+-- the cursor can never skip anything again and are dropped after each pull.
+create table if not exists applied_seq (
+  key text primary key,
+  seq integer not null
+);
