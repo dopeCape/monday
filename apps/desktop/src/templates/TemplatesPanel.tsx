@@ -437,7 +437,7 @@ export function TemplateForm({
   );
 }
 
-registerPanel("accounts", "Templates", TemplatesPanel, {
+registerPanel("templates", "Templates", TemplatesPanel, {
   title: "strings.templates.title",
   description: "strings.templates.hint",
   searchTerms: [

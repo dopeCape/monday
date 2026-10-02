@@ -35,6 +35,8 @@ export interface ToolbarProps {
   /** The link field is open (Mod-K in the text asks for it). */
   linkOpen: boolean;
   onLinkOpen: (open: boolean) => void;
+  /** The Templates button (templates/compose.tsx), after the formatting. */
+  templates?: ReactNode | undefined;
   /** The assist menu button, at the far end of the row. */
   assist?: ReactNode | undefined;
   className?: string | undefined;
@@ -61,6 +63,7 @@ export function Toolbar({
   hidden,
   linkOpen,
   onLinkOpen,
+  templates,
   assist,
   className,
 }: ToolbarProps) {
@@ -190,6 +193,12 @@ export function Toolbar({
       )}
       <span className="vr" />
       {tool("x", strings.clearFormat, "mod+\\", TextTSlashIcon, clearFormatting, false)}
+      {templates ? (
+        <>
+          <span className="vr" />
+          {templates}
+        </>
+      ) : null}
       <span className="sp" />
       {assist}
       {linkField}

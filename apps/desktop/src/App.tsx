@@ -816,6 +816,15 @@ export function App({
     [shell, openOnboarding, openSearch, askHere],
   );
 
+  // The picker's "Manage templates": the open compose window goes to the dock, Settings › Templates opens.
+  const composeRef = useRef(compose);
+  composeRef.current = compose;
+  const manageTemplates = useCallback(() => {
+    const open = composeRef.current.overlay;
+    if (open) composeRef.current.minimize(open.draftId);
+    navigate("settings:templates");
+  }, [navigate]);
+
   /* ------------------------------ The Agent's calendar drafts ------------------------------ */
 
   // Opens the Calendar on a draft: its first day, overlaid, the store's active one.
@@ -1289,7 +1298,7 @@ export function App({
         >
           {parts}
           {reauth}
-          <TemplatesBridge composer={composer} />
+          <TemplatesBridge composer={composer} onManage={manageTemplates} />
           <ComposeLayer
             compose={compose}
             composer={composer}

@@ -117,11 +117,42 @@ export interface TemplateSuggestRequest {
   /** The Thread a reply answers; null for a new Message. */
   threadId: Id | null;
   draft: { to: Person[]; subject: string; typed: string };
+  /**
+   * Request 1 only: the picker's ranking, with no gate and no closer look.
+   * Answered as `{status: "ranked"}`.
+   */
+  rankOnly?: boolean | undefined;
+}
+
+/** One Template's share of request 1's `which` Choice. */
+export interface TemplateRank {
+  templateId: Id;
+  p: number;
 }
 
 export type TemplateSuggestResult =
-  | { status: "suggested"; templateId: Id; name: string; fits: number; gate: number }
-  | { status: "none"; reason: "gate" | "floor" | "empty" | "disabled"; gate?: number }
+  | {
+      status: "suggested";
+      templateId: Id;
+      name: string;
+      fits: number;
+      gate: number;
+      /** Request 1's ranking, likeliest first, Templates it gave nothing left out. */
+      ranking?: TemplateRank[];
+    }
+  | {
+      status: "none";
+      reason: "gate" | "floor" | "empty" | "disabled";
+      gate?: number;
+      ranking?: TemplateRank[];
+      /**
+       * Request 1's first choice when it is at least `templates.suggest.hint_floor`
+       * likely though nothing was suggested: the softer "Maybe" line.
+       */
+      maybe?: { templateId: Id; name: string; p: number };
+    }
+  /** The picker's ranking alone (`rankOnly`). */
+  | { status: "ranked"; ranking: TemplateRank[]; gate: number }
   /** No judge answers on this Server: nothing is suggested and the window says so quietly. */
   | { status: "unavailable"; reason: string };
 

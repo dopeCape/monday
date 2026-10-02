@@ -74,6 +74,7 @@ interface Harness {
 async function mount(
   result: (id: string) => TemplateFillResult | null,
   suggest?: (typed: string) => TemplateSuggestResult | null,
+  extra: Partial<TemplateLink> = {},
 ): Promise<Harness> {
   host = document.createElement("div");
   document.body.appendChild(host);
@@ -108,6 +109,9 @@ async function mount(
     },
     draftFrom: () => {},
     onOpen: { enabled: false, needsReplyAt: 0.6, suggest: async () => null },
+    ranking: { enabled: false, suggestedMax: 3, suggestedFloor: 0.15, rank: async () => null },
+    hint: { show: false, dismiss: () => {} },
+    ...extra,
   };
   function Surface() {
     const [ed, setEd] = useState<TiptapEditor | null>(null);
@@ -147,6 +151,7 @@ async function mount(
         />
         {compose.blocked ? <span className="blocked">{compose.blocked}</span> : null}
         {compose.suggestionLine}
+        {compose.button}
         {compose.overlay}
       </div>
     );
@@ -365,5 +370,143 @@ describe("suggestions while typing", () => {
     await type(h.editor(), "Hello");
     await until(() => line() !== null);
     expect(line()?.textContent).toBe("Template suggestions need TypeSafe or a language model");
+  });
+
+  test("when the closer look says none but the ranking leans to one, a softer Maybe line offers it", async () => {
+    const h = await mount(
+      () => ({
+        templateId: "t_offer_times",
+        judge: "typesafe",
+        fills: [fillOf("first_name", "Sofia"), fillOf("times", "Tuesday at 10")],
+      }),
+      () => ({
+        status: "none",
+        reason: "floor",
+        gate: 0.6,
+        maybe: { templateId: "t_offer_times", name: "Offer other times", p: 0.48 },
+      }),
+    );
+    await type(h.editor(), "Sorry I can't make it this week");
+    await until(() => line() !== null);
+    expect(line()?.textContent).toContain("Maybe: Offer other times (Tab)");
+    expect(line()?.getAttribute("data-soft")).toBe("true");
+    await key(h.editor(), "Tab");
+    await until(() => h.editor().getText().includes("Hi Sofia,"));
+    expect(h.editor().getText()).not.toContain("Sorry I can't make it");
+  });
+});
+
+describe("finding templates: the button, the hint, Jev in the picker", () => {
+  const button = () => document.body.querySelector<HTMLButtonElement>(".tpl-open");
+  const line = () => document.body.querySelector(".tpl-suggest");
+  const click = async (el: Element | null | undefined) => {
+    if (!el) throw new Error("nothing to click");
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      (el as HTMLElement).click();
+      await tick();
+    });
+  };
+
+  test("the Templates button names the trigger and the key, and opens the picker at the end of the text", async () => {
+    const h = await mount(() => ({ templateId: "t_thank_you", judge: "none", fills: [] }));
+    expect(button()?.textContent?.trim()).toBe("Templates");
+    expect(button()?.title).toContain(";;");
+    expect(button()?.title).toMatch(/(Ctrl|⌘)\+?;/);
+    await act(async () => h.editor().commands.setContent("<p>Hello there</p>"));
+    await act(async () => h.editor().commands.blur());
+    await click(button());
+    expect(picker()).not.toBeNull();
+    expect(document.body.querySelector(".tpl-picker input")).not.toBeNull();
+    // Picking inserts at the end of what was typed, not at the start.
+    await click(document.body.querySelector('[data-template="t_thank_you"]'));
+    await act(async () => tick(20));
+    expect(picker()).toBeNull();
+    expect(h.editor().getText().startsWith("Hello there")).toBe(true);
+    // The button toggles: a second click closes what the first opened.
+    await click(button());
+    expect(picker()).not.toBeNull();
+    await click(button());
+    expect(picker()).toBeNull();
+  });
+
+  test("the picker opens at once in its own order, then Jev's ranking puts the Suggested first with the fit", async () => {
+    let answer: (r: Array<{ templateId: string; p: number }>) => void = () => {};
+    const asked: Array<{ threadId: string | null; typed: string }> = [];
+    await mount(() => null, undefined, {
+      ranking: {
+        enabled: true,
+        suggestedMax: 3,
+        suggestedFloor: 0.15,
+        rank: (request) => {
+          asked.push({ threadId: request.threadId, typed: request.draft.typed });
+          return new Promise((resolve) => {
+            answer = resolve;
+          });
+        },
+      },
+    });
+    await click(button());
+    expect(picker()).not.toBeNull();
+    // Not back yet: the static order, nothing marked.
+    expect(pickerNames()[0]).toBe("Thanks, received");
+    expect(document.body.querySelector(".tpl-picker [data-suggested]")).toBeNull();
+    expect(asked).toEqual([{ threadId: "t-podcast", typed: "" }]);
+    await act(async () => {
+      answer([
+        { templateId: "t_offer_times", p: 0.62 },
+        { templateId: "t_reschedule", p: 0.2 },
+        { templateId: "t_decline", p: 0.1 },
+      ]);
+      await tick(10);
+    });
+    expect(pickerNames().slice(0, 2)).toEqual(["Offer other times", "Reschedule"]);
+    const marked = [...document.body.querySelectorAll(".tpl-picker [data-suggested]")];
+    expect(marked).toHaveLength(2);
+    expect(document.body.querySelector(".tpl-h-suggested")?.textContent).toBe("Suggested");
+    expect(marked[0]?.querySelector(".tpl-share")?.textContent).toBe("62%");
+    // Below the floor a ranked template keeps its usual place, unmarked.
+    expect(pickerNames()).toHaveLength(21);
+  });
+
+  test("the typed trigger is left out of what the ranking reads", async () => {
+    const asked: string[] = [];
+    const h = await mount(() => null, undefined, {
+      ranking: {
+        enabled: true,
+        suggestedMax: 3,
+        suggestedFloor: 0.15,
+        rank: async (request) => {
+          asked.push(request.draft.typed);
+          return [{ templateId: "t_thanks_received", p: 0.7 }];
+        },
+      },
+    });
+    await act(async () => h.editor().commands.setContent("<p>Thanks for the deck</p><p></p>"));
+    await act(async () => h.editor().commands.focus("end"));
+    await type(h.editor(), ";;");
+    await until(() => document.body.querySelector(".tpl-picker [data-suggested]") !== null);
+    expect(asked).toEqual(["Thanks for the deck"]);
+    expect(pickerNames()[0]).toBe("Thanks, received");
+  });
+
+  test("the one-time hint names the trigger and Got it dismisses it; Manage templates opens Settings", async () => {
+    let dismissed = 0;
+    let managed = 0;
+    await mount(() => null, undefined, {
+      hint: { show: true, dismiss: () => dismissed++ },
+      manage: () => managed++,
+    });
+    expect(line()?.textContent).toContain("Type ;; for templates");
+    await click(
+      [...document.body.querySelectorAll(".tpl-hint button")].find(
+        (b) => b.textContent === "Got it",
+      ),
+    );
+    expect(dismissed).toBe(1);
+    await click(button());
+    await click(document.body.querySelector(".tpl-manage"));
+    expect(managed).toBe(1);
+    expect(picker()).toBeNull();
   });
 });

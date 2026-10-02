@@ -78,7 +78,10 @@ The signature is the Account's own, added by compose as today; built-ins never c
 
 ## Using a Template
 
-- **The picker.** In compose, typing `templates.trigger` (default `;;`) at the start of a line, or the key `compose.templates.open` (Ctrl or Cmd+;), opens the picker at the caret: the Workspace's Templates, then the built-ins, filtered as the user types by name and fits-when. Arrows move, Enter inserts, Esc closes. The palette lists them too ("Template: Confirm the time").
+- **The picker.** In compose, typing `templates.trigger` (default `;;`) at the start of a line, the key `compose.templates.open` (Ctrl or Cmd+;), or the Templates button opens the picker at the caret: the Workspace's Templates, then the built-ins, filtered as the user types by name and fits-when. Arrows move, Enter inserts, Esc closes. The palette lists them too ("Template: Confirm the time"). The picker ends with "Manage templates", which opens Settings › Templates (the open compose window goes to the dock).
+- **The Templates button.** Both compose surfaces (the compose window and the inline reply) have a Templates button in the writing toolbar, after the formatting: a Phosphor notepad and the label `strings.templates.button`. Its tooltip names the trigger and the picker key from their Settings ("Insert a template. Type ;; at the start of a line, or press Ctrl+;"). It opens the picker at the caret, or at the end of the owner's text when the editor is not focused; a second click closes it. With `compose.toolbar` off the row and the button are hidden; the trigger and the key still work.
+- **The one-time hint.** Until the device flag `templates.hint.trigger_seen` is set, compose with Templates on shows one quiet line where suggestions go: "Type ;; for templates" (the trigger from its Setting) and "Got it". Got it, or inserting any Template, sets the flag; the line never shows on that device again. A suggestion line takes its place while one shows.
+- **Jev's order in the picker.** When the picker opens in a reply, or with something typed, it opens at once in the order above and asks request 1 below alone (`rankOnly`: the ranking Choice, no gate, no closer look) for that Thread and the typed text, the trigger left out. When the ranking is back the picker reorders: at most `templates.picker.suggested_max` (3) Templates the ranking gives at least `templates.picker.suggested_floor` (0.15) move to the top under "Suggested", likeliest first, each with its share shown quietly ("62%"); every other Template keeps its place. The row under the arrow stays under it. A ranking is remembered for `templates.picker.rank_cache_ms` (60 s) per Thread and typed text, and a suggestion while typing that already carried one answers the picker without a request. No ranking (off, no judge, an error) leaves the usual order. Off with `templates.picker.rank` or with suggestions off.
 - **Inserting.** The body replaces the trigger; for a starter with a subject, the subject fills an empty subject field. Each Placeholder shows as an inline chip in the editor ("invoice number") until filled. Tab and Shift-Tab move between Placeholders.
 - **Filling (below)** runs at once when the compose window replies to a Thread; a new Message has no Thread, so only the To field's name fills.
 - **Send is blocked** while any required Placeholder is unfilled: the Send button is disabled and says why ("Fill invoice number first"); Send later and the send key refuse the same way. An unfilled optional Placeholder is removed with the space before it when sending.
@@ -121,6 +124,8 @@ The skill-suggestion cookbook's two requests: a cheap ranking over the whole lib
   "fits_t_confirm_time": { "type": "noul", "instructions": "The template 'Confirm the time' says what the owner means to say in this message. Its text: Hi {first_name}, {time} on {date} works for me. ..." } }
 ```
   When the best `fits_*` is below `templates.suggest.fits_floor` (0.5), nothing is suggested; otherwise request 2's `which` winner is.
+- **The ranking travels.** Every answer after request 1 carries `ranking: [{templateId, p}]`, request 1's `which` probabilities likeliest first (Templates given nothing left out); the picker orders by it.
+- **The softer line.** When request 2 rejects all of them (the floor, not the gate) but request 1's first choice has at least `templates.suggest.hint_floor` (0.35), the answer carries `maybe: {templateId, name, p}` and the line reads "Maybe: Offer other times (Tab)", quieter than the confident one; Tab and Esc work the same. Below the gate nothing shows, not even softly: the owner is writing something no template should cover.
 - **Shown** as one quiet line above the editor, "Use Confirm the time (Tab)". Tab inserts it at the caret, replacing what was typed only when the user confirms ("Replace what you typed?") if more than one line was typed; Esc dismisses it for this Draft.
 - **On open.** A Thread whose `needs_reply` holds gets the same two requests with `typed` empty when it is opened (not on arrival: the library changes too often to be a standing Signal); the winner names the Reply chip ("Reply with Confirm the time", `actions.md`).
 
@@ -166,6 +171,8 @@ A new built-in Step, `draft_from_template` (ADR 0003: a typed model Step):
 
 ## Settings
 
+Settings › Templates is its own section of Settings (`settings:templates`), between Routing and AI and agent: the Templates panel with the switch, the scope and the hidden built-ins, then In compose (trigger, key, the picker's ranking), Suggestions, Filling, Writing templates and Checks.
+
 | Key | Default | Why |
 |---|---|---|
 | `templates.enabled` | on | Picker and suggestions |
@@ -180,6 +187,11 @@ A new built-in Step, `draft_from_template` (ADR 0003: a typed model Step):
 | `templates.suggest.max_typed_chars` | 200 | Suggestions help starts, not finished drafts |
 | `templates.suggest.gate` | 0.4 | Below it nothing is suggested |
 | `templates.suggest.fits_floor` | 0.5 | The reject-all floor of request 2 |
+| `templates.suggest.hint_floor` | 0.35 | Below the floor, request 1's first choice this likely shows as "Maybe" |
+| `templates.picker.rank` | on | The picker puts the Templates that fit first |
+| `templates.picker.suggested_max` / `suggested_floor` | 3 / 0.15 | How many are marked Suggested, and from what share |
+| `templates.picker.rank_cache_ms` | 60,000 | A ranking is reused this long per Thread and typed text |
+| `templates.hint.trigger_seen` | off, per device | The one-time "Type ;; for templates" was dismissed or a Template was used |
 | `templates.suggest.on_open` | on | Names the Reply chip with a Template |
 | `templates.duplicate.same_at` / `related_at` | 1.5 / 0.5 | Score boundaries for the duplicate check |
 | `templates.verify.enabled` | on | Badges on `draft_from_template` |
@@ -187,7 +199,7 @@ A new built-in Step, `draft_from_template` (ADR 0003: a typed model Step):
 
 ## Strings (examples)
 
-"Templates", "Use {name} (Tab)", "Replace what you typed?", "Fill {placeholder} first", "Type it", "Make a template from this", "You already have {name}", "Similar to {name}", "Replace it", "Keep both", "Use in every account", "Change it everywhere", "Only here", "Restore the original", "Answers {n} of {m} questions", "Leaves {n} unanswered: {question}", "No new promises", "Promises something the thread does not support: {sentence}", "No outside details", "{n} details not in the thread: {list}", "Could not check", "Could not fill {placeholder} from the thread", "Runs on your standing approval when every check passes".
+"Templates", "Use {name} (Tab)", "Maybe: {name} (Tab)", "Type {trigger} for templates", "Got it", "Insert a template. Type {trigger} at the start of a line, or press {key}", "Suggested", "Manage templates", "Replace what you typed?", "Fill {placeholder} first", "Type it", "Make a template from this", "You already have {name}", "Similar to {name}", "Replace it", "Keep both", "Use in every account", "Change it everywhere", "Only here", "Restore the original", "Answers {n} of {m} questions", "Leaves {n} unanswered: {question}", "No new promises", "Promises something the thread does not support: {sentence}", "No outside details", "{n} details not in the thread: {list}", "Could not check", "Could not fill {placeholder} from the thread", "Runs on your standing approval when every check passes".
 
 ## Edge cases
 
@@ -214,3 +226,5 @@ A new built-in Step, `draft_from_template` (ADR 0003: a typed model Step):
 5. A `draft_from_template` Step on a fixture Thread asking two questions shows "Leaves 1 unanswered" when the draft skips one, and a Standing approval does not send that Run.
 6. Templates are unreadable in `psql` and readable through the API; `monday.toml` is never written.
 7. A Template marked Use in every account appears in both fixture Workspaces; editing it offers Change it everywhere.
+8. Both compose surfaces show the Templates button, whose tooltip names `;;` and the picker key; clicking it opens the picker. When the fake judge's ranking gives Offer other times 0.62, opening the picker in a reply lists it first under Suggested with "62%", after the picker has already shown its usual order.
+9. With the fake closer look rejecting all and request 1 giving Offer other times 0.48, the line reads "Maybe: Offer other times (Tab)" and Tab inserts it.

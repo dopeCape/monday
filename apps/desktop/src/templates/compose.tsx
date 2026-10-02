@@ -6,10 +6,10 @@
 // ProseMirror plugin, put first, carries the keys and the clicks; the rest is
 // React state over the Tiptap editor the surface already has.
 
-import type { Id, Person, Template } from "@monday/shared";
+import type { Id, Person, Template, TemplateRank } from "@monday/shared";
 import { placeholderLabel, placeholdersIn } from "@monday/shared";
-import { Btn, cx, type Placement, placeMenu } from "@monday/ui";
-import { XIcon } from "@phosphor-icons/react";
+import { Btn, cx, Icon, type Placement, placeMenu } from "@monday/ui";
+import { GearSixIcon, NotepadIcon, XIcon } from "@phosphor-icons/react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import {
@@ -23,11 +23,11 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { chordOf, normalizeChord } from "../keyboard/keymaps.ts";
+import { chordLabel, chordOf, normalizeChord } from "../keyboard/keymaps.ts";
 import type { Composer } from "../screens/compose/composer.ts";
 import { AnchoredMenu } from "../screens/compose/Menu.tsx";
 import { type TemplateLink, takeQueuedTemplate } from "./link.ts";
-import { filterTemplates, triggerAt } from "./picker.ts";
+import { filterTemplates, type RankedItems, rankTemplates, triggerAt } from "./picker.ts";
 import {
   applyFills,
   chipsIn,
@@ -73,10 +73,18 @@ export interface TemplateCompose {
   blocked: string | null;
   /** The picker and the chip menu, in portals; render anywhere in the surface. */
   overlay: ReactNode;
-  /** The one quiet line above the editor: "Use Confirm the time (Tab)", or null. */
+  /**
+   * The one quiet line above the editor: "Use Confirm the time (Tab)", the
+   * softer "Maybe: Offer other times (Tab)", the one-time "Type ;; for
+   * templates", or null.
+   */
   suggestionLine: ReactNode;
-  /** The Template suggested now, if any. */
-  suggested: { templateId: Id; name: string } | null;
+  /** The Template suggested now, if any; `soft` for the Maybe line. */
+  suggested: Suggested | null;
+  /** The toolbar's Templates button: opens the picker at the caret, or the end of the text. */
+  button: ReactNode;
+  /** Opens the picker as the button does. */
+  openPicker(): void;
   /** Inserts a Template at the caret as if picked. */
   insert(template: Template, range?: { from: number; to: number }): void;
 }
@@ -92,6 +100,25 @@ function ownRange(editor: TiptapEditor): { from: number; to: number; text: strin
   return { from: 1, to: Math.max(1, end - 1), text };
 }
 
+/** What the owner typed around a range (the picker's trigger), for the ranking. */
+function typedAround(editor: TiptapEditor, from: number, to: number): string {
+  const own = ownRange(editor);
+  const end = own.to + 1;
+  const a = Math.min(from, end);
+  const b = Math.min(Math.max(to, a), end);
+  const doc = editor.state.doc;
+  return `${doc.textBetween(0, a, "\n", "\n")}${doc.textBetween(b, end, "\n", "\n")}`.trim();
+}
+
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform ?? "");
+
+export interface Suggested {
+  templateId: Id;
+  name: string;
+  /** The softer line: the closer look rejected it, but the ranking still leans to it. */
+  soft?: boolean;
+}
+
 /** "Template suggestions need a judge" is said once per window session, quietly. */
 let unavailableSaid = false;
 
@@ -102,13 +129,26 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
   const [subjectNames, setSubjectNames] = useState<string[]>([]);
   const enabled = Boolean(link?.enabled);
   const library = link?.library ?? [];
-  const items = useMemo(
-    () => (picker ? filterTemplates(library, picker.query) : []),
-    [library, picker],
+  // Jev's ranking for this opening of the picker: null until it is back (or never asked).
+  const [rank, setRank] = useState<TemplateRank[] | null>(null);
+  const rankOptions = useMemo(
+    () => ({
+      max: link?.ranking.suggestedMax ?? 0,
+      floor: link?.ranking.suggestedFloor ?? 1,
+    }),
+    [link?.ranking.suggestedMax, link?.ranking.suggestedFloor],
   );
+  const ranked = useMemo<RankedItems>(
+    () =>
+      picker
+        ? rankTemplates(filterTemplates(library, picker.query), rank, rankOptions)
+        : { items: [], suggested: 0, p: new Map() },
+    [library, picker, rank, rankOptions],
+  );
+  const items = ranked.items;
 
   // Suggestions while typing (slice 37): the Template suggested, the replace question, the quiet line.
-  const [suggested, setSuggested] = useState<{ templateId: Id; name: string } | null>(null);
+  const [suggested, setSuggested] = useState<Suggested | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const dismissed = useRef(false);
@@ -116,8 +156,8 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
   const asking = useRef(0);
 
   // Latest values for the plugin, which is made once per editor.
-  const latest = useRef({ o, picker, items, enabled, suggested });
-  latest.current = { o, picker, items, enabled, suggested };
+  const latest = useRef({ o, picker, items, enabled, suggested, rankOptions });
+  latest.current = { o, picker, items, enabled, suggested, rankOptions };
 
   const insert = useCallback((template: Template, range?: { from: number; to: number }) => {
     const { o: opts } = latest.current;
@@ -126,6 +166,8 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
     const at = range ?? { from: ed.state.selection.from, to: ed.state.selection.to };
     insertTemplate(ed, at, template);
     setPicker(null);
+    // Using a template is knowing where they are: the one-time hint has done its work.
+    if (opts.link.hint.show) opts.link.hint.dismiss();
     let subjectTemplate: string | null = null;
     if (template.kind === "starter" && template.subject && !opts.subject.trim()) {
       subjectTemplate = template.subject;
@@ -242,6 +284,59 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
     [pick, accept, dismiss],
   );
 
+  /** The button: the picker at the caret, or at the end of the owner's text when the editor is not focused. */
+  const openPicker = useCallback(() => {
+    const { o: opts, picker: p, enabled: on } = latest.current;
+    const ed = opts.editor;
+    if (!ed || !opts.link || !on) return;
+    if (p) {
+      setPicker(null);
+      return;
+    }
+    let { from, to } = ed.state.selection;
+    if (!ed.isFocused) {
+      const end = ownRange(ed).to;
+      from = end;
+      to = end;
+    }
+    setPicker({ mode: "key", from, to, query: "", index: 0 });
+  }, []);
+
+  // When the picker opens in a reply, or with something typed, Jev's ranking
+  // reorders it once it is back; the picker opens at once in its own order.
+  const pickerOpen = picker !== null;
+  const opening = useRef(0);
+  useEffect(() => {
+    const mine = ++opening.current;
+    setRank(null);
+    if (!pickerOpen) return;
+    const { o: opts, picker: p } = latest.current;
+    const l = opts.link;
+    const ed = opts.editor;
+    if (!l || !ed || !p || !l.ranking.enabled) return;
+    const typed = typedAround(ed, p.from, p.to);
+    if (!opts.threadId && !typed) return;
+    void l.ranking
+      .rank({ threadId: opts.threadId, draft: { to: [...opts.to], subject: opts.subject, typed } })
+      .then((ranking) => {
+        if (mine !== opening.current || !ranking) return;
+        // Keep the row the owner moved to under the arrow; a list not yet moved starts at the top.
+        const now = latest.current;
+        const at = now.picker;
+        const kept = at && at.index > 0 ? now.items[at.index]?.id : undefined;
+        setRank(ranking);
+        if (at && kept) {
+          const next = rankTemplates(
+            filterTemplates(now.o.link?.library ?? [], at.query),
+            ranking,
+            now.rankOptions,
+          ).items.findIndex((t) => t.id === kept);
+          setPicker((q) => (q ? { ...q, index: Math.max(0, next) } : q));
+        }
+      })
+      .catch(() => {});
+  }, [pickerOpen]);
+
   // After a pause in the first words, the two requests (docs/spec/templates.md, "When").
   const suggestion = link?.suggestion;
   const typedNow = editor && link ? ownRange(editor).text.trim() : "";
@@ -275,7 +370,9 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
         .then((r) => {
           if (mine !== asking.current || dismissed.current || !r) return;
           if (r.status === "suggested") setSuggested({ templateId: r.templateId, name: r.name });
-          else setSuggested(null);
+          else if (r.status === "none" && r.maybe) {
+            setSuggested({ templateId: r.maybe.templateId, name: r.maybe.name, soft: true });
+          } else setSuggested(null);
           if (r.status === "unavailable" && !unavailableSaid) {
             unavailableSaid = true;
             setUnavailable(true);
@@ -365,10 +462,20 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
             editor={editor}
             at={picker.from}
             items={items}
+            suggestedCount={ranked.suggested}
+            shares={ranked.p}
             index={picker.index}
             mode={picker.mode}
             query={picker.query}
             strings={link.strings}
+            onManage={
+              link.manage
+                ? () => {
+                    setPicker(null);
+                    link.manage?.();
+                  }
+                : undefined
+            }
             onQuery={(query) => setPicker({ ...picker, query, index: 0 })}
             onIndex={(index) => setPicker({ ...picker, index })}
             onPick={pick}
@@ -428,14 +535,19 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
       );
     } else if (suggested) {
       suggestionLine = (
-        <div className="tpl-suggest" role="status" data-suggest={suggested.templateId}>
+        <div
+          className={cx("tpl-suggest", suggested.soft && "maybe")}
+          role="status"
+          data-suggest={suggested.templateId}
+          data-soft={suggested.soft ? "true" : undefined}
+        >
           <button
             type="button"
             className="tpl-suggest-use"
             onMouseDown={(e) => e.preventDefault()}
             onClick={accept}
           >
-            {fillIn(s.suggestUse, { name: suggested.name })}
+            {fillIn(suggested.soft ? s.suggestMaybe : s.suggestUse, { name: suggested.name })}
           </button>
           <Btn icon sm title={s.dismiss} onClick={dismiss}>
             <XIcon />
@@ -448,9 +560,46 @@ export function useTemplateCompose(o: TemplateComposeOptions): TemplateCompose {
           {s.unavailable}
         </div>
       );
+    } else if (link.hint.show) {
+      const hint = link.hint;
+      suggestionLine = (
+        <div className="tpl-suggest tpl-hint" role="note" data-suggest="hint">
+          <Icon icon={NotepadIcon} />
+          <span>{fillIn(s.hintTrigger, { trigger: link.trigger })}</span>
+          <Btn sm onMouseDown={(e) => e.preventDefault()} onClick={() => hint.dismiss()}>
+            {s.hintDismiss}
+          </Btn>
+        </div>
+      );
     }
   }
-  return { blocked, overlay, insert, suggestionLine, suggested };
+
+  let button: ReactNode = null;
+  if (link && enabled) {
+    const s = link.strings;
+    const tip = fillIn(s.buttonTip, {
+      trigger: link.trigger,
+      key: chordLabel(link.openKey, MAC),
+    });
+    button = (
+      <Btn
+        sm
+        className="tpl-open"
+        data-templates-open=""
+        title={tip}
+        aria-label={s.button}
+        aria-haspopup="listbox"
+        aria-expanded={picker !== null}
+        on={picker !== null}
+        disabled={!editor}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={openPicker}
+      >
+        <Icon icon={NotepadIcon} /> {s.button}
+      </Btn>
+    );
+  }
+  return { blocked, overlay, insert, suggestionLine, suggested, button, openPicker };
 }
 
 /* ------------------------------ The picker ------------------------------ */
@@ -460,6 +609,10 @@ interface TemplatePickerProps {
   /** The document position the picker opens at: the trigger's start, or the caret. */
   at: number;
   items: readonly Template[];
+  /** How many of `items`, from the top, Jev's ranking marks Suggested. */
+  suggestedCount: number;
+  /** Each ranked Template's share of the ranking, shown subtly on the Suggested. */
+  shares: ReadonlyMap<string, number>;
   index: number;
   mode: "trigger" | "key";
   query: string;
@@ -468,12 +621,16 @@ interface TemplatePickerProps {
   onIndex(index: number): void;
   onPick(template: Template): void;
   onClose(): void;
+  /** "Manage templates": Settings › Templates. */
+  onManage?: (() => void) | undefined;
 }
 
 function TemplatePicker({
   editor,
   at,
   items,
+  suggestedCount,
+  shares,
   index,
   mode,
   query,
@@ -482,6 +639,7 @@ function TemplatePicker({
   onIndex,
   onPick,
   onClose,
+  onManage,
 }: TemplatePickerProps) {
   const host = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<Placement | null>(null);
@@ -512,6 +670,8 @@ function TemplatePicker({
   useEffect(() => {
     const away = (e: MouseEvent) => {
       if (host.current?.contains(e.target as Node)) return;
+      // The toolbar button toggles the picker itself.
+      if ((e.target as Element | null)?.closest?.("[data-templates-open]")) return;
       closeRef.current();
     };
     document.addEventListener("mousedown", away);
@@ -540,23 +700,34 @@ function TemplatePicker({
     }
   };
 
-  const own = items.filter((t) => t.workspaceId !== null);
-  const builtin = items.filter((t) => t.workspaceId === null);
-  const row = (t: Template) => {
+  const suggested = items.slice(0, suggestedCount);
+  const rest = items.slice(suggestedCount);
+  const own = rest.filter((t) => t.workspaceId !== null);
+  const builtin = rest.filter((t) => t.workspaceId === null);
+  const row = (t: Template, mark = false) => {
     const i = items.indexOf(t);
+    const share = mark ? shares.get(t.id) : undefined;
     return (
       <button
         key={t.id}
         type="button"
         role="option"
         aria-selected={i === index}
-        className={cx("pop-item", "tpl-item", i === index && "on")}
+        className={cx("pop-item", "tpl-item", i === index && "on", mark && "suggested")}
         data-template={t.id}
+        data-suggested={mark ? "true" : undefined}
         onMouseEnter={() => onIndex(i)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => onPick(t)}
       >
-        <span className="tpl-name">{t.name}</span>
+        <span className="tpl-line">
+          <span className="tpl-name">{t.name}</span>
+          {share !== undefined ? (
+            <span className="tpl-share" title={strings.pickerFitTitle}>
+              {fillIn(strings.pickerFit, { percent: Math.round(share * 100) })}
+            </span>
+          ) : null}
+        </span>
         <span className="tpl-fit">{t.fitsWhen}</span>
       </button>
     );
@@ -590,11 +761,27 @@ function TemplatePicker({
       ) : null}
       <div className="pop-list">
         {items.length === 0 ? <div className="pop-empty">{strings.pickerEmpty}</div> : null}
+        {suggested.length > 0 ? (
+          <div className="pop-h tpl-h-suggested">{strings.pickerSuggested}</div>
+        ) : null}
+        {suggested.map((t) => row(t, true))}
         {own.length > 0 ? <div className="pop-h">{strings.pickerYours}</div> : null}
-        {own.map(row)}
+        {own.map((t) => row(t))}
         {builtin.length > 0 ? <div className="pop-h">{strings.pickerBuiltin}</div> : null}
-        {builtin.map(row)}
+        {builtin.map((t) => row(t))}
       </div>
+      {onManage ? (
+        <div className="tpl-picker-foot">
+          <button
+            type="button"
+            className="tpl-manage"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onManage}
+          >
+            <Icon icon={GearSixIcon} /> {strings.pickerManage}
+          </button>
+        </div>
+      ) : null}
     </div>,
     document.body,
   );

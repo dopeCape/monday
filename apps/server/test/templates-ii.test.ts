@@ -50,6 +50,7 @@ const d = defaultSettings();
 const SUGGEST: SuggestSettings = {
   gate: d["templates.suggest.gate"],
   fitsFloor: d["templates.suggest.fits_floor"],
+  hintFloor: d["templates.suggest.hint_floor"],
   shortlist: d["templates.suggest.shortlist"],
   choiceMax: d["templates.suggest.choice_max"],
   questions: {
@@ -163,6 +164,72 @@ describe("suggestions while typing (the two requests)", () => {
       settings: SUGGEST,
     });
     expect(r).toMatchObject({ status: "none", reason: "floor" });
+    // The ranking comes back likeliest first, and request 1's first choice,
+    // at least templates.suggest.hint_floor likely, is offered softly.
+    expect(r.status === "none" ? r.ranking : null).toEqual([
+      { templateId: "t_confirm_time", p: 0.5 },
+      { templateId: "t_offer_times", p: 0.3 },
+      { templateId: "t_reschedule", p: 0.2 },
+    ]);
+    expect(r).toMatchObject({
+      maybe: { templateId: "t_confirm_time", name: "Confirm the time", p: 0.5 },
+    });
+  });
+
+  test("below the hint floor, or below the gate, nothing is offered even softly", async () => {
+    const run = (answers: Parameters<typeof createFakeJudge>[0]) =>
+      suggestTemplate({
+        ask: askOver(createFakeJudge(answers)),
+        workspaceId: "ws",
+        library: BUILTIN_TEMPLATES,
+        thread: null,
+        draft: { to: [], subject: "", typed: "About the call" },
+        settings: SUGGEST,
+      });
+    const low = await run({
+      gate_standard: 0.9,
+      gate_purpose: 0.8,
+      gate_personal: 0.1,
+      which: choice({ t_confirm_time: 0.3, t_offer_times: 0.25, none: 0.45 }),
+      fits_t_confirm_time: 0.2,
+      fits_t_offer_times: 0.2,
+    });
+    expect(low).toMatchObject({ status: "none", reason: "floor" });
+    expect("maybe" in low).toBe(false);
+    const personal = await run({
+      gate_standard: 0.1,
+      gate_purpose: 0.2,
+      gate_personal: 0.9,
+      which: choice({ t_confirm_time: 0.8, none: 0.2 }),
+    });
+    expect(personal).toMatchObject({ status: "none", reason: "gate" });
+    expect("maybe" in personal).toBe(false);
+  });
+
+  test("rankOnly sends request 1 alone and answers with the ranking, gate or not", async () => {
+    const judge = createFakeJudge({
+      gate_standard: 0.1,
+      gate_purpose: 0.1,
+      gate_personal: 0.9,
+      which: choice({ t_offer_times: 0.6, t_reschedule: 0.25, none: 0.15 }),
+    });
+    const r = await suggestTemplate({
+      ask: askOver(judge),
+      workspaceId: "ws",
+      library: BUILTIN_TEMPLATES,
+      thread: null,
+      draft: { to: [], subject: "", typed: "can we do another time?" },
+      settings: SUGGEST,
+      rankOnly: true,
+    });
+    expect(judge.calls).toHaveLength(1);
+    expect(r).toMatchObject({
+      status: "ranked",
+      ranking: [
+        { templateId: "t_offer_times", p: 0.6 },
+        { templateId: "t_reschedule", p: 0.25 },
+      ],
+    });
   });
 });
 
@@ -367,7 +434,8 @@ describe("Templates II over the routes", () => {
     judge.when(
       (state, questions) =>
         "gate_standard" in questions &&
-        (state as { draft?: { typed?: string } }).draft?.typed !== "",
+        (state as { draft?: { typed?: string } }).draft?.typed !== "" &&
+        !/another time/.test(JSON.stringify((state as { draft?: unknown }).draft)),
       {
         gate_standard: 0.1,
         gate_purpose: 0.4,
@@ -406,6 +474,50 @@ describe("Templates II over the routes", () => {
     });
     await db.handle.db.delete(settingsTable);
     expect(judge.calls.length).toBe(before);
+  });
+
+  test("rankOnly over the route: the picker's ranking past max_typed_chars, and off with templates.picker.rank", async () => {
+    judge.when(
+      (state, questions) =>
+        "gate_standard" in questions &&
+        /another time/.test(JSON.stringify((state as { draft?: unknown }).draft)),
+      {
+        gate_standard: 0.8,
+        gate_purpose: 0.8,
+        gate_personal: 0.2,
+        which: choice({ t_offer_times: 0.55, t_reschedule: 0.3, none: 0.15 }),
+      },
+    );
+    const rank = (typed: string) =>
+      json<TemplateSuggestResult>(
+        request("/templates/suggest", {
+          method: "POST",
+          body: JSON.stringify({
+            workspace: workspaceId,
+            threadId: deckThread,
+            draft: { to: [sofia], subject: "", typed },
+            rankOnly: true,
+          }),
+        }),
+      );
+    const before = judge.calls.length;
+    expect(await rank(`${"x".repeat(250)} can we do another time?`)).toMatchObject({
+      status: "ranked",
+      ranking: [
+        { templateId: "t_offer_times", p: 0.55 },
+        { templateId: "t_reschedule", p: 0.3 },
+      ],
+    });
+    expect(judge.calls.length).toBe(before + 1);
+    await db.handle.db
+      .insert(settingsTable)
+      .values({ scope: "global", deviceId: null, key: "templates.picker.rank", value: false });
+    expect(await rank("can we do another time?")).toMatchObject({
+      status: "none",
+      reason: "disabled",
+    });
+    await db.handle.db.delete(settingsTable);
+    expect(judge.calls.length).toBe(before + 1);
   });
 
   test("on open, a Thread that needs a reply names the Reply chip; one that does not asks nothing", async () => {
