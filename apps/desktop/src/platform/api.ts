@@ -19,6 +19,7 @@ import type {
   CorrectionResult,
   DeploymentMode,
   Device,
+  DeviceKind,
   Draft,
   DraftAssistRequest,
   DraftAssistResult,
@@ -60,6 +61,7 @@ import type {
   MeetingOptions,
   MessageBodiesPage,
   MeterMonth,
+  PairingInvite,
   PeopleSearchPage,
   ProposedMove,
   Provider,
@@ -680,6 +682,13 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
       revoke: (id: Id) => raw(`/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
       /** Approves a pairing code another Device is showing (ADR 0006). */
       confirm: (code: string) => request<{ ok: boolean }>("/pair/confirm", json("POST", { code })),
+      /**
+       * A Pairing invite for a phone: the QR code's text, the short code, the
+       * addresses and the LAN certificate's fingerprint. Cancels the last one.
+       */
+      invite: () => request<PairingInvite>("/pair/invite", json("POST", {})),
+      /** Cancels every open invite (the card was closed). */
+      cancelInvite: () => raw("/pair/invite", { method: "DELETE" }),
     },
     /** What the Server holds: message count and database size, for the Storage line. */
     storage: () => request<StorageInfo>("/storage"),
@@ -1257,6 +1266,8 @@ export function createApi(target: () => ServerTarget | null, options: ApiOptions
 export interface DeviceMe {
   id: Id;
   kind: "device" | "sidecar";
+  /** A computer or a phone; absent from a Server older than phones. */
+  deviceKind?: DeviceKind;
 }
 
 export interface PendingPairing {

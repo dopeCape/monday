@@ -114,6 +114,10 @@ function fakeApi(over: { capabilities?: Capabilities; devices?: Device[] } = {})
         calls.push({ name: "confirm", args: [code] });
         return { ok: true };
       },
+      invite: async () => {
+        throw new Error("no invite scripted");
+      },
+      cancelInvite: async () => new Response(null, { status: 204 }),
     },
   };
   return { api, calls };

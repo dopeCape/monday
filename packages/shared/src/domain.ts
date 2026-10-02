@@ -1,6 +1,8 @@
 // Domain types. The glossary in CONTEXT.md made executable.
 // Runtime-neutral: no Bun, no DOM, no Node imports.
 
+import type { DeviceKind, LanStatus } from "./pairing.ts";
+
 export type Id = string;
 export type IsoDate = string;
 
@@ -601,6 +603,8 @@ export interface ServiceStatus {
    * `mailThrough`, and the waiting Workflow Steps by key (`<run>:<activity or step>`).
    */
   notified: { mailThrough: IsoDate | null; approvals: string[] };
+  /** The LAN listener phones reach (server.lan.*); absent on a Server without one. */
+  lan?: LanStatus;
 }
 
 export type NavKnob = "full" | "rail" | "hidden";
@@ -634,6 +638,11 @@ export interface Device {
   id: Id;
   name: string;
   lastSeen: IsoDate;
+  /**
+   * A computer or a phone (pairing.ts); a phone never reaches the root key's
+   * routes. Absent from a Server older than phones, which reads as a computer.
+   */
+  kind?: DeviceKind;
 }
 
 /* ------------------------------ Calendar (slice 18) ------------------------------ */

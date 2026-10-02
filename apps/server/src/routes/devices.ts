@@ -2,7 +2,7 @@
 // approval, and revoke. Revoking deletes the token hash, so the Device's next
 // request is a 401.
 //   GET    /devices          Device[]
-//   GET    /devices/me       {id, kind}                      the caller
+//   GET    /devices/me       {id, kind, deviceKind}          the caller (a computer or a phone)
 //   GET    /devices/pending  {pending: [{code, name, expiresAt}], setupAvailable}
 //   DELETE /devices/:id      204
 
@@ -18,7 +18,11 @@ export function devicesRoutes(auth: Auth): Hono<AppEnv> {
 
   app.get("/me", (c) => {
     const principal = principalOf(c);
-    return c.json({ id: principal.deviceId, kind: principal.kind });
+    return c.json({
+      id: principal.deviceId,
+      kind: principal.kind,
+      deviceKind: principal.kind === "device" ? principal.deviceKind : "computer",
+    });
   });
 
   app.get("/pending", async (c) => {

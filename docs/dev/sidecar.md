@@ -50,3 +50,22 @@ tail -f ~/.local/share/io.monday.desktop/sidecar.log
 ## Login start
 
 `server.sidecar.start_at_login` (Settings › Sync server › Background service) enables or disables the systemd unit, moves the LaunchAgent in or out of `~/Library/LaunchAgents`, writes or removes `~/.config/autostart/monday-sidecar.desktop` (Linux without systemd), or sets the Run key value (Windows). Tests never touch these places; they write into temporary directories.
+
+## Pairing a phone in development
+
+A phone is a Device of the running Sidecar (ADR 0006 amendment). The emulators reach the host without LAN access:
+
+- Android emulator: the host's `127.0.0.1` is `10.0.2.2`. The address is `http://10.0.2.2:<port>`, the port from `sidecar.json`.
+- iOS simulator: the host is `localhost`, so `http://localhost:<port>`; App Transport Security allows localhost.
+
+Make an invite in Settings › Sync server › Devices › Add a phone (the short code is under the QR code), or from a shell:
+
+```sh
+DIR=~/.local/share/io.monday.desktop
+curl -s -X POST -H "Authorization: Bearer $(cat $DIR/sidecar.token)" \
+  http://127.0.0.1:$(jq .port $DIR/sidecar.json)/pair/invite | jq '{code, expiresAt}'
+```
+
+On the phone's Connect screen choose "Type it instead", enter the address and the code. The webview on Android must allow cleartext to `10.0.2.2` (the platform's network security config). The phone appears in the Devices list as a Phone; Revoke signs it out.
+
+A real phone on the same Wi-Fi needs LAN access: turn on Let phones connect over your network (`server.lan.enabled`), restart the background service, and scan the QR code. The listener is `0.0.0.0:47820` (`server.lan.port`) over HTTPS with the certificate in `lan-tls/` of the data directory; deleting that folder makes a new certificate at the next start, and every phone paired by QR code must pair again.

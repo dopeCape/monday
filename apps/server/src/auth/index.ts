@@ -4,10 +4,16 @@
 // bearer token of which only the SHA-256 is stored. The Sidecar additionally
 // accepts its per-launch token, on loopback only.
 //
+// A phone pairs the other way round: a paired Device asks for a Pairing invite
+// (a one-time secret for the QR code and a short code for typing, confirmed
+// from the start), and the phone redeems either for its own token. Wrong
+// secrets and codes are counted while an invite is open; past
+// server.pairing.max_failures every open invite is cancelled.
+//
 // Runtime-neutral: Web Crypto only.
 
-import type { Device } from "@monday/shared";
-import { settingsSchema } from "@monday/shared";
+import type { Device, DeviceKind } from "@monday/shared";
+import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH, settingsSchema } from "@monday/shared";
 import { and, desc, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
 import { devices, pairingCodes } from "../db/schema.ts";
@@ -15,12 +21,16 @@ import { devices, pairingCodes } from "../db/schema.ts";
 export const SIDECAR_DEVICE_ID = "local";
 /** The shipped default of server.device_code_minutes, as milliseconds. */
 export const PAIRING_CODE_TTL_MS = settingsSchema["server.device_code_minutes"].default * 60_000;
+/** The shipped default of server.pairing.invite_minutes, as milliseconds. */
+export const INVITE_TTL_MS = settingsSchema["server.pairing.invite_minutes"].default * 60_000;
+/** The shipped default of server.pairing.max_failures. */
+export const INVITE_MAX_FAILURES = settingsSchema["server.pairing.max_failures"].default;
 /** How often a Device's last_seen is written. */
 export const LAST_SEEN_RESOLUTION_MS = 60_000;
 
 export type Principal =
   | { kind: "sidecar"; deviceId: typeof SIDECAR_DEVICE_ID }
-  | { kind: "device"; deviceId: string };
+  | { kind: "device"; deviceId: string; deviceKind: DeviceKind };
 
 export type PairingErrorCode =
   | "invalid_setup_code"
@@ -28,7 +38,8 @@ export type PairingErrorCode =
   | "unknown_code"
   | "expired"
   | "already_used"
-  | "unknown_secret";
+  | "unknown_secret"
+  | "too_many_attempts";
 
 export class PairingError extends Error {
   constructor(readonly code: PairingErrorCode) {
@@ -48,6 +59,19 @@ export type PairClaimResult =
   | { status: "pending"; expiresAt: Date }
   | { status: "paired"; deviceId: string; token: string };
 
+/** A Pairing invite as made: the secret goes in the QR code, the code is for typing. */
+export interface PairInviteResult {
+  code: string;
+  secret: string;
+  expiresAt: Date;
+}
+
+/** What a phone presents: the scanned secret, or the typed short code. */
+export type PairRedeemRequest = ({ secret: string } | { code: string }) & {
+  name: string;
+  kind: DeviceKind;
+};
+
 /** A pairing code waiting for an existing Device to approve it. */
 export interface PendingCode {
   code: string;
@@ -63,6 +87,10 @@ export interface AuthOptions {
   setupCode?: string | null;
   /** How long a pairing code lives; the Setting server.device_code_minutes when read from the table. */
   codeTtlMs?: number | (() => Promise<number> | number);
+  /** How long a Pairing invite lives; the Setting server.pairing.invite_minutes when read from the table. */
+  inviteTtlMs?: number | (() => Promise<number> | number);
+  /** Wrong secrets and codes allowed while invites are open; the Setting server.pairing.max_failures. */
+  maxFailures?: number | (() => Promise<number> | number);
   now?: () => Date;
 }
 
@@ -73,6 +101,12 @@ export interface Auth {
   pairStart(name: string): Promise<PairStartResult>;
   pairConfirm(code: string): Promise<void>;
   pairClaim(secret: string): Promise<PairClaimResult>;
+  /** A Pairing invite for a phone; every earlier open invite is cancelled. */
+  pairInvite(): Promise<PairInviteResult>;
+  /** Exchanges an invite's secret or short code for a Device token, once. */
+  pairRedeem(request: PairRedeemRequest): Promise<{ deviceId: string; token: string }>;
+  /** Cancels every open invite (the card was closed). */
+  cancelInvites(): Promise<void>;
   listDevices(): Promise<Device[]>;
   revokeDevice(id: string): Promise<boolean>;
   hasDevices(): Promise<boolean>;
@@ -104,6 +138,14 @@ export function randomCode(): string {
   return String((buf[0] ?? 0) % 1_000_000).padStart(6, "0");
 }
 
+/** A short code for a Pairing invite: Crockford base32, uniformly drawn. */
+export function randomInviteCode(): string {
+  const buf = new Uint8Array(INVITE_CODE_LENGTH);
+  crypto.getRandomValues(buf);
+  // 256 is a multiple of 32, so the remainder is uniform.
+  return Array.from(buf, (b) => INVITE_CODE_ALPHABET[b % INVITE_CODE_ALPHABET.length]).join("");
+}
+
 /** Compares two strings without leaking where they differ. */
 export function timingSafeEqual(a: string, b: string): boolean {
   const x = encoder.encode(a);
@@ -126,14 +168,45 @@ export function createAuth(options: AuthOptions): Auth {
   const setupCode = options.setupCode || null;
   const codeTtl = options.codeTtlMs ?? PAIRING_CODE_TTL_MS;
   const codeTtlMs = async () => (typeof codeTtl === "function" ? await codeTtl() : codeTtl);
+  const inviteTtl = options.inviteTtlMs ?? INVITE_TTL_MS;
+  const inviteTtlMs = async () => (typeof inviteTtl === "function" ? await inviteTtl() : inviteTtl);
+  const maxFailuresOption = options.maxFailures ?? INVITE_MAX_FAILURES;
+  const maxFailures = async () =>
+    typeof maxFailuresOption === "function" ? await maxFailuresOption() : maxFailuresOption;
   const now = options.now ?? (() => new Date());
+  // Wrong secrets and codes since the last invite was made. In memory: a
+  // restart forgets them, and an invite lives minutes.
+  let failures = 0;
 
-  const mintDevice = async (name: string) => {
+  const openInvites = () =>
+    and(
+      eq(pairingCodes.invite, true),
+      eq(pairingCodes.used, false),
+      gt(pairingCodes.expiresAt, now()),
+    );
+
+  const cancelOpenInvites = async () => {
+    await db.update(pairingCodes).set({ used: true }).where(openInvites());
+  };
+
+  /** A wrong secret or code: counted, and every open invite goes when there were too many. */
+  const failed = async (code: PairingErrorCode): Promise<never> => {
+    failures += 1;
+    if (failures >= (await maxFailures())) {
+      failures = 0;
+      await cancelOpenInvites();
+      throw new PairingError("too_many_attempts");
+    }
+    throw new PairingError(code);
+  };
+
+  const mintDevice = async (name: string, kind: DeviceKind = "computer") => {
     const token = randomToken();
     const deviceId = crypto.randomUUID();
     await db.insert(devices).values({
       id: deviceId,
       name,
+      kind,
       tokenHash: await sha256Hex(token),
       createdAt: now(),
       lastSeen: now(),
@@ -154,7 +227,7 @@ export function createAuth(options: AuthOptions): Auth {
       if (now().getTime() - row.lastSeen.getTime() >= LAST_SEEN_RESOLUTION_MS) {
         await db.update(devices).set({ lastSeen: now() }).where(eq(devices.id, row.id));
       }
-      return { kind: "device", deviceId: row.id };
+      return { kind: "device", deviceId: row.id, deviceKind: row.kind };
     },
 
     async pairSetup(code, name) {
@@ -204,7 +277,7 @@ export function createAuth(options: AuthOptions): Auth {
     async pairClaim(secret) {
       const secretHash = await sha256Hex(secret);
       const row = await db.query.pairingCodes.findFirst({
-        where: eq(pairingCodes.secretHash, secretHash),
+        where: and(eq(pairingCodes.secretHash, secretHash), eq(pairingCodes.invite, false)),
         orderBy: desc(pairingCodes.createdAt),
       });
       if (!row) throw new PairingError("unknown_secret");
@@ -227,9 +300,65 @@ export function createAuth(options: AuthOptions): Auth {
       return { status: "paired", ...minted };
     },
 
+    async pairInvite() {
+      await cancelOpenInvites();
+      failures = 0;
+      const secret = randomToken();
+      const secretHash = await sha256Hex(secret);
+      const expiresAt = new Date(now().getTime() + (await inviteTtlMs()));
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const code = randomInviteCode();
+        const inserted = await db
+          .insert(pairingCodes)
+          .values({
+            code,
+            secretHash,
+            deviceName: "Phone",
+            expiresAt,
+            confirmedAt: now(),
+            invite: true,
+            createdAt: now(),
+          })
+          .onConflictDoNothing({ target: pairingCodes.code })
+          .returning({ code: pairingCodes.code });
+        if (inserted.length > 0) return { code, secret, expiresAt };
+      }
+      throw new Error("could not allocate a pairing invite");
+    },
+
+    async pairRedeem(request) {
+      const where =
+        "secret" in request
+          ? eq(pairingCodes.secretHash, await sha256Hex(request.secret))
+          : eq(pairingCodes.code, request.code);
+      const row = await db.query.pairingCodes.findFirst({
+        where: and(where, eq(pairingCodes.invite, true)),
+      });
+      if (!row) return failed("secret" in request ? "unknown_secret" : "unknown_code");
+      if (row.used) throw new PairingError("already_used");
+      if (row.expiresAt.getTime() < now().getTime()) throw new PairingError("expired");
+      // One redemption wins: the row flips to used only where it still is not.
+      const spent = await db
+        .update(pairingCodes)
+        .set({ used: true })
+        .where(and(eq(pairingCodes.code, row.code), eq(pairingCodes.used, false)))
+        .returning({ code: pairingCodes.code });
+      if (spent.length === 0) throw new PairingError("already_used");
+      return mintDevice(request.name, request.kind);
+    },
+
+    async cancelInvites() {
+      await cancelOpenInvites();
+    },
+
     async listDevices() {
       const rows = await db.select().from(devices).orderBy(devices.createdAt);
-      return rows.map((r) => ({ id: r.id, name: r.name, lastSeen: r.lastSeen.toISOString() }));
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: r.kind,
+        lastSeen: r.lastSeen.toISOString(),
+      }));
     },
 
     async revokeDevice(id) {
@@ -252,6 +381,7 @@ export function createAuth(options: AuthOptions): Auth {
         .where(
           and(
             eq(pairingCodes.used, false),
+            eq(pairingCodes.invite, false),
             isNull(pairingCodes.confirmedAt),
             gt(pairingCodes.expiresAt, now()),
           ),

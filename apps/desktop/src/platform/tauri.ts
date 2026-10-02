@@ -2,6 +2,7 @@
 // goes through this one module, so tests and the browser dev server can fake it.
 
 import type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
+import type { FetchLike } from "./cloud.ts";
 
 export type { Process, ProcessRunner, SpawnOptions } from "../agent/runtimes/process.ts";
 
@@ -128,6 +129,24 @@ export interface Platform {
   spawn: ProcessRunner;
   /** The window's frame buttons and drag; absent outside the desktop app. */
   frame?: WindowFrame | undefined;
+  /**
+   * Phones (platform/remote.ts): opens the camera and resolves with the text
+   * of the first QR code it reads, or null when the user backs out. The
+   * barcode scanner plugin on Android and iOS; absent elsewhere, where the
+   * Connect screen offers typing the address and the short code only. The
+   * camera permission's reason is strings.mobile.connect.camera_permission
+   * (NSCameraUsageDescription on iOS).
+   */
+  scanQr?: (() => Promise<string | null>) | undefined;
+  /**
+   * Phones: a fetch that accepts exactly the TLS certificate whose SHA-256
+   * (base64url) is `fingerprint`, and no other, for a Sidecar's LAN address
+   * (ADR 0006 amendment). It rejects with an Error named "PinMismatch" when
+   * the certificate differs. A webview cannot pin, so this runs in the native
+   * layer; absent, https to a self-signed LAN address fails and the phone
+   * needs plain HTTP on the LAN or a Cloud server.
+   */
+  pinnedFetch?: ((fingerprint: string) => FetchLike) | undefined;
   isTauri: boolean;
 }
 

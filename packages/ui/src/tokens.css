@@ -19,6 +19,10 @@
   --r-lg: 12px;
   --r-xl: 16px;
 
+  /* QR codes stay dark on light in every palette: phone scanners expect it. */
+  --qr-ink: #000;
+  --qr-paper: #fff;
+
   /* density: comfortable (default). compact and spacious override below. */
   --fs-xs: 11.5px;
   --fs-sm: 12.5px;

@@ -42,10 +42,15 @@
 // starts work locked, rotates <dir>/sidecar.log, and posts desktop
 // notifications itself while no client is connected. It stops on SIGTERM or
 // POST /service/stop, finishing leases and closing Postgres.
+//
+// LAN access (server.lan.*, off by default): the Sidecar also listens on
+// 0.0.0.0:<server.lan.port>, over TLS with a self-signed certificate a phone
+// pins (entry/lan.ts), so a phone on the same network can pair and sync. Read
+// at start; a changed Setting applies at the next restart of the service.
 //   monday-server stop [--data-dir <dir>]    SIGTERM to the running service, and wait
 //   monday-server status [--data-dir <dir>]  the runtime file, or "not running"
 
-import { homedir } from "node:os";
+import { homedir, hostname as osHostname } from "node:os";
 import { join } from "node:path";
 import type { DeploymentMode, ServiceManager, ServiceStatus } from "@monday/shared";
 import { createApp } from "../src/app.ts";
@@ -63,18 +68,20 @@ import { defaultDiscoveryDeps } from "../src/providers/autoconfig.ts";
 import { createOAuthFlow } from "../src/providers/oauth/flow.ts";
 import { serviceRoutes } from "../src/routes/service.ts";
 import { upgradeRoutes } from "../src/routes/upgrade.ts";
+import { type LanSettings, lanBind } from "../src/service/lan.ts";
 import {
   createDbNoticeSource,
   createSidecarNotices,
   SIDECAR_NOTICE_KEYS,
 } from "../src/service/notices.ts";
-import { readDeviceSettings, readGlobalSetting } from "../src/settings/read.ts";
+import { readDeviceSettings, readGlobalSetting, readGlobalSettings } from "../src/settings/read.ts";
 import { createUpgrade } from "../src/upgrade/index.ts";
 import { fileAttachStore, readAttachedUrl } from "./attach.ts";
 import { createChangesSocket, type SocketData } from "./changes-ws.ts";
 import { createCheckpointer } from "./checkpointer.ts";
 import { createDesktopNotifier } from "./desktop-notify.ts";
 import { rememberBuffersMb, startEmbeddedPostgres } from "./embedded-postgres.ts";
+import { type LanListener, startLanListener } from "./lan.ts";
 import { createLoopbackListener } from "./oauth-loopback.ts";
 import { findPgDump, pgDump } from "./pg-dump.ts";
 import { migrationsFolder } from "./resources.ts";
@@ -303,6 +310,21 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
     log: debug,
   });
 
+  // The LAN listener phones reach; started below, once the app exists.
+  const readLanSettings = async (): Promise<LanSettings> => {
+    const s = await readGlobalSettings(handle.db, [
+      "server.lan.enabled",
+      "server.lan.port",
+      "server.lan.tls",
+    ] as const);
+    return {
+      enabled: s["server.lan.enabled"],
+      port: s["server.lan.port"],
+      tls: s["server.lan.tls"],
+    };
+  };
+  let lanListener: LanListener | null = null;
+
   const app = createApp({
     db: handle.db,
     auth,
@@ -367,6 +389,25 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
         : createMemoryNotifier((line) => log(line)),
     presence,
     publicUrl: publicUrlReader(handle.db, process.env),
+    ...(mode === "sidecar"
+      ? {
+          lan: async () => {
+            if (lanListener) return lanListener.status();
+            const saved = await readLanSettings();
+            return {
+              enabled: saved.enabled,
+              listening: false,
+              port: saved.port,
+              tls: saved.tls,
+              urls: [],
+              fingerprint: null,
+              error: null,
+              restartNeeded: saved.enabled,
+            };
+          },
+          hostName: osHostname(),
+        }
+      : {}),
     log,
   });
 
@@ -383,6 +424,16 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
   // writes the runtime file, which is how the app finds it (ADR 0013).
   console.log(`monday server listening on http://127.0.0.1:${server.port}`);
   if (hostname !== "127.0.0.1") log(`bound to ${hostname}:${server.port} in ${mode} mode`);
+  if (mode === "sidecar") {
+    lanListener = await startLanListener<SocketData>({
+      bind: lanBind(await readLanSettings(), mode),
+      dataDir,
+      fetch: async (req, srv) => (await changesSocket.upgrade(req, srv)) ?? app.fetch(req, srv),
+      websocket: changesSocket.websocket,
+      saved: readLanSettings,
+      log,
+    });
+  }
   if (service) {
     await writeRuntimeFile(dataDir, {
       pid: process.pid,
@@ -441,6 +492,7 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
         ] * 1000,
       ),
       notified: notices?.told() ?? { mailThrough: null, approvals: [] },
+      ...(lanListener ? { lan: await lanListener.status() } : {}),
     };
   }
 
@@ -455,6 +507,7 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
       stopNotices?.();
       if (logTimer) clearInterval(logTimer);
       server.stop(true);
+      lanListener?.stop();
       await kicker.stop();
       await sync.close();
       await calendar.close();

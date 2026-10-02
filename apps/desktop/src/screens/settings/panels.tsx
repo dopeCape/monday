@@ -30,6 +30,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AccountView, PendingPairings, StorageInfo } from "../../platform/api.ts";
 import { platform } from "../../platform/tauri.ts";
 import { useShell } from "../../shell/Shell.tsx";
+import { PhoneInvite } from "./PhoneInvite.tsx";
 import {
   Card,
   DangerAction,
@@ -754,6 +755,7 @@ export function DevicesPanel(_: PanelProps) {
               )
             }
           >
+            {d.kind === "phone" ? <Tag>{s["strings.server.devices.kind.phone"]}</Tag> : null}
             {d.id === me ? <Tag kind="ok">{s["strings.settings.devices.this"]}</Tag> : null}
           </Card>
         ))}
@@ -813,13 +815,29 @@ export function DevicesPanel(_: PanelProps) {
           </Btn>
         </div>
       </Card>
+      <PhoneInvite />
     </>
   );
 }
 registerPanel("server", "Devices", DevicesPanel, {
   title: "strings.server.devices.title",
   description: "strings.server.devices.intro",
-  searchTerms: ["devices", "pair", "pairing", "revoke", "code", "laptop", "phone", "approve"],
+  searchTerms: [
+    "devices",
+    "pair",
+    "pairing",
+    "revoke",
+    "code",
+    "laptop",
+    "phone",
+    "approve",
+    "qr",
+    "android",
+    "iphone",
+    "network",
+    "wifi",
+    "lan",
+  ],
 });
 
 function formatBytes(n: number): string {
