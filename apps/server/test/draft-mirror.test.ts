@@ -13,13 +13,20 @@ import { eq } from "drizzle-orm";
 import { claimableNeeds } from "../src/capabilities.ts";
 import { randomKey } from "../src/crypto/aead.ts";
 import { createKeys } from "../src/crypto/keys.ts";
-import { drafts as draftsTable, jobs as jobsTable } from "../src/db/schema.ts";
+import {
+  drafts as draftsTable,
+  jobs as jobsTable,
+  messages as messagesTable,
+  providerDrafts,
+  syncMessages,
+} from "../src/db/schema.ts";
 import {
   backfillDraftMirrors,
   createDrafts,
   type Drafts,
   MIRROR_DEBOUNCE_MS,
   MIRROR_STEP,
+  repairDraftMirrors,
 } from "../src/drafts/index.ts";
 import { createJobs, type Jobs } from "../src/jobs/index.ts";
 import { createMailstore, type Mailstore } from "../src/mailstore/index.ts";
@@ -158,8 +165,8 @@ describe("Draft mirrors in Gmail's Drafts", () => {
     });
     drafts.registerSteps(jobs);
     engine.setDraftImporter(
-      (found) => drafts.importProviderDraft(found).then(() => {}),
-      (ws) => drafts.knownProviderDraftIds(ws),
+      (found) => drafts.importProviderDraft(found).then((d) => d.id),
+      (ws, keys) => drafts.matchProviderDraft(ws, keys),
     );
     // Headers first, so a reply has a parent Message with a Message-ID.
     await syncAll(true);
@@ -281,6 +288,204 @@ describe("Draft mirrors in Gmail's Drafts", () => {
     const after = await drafts.list(workspaceId);
     expect(after).toHaveLength(before);
     expect(after.filter((d) => d.updatedBy === "provider")).toHaveLength(0);
+  }, 120_000);
+
+  test("monday's mirrors never become Thread Messages", async () => {
+    // reply-draft sits in Gmail under DRAFT, on the Thread it answers.
+    const reply = await row("reply-draft");
+    const gmailMessage = gmail.drafts.get(reply?.providerDraftId ?? "") ?? "missing";
+    expect(gmail.emails.get(gmailMessage)?.labelIds).toEqual(["DRAFT"]);
+    const asMessage = await db.handle.db
+      .select()
+      .from(messagesTable)
+      .where(eq(messagesTable.providerMessageId, gmailMessage));
+    expect(asMessage).toHaveLength(0);
+    const mirrorOnly = (await mirrorRows(db.handle.db, workspaceId)).filter((r) =>
+      r.mailboxIds.every((m) => m === "DRAFT"),
+    );
+    expect(mirrorOnly).toHaveLength(0);
+    // The engine kept it apart and matched it to the Draft it mirrors.
+    const kept = await db.handle.db.query.providerDrafts.findFirst({
+      where: eq(providerDrafts.providerId, gmailMessage),
+    });
+    expect(kept?.draftId).toBe("reply-draft");
+    expect(kept?.threadId).toBe(reply?.threadId ?? "missing");
+  }, 120_000);
+
+  test("a mirror Gmail renames is matched, also after an update mints a new message", async () => {
+    gmail.rewriteDraftMessageIds = true;
+    try {
+      advance(1_000);
+      await drafts.save({
+        id: "renamed-draft",
+        workspaceId,
+        content: content({ subject: "Renamed by Gmail" }),
+        updatedBy: "agent",
+        at: now().toISOString(),
+      });
+      expect(await drafts.mirror("renamed-draft")).toBe("mirrored");
+      const first = await row("renamed-draft");
+      expect(first?.providerMessageId).toBe(gmail.drafts.get(first?.providerDraftId ?? ""));
+      await syncAll(false);
+      advance(1_000);
+      await drafts.save({
+        id: "renamed-draft",
+        workspaceId,
+        content: content({ subject: "Renamed by Gmail", bodyText: "Second take." }),
+        updatedBy: "agent",
+        at: now().toISOString(),
+      });
+      expect(await drafts.mirror("renamed-draft")).toBe("mirrored");
+      // Lost the race with sync: the Draft row does not know the new message id yet.
+      await db.handle.db
+        .update(draftsTable)
+        .set({ providerMessageId: null })
+        .where(eq(draftsTable.id, "renamed-draft"));
+      await syncAll(false);
+      const all = await drafts.list(workspaceId);
+      expect(all.filter((d) => d.subject === "Renamed by Gmail")).toHaveLength(1);
+      expect(all.filter((d) => d.updatedBy === "provider")).toHaveLength(0);
+      const after = await row("renamed-draft");
+      // drafts.list named the draft the new message belongs to.
+      expect(after?.providerMessageId).toBe(gmail.drafts.get(after?.providerDraftId ?? ""));
+    } finally {
+      gmail.rewriteDraftMessageIds = false;
+    }
+  }, 120_000);
+
+  test("a reply drafted in Gmail itself is imported on its Thread", async () => {
+    const page = await store.listThreads(workspaceId, { limit: 5, includeArchived: true });
+    const thread = page.threads[1] ?? page.threads[0];
+    if (!thread) throw new Error("no threads synced");
+    const parents = await store.listMessages(thread.id);
+    const parent = parents[parents.length - 1];
+    const parentRow = (await mirrorRows(db.handle.db, workspaceId)).find(
+      (r) => r.messageId === parent?.id,
+    );
+    const rfc = parentRow?.rfcMessageId ?? "";
+    const gmailParent = [...gmail.emails.values()].find(
+      (e) => e.headers["message-id"] === `<${rfc}>`,
+    );
+    const written = gmail.draftFromElsewhere(
+      [
+        `From: ${fixture.address}`,
+        "To: aoife@northlight.dev",
+        `Subject: Re: ${thread.subject}`,
+        `Message-ID: <phone-draft@mail.gmail.com>`,
+        `In-Reply-To: <${rfc}>`,
+        `References: <${rfc}>`,
+        "",
+        "Written on my phone.",
+      ].join("\r\n"),
+      gmailParent?.threadId ?? null,
+    );
+    const before = (await store.listMessages(thread.id)).length;
+    await syncAll(false);
+    const imported = (await drafts.list(workspaceId)).find((d) => d.updatedBy === "provider");
+    expect(imported).toBeDefined();
+    expect(imported?.kind).toBe("reply");
+    expect(imported?.threadId).toBe(thread.id);
+    expect(imported?.inReplyToMessageId).toBe(parent?.id ?? "missing");
+    expect(imported?.bodyText).toContain("Written on my phone.");
+    // Gmail's draft id, so an edit in monday updates that draft and a delete removes it.
+    expect((await row(imported?.id ?? ""))?.providerDraftId).toBe(written.id);
+    expect((await row(imported?.id ?? ""))?.providerMessageId).toBe(written.messageId);
+    expect(await store.listMessages(thread.id)).toHaveLength(before);
+    // A second pass imports nothing more.
+    await syncAll(false);
+    expect((await drafts.list(workspaceId)).filter((d) => d.updatedBy === "provider")).toHaveLength(
+      1,
+    );
+  }, 120_000);
+
+  test("the repair moves Drafts-only Messages out of Threads and drops copy drafts, once", async () => {
+    const page = await store.listThreads(workspaceId, { limit: 5, includeArchived: true });
+    const thread = page.threads[2] ?? page.threads[0];
+    if (!thread) throw new Error("no threads synced");
+    const parents = await store.listMessages(thread.id);
+    const parent = parents[parents.length - 1];
+    const rows = await mirrorRows(db.handle.db, workspaceId);
+    const parentRow = rows.find((r) => r.messageId === parent?.id);
+    const sentBefore = rows.filter((r) => r.mailboxIds.includes("SENT")).length;
+    expect(sentBefore).toBeGreaterThan(0);
+    // What an older build left behind: the original mirrored Draft on the Thread...
+    advance(1_000);
+    await drafts.save({
+      id: "legacy-original",
+      workspaceId,
+      content: content({
+        kind: "reply",
+        threadId: thread.id,
+        inReplyToMessageId: parent?.id ?? null,
+        subject: `Re: ${thread.subject}`,
+      }),
+      updatedBy: "agent",
+      at: now().toISOString(),
+    });
+    await db.handle.db
+      .update(draftsTable)
+      .set({ providerDraftId: "r-legacy", mirroredHash: "legacy" })
+      .where(eq(draftsTable.id, "legacy-original"));
+    // ...Gmail's copy synced as a Thread Message from the owner...
+    const messageId = await store.upsertMessage({
+      threadId: thread.id,
+      providerMessageId: "legacy-draft-msg",
+      from: fixture.owner,
+      to: [{ name: "Aoife", email: "aoife@northlight.dev" }],
+      cc: [],
+      date: now().toISOString(),
+      headers: {},
+      bodyText: "",
+      bodyHtml: null,
+      snippet: "",
+    });
+    await db.handle.db.insert(syncMessages).values({
+      workspaceId,
+      providerId: "legacy-draft-msg",
+      messageId,
+      threadId: thread.id,
+      threadKey: parentRow?.threadKey ?? "",
+      rfcMessageId: "CA+legacy@mail.gmail.com",
+      references: [parentRow?.rfcMessageId ?? ""],
+      mailboxIds: ["DRAFT"],
+      seen: true,
+      date: now(),
+    });
+    // ...and imported back as a second, unlinked Draft.
+    advance(1_000);
+    await drafts.save({
+      id: "legacy-copy",
+      workspaceId,
+      content: content({ subject: `Re: ${thread.subject}` }),
+      updatedBy: "provider",
+      at: now().toISOString(),
+    });
+    await db.handle.db
+      .update(draftsTable)
+      .set({ providerDraftId: "legacy-draft-msg", mirroredHash: "copy" })
+      .where(eq(draftsTable.id, "legacy-copy"));
+    expect((await store.listMessages(thread.id)).map((m) => m.id)).toContain(messageId);
+
+    const repaired = await repairDraftMirrors(engine, drafts);
+    expect(repaired).toEqual({ messages: 1, drafts: 1 });
+    expect((await store.listMessages(thread.id)).map((m) => m.id)).not.toContain(messageId);
+    expect((await drafts.list(workspaceId)).map((d) => d.id)).not.toContain("legacy-copy");
+    const original = await row("legacy-original");
+    expect(original?.deleted).toBe(false);
+    expect(original?.providerMessageId).toBe("legacy-draft-msg");
+    // The copy is gone without touching Gmail: the Provider's draft is the original's mirror.
+    expect((await row("legacy-copy"))?.providerDraftId).toBeNull();
+    const kept = await db.handle.db.query.providerDrafts.findFirst({
+      where: eq(providerDrafts.providerId, "legacy-draft-msg"),
+    });
+    expect(kept?.draftId).toBe("legacy-original");
+    // Sent mail is left alone, and a second run finds nothing.
+    const after = await mirrorRows(db.handle.db, workspaceId);
+    expect(after.filter((r) => r.mailboxIds.includes("SENT")).length).toBe(sentBefore);
+    expect(await repairDraftMirrors(engine, drafts)).toEqual({ messages: 0, drafts: 0 });
+    // The import pass matches the kept copy to the original instead of importing it.
+    await syncAll(false);
+    expect((await drafts.list(workspaceId)).map((d) => d.id)).not.toContain("legacy-copy");
   }, 120_000);
 
   test("a lasting 403 quota refusal fails the mirror instead of vanishing", async () => {

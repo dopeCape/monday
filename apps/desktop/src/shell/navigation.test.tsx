@@ -343,6 +343,22 @@ describe("Drafts", () => {
     expect(composer.draft("d2")?.subject).toBe("");
   });
 
+  test("selected Drafts are deleted together, and one Undo saves them all back", async () => {
+    const { composer } = await mount({ drafts: [draft, emptyDraft] });
+    await click(navItem("Drafts"));
+    expect(q(".drafts-bar")).toBeNull();
+    await click(q('.draft-row[data-draft="d1"] .draft-check'));
+    await click(q('.draft-row[data-draft="d2"] .draft-check'));
+    expect(q(".drafts-bar")?.textContent).toContain("2 selected");
+    await click(q(".drafts-bar .drafts-delete"));
+    expect(qa(".draft-row")).toHaveLength(0);
+    expect(q(".toast")?.textContent).toContain("2 drafts deleted");
+    expect(q(".drafts-bar")).toBeNull();
+    await click(q(".toast .btn"));
+    expect(qa(".draft-row").map((r) => r.getAttribute("data-draft")).sort()).toEqual(["d1", "d2"]);
+    expect(composer.drafts()).toHaveLength(2);
+  });
+
   test("no Drafts shows the empty line and no count", async () => {
     await mount();
     expect(navItem("Drafts").querySelector(".n")).toBeNull();

@@ -54,7 +54,7 @@ import { claimableNeeds, isDeploymentMode } from "../src/capabilities.ts";
 import { createChangeBus, listenForChanges } from "../src/changes/bus.ts";
 import { createDb, dbOptionsFor } from "../src/db/client.ts";
 import { migrate, SchemaNewerThanBuildError } from "../src/db/migrate.ts";
-import { backfillDraftMirrors } from "../src/drafts/index.ts";
+import { backfillDraftMirrors, createDrafts, repairDraftMirrors } from "../src/drafts/index.ts";
 import { createMemoryNotifier } from "../src/external/index.ts";
 import { cloudIsAlive, readHeartbeatTiming } from "../src/heartbeat.ts";
 import { createProcessKicker } from "../src/kicker/process.ts";
@@ -233,6 +233,21 @@ async function main(service: (ServiceArgs & { dataDir: string }) | null) {
     void services
       .startAccounts()
       .catch((error) => log(`re-arming accounts after unlock failed: ${error}`));
+  });
+  // Drafts synced back as Thread Messages or as copies of themselves are put right once the key is in.
+  const repairDrafts = () =>
+    repairDraftMirrors(sync, createDrafts({ db: handle.db, mailstore, sync }))
+      .then(
+        (r) =>
+          (r.messages > 0 || r.drafts > 0) &&
+          log(
+            `draft repair: ${r.messages} message(s) out of Threads, ${r.drafts} copy draft(s) dropped`,
+          ),
+      )
+      .catch((error) => log(`draft repair failed: ${error}`));
+  if (keys.isUnlocked()) await repairDrafts();
+  keys.onUnlock(() => {
+    void repairDrafts();
   });
   // Drafts saved before their Provider could hold them reach its Drafts folder now.
   await backfillDraftMirrors(handle.db, jobs)

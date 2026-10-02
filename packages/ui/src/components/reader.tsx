@@ -1,5 +1,6 @@
 // The reader's parts: the Brief, one Message (open or collapsed), an
-// Attachment pill, and the reply box at the bottom.
+// Attachment pill, a Draft of the Thread shown as a draft card, and the reply
+// box at the bottom.
 import type {
   Attachment as AttachmentData,
   Brief as BriefData,
@@ -13,7 +14,10 @@ import {
   FileIcon,
   FilePdfIcon,
   ImageIcon,
+  NotePencilIcon,
   PaperclipIcon,
+  PencilSimpleIcon,
+  TrashIcon,
 } from "@phosphor-icons/react";
 import { type ChangeEvent, Fragment, type ReactNode } from "react";
 import {
@@ -369,5 +373,114 @@ export function ReplyBox({
         </Btn>
       </div>
     </div>
+  );
+}
+
+export interface DraftCardStrings {
+  /** The badge: "Draft". */
+  badge: string;
+  /** "Drafted by monday" or "Your draft", by who wrote it. */
+  byline: string;
+  /** "To {to}" */
+  to: string;
+  /** Shown when nobody is addressed yet. */
+  noRecipient: string;
+  /** "Saved {when}" */
+  saved: string;
+  /** Shown when the Draft has no text yet. */
+  emptyBody: string;
+  edit: string;
+  send: string;
+  discard: string;
+}
+
+export interface DraftCardProps {
+  draftId: string;
+  /** Who it goes to, To then Cc. */
+  recipients: readonly { name: string; email: string }[];
+  /** The Draft's text; the card shows its first lines. */
+  bodyText: string;
+  /** When it was last saved. */
+  updatedAt: string;
+  /** "agent" when monday wrote it; the card says so. */
+  author: "agent" | "user";
+  strings: DraftCardStrings;
+  now?: Date | undefined;
+  onEdit: (draftId: string) => void;
+  onSend?: ((draftId: string) => void) | undefined;
+  onDiscard: (draftId: string) => void;
+}
+
+/** The Draft's own words, without the quoted history under them, cut to a few lines. */
+function draftPreview(text: string, max = 280): string {
+  const own: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith(">") || /^On .+ wrote:\s*$/.test(line.trim())) break;
+    own.push(line);
+  }
+  const joined = own
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return joined.length > max ? `${joined.slice(0, max).trimEnd()}…` : joined;
+}
+
+/**
+ * A Draft at the end of its Thread: not a Message, so it never looks like
+ * one. Dashed and tinted, badged, with who drafted it, its recipients, the
+ * start of its text and when it was saved; Edit opens it in the inline
+ * reply, Send sends it the usual way, Discard throws it away with Undo.
+ */
+export function DraftCard({
+  draftId,
+  recipients,
+  bodyText,
+  updatedAt,
+  author,
+  strings,
+  now,
+  onEdit,
+  onSend,
+  onDiscard,
+}: DraftCardProps) {
+  const to = recipients.map((p) => p.name || p.email).join(", ");
+  const text = draftPreview(bodyText);
+  return (
+    <article className="draft-card" data-draft={draftId} data-author={author}>
+      <div className="draft-card-head">
+        <span className="draft-badge">
+          <Icon icon={NotePencilIcon} /> {strings.badge}
+        </span>
+        <span className="draft-by">{strings.byline}</span>
+        <span className="sp" />
+        <span className="draft-when">
+          {strings.saved.replace("{when}", formatWhen(updatedAt, now ?? new Date()))}
+        </span>
+      </div>
+      <div className={cx("draft-to", !to && "none")}>
+        {to ? strings.to.replace("{to}", to) : strings.noRecipient}
+      </div>
+      <button
+        type="button"
+        className={cx("draft-text", !text && "none")}
+        onClick={() => onEdit(draftId)}
+      >
+        {text || strings.emptyBody}
+      </button>
+      <div className="draft-card-actions">
+        <Btn sm onClick={() => onEdit(draftId)}>
+          <Icon icon={PencilSimpleIcon} /> {strings.edit}
+        </Btn>
+        {onSend ? (
+          <Btn sm primary onClick={() => onSend(draftId)}>
+            {strings.send}
+          </Btn>
+        ) : null}
+        <span className="sp" />
+        <Btn sm className="draft-discard" onClick={() => onDiscard(draftId)}>
+          <Icon icon={TrashIcon} /> {strings.discard}
+        </Btn>
+      </div>
+    </article>
   );
 }

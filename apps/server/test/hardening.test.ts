@@ -112,6 +112,7 @@ describe("transcripts and checkpoints under the envelope", () => {
       mailstore: store,
       intelligence,
       remoteAddress: () => "127.0.0.1",
+      now: () => NOW,
     });
     workspaceId = (await store.createWorkspace(account)).id;
     await send("/keys/anthropic", { workspace: workspaceId, key: "sk-ant-shared" }, "PUT");

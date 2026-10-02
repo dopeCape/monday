@@ -29,6 +29,7 @@ import {
   type OAuthAuth,
   type Provider,
   type ProviderCapabilities,
+  type ProviderDraftRef,
   ProviderError,
   parseReferences,
   type RawMessage,
@@ -745,17 +746,17 @@ export class GmailSession implements Session {
     const path = draftId ? `drafts/${encodeURIComponent(draftId)}` : "drafts";
     const cost = draftId ? GMAIL_COST["drafts.update"] : GMAIL_COST["drafts.create"];
     const method = draftId ? "PUT" : "POST";
-    let draft: { id?: string };
+    let draft: { id?: string; message?: { id?: string } };
     if (mime.byteLength <= simpleLimit) {
       const message = { raw: base64url(mime), ...(threadId ? { threadId } : {}) };
-      draft = await this.client.request<{ id?: string }>(path, {
+      draft = await this.client.request<{ id?: string; message?: { id?: string } }>(path, {
         method,
         cost,
         body: draftId ? { id: draftId, message } : { message },
       });
     } else {
       const message = threadId ? { threadId } : {};
-      draft = await this.client.resumableUpload<{ id?: string }>(
+      draft = await this.client.resumableUpload<{ id?: string; message?: { id?: string } }>(
         path,
         draftId ? { id: draftId, message } : { message },
         mime,
@@ -766,7 +767,28 @@ export class GmailSession implements Session {
     }
     const id = draft.id ?? draftId;
     if (!id) throw new ProviderError("drafts.create returned no id", "protocol");
-    return { id };
+    return { id, messageId: draft.message?.id ?? null };
+  }
+
+  /** drafts.list, every page: each draft id with the message that holds it now. */
+  async listDrafts(): Promise<ProviderDraftRef[]> {
+    const out: ProviderDraftRef[] = [];
+    let pageToken: string | undefined;
+    for (let guard = 0; guard < 100; guard++) {
+      const page = await this.client.request<{
+        drafts?: { id?: string; message?: { id?: string } }[];
+        nextPageToken?: string;
+      }>("drafts", {
+        cost: "drafts.list",
+        query: { maxResults: "500", ...(pageToken ? { pageToken } : {}) },
+      });
+      for (const d of page.drafts ?? []) {
+        if (d.id && d.message?.id) out.push({ id: d.id, messageId: d.message.id });
+      }
+      pageToken = page.nextPageToken;
+      if (!pageToken) break;
+    }
+    return out;
   }
 
   /** drafts.delete; a draft already gone (404) is not an error. */

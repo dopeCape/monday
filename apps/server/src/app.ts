@@ -261,8 +261,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
       if (options.jobs) created.registerSteps(options.jobs);
       if (options.sync) {
         options.sync.setDraftImporter(
-          (found) => created.importProviderDraft(found).then(() => {}),
-          (workspaceId) => created.knownProviderDraftIds(workspaceId),
+          (found) => created.importProviderDraft(found).then((d) => d.id),
+          (workspaceId, keys) => created.matchProviderDraft(workspaceId, keys),
         );
       }
       return created;
@@ -540,7 +540,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", peopleRoutes(db, options.now ? { now: options.now } : {}));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
-  app.route("/", intelligenceRoutes(intelligence));
+  app.route(
+    "/",
+    intelligenceRoutes(intelligence, options.now ? { now: options.now } : {}),
+  );
   app.route("/", signalsRoutes(intelligence, { mode, isLoopback }));
   app.route("/", recommendationsRoutes(intelligence));
   app.route("/", localRuntimeRoutes(localBridge));

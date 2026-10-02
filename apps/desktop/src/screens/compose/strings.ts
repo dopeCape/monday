@@ -45,6 +45,7 @@ export interface ComposeUiStrings {
   discarded: string;
   draftedByAgent: string;
   draftedByYou: string;
+  draftBadge: string;
   openDraft: string;
   assist: AssistStrings;
   laterIn: string;
@@ -130,6 +131,7 @@ export function composeStrings(s: Settings): ComposeUiStrings {
     discarded: s["strings.compose.discarded"],
     draftedByAgent: s["strings.compose.drafted_by_agent"],
     draftedByYou: s["strings.compose.drafted_by_you"],
+    draftBadge: s["strings.drafts.badge"],
     openDraft: s["strings.compose.open_draft"],
     assist: {
       menu: s["strings.compose.assist"],

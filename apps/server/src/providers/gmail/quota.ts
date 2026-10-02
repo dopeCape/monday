@@ -18,6 +18,7 @@ export const GMAIL_COST = {
   "drafts.update": 15,
   "drafts.delete": 10,
   "drafts.get": 5,
+  "drafts.list": 5,
   "threads.get": 40,
   "labels.list": 1,
   "labels.get": 1,

@@ -102,10 +102,14 @@ export interface GmailServer {
   }[];
   /** Answer the next n Gmail calls with a 403 rateLimitExceeded (the per-user quota refusal). */
   quotaRefuseNext: number;
+  /** Like real Gmail, a draft's Message-ID is Gmail's own, not the one its MIME named. */
+  rewriteDraftMessageIds: boolean;
   /** The code the fake authorization endpoint would hand back for `state`. */
   issueCode(redirectUri: string, challenge: string): string;
   /** Simulates another client. */
   deliver(message: FixtureMessage): void;
+  /** A draft written in Gmail itself (the web client, a phone): drafts.create by another client. */
+  draftFromElsewhere(raw: string, threadId: string | null): { id: string; messageId: string };
   setLabels(id: string, add: string[], remove: string[]): void;
   destroy(id: string): void;
   /** Drops history so every stored historyId is too old (404). */
@@ -277,6 +281,7 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
     drafts: new Map(),
     draftWrites: [],
     quotaRefuseNext: 0,
+    rewriteDraftMessageIds: false,
     get historyId() {
       return historyId;
     },
@@ -285,6 +290,13 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
       const code = `code-${counter}`;
       codes.set(code, { redirectUri, challenge });
       return code;
+    },
+    draftFromElsewhere(raw, threadId) {
+      const written = writeDraft(new TextEncoder().encode(raw), threadId, null, "simple") as {
+        id: string;
+        message: { id: string };
+      };
+      return { id: written.id, messageId: written.message.id };
     },
     deliver(message) {
       const e = add(message);
@@ -475,6 +487,15 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
       log(GMAIL_COST.stop);
       return new Response(null, { status: 204 });
     }
+    if (path === "drafts" && method === "GET") {
+      log(GMAIL_COST["drafts.list"]);
+      return Response.json({
+        drafts: [...server.drafts].map(([id, messageId]) => ({
+          id,
+          message: { id: messageId, threadId: emails.get(messageId)?.threadId },
+        })),
+      });
+    }
     if (path === "drafts" && method === "POST") {
       log(GMAIL_COST["drafts.create"]);
       const message = body.message as { raw?: string; threadId?: string } | undefined;
@@ -594,6 +615,9 @@ export function createGmailServer(fixture: Fixture, options: GmailServerOptions 
       id = `r-${counter}`;
     }
     const email = storeRaw(raw, threadId, ["DRAFT"], "draft-msg");
+    if (server.rewriteDraftMessageIds) {
+      email.headers["message-id"] = `<CA+gmail-${email.id}@mail.gmail.com>`;
+    }
     server.drafts.set(id, email.id);
     server.draftWrites.push({ draftId: id, raw, threadId, via, update: draftId !== null });
     return { id, message: { id: email.id, threadId: email.threadId, labelIds: email.labelIds } };
