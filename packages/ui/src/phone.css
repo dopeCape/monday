@@ -303,19 +303,68 @@
 }
 
 /* ---------- Menus become action sheets along the bottom ---------- */
-:root[data-form="phone"] .pop {
+/* Every menu, picker and popover: full width along the bottom, over a scrim
+   (a spread shadow, so a menu needs no element of its own behind it; a tap
+   on it is a tap outside, which closes the menu). The anchored ones drop
+   their inline position on a phone (.sheet, placement.ts opensAsSheet). */
+:root[data-form="phone"] :is(.pop, .cal-pop.sheet) {
   position: fixed;
   top: auto;
-  left: 8px;
-  right: 8px;
+  left: calc(8px + var(--safe-left));
+  right: calc(8px + var(--safe-right));
   bottom: calc(8px + var(--safe-bottom));
+  width: auto;
   min-width: 0;
-  max-height: 70dvh;
+  max-width: none;
+  max-height: min(78dvh, calc(100dvh - var(--safe-top) - 48px));
   overflow-y: auto;
-  z-index: 65;
+  overscroll-behavior: contain;
+  z-index: 75;
+  padding: 8px;
+  border-radius: 18px;
+  box-shadow:
+    var(--shadow-lg),
+    0 0 0 100vmax color-mix(in srgb, var(--bg) 55%, transparent);
+  animation: sheet-up var(--t-med) var(--ease);
+}
+:root[data-form="phone"] .pop.leaving {
+  animation: sheet-down var(--t-fast) var(--ease-in) forwards;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+@keyframes sheet-down {
+  to {
+    transform: translateY(24px);
+    opacity: 0;
+  }
 }
 :root[data-form="phone"] .pop-item {
+  min-height: var(--tap);
+  height: auto;
+  padding: 8px 12px;
   font-size: var(--fs-md);
+  border-radius: 10px;
+}
+:root[data-form="phone"] .pop-h {
+  padding: 8px 12px 6px;
+  font-size: var(--fs-sm);
+}
+:root[data-form="phone"] .pop .input {
+  height: var(--tap);
+}
+/* A sheet names what it chooses: the Select's label, the menu's name. */
+.sheet-h {
+  display: none;
+}
+:root[data-form="phone"] .sheet-h {
+  display: block;
+}
+:root[data-form="phone"] .pop-list {
+  max-height: none;
 }
 
 /* ---------- The reader: a full screen pushed over the list ---------- */
@@ -520,4 +569,536 @@
 :root[data-form="phone"] .c-foot {
   flex-wrap: wrap;
   row-gap: 6px;
+}
+
+/* ==================================================================
+   The phone polish pass: what the screenshots at 412 and 390 wide asked
+   for. Every rule is scoped to the phone form; the desktop is untouched.
+   ================================================================== */
+
+/* ---------- The software keyboard: what sits along the bottom rides above it ----------
+   --keyboard is set on the root while iOS lays its keyboard over the page
+   (shell/keyboard.ts); Android resizes the page itself and leaves it unset. */
+:root[data-form="phone"] .agent-dock {
+  bottom: var(--keyboard, 0px);
+}
+:root[data-form="phone"] :is(.compose, .compose.is-docked) {
+  padding-bottom: max(var(--safe-bottom), var(--keyboard, 0px));
+}
+:root[data-form="phone"] :is(.pop, .cal-pop.sheet) {
+  bottom: calc(8px + max(var(--safe-bottom), var(--keyboard, 0px)));
+}
+:root[data-form="phone"] .reader-inner {
+  padding-bottom: calc(var(--bar-h) + 40px + max(var(--safe-bottom), var(--keyboard, 0px)));
+}
+
+/* ---------- Touch targets the first pass missed ---------- */
+:root[data-form="phone"] .chip {
+  height: 36px;
+  padding: 0 14px;
+}
+:root[data-form="phone"] .seg button {
+  height: 36px;
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+}
+:root[data-form="phone"] .tabs button {
+  height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+:root[data-form="phone"] .tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 100%;
+}
+:root[data-form="phone"] .switch {
+  width: 44px;
+  height: 26px;
+}
+:root[data-form="phone"] .switch::after {
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+}
+:root[data-form="phone"] .switch.on::after {
+  transform: translateX(18px);
+}
+/* A checkbox stays small to the eye; its press area grows to a finger. */
+:root[data-form="phone"] :is(.check, .draft-row .draft-check) {
+  width: 20px;
+  height: 20px;
+}
+:root[data-form="phone"] .draft-row .draft-check {
+  position: relative;
+}
+:root[data-form="phone"] .row .check {
+  left: calc(var(--pad) - 8px);
+}
+:root[data-form="phone"] :is(.row .check, .draft-row .draft-check)::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+}
+:root[data-form="phone"] .ws {
+  height: var(--tap);
+}
+:root[data-form="phone"] .scard-foot .link {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+:root[data-form="phone"] .c-field .cc button {
+  min-width: var(--tap);
+  min-height: var(--tap);
+}
+
+/* ---------- Key hints: hidden, except where the keys are the subject (Settings › Shortcuts) ---------- */
+:root[data-form="phone"] .settings .chord-btn :is(.kbd, kbd) {
+  display: revert;
+}
+:root[data-form="phone"] .cmdk-foot {
+  display: none;
+}
+
+/* ---------- The list header: New message beside search and Filter ---------- */
+:root[data-form="phone"] .col.list .col-head .phone-compose {
+  flex: none;
+}
+:root[data-form="phone"] .col.list .col-head:has(.list-search.on) .phone-compose {
+  display: none;
+}
+
+/* ---------- Dialogs and side sheets: full width, from the bottom ---------- */
+:root[data-form="phone"] .scrim.appr-scrim {
+  place-items: stretch;
+}
+:root[data-form="phone"] .appr {
+  width: 100%;
+  border-left: 0;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+:root[data-form="phone"] :is(.mcp-scrim, .cal-dialog-scrim) {
+  place-items: end stretch;
+  padding: 0;
+}
+:root[data-form="phone"] :is(.mcp-dialog, .cal-dialog) {
+  width: 100%;
+  max-width: 100%;
+  max-height: calc(100dvh - var(--safe-top) - 24px);
+  border-radius: 18px 18px 0 0;
+  border-bottom: 0;
+  padding-bottom: calc(16px + var(--safe-bottom));
+  animation: sheet-up var(--t-med) var(--ease);
+}
+:root[data-form="phone"] .cal-editor-scrim {
+  padding: 0;
+  place-items: stretch;
+}
+:root[data-form="phone"] .cal-editor {
+  width: 100%;
+  max-height: 100%;
+  height: 100%;
+  border-radius: 0;
+  padding-bottom: var(--safe-bottom);
+}
+:root[data-form="phone"] :is(.cal-dialog-foot, .cal-pop) .btn {
+  min-height: var(--tap);
+}
+
+/* ---------- The command palette: the whole screen, a back arrow in place of Escape ---------- */
+:root[data-form="phone"] .scrim:has(> .cmdk) {
+  padding: 0;
+  place-items: stretch;
+}
+:root[data-form="phone"] .cmdk {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: calc(16px + var(--safe-bottom));
+  animation: fade var(--t-fast) var(--ease);
+}
+:root[data-form="phone"] .cmdk-in {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--overlay);
+  padding: 4px 12px 4px 4px;
+  min-height: calc(var(--head-h) + 4px);
+}
+:root[data-form="phone"] :is(.cmdk-item, .cmdk-thread) {
+  min-height: var(--tap);
+}
+.cmdk-back {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-md);
+  color: var(--fg-muted);
+}
+
+/* ---------- The agent sheet: the name and the runtime on one line ---------- */
+:root[data-form="phone"] .agent-panel .col-head h2 {
+  flex: none;
+  overflow: visible;
+}
+:root[data-form="phone"] .agent-panel .col-head .count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-form="phone"] .agent-panel .col-head .count .runtime {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-form="phone"] .agent-thread :is(table, pre) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ---------- Compose: the toolbar's overflow sits behind More, Templates is its icon ---------- */
+:root[data-form="phone"] .c-tools .tpl-open {
+  font-size: 0;
+  gap: 0;
+  width: var(--tap);
+  justify-content: center;
+}
+:root[data-form="phone"] .c-tools .c-assist {
+  flex: none;
+}
+:root[data-form="phone"] .c-field {
+  align-items: flex-start;
+  min-height: calc(var(--tap) + 8px);
+  padding-block: 4px;
+}
+:root[data-form="phone"] .c-field > label {
+  line-height: var(--tap);
+}
+:root[data-form="phone"] .c-field > input {
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .c-field .to {
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .c-field .to input {
+  min-width: 80px;
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .c-field .pill {
+  height: 32px;
+}
+:root[data-form="phone"] .c-field .pill .x {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 -8px 0 0;
+}
+/* Later is its clock and caret on a phone, so Send, Later, Save as template,
+   attach and discard keep to one line. */
+:root[data-form="phone"] .c-foot > .btn[aria-haspopup="menu"] {
+  font-size: 0;
+  gap: 2px;
+}
+/* Saving is automatic; on a phone the foot keeps its room for the actions. */
+:root[data-form="phone"] .c-foot > .c-status:not(.c-blocked) {
+  display: none;
+}
+:root[data-form="phone"] .c-tools .btn.icon.sm {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+/* ---------- Settings: a row's control goes under its words when both do not fit ---------- */
+:root[data-form="phone"] .scard-main {
+  gap: 12px 16px;
+  padding: 16px;
+}
+/* In a row only: a block card stacks already, where a basis would be a height. */
+:root[data-form="phone"] .scard:not(.block) > .scard-main > .scard-text {
+  flex: 1 1 180px;
+}
+:root[data-form="phone"] .scard:not(.block) > .scard-main > .scard-ctl {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+:root[data-form="phone"] .scard-ctl :is(.input, .dd) {
+  max-width: 100%;
+}
+:root[data-form="phone"] .scard-foot {
+  padding: 9px 16px;
+}
+:root[data-form="phone"] .providers {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* A block card's parts never grow past it for a line that does not wrap. */
+:root[data-form="phone"] .scard.block > .scard-main > *,
+:root[data-form="phone"] :is(.tpl-panel, .tpl-list, .tpl-row) {
+  min-width: 0;
+  max-width: 100%;
+}
+:root[data-form="phone"] .tpl-row {
+  flex-wrap: wrap;
+}
+:root[data-form="phone"] .tpl-row-text {
+  flex: 1 1 100%;
+}
+:root[data-form="phone"] .tpl-row .btn {
+  opacity: 1;
+}
+
+/* ---------- Pages: the head wraps, side columns go under the main one ---------- */
+:root[data-form="phone"] .page-in {
+  padding-top: 20px;
+}
+:root[data-form="phone"] .page-head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+:root[data-form="phone"] .page-head > div:first-child {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+:root[data-form="phone"] .page-head .acts {
+  margin-left: 0;
+  flex-wrap: wrap;
+}
+:root[data-form="phone"] .page-head h1 {
+  font-size: var(--fs-2xl);
+}
+/* The phone bar already names the page. */
+:root[data-form="phone"] .phone-stack .page-head h1 {
+  display: none;
+}
+:root[data-form="phone"] .phone-stack .page-head p {
+  margin-top: 0;
+}
+:root[data-form="phone"] .two {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+:root[data-form="phone"] .rt-stats {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+:root[data-form="phone"] .rgrp {
+  padding: 14px;
+}
+:root[data-form="phone"] .rgrp-h {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+:root[data-form="phone"] .rgrp-name {
+  flex: 1 1 0;
+}
+:root[data-form="phone"] .rgrp-conf {
+  margin-left: 44px;
+  order: 3;
+}
+:root[data-form="phone"] .rgrp-h .acts {
+  margin-left: auto;
+}
+
+/* A Section or custom action: its words across the width, its controls under them. */
+:root[data-form="phone"] .set-rules .set-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+:root[data-form="phone"] .set-rules .set-rule > div {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+:root[data-form="phone"] .set-rules .set-rule .rule-hide {
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+:root[data-form="phone"] .rule-placement {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ---------- Workflows: the list, then one Workflow as a page ---------- */
+:root[data-form="phone"] .wfx {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+:root[data-form="phone"] .wfx-list {
+  position: static;
+}
+:root[data-form="phone"] .wfx[data-phone="list"] .wfx-detail,
+:root[data-form="phone"] .wfx[data-phone="detail"] .wfx-list {
+  display: none;
+}
+:root[data-form="phone"] .wfx[data-phone="list"] .wfx-row[aria-current="true"] {
+  background: transparent;
+  border-color: transparent;
+}
+:root[data-form="phone"] .wf-page:has(.wfx[data-phone="detail"]) > :is(.page-head, .wf-tabs) {
+  display: none;
+}
+:root[data-form="phone"] .wfx-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+:root[data-form="phone"] .wfx-head .phone-back {
+  margin-left: -10px;
+}
+:root[data-form="phone"] .wfx-title {
+  flex: 1 1 0;
+  min-width: 0;
+}
+:root[data-form="phone"] :is(.wfx-meta, .wfx-acts) {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
+
+/* ---------- Drafts: two lines a row ---------- */
+:root[data-form="phone"] .draft-open {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  row-gap: 2px;
+  height: auto;
+  min-height: 64px;
+  padding-block: 10px;
+}
+:root[data-form="phone"] .draft-open .subj {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+}
+:root[data-form="phone"] .draft-open .when {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+/* ---------- The Calendar: the views under the header, the asks behind More ---------- */
+:root[data-form="phone"] .cal-wrap .col-head {
+  overflow: visible;
+}
+:root[data-form="phone"] .cal-wrap .col-head h2 {
+  display: none;
+}
+:root[data-form="phone"] .cal-wrap .col-head .count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 4px;
+  color: var(--fg);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+:root[data-form="phone"] .cal-wrap .col-head > .vr {
+  display: none;
+}
+:root[data-form="phone"] .cal-new .btn {
+  font-size: 0;
+  gap: 0;
+  width: var(--tap);
+  padding: 0;
+  justify-content: center;
+}
+.cal-phone-views {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 calc(var(--pad) - 8px) 10px;
+  border-bottom: 1px solid var(--border);
+}
+.cal-phone-views .seg {
+  flex: 1;
+}
+.cal-phone-views .seg button {
+  flex: 1;
+  justify-content: center;
+}
+:root[data-form="phone"] .cal-ag-b {
+  min-height: 40px;
+}
+/* A week at phone width: each day's name over its date, centred, so seven fit. */
+:root[data-form="phone"] .cal-tg-dh {
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 4px 0 2px;
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+:root[data-form="phone"] .cal-tg-dh b {
+  font-size: var(--fs-lg);
+}
+:root[data-form="phone"] .cal-tg-dh.today b {
+  min-width: 26px;
+  height: 26px;
+  font-size: var(--fs-sm);
+}
+/* The draft bar: its words on their own line, the actions under them. */
+:root[data-form="phone"] .cal-draft-bar {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+:root[data-form="phone"] .cal-draft-bar-text {
+  flex: 1 1 calc(100% - 96px);
+  flex-direction: column;
+  gap: 2px;
+}
+:root[data-form="phone"] .cal-draft-bar > .btn {
+  order: 2;
+}
+:root[data-form="phone"] .cal-draft-bar > .btn:last-child {
+  order: 1;
+}
+
+/* ---------- The reader: subject and header lines wrap, nothing runs off ---------- */
+:root[data-form="phone"] .reader h1 {
+  overflow-wrap: anywhere;
+}
+:root[data-form="phone"] .reader pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Onboarding: one column ---------- */
+:root[data-form="phone"] .onb-convo-wrap {
+  padding: 16px var(--pad) calc(16px + var(--safe-bottom));
+}
+:root[data-form="phone"] .onb-convo-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+:root[data-form="phone"] .onb-convo-progress {
+  justify-items: start;
+  min-width: 0;
+}
+:root[data-form="phone"] .onb-meter {
+  width: 100%;
+}
+:root[data-form="phone"] :is(.onb-skip, .onb-disclose) {
+  min-height: var(--tap);
 }

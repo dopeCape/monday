@@ -35,6 +35,8 @@ export interface EditorStrings {
   clearFormat: string;
   /** The folded history toggle. */
   quoted: string;
+  /** The phone form's button for the formatting that does not fit the toolbar. */
+  more?: string | undefined;
 }
 
 /** The extension list; shared with tests so a headless Editor matches the surface. */

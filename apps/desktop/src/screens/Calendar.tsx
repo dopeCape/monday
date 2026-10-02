@@ -30,6 +30,7 @@ import {
   CalendarBlankIcon,
   CaretLeftIcon,
   CaretRightIcon,
+  DotsThreeIcon,
   MagnifyingGlassIcon,
   PlusIcon,
   SidebarSimpleIcon,
@@ -96,6 +97,7 @@ import { type AnchorRect, type Ask, AskDialog, Popover, rectOf } from "./calenda
 import { Sidebar } from "./calendar/Sidebar.tsx";
 import { StatusBanner } from "./calendar/StatusBanner.tsx";
 import { type Slot, TimeGrid } from "./calendar/TimeGrid.tsx";
+import { AnchoredMenu } from "./compose/Menu.tsx";
 import { useExit } from "./inbox/useExit.ts";
 import { Palette, type PaletteCommand } from "./Palette.tsx";
 
@@ -184,6 +186,10 @@ export function Calendar({
   agent,
 }: CalendarProps) {
   const shell = useShell();
+  // The phone form: the views under the header, the agent's asks behind More.
+  const phone = shell.form === "phone";
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const workspace = useWorkspace();
   const open = onOpenLink ?? ((href: string) => void openExternal(href));
   const s: Settings = shell.settings;
@@ -999,32 +1005,57 @@ export function Calendar({
 
   const key = (action: KeyAction) => chordLabel(keymap[action], mac);
 
+  const previous = (
+    <Btn
+      icon
+      title={`${s["strings.calendar.previous"]} (${key("calendar.previous")})`}
+      aria-label={s["strings.calendar.previous"]}
+      onClick={() => step(-1)}
+    >
+      <Icon icon={CaretLeftIcon} />
+    </Btn>
+  );
+  const today = (
+    <Btn title={`${s["strings.calendar.today"]} (${key("calendar.today")})`} onClick={goToday}>
+      {s["strings.calendar.today"]}
+    </Btn>
+  );
+  const next = (
+    <Btn
+      icon
+      title={`${s["strings.calendar.next"]} (${key("calendar.next")})`}
+      aria-label={s["strings.calendar.next"]}
+      onClick={() => step(1)}
+    >
+      <Icon icon={CaretRightIcon} />
+    </Btn>
+  );
+  const viewSeg = (
+    <Seg
+      value={view}
+      onChange={(v) => {
+        setPop(null);
+        setView(v);
+      }}
+      options={[
+        { value: "day", label: s["strings.calendar.view.day"] },
+        { value: "week", label: s["strings.calendar.view.week"] },
+        { value: "month", label: s["strings.calendar.view.month"] },
+        { value: "agenda", label: s["strings.calendar.view.agenda"] },
+      ]}
+    />
+  );
+
   return (
     <div className="main page">
       <div className={`page-wrap cal-wrap${sidebar ? "" : " no-side"}`}>
         <ColHead title={s["strings.calendar.title"]} count={heading} leading={<DrawerButton />}>
           <Vr />
-          <Btn
-            icon
-            title={`${s["strings.calendar.previous"]} (${key("calendar.previous")})`}
-            onClick={() => step(-1)}
-          >
-            <Icon icon={CaretLeftIcon} />
-          </Btn>
-          <Btn
-            title={`${s["strings.calendar.today"]} (${key("calendar.today")})`}
-            onClick={goToday}
-          >
-            {s["strings.calendar.today"]}
-          </Btn>
-          <Btn
-            icon
-            title={`${s["strings.calendar.next"]} (${key("calendar.next")})`}
-            onClick={() => step(1)}
-          >
-            <Icon icon={CaretRightIcon} />
-          </Btn>
+          {phone ? null : previous}
+          {phone ? null : today}
+          {phone ? null : next}
           <span className="sp" />
+          {phone ? today : null}
           <div className={`cal-search${searchOpen ? " open" : ""}`}>
             {searchOpen ? (
               <>
@@ -1068,19 +1099,7 @@ export function Calendar({
               </Btn>
             )}
           </div>
-          <Seg
-            value={view}
-            onChange={(v) => {
-              setPop(null);
-              setView(v);
-            }}
-            options={[
-              { value: "day", label: s["strings.calendar.view.day"] },
-              { value: "week", label: s["strings.calendar.view.week"] },
-              { value: "month", label: s["strings.calendar.view.month"] },
-              { value: "agenda", label: s["strings.calendar.view.agenda"] },
-            ]}
-          />
+          {phone ? null : viewSeg}
           <span ref={newButton} className="cal-new">
             <Btn
               onClick={newEvent}
@@ -1089,7 +1108,7 @@ export function Calendar({
               <Icon icon={PlusIcon} /> {s["strings.calendar.new_event"]}
             </Btn>
           </span>
-          {onAsk && !aiOff ? (
+          {onAsk && !aiOff && !phone ? (
             <>
               <Btn onClick={() => onAsk(s["strings.calendar.schedule_ask"])}>
                 <Icon icon={CalendarBlankIcon} /> {s["strings.calendar.schedule"]}
@@ -1099,16 +1118,62 @@ export function Calendar({
               </Btn>
             </>
           ) : null}
-          <Btn
-            icon
-            on={sidebar}
-            aria-pressed={sidebar}
-            title={s["strings.calendar.sidebar_toggle"]}
-            onClick={() => void shell.set("calendar.sidebar", !sidebar)}
-          >
-            <Icon icon={SidebarSimpleIcon} />
-          </Btn>
+          {phone ? (
+            onAsk && !aiOff ? (
+              <Btn
+                ref={moreButton}
+                icon
+                className="cal-phone-more"
+                title={s["strings.phone.more"]}
+                aria-label={s["strings.phone.more"]}
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                on={moreOpen}
+                onClick={() => setMoreOpen((o) => !o)}
+              >
+                <Icon icon={DotsThreeIcon} />
+              </Btn>
+            ) : null
+          ) : (
+            <Btn
+              icon
+              on={sidebar}
+              aria-pressed={sidebar}
+              title={s["strings.calendar.sidebar_toggle"]}
+              onClick={() => void shell.set("calendar.sidebar", !sidebar)}
+            >
+              <Icon icon={SidebarSimpleIcon} />
+            </Btn>
+          )}
         </ColHead>
+        {phone ? (
+          <div className="cal-phone-views">
+            {previous}
+            {viewSeg}
+            {next}
+          </div>
+        ) : null}
+        {phone && moreOpen && onAsk ? (
+          // What does not fit the phone's header: the agent's two asks, as a sheet.
+          <AnchoredMenu
+            anchor={moreButton.current}
+            label={s["strings.phone.more"]}
+            align="end"
+            items={[
+              { key: "schedule", label: s["strings.calendar.schedule"] },
+              { key: "plan", label: s["strings.calendar.plan_week"] },
+            ]}
+            onPick={(k) => {
+              setMoreOpen(false);
+              onAsk(
+                s[
+                  k === "plan" ? "strings.calendar.plan_week_ask" : "strings.calendar.schedule_ask"
+                ],
+              );
+            }}
+            onClose={() => setMoreOpen(false)}
+          />
+        ) : null}
         {problems.map((st) => (
           <StatusBanner
             key={st.workspaceId}

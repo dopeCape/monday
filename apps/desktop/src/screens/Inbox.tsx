@@ -46,6 +46,7 @@ import {
   FolderSimpleIcon,
   FunnelSimpleIcon,
   MagnifyingGlassIcon,
+  PencilSimpleLineIcon,
   StarIcon,
   TrashIcon,
   TrayArrowUpIcon,
@@ -3162,6 +3163,18 @@ function InboxBody({
                 ) : null}
               </>
             )}
+            {phone ? (
+              // The phone has no sidebar on show: New message sits in the list header.
+              <Btn
+                icon
+                className="phone-compose"
+                title={t("strings.phone.compose")}
+                aria-label={t("strings.phone.compose")}
+                onClick={() => compose.openNew()}
+              >
+                <PencilSimpleLineIcon />
+              </Btn>
+            ) : null}
           </ColHead>
         )}
         <FilterChips chips={filterChips} t={t} now={now} onChange={setFilterChips} />

@@ -58,6 +58,8 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { cliLabel } from "../agent/runtimes/index.ts";
 import type { LiveRunsSnapshot } from "../approvals/live-runs.ts";
 import { openExternal } from "../platform/open.ts";
+import { useBack } from "../shell/back.ts";
+import { BackButton } from "../shell/phone.tsx";
 import { useShell } from "../shell/Shell.tsx";
 import { badgeStrings, previewBadges } from "../templates/badges.ts";
 import { useWorkspace } from "../workspace.tsx";
@@ -404,7 +406,13 @@ export function Workflows({
     undoable: false,
   });
 
+  // The phone form: the list, then one Workflow as a page over it with a back arrow.
+  const phone = shell.form === "phone";
+  const [phoneDetail, setPhoneDetail] = useState(initialRun !== undefined);
+  useBack(phone && phoneDetail, () => setPhoneDetail(false));
+
   const select = (id: string) => {
+    setPhoneDetail(true);
     setSelectedId(id);
     setShownRun(null);
     setDry(null);
@@ -536,7 +544,11 @@ export function Workflows({
           {view === "list" && list.length > 0 && selected ? (
             <>
               {locked ? <h2 className="wf-kept">{s["locked.kept"]}</h2> : null}
-              <div className="wfx" data-locked={locked ? "true" : undefined}>
+              <div
+                className="wfx"
+                data-locked={locked ? "true" : undefined}
+                data-phone={phone ? (phoneDetail ? "detail" : "list") : undefined}
+              >
                 <nav className="wfx-list" aria-label={s.list_label}>
                   {list.map((w) => {
                     const st = status(w);
@@ -601,6 +613,7 @@ export function Workflows({
                 </nav>
                 <section className="wfx-detail" aria-label={selected.name}>
                   <header className="wfx-head">
+                    <BackButton onBack={() => setPhoneDetail(false)} />
                     <div className="wfx-title">
                       {renaming !== null ? (
                         <form

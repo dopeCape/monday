@@ -177,6 +177,7 @@ export function composeStrings(s: Settings): ComposeUiStrings {
       code: s["strings.compose.code"],
       clearFormat: s["strings.compose.clear_format"],
       quoted: s["strings.reader.show_quoted"],
+      more: s["strings.phone.more_formatting"],
     },
     reply: { wrote: s["strings.compose.wrote"], forwarded: s["strings.compose.forwarded"] },
     undo: {
