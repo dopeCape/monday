@@ -53,9 +53,15 @@ describe("fakePlatform", () => {
       "notify",
       "spawn",
       "isTauri",
+      "kind",
     ];
     for (const name of expected) expect(name in fake, name).toBe(true);
     expect(fake.isTauri).toBe(false);
+  });
+
+  test("is a desktop unless told it is a phone", () => {
+    expect(fakePlatform().kind).toBe("desktop");
+    expect(fakePlatform("", { kind: "mobile" }).kind).toBe("mobile");
   });
 
   test("the config file is watched in memory and a write tells the watcher", async () => {

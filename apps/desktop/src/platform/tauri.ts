@@ -52,7 +52,19 @@ export interface WindowFrame {
   onResized(cb: () => void): () => void;
 }
 
+/**
+ * What kind of Device the app runs on (docs/mobile.md). A "desktop" host runs
+ * the Sidecar, spawns Local runtime CLIs and watches the config file. A
+ * "mobile" host (Android, iOS) is a client of a paired Server: no Sidecar
+ * (sidecarInfo says not running, stop and restart reject), no Local runtimes
+ * (spawn rejects as not installed), no window frame, and a config file of its
+ * own in the app's private directory. The browser dev server is "desktop"
+ * unless `?kind=mobile` says otherwise.
+ */
+export type PlatformKind = "desktop" | "mobile";
+
 export interface Platform {
+  kind: PlatformKind;
   readConfig(): Promise<ConfigFile>;
   /** Only after the user explicitly asked (ADR 0001). */
   writeConfig(text: string): Promise<void>;
@@ -127,6 +139,8 @@ async function tauriPlatform(): Promise<Platform> {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
   const { openUrl } = await import("@tauri-apps/plugin-opener");
+  const kind = await invoke<PlatformKind>("platform_kind").catch((): PlatformKind => "desktop");
+  if (kind === "mobile") return mobilePlatform(invoke, openUrl);
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { Command } = await import("@tauri-apps/plugin-shell");
   const spawn: ProcessRunner = async (command, options: SpawnOptions): Promise<Process> => {
@@ -203,6 +217,7 @@ async function tauriPlatform(): Promise<Platform> {
     },
   };
   return {
+    kind: "desktop",
     isTauri: true,
     frame,
     readConfig: () => invoke<ConfigFile>("read_config"),
@@ -230,7 +245,63 @@ async function tauriPlatform(): Promise<Platform> {
   };
 }
 
+type Invoke = typeof import("@tauri-apps/api/core").invoke;
+
+/** Why a phone rejects the Sidecar's controls. */
+const NO_SIDECAR_ON_MOBILE = "no background service on a phone: monday connects to a paired server";
+
+/**
+ * The Tauri host on a phone (docs/mobile.md): the Cache, the keychain, the
+ * opener and notifications as on a computer; no Sidecar, no Local runtimes,
+ * no window frame. The config file is the app's private one and nothing else
+ * edits it, so a write tells this module's own listeners instead of a watcher.
+ */
+function mobilePlatform(invoke: Invoke, openUrl: (url: string) => Promise<void>): Platform {
+  const configListeners = new Set<(file: ConfigFile) => void>();
+  return {
+    kind: "mobile",
+    isTauri: true,
+    readConfig: () => invoke<ConfigFile>("read_config"),
+    writeConfig: async (text) => {
+      await invoke("write_config", { text });
+      const file = await invoke<ConfigFile>("read_config");
+      for (const l of configListeners) l(file);
+    },
+    onConfigChanged: (cb) => {
+      configListeners.add(cb);
+      return () => configListeners.delete(cb);
+    },
+    readPaletteFile: (path) => invoke<ConfigFile>("read_palette_file", { path }),
+    secretGet: (key) => invoke<string | null>("secret_get", { key }),
+    secretSet: (key, value) => invoke("secret_set", { key, value }),
+    secretDelete: (key) => invoke("secret_delete", { key }),
+    sidecarInfo: async () => ({ port: 0, token: "", running: false }),
+    onSidecarReady: () => () => {},
+    onSidecarFailed: () => () => {},
+    onSidecarStopped: () => () => {},
+    sidecarStop: async () => {
+      throw new Error(NO_SIDECAR_ON_MOBILE);
+    },
+    sidecarRestart: async () => {
+      throw new Error(NO_SIDECAR_ON_MOBILE);
+    },
+    sidecarLoginStart: async () => false,
+    openExternal: (url) => openUrl(url),
+    network: () => invoke<NetworkInfo>("network_info"),
+    power: () => invoke<PowerInfo>("power_info"),
+    recoveryFile: () => invoke<string>("recovery_file"),
+    importRecoveryKey: (text) => invoke("import_recovery_key", { text }),
+    notify: (title, body) => invoke("notify", { title, body }),
+    // A phone runs no Local runtime: every CLI reads as not installed.
+    spawn: async (command) => {
+      throw new Error(`${command}: command not found`);
+    },
+  };
+}
+
 export interface FakePlatformOptions {
+  /** The fake's Device kind; desktop by default, `?kind=mobile` in the dev server. */
+  kind?: PlatformKind;
   /** The fake's connection; `?metered=1` in the dev server flips it. */
   network?: NetworkInfo;
   /** The fake's power; `?battery=1` in the dev server flips it. */
@@ -335,6 +406,7 @@ export function fakePlatform(initialConfig = "", options: FakePlatformOptions = 
     text,
   });
   return {
+    kind: options.kind ?? "desktop",
     isTauri: false,
     frame: options.frame,
     readConfig: async () => file(),
@@ -428,11 +500,15 @@ export function platform(): Promise<Platform> {
   return cached;
 }
 
-/** Browser dev only: `?metered=1` and `?battery=1` put the fake on a hotspot or off mains. */
+/**
+ * Browser dev only: `?metered=1` and `?battery=1` put the fake on a hotspot or
+ * off mains; `?kind=mobile` makes it say it is a phone.
+ */
 function devConditions(): FakePlatformOptions {
   if (typeof location === "undefined") return {};
   const q = new URLSearchParams(location.search);
   return {
+    kind: q.get("kind") === "mobile" ? "mobile" : "desktop",
     network: { online: true, metered: q.get("metered") === "1" },
     power: { mains: q.get("battery") !== "1", level: q.get("battery") === "1" ? 0.5 : null },
   };

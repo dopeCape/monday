@@ -16,18 +16,32 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
-notify = "8"
-notify-debouncer-mini = "0.6"
 rand = "0.9"
 base64 = "0.22"
 thiserror = "2"
+# SQLCipher compiled in, with OpenSSL built from source for the target: the same
+# Cache on Linux, macOS, Windows, Android (NDK clang) and iOS (Xcode clang).
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# A computer only (docs/mobile.md): the Local runtime CLIs and the Sidecar spawn
+# through the shell plugin, and the config file is watched for outside edits.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-shell = "2"
+notify = "8"
+notify-debouncer-mini = "0.6"
+
+# The keychain (src/secrets.rs): the OS keychain everywhere but Android, where
+# it is SharedPreferences encrypted with a key held in the Android Keystore.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+keyring-core = "1"
+android-native-keyring-store = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0", features = ["v2_34"] }
