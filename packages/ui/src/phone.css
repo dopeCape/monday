@@ -240,11 +240,15 @@
 }
 :root[data-form="phone"] .col.list.selecting .row .check {
   display: inline-grid;
-  grid-column: 1;
-  grid-row: 1 / span 2;
+  top: calc(var(--list-row-py) + 4px);
+  margin-top: 0;
 }
 :root[data-form="phone"] .col.list.selecting .row .dot {
   display: none;
+}
+/* A tap leaves the row "hovered" on touch screens: the dot stays. */
+:root[data-form="phone"] .row:hover .dot {
+  visibility: visible;
 }
 .row .row-more {
   display: none;
@@ -495,4 +499,25 @@
 }
 :root[data-form="phone"] .cal-list-row .cal-list-tag {
   display: none;
+}
+
+/* ---------- The Calendar: the view alone; the side panel needs a wider screen ---------- */
+:root[data-form="phone"] .cal-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+:root[data-form="phone"] .cal-side {
+  display: none;
+}
+:root[data-form="phone"] .cal-wrap .col-head {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+:root[data-form="phone"] .cal-wrap .col-head .count {
+  white-space: nowrap;
+}
+
+/* ---------- Compose's foot wraps rather than running off the side ---------- */
+:root[data-form="phone"] .c-foot {
+  flex-wrap: wrap;
+  row-gap: 6px;
 }

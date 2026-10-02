@@ -28,6 +28,18 @@ const KEYS: readonly string[] = [
   "settings.search_key",
 ];
 
+/**
+ * Sections whose summary card is about this computer: the Server's offers to
+ * keep syncing while the computer is off and to move the database, and the
+ * keymap's summary.
+ */
+const OVERVIEWS: readonly SettingSection[] = ["server", "shortcuts"];
+
+/** Whether a section's summary card is left off on a mobile OS. */
+export function overviewHiddenOnMobile(section: SettingSection): boolean {
+  return OVERVIEWS.includes(section);
+}
+
 /** Whether a group of a section is left off on a mobile OS. */
 export function groupHiddenOnMobile(section: SettingSection, group: string): boolean {
   return GROUPS[section]?.includes(group) ?? false;

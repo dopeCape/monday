@@ -50,7 +50,7 @@ import {
   type PageLayout,
   pageLayout,
 } from "./layout.ts";
-import { MOBILE_HIDE } from "./mobile.ts";
+import { MOBILE_HIDE, overviewHiddenOnMobile } from "./mobile.ts";
 import type { ServerProps } from "./Server.tsx";
 import { fill } from "./wizard.ts";
 
@@ -335,9 +335,10 @@ export const foldLines: Record<string, (props: { groups: readonly string[] }) =>
 export const foldBadges: Record<string, (props: { group: string }) => ReactNode> = {};
 
 export function SettingsPage({ section }: { section: SettingSection }) {
-  const s = useShell().settings;
+  const shell = useShell();
+  const s = shell.settings;
   const layout = usePageLayout(section);
-  const Overview = overviews[section];
+  const Overview = shell.mobile && overviewHiddenOnMobile(section) ? undefined : overviews[section];
   return (
     <>
       <header className="settings-head">

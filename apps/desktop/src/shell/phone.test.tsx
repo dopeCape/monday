@@ -559,6 +559,8 @@ describe("a phone or tablet OS hides what is about a computer", () => {
     expect(card?.dataset.state).toBe("online");
     expect(q('[data-setting="server.sidecar.start_at_login"]')).toBeNull();
     expect(q('[data-setting="server.prefer"]')).toBeNull();
+    // The summary's offers are about a computer that stays on.
+    expect(q(".settings-in")?.textContent).not.toContain("Keep syncing while this computer is off");
   });
 
   test("Server, unreachable: it says it is looking for the paired one", async () => {
