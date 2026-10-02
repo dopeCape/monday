@@ -6868,6 +6868,15 @@ button.prov {
 .scrim.leaving > .batch {
   animation: sink var(--t-med) var(--ease-in) forwards;
 }
+/* A minimize: only the tint clears, so the window traveling to the dock is not faded twice. */
+.scrim.leaving:has(> .compose.to-dock) {
+  animation: scrim-clear var(--t-med) var(--ease-in) forwards;
+}
+@keyframes scrim-clear {
+  to {
+    background: transparent;
+  }
+}
 .cmdk {
   width: 600px;
   max-width: calc(100% - 40px);
@@ -7807,25 +7816,40 @@ button.prov {
   --dock-origin: bottom center;
 }
 .compose.from-dock {
-  transform-origin: var(--dock-origin, bottom right);
+  transform-origin: center;
+  will-change: transform, opacity;
   animation: from-dock var(--t-med) var(--ease);
 }
 .scrim.leaving > .compose.to-dock,
 .compose.to-dock.leaving {
-  transform-origin: var(--dock-origin, bottom right);
+  transform-origin: center;
+  will-change: transform, opacity;
   animation: to-dock var(--t-med) var(--ease-in) forwards;
 }
+/* The window travels to the docked chip's place (--dock-dx/-dy, measured by the overlay)
+   and shrinks to its width; it stays opaque most of the way, so it reads as one move. */
 @keyframes from-dock {
   from {
-    transform: scale(0.3);
+    transform: translate(var(--dock-dx, 0), var(--dock-dy, 0)) scale(var(--dock-scale, 0.3));
     opacity: 0;
+  }
+  40% {
+    opacity: 1;
   }
 }
 @keyframes to-dock {
+  60% {
+    opacity: 1;
+  }
   to {
-    transform: scale(0.3);
+    transform: translate(var(--dock-dx, 0), var(--dock-dy, 0)) scale(var(--dock-scale, 0.3));
     opacity: 0;
   }
+}
+/* The chip appears as the window arrives, not on top of it. */
+.dock-chip {
+  animation-delay: calc(var(--t-med) * 0.6);
+  animation-fill-mode: both;
 }
 
 /* minimized messages, docked along the bottom edge above the agent bar */
@@ -12123,7 +12147,7 @@ button.appr-link:focus-visible {
   height: 6px;
   border-radius: 50%;
   background: var(--fg-faint);
-  animation: tpl-pulse 1s var(--ease) infinite alternate;
+  animation: tpl-pulse calc(var(--t-slow) * 3) var(--ease) infinite alternate;
 }
 @keyframes tpl-pulse {
   from {

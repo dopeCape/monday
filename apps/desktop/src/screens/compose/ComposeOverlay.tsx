@@ -14,6 +14,7 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -211,12 +212,36 @@ export function ComposeWindow({
   const exit = leaving ? link?.exitOf(draftId) : null;
   const motion = exit === "minimize" ? "to-dock" : fromDock && !leaving ? "from-dock" : undefined;
   const dockSide = link ? `dock-${link.settings.dockPosition}` : undefined;
+  // Minimize travels to where the docked chip sits, and a restore comes out of it: the
+  // window's offset to the dock, measured before the animation's first frame.
+  const host = useRef<HTMLDivElement>(null);
+  const dockPosition = link?.settings.dockPosition ?? "bottom-right";
+  useLayoutEffect(() => {
+    if (!motion) return;
+    const el = host.current?.querySelector<HTMLElement>(".compose");
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const root = getComputedStyle(document.documentElement);
+    const bar = Number.parseFloat(root.getPropertyValue("--bar-h")) || 0;
+    const chip = { w: 240, h: 44 };
+    const y = window.innerHeight - (bar + 30) - chip.h / 2;
+    const x =
+      dockPosition === "bottom-left"
+        ? 16 + chip.w / 2
+        : dockPosition === "bottom-full"
+          ? window.innerWidth / 2
+          : window.innerWidth - 16 - chip.w / 2;
+    el.style.setProperty("--dock-dx", `${Math.round(x - (r.left + r.width / 2))}px`);
+    el.style.setProperty("--dock-dy", `${Math.round(y - (r.top + r.height / 2))}px`);
+    el.style.setProperty("--dock-scale", String(Math.min(1, chip.w / Math.max(1, r.width))));
+  }, [motion, dockPosition]);
   const byline =
     author === "agent" ? <span className="c-status">{strings.draftedByAgent}</span> : null;
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for files; the Attach button is the keyboard path
     <div
+      ref={host}
       className={dragging ? "drop-target" : undefined}
       onDragOver={(e) => {
         e.preventDefault();

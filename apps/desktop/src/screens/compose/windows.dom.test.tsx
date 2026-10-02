@@ -251,6 +251,12 @@ describe("minimize and the dock", () => {
     const { render } = await mount({ composeRequest: 0 });
     await newWithSubject(render, 1, "Offsite dates");
     await click(button(sheet(), "Minimize"));
+    // On its way to the dock the window carries its measured offset to the chip's place.
+    const leaving = document.querySelector<HTMLElement>(".compose.to-dock");
+    if (leaving) {
+      expect(leaving.style.getPropertyValue("--dock-dx")).toMatch(/^-?\d+px$/);
+      expect(leaving.style.getPropertyValue("--dock-dy")).toMatch(/^-?\d+px$/);
+    }
     await until(() => sheet() === null && chips().length === 1);
     expect(chips()).toEqual(["Offsite dates"]);
     await click(document.querySelector(".dock-chip .dock-open"));
