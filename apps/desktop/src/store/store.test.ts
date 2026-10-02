@@ -164,6 +164,12 @@ describe("table parsing", () => {
     expect([...tablesRead("select id, sender from messages where thread_id = ?")]).toEqual([
       "messages",
     ]);
+    // A list over a subquery reads Threads, not bodies: a body landing leaves it alone.
+    expect(
+      tablesRead(
+        "select * from (select (select json_extract(m.sender, '$.email') from messages m where m.thread_id = t.id limit 1) as f from threads t)",
+      ).has("message_bodies"),
+    ).toBe(false);
     expect([...tablesWritten("update threads set archived = 1 where id = ?")]).toEqual([
       "threads",
       "threads_fts",

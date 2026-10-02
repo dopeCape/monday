@@ -281,6 +281,7 @@ pub async fn db_query(
     let bytes = with_conn(&app, &state, &workspace, |c| {
         let ran = std::time::Instant::now();
         let out = query_packed(c, &sql, &params);
+        count_query(&sql, ran.elapsed());
         log_if_slow("query (running)", &workspace, &sql, ran);
         out
     })?;
@@ -303,11 +304,40 @@ pub async fn db_batch(
     let done = with_conn(&app, &state, &workspace, |c| {
         let ran = std::time::Instant::now();
         let out = batch(c, &statements);
+        count_query(&format!("BATCH {first_sql}"), ran.elapsed());
         log_if_slow("batch (running)", &workspace, &first_sql, ran);
         out
     });
     log_if_slow("batch (waiting and running)", &workspace, &first_sql, started);
     done
+}
+
+/// With MONDAY_QUERY_STATS set, every 10 s the log lists the Cache statements asked most
+/// in that time, with their count and total running time: a loop of fast queries shows.
+fn count_query(sql: &str, took: std::time::Duration) {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("MONDAY_QUERY_STATS").is_some()) {
+        return;
+    }
+    static STATS: OnceLock<Mutex<(std::time::Instant, HashMap<String, (u64, u128)>)>> =
+        OnceLock::new();
+    let stats = STATS.get_or_init(|| Mutex::new((std::time::Instant::now(), HashMap::new())));
+    let Ok(mut guard) = stats.lock() else { return };
+    let key: String = sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+    let entry = guard.1.entry(key).or_insert((0, 0));
+    entry.0 += 1;
+    entry.1 += took.as_micros();
+    if guard.0.elapsed() >= std::time::Duration::from_secs(10) {
+        let mut top: Vec<_> = guard.1.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        top.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        for (k, (n, us)) in top.iter().take(8) {
+            eprintln!("[monday] cache stats 10s: {n}x {} ms: {k}", us / 1000);
+        }
+        guard.1.clear();
+        guard.0 = std::time::Instant::now();
+    }
 }
 
 /// A Cache statement slower than MONDAY_SLOW_QUERY_MS (1000 by default) goes to the app's

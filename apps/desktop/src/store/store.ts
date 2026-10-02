@@ -532,7 +532,7 @@ export function tablesRead(sql: string): Set<string> {
   // A query over messages sees its bodies too, unless it never reads a body column.
   if (
     out.has("messages") &&
-    /\bbody_(text|html|at)\b|\bm\.\*|messages\.\*|select\s+\*/i.test(sql)
+    /\bbody_(text|html|at)\b|\bm\.\*|\bmessages\.\*|select\s+\*\s+from\s+messages\b/i.test(sql)
   ) {
     out.add("message_bodies");
   }
