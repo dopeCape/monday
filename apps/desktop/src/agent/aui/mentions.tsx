@@ -225,31 +225,35 @@ export interface AttachRequest {
   label: string;
 }
 
-const attachListeners = new Set<(items: readonly AttachRequest[]) => void>();
-let attachWaiting: AttachRequest[] = [];
+const attachListeners = new Map<string, Set<(items: readonly AttachRequest[]) => void>>();
+const attachWaiting = new Map<string, AttachRequest[]>();
 
 /**
- * How a screen attaches a chip to whichever composer is mounted (the bar, or the
+ * How a screen attaches a chip to its own Workspace's composer (the bar, or the
  * panel left or right): Draft a reply puts "Reply: Subject" there and the user
- * types how. With no composer mounted the chip waits for the next one.
+ * types how. Every warmed Account keeps its screen mounted, so a chip goes only to
+ * the composers of the Workspace it belongs to. With none mounted it waits for one.
  */
 export const composerAttach = {
-  attach(items: readonly AttachRequest[]): void {
-    if (attachListeners.size === 0) {
-      attachWaiting = [...attachWaiting, ...items];
+  attach(workspaceId: string, items: readonly AttachRequest[]): void {
+    const listeners = attachListeners.get(workspaceId);
+    if (!listeners || listeners.size === 0) {
+      attachWaiting.set(workspaceId, [...(attachWaiting.get(workspaceId) ?? []), ...items]);
       return;
     }
-    for (const l of [...attachListeners]) l(items);
+    for (const l of [...listeners]) l(items);
   },
-  listen(listener: (items: readonly AttachRequest[]) => void): () => void {
-    attachListeners.add(listener);
-    if (attachWaiting.length) {
-      const waiting = attachWaiting;
-      attachWaiting = [];
+  listen(workspaceId: string, listener: (items: readonly AttachRequest[]) => void): () => void {
+    const listeners = attachListeners.get(workspaceId) ?? new Set();
+    listeners.add(listener);
+    attachListeners.set(workspaceId, listeners);
+    const waiting = attachWaiting.get(workspaceId);
+    if (waiting?.length) {
+      attachWaiting.delete(workspaceId);
       listener(waiting);
     }
     return () => {
-      attachListeners.delete(listener);
+      listeners.delete(listener);
     };
   },
 };

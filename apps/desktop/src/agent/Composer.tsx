@@ -38,6 +38,7 @@ interface Attached {
   label: string;
 }
 
+import { useWorkspace } from "../workspace.tsx";
 import { useMondayRuntime } from "./aui/runtime.ts";
 import {
   Bar,
@@ -125,14 +126,16 @@ function ComposerRoot(props: ComposerProps) {
   };
   const runtime = useMondayRuntime(agent, { onSend });
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const workspace = useWorkspace();
   // Draft a reply (and any screen) attaches a chip here; the input takes focus for the user's words.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: addAttached only sets state; one listener per Workspace
   useEffect(
     () =>
-      composerAttach.listen((items) => {
+      composerAttach.listen(workspace.id, (items) => {
         addAttached(items);
         requestAnimationFrame(() => inputRef.current?.focus());
       }),
-    [],
+    [workspace.id],
   );
   const env = useComposerEnvValue(agent, strings, now, onOpenThread, props.onOpenLink ?? openLink, {
     // Edit and resend: the turn's words go back in the bar, focused at their end.
