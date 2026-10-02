@@ -605,6 +605,14 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const [prefersDark, setPrefersDark] = useState(systemPrefersDark);
   const resolvedMode = resolveMode(mode, prefersDark);
 
+  // A phone's status and navigation bars sit over monday's own background
+  // (the webview draws edge to edge): their icons follow its appearance.
+  useEffect(() => {
+    void platformOf()
+      .then((p) => p.setSystemBars?.(resolvedMode === "dark"))
+      .catch(() => {});
+  }, [platformOf, resolvedMode]);
+
   useEffect(() => {
     const r = document.documentElement;
     r.dataset.theme = resolvedMode;

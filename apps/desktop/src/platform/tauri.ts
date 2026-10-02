@@ -156,6 +156,12 @@ export interface Platform {
    * needs plain HTTP on the LAN or a Cloud server.
    */
   pinnedFetch?: ((fingerprint: string) => FetchLike) | undefined;
+  /**
+   * Phones: the status and navigation bars' icons follow monday's resolved
+   * appearance (light icons when `dark`), since the webview draws edge to
+   * edge under them. Absent where the window has no such bars.
+   */
+  setSystemBars?: ((dark: boolean) => Promise<void>) | undefined;
   isTauri: boolean;
 }
 
@@ -299,6 +305,7 @@ function mobilePlatform(
     isTauri: true,
     pinnedFetch: pinnedFetchOver(invoke as InvokeLike),
     scanQr,
+    setSystemBars: (dark) => invoke("set_system_bars", { dark }),
     readConfig: () => invoke<ConfigFile>("read_config"),
     writeConfig: async (text) => {
       await invoke("write_config", { text });

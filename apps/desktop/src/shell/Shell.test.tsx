@@ -380,6 +380,22 @@ describe("a phone", () => {
     expect(calls).toContain("FP https://192.168.1.20:47820/settings");
   });
 
+  test("the system bars follow the resolved appearance", async () => {
+    const p = phoneHost([]);
+    const bars: boolean[] = [];
+    p.setSystemBars = async (dark) => {
+      bars.push(dark);
+    };
+    await p.writeConfig('[appearance]\nmode = "dark"\n');
+    await mountHost(p);
+    expect(bars.at(-1)).toBe(true);
+    await act(async () => {
+      await p.writeConfig('[appearance]\nmode = "light"\n');
+    });
+    await settle();
+    expect(bars.at(-1)).toBe(false);
+  });
+
   test("a phone paired before starts on its Server, never the Sidecar", async () => {
     const p = phoneHost([]);
     await p.secretSet(
