@@ -8,6 +8,7 @@
     "./tokens.css": "./src/tokens.css",
     "./app.css": "./src/app.css",
     "./views.css": "./src/views.css",
+    "./phone.css": "./src/phone.css",
     "./palettes": "./src/palettes.ts",
     "./fixtures": "./src/fixtures.ts",
     "./test-dom": "./src/test-dom.ts"

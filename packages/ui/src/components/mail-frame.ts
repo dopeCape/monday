@@ -143,6 +143,11 @@ html[data-theme="dark"] .${MAIL_SCOPE}.paper { padding: 16px; border-radius: 8px
   color: var(--mail-muted, #6b6b76);
 }
 html[data-quoted="collapsed"] .quoted { display: none !important; }
+@media (max-width: 640px) {
+  :where(.${MAIL_SCOPE}) :where(table[width], td[width], div[style*="width"]) { max-width: 100% !important; }
+  :where(.${MAIL_SCOPE}) :where(img) { height: auto !important; }
+  :where(.${MAIL_SCOPE}) :where(pre) { overflow-x: auto; }
+}
 `;
 
 function escapeAttr(value: string): string {

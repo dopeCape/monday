@@ -49,6 +49,8 @@ import { chordLabel, chordOf, type KeymapName, resolveKeymap } from "../keyboard
 import { isTypingTarget } from "../keyboard/useKeymap.ts";
 import { type DeviceProviderKeys, deviceProviderKeys } from "../platform/providerKeys.ts";
 import { platform } from "../platform/tauri.ts";
+import { useBack } from "../shell/back.ts";
+import { BackButton, DrawerButton } from "../shell/phone.tsx";
 import { type SetResult, useShell } from "../shell/Shell.tsx";
 
 import "./settings/controls.tsx";
@@ -62,6 +64,7 @@ import "./settings/overview.tsx";
 import { DisclosureProvider, useSessionDisclosures } from "./settings/disclosure.tsx";
 import { HiddenLine } from "./settings/hidden.tsx";
 import { type IndexEntry, pageLayout, revealGroup, revealKey } from "./settings/layout.ts";
+import { groupHiddenOnMobile, keyHiddenOnMobile, MOBILE_HIDE } from "./settings/mobile.ts";
 import {
   Card,
   groupId,
@@ -192,6 +195,13 @@ export function Settings({
     sectionOf(initialSection ?? params.get("section") ?? undefined),
   );
   const [query, setQuery] = useState(() => params.get("q") ?? "");
+  // The phone form shows the sections as a list, then one section as a page
+  // over it; a section asked for by name opens straight on its page.
+  const phone = shell.form === "phone";
+  const [onPage, setOnPage] = useState(
+    () => initialSection !== undefined || params.get("section") !== null || initialSearch === true,
+  );
+  useBack(phone && onPage, () => setOnPage(false));
   const [target, setTarget] = useState<Target | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const toastSeq = useRef(0);
@@ -256,15 +266,22 @@ export function Settings({
     (to: SettingSection, at?: string) => {
       setQuery("");
       setSection(to);
+      setOnPage(true);
       if (at) {
         const level = s["ai.level"];
-        const layout = pageLayout(to, level, s as never, panelAt(to, level));
+        const layout = pageLayout(
+          to,
+          level,
+          s as never,
+          panelAt(to, level),
+          shell.mobile ? MOBILE_HIDE : undefined,
+        );
         const path = isSettingKey(at) ? revealKey(layout, to, at) : revealGroup(layout, to, at);
         if (path) disclosures.open(path);
       }
       setTarget((t) => ({ section: to, target: at, seq: (t?.seq ?? 0) + 1 }));
     },
-    [s, disclosures],
+    [s, disclosures, shell.mobile],
   );
 
   const screen = useMemo<SettingsScreen>(
@@ -380,9 +397,12 @@ export function Settings({
         <KeyStateProvider>
           {/* biome-ignore lint/a11y/noStaticElementInteractions: the undo and search chords are page-level shortcuts */}
           <div className="main page" onKeyDown={onKeyDown}>
-            <div className="settings">
+            <div className="settings" data-phone={phone ? (onPage ? "page" : "list") : undefined}>
               <nav className="settings-nav">
-                <h4>{s["strings.settings.title"]}</h4>
+                <h4>
+                  <DrawerButton />
+                  {s["strings.settings.title"]}
+                </h4>
                 {SETTING_SECTIONS.map((n) => (
                   <button
                     key={n}
@@ -398,6 +418,7 @@ export function Settings({
               <div className="settings-body" ref={bodyRef} data-index={wide ? "shown" : "hidden"}>
                 <div className="settings-in" data-section={section} data-searching={searching}>
                   <div className="settings-search">
+                    <BackButton onBack={() => setOnPage(false)} />
                     <label className="settings-search-box">
                       <span className="search-ic" aria-hidden="true">
                         <MagnifyingGlassIcon />
@@ -621,7 +642,20 @@ function SearchResults({
       ) as Record<SettingSection, string>,
     [s],
   );
-  const index = useMemo(() => buildSearchIndex(names, panelIndex(s)), [names, s]);
+  // A phone or tablet finds nothing it leaves off its pages (settings/mobile.ts).
+  const mobile = shell.mobile !== null;
+  const index = useMemo(
+    () =>
+      buildSearchIndex(names, panelIndex(s)).filter(
+        (e) =>
+          !mobile ||
+          !(
+            groupHiddenOnMobile(e.section, e.group) ||
+            (e.kind === "setting" && keyHiddenOnMobile(e.key))
+          ),
+      ),
+    [names, s, mobile],
+  );
   const hits = useMemo(
     () =>
       searchSettings(index, query, {

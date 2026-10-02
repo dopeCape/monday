@@ -102,6 +102,13 @@ Each action maps to the provider's native concept where one exists and is emulat
 - Offline: the workspace header dot turns grey. Rows stay interactive through the Outbox. The agent bar says hosted work is unavailable; Local runtime work continues.
 - Unread counts in the nav come from the Server and update through the Changes feed.
 
+## The phone form
+
+- Under `appearance.mobile_breakpoint` (720px; on a phone or tablet the shorter side counts) the window shows one column at a time: the sidebar is a drawer behind a menu button in each screen's header, the list fills the width, the reader is a full screen pushed over it with a back arrow, compose is a full screen, and the agent bar sits along the bottom with its panel as a sheet. The layout knobs keep their values and apply again above the breakpoint.
+- Back walks what is open, newest first: the reader, the agent sheet, compose, the drawer, a Settings page, then a screen back to the Inbox. The system back does the same, and so does a swipe in from the left edge (`appearance.back_swipe`, on by default on iOS).
+- A swipe across a row runs `inbox.swipe.right` (archive) or `inbox.swipe.left` (snooze) once it travels `inbox.swipe.distance_px`, with the usual Undo. A press held `inbox.long_press_ms` starts a selection, after which a tap picks rows. A pull from the top past `inbox.pull_refresh_px` syncs. Nothing waits for a hover: each row has an actions button with what hover would show, and key hints are hidden.
+- On a phone or tablet OS the app is a client of the Server it paired with: no window frame, no Config file panel, no keymap, no Local runtime (the agent runs Hosted), no background service; Settings › Server says "Connected to" the paired Server.
+
 ## Strings
 
 Every user-visible string on this screen is a Setting keyed by name, so the Agent can change wording on request.

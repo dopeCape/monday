@@ -51,22 +51,38 @@ function holds(values: SettingValues, when: GroupMeta["visibleWhen"]): boolean {
   return unmetConditions(when, values).length === 0;
 }
 
+/** Groups and keys the device leaves off (a phone's, settings/mobile.ts): gone, not hidden by a choice. */
+export interface DeviceOmit {
+  group(section: SettingSection, group: string): boolean;
+  key(key: SettingKey): boolean;
+}
+
 /**
  * The page for a section at an AI level over the resolved Settings. `hasPanel`
  * says whether a group has a panel the level allows (the registry lives in the
- * renderer).
+ * renderer). `omit` leaves off what the device has no use for.
  */
 export function pageLayout(
   section: SettingSection,
   level: AiLevel,
   values: SettingValues,
   hasPanel: (group: string) => boolean,
+  omit?: DeviceOmit,
 ): PageLayout {
   const items: PageItem[] = [];
   const advanced: PageLayout["advanced"] = [];
   const hiddenAll: SettingKey[] = [];
   const folds = new Map<string, Extract<PageItem, { kind: "fold" }>>();
-  for (const g of groupsInSectionAt(section, level)) {
+  for (const found of groupsInSectionAt(section, level)) {
+    if (omit?.group(section, found.name)) continue;
+    const kept = (keys: SettingKey[]) => (omit ? keys.filter((k) => !omit.key(k)) : keys);
+    const g = {
+      ...found,
+      keys: kept(found.keys),
+      primary: kept(found.primary),
+      more: kept(found.more),
+      advanced: kept(found.advanced),
+    };
     const meta = groupMeta(section, g.name);
     const all = [...g.primary, ...g.more, ...g.advanced];
     if (!holds(values, meta.visibleWhen)) {

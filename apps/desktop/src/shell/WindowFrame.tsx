@@ -4,7 +4,8 @@
 // window's state, read again on every resize (a maximize from the keyboard or
 // a snap changes it too). Close goes through the window's normal close, so
 // Rust stops the Sidecar and its Postgres as it always has. Without a frame
-// (the browser dev server, tests) nothing renders and no strip is reserved.
+// (the browser dev server, tests) nothing renders and no strip is reserved;
+// on a phone or tablet OS neither, whatever the host offers.
 
 import { TitleBar } from "@monday/ui";
 import { useEffect, useState } from "react";
@@ -17,8 +18,11 @@ export function WindowFrame({
   /** The platform seam; tests hand a fake one with or without a frame. */
   load?: (() => Promise<Platform>) | undefined;
 }) {
-  const s = useShell().settings;
-  const [frame, setFrame] = useState<Frame | null>(null);
+  const shell = useShell();
+  const s = shell.settings;
+  const [found, setFrame] = useState<Frame | null>(null);
+  // A phone or tablet has no window to move or close: no strip, no drag region.
+  const frame = shell.mobile ? null : found;
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {

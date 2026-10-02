@@ -87,7 +87,10 @@ import {
 } from "../search/index.ts";
 import type { AgentAsk } from "../search/palette.ts";
 import { useIsActivePane } from "../shell/active.ts";
+import { useBack } from "../shell/back.ts";
+import { DrawerButton } from "../shell/phone.tsx";
 import { useShell } from "../shell/Shell.tsx";
+import { type SwipeDirection, useListGestures } from "../shell/touch.ts";
 import { queueTemplate, useTemplateLink } from "../templates/link.ts";
 import { useReplyTemplate } from "../templates/reply.ts";
 import type { InboxViewHost } from "../views/actions.ts";
@@ -277,6 +280,8 @@ export interface InboxProps {
    * reply text for a chip. Absent, no meeting chips.
    */
   meetings?: MeetingsSeam | null | undefined;
+  /** Syncs now: the phone list's pull to refresh. Absent, the list does not pull. */
+  onRefresh?: (() => Promise<unknown>) | undefined;
 }
 
 /** What the View screen hands the Inbox: its Threads in Lane order, and how to draw them. */
@@ -531,6 +536,7 @@ function InboxBody({
   meetings,
   view,
   panels,
+  onRefresh,
 }: InboxProps & { compose: ComposeController; ownsCompose: boolean }) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -934,7 +940,7 @@ function InboxBody({
   /** A palette action runs once the overlay has closed, so the key handlers see the list. */
   const pendingAction = useRef<KeyAction | null>(null);
   // `?overlay=filter` opens the Filter menu on mount, as the mock does, for the screenshot check.
-  const [picker, setPicker] = useState<"snooze" | "move" | "more" | "filter" | null>(() =>
+  const [picker, setPicker] = useState<"snooze" | "move" | "more" | "filter" | "row" | null>(() =>
     typeof location !== "undefined" &&
     new URLSearchParams(location.search).get("overlay") === "filter"
       ? "filter"
@@ -1360,7 +1366,7 @@ function InboxBody({
   }, [batch, runBatch]);
 
   const openPicker = useCallback(
-    (which: "snooze" | "move" | "more" | "filter", ids: readonly string[]) => {
+    (which: "snooze" | "move" | "more" | "filter" | "row", ids: readonly string[]) => {
       if (which !== "more" && which !== "filter" && ids.length === 0) return;
       setPickerIds([...ids]);
       setPicker(which);
@@ -2323,6 +2329,42 @@ function InboxBody({
     anchor.current = id;
   };
 
+  /* ------------------------------ The phone form ------------------------------ */
+
+  // One column at a time: the reader and the agent sheet are layers back
+  // closes, and the list takes touch: a swipe runs inbox.swipe.right or
+  // inbox.swipe.left with the usual Undo, a long press starts a selection,
+  // and a pull from the top syncs.
+  const phone = shell.form === "phone";
+  useBack(phone && showReader, () => setReaderOpen(false));
+  useBack(phone && agentOpen, () => setAgentOpen(false));
+  const listRef = useRef<HTMLElement>(null);
+  const swipeAct = (id: string, direction: SwipeDirection) => {
+    const action = s[direction === "right" ? "inbox.swipe.right" : "inbox.swipe.left"];
+    if (action === "archive") request(folder === "archive" ? "unarchive" : "archive", [id]);
+    else if (action === "delete") request("delete", [id]);
+    else if (action === "snooze") openPicker("snooze", [id]);
+    else if (action === "read") toggleRead([id]);
+    else if (action === "star") toggleStar([id]);
+  };
+  const gestures = useListGestures(listRef, {
+    enabled: phone,
+    distance: s["inbox.swipe.distance_px"],
+    longPressMs: s["inbox.long_press_ms"],
+    pullPx: s["inbox.pull_refresh_px"],
+    onSwipe: swipeAct,
+    onLongPress: (id) => {
+      setFocus(id);
+      if (!selection.includes(id)) toggleRow(id);
+    },
+    onPull: onRefresh,
+  });
+  /** The row whose actions button opened the row menu, with its suggested action. */
+  const rowMenu = useRef<{ id: string; chip: { label: string; onRun: () => void } | null }>({
+    id: "",
+    chip: null,
+  });
+
   const handlers: KeyHandlers = {
     "move.down": () => {
       if (overlay) return false;
@@ -2757,8 +2799,26 @@ function InboxBody({
     // else the row's top Recommended action, on hover by default.
     const meetingChip = meetingsLive ? listMeetingChip(inbox.meeting?.(th.id), s, now) : null;
     const rowRec = meetingChip ? null : rowRecommendation(th);
+    const rowChip = meetingChip
+      ? { label: meetingChip.label, onRun: () => void runMeeting(th.id, meetingChip.chip, null) }
+      : rowRec
+        ? {
+            label: recommendedChipLabel(rowRec, recWords, now),
+            onRun: () => void runRecommended(th.id, rowRec),
+          }
+        : null;
     return (
       <MessageRow
+        onMore={
+          phone
+            ? (id) => {
+                rowMenu.current = { id, chip: rowChip };
+                setFocus(id);
+                openPicker("row", [id]);
+              }
+            : undefined
+        }
+        moreLabel={t("strings.phone.row_more")}
         key={th.id}
         thread={th}
         draft={draftThreads.has(th.id) ? t("strings.drafts.badge") : undefined}
@@ -2796,6 +2856,11 @@ function InboxBody({
               : undefined
         }
         onOpen={(id) => {
+          // On a phone, while a selection is open, a tap picks a row instead of opening it.
+          if (phone && selecting) {
+            toggleRow(id);
+            return;
+          }
           if (searching && search) void search.remember(searchText);
           // A full search hit may be a Thread the list does not hold: read it
           // from the Cache like any Thread outside the window.
@@ -2888,6 +2953,52 @@ function InboxBody({
       pickSelectionAction(k.slice("custom:".length));
     } else if (k === "read" || k === "unread" || k === "star" || k === "unstar") {
       withTargets((ids) => request(k, ids));
+    }
+  };
+  /** The row menu's items: the hover actions, the row's suggested action, and Select. */
+  const rowMenuItems = () => {
+    const th = inbox.thread(rowMenu.current.id) ?? liveById.get(rowMenu.current.id);
+    const chip = rowMenu.current.chip;
+    return [
+      ...(chip ? [{ key: "chip", label: chip.label }] : []),
+      folder === "archive"
+        ? { key: "unarchive", label: t("strings.inbox.select.unarchive") }
+        : { key: "archive", label: t("strings.inbox.action.archive") },
+      { key: "snooze", label: t("strings.inbox.action.snooze") },
+      { key: "delete", label: t("strings.inbox.action.delete") },
+      {
+        key: th?.unread ? "read" : "unread",
+        label: t(th?.unread ? "strings.inbox.action.read" : "strings.inbox.action.unread"),
+      },
+      {
+        key: th?.starred ? "unstar" : "star",
+        label: t(th?.starred ? "strings.inbox.action.unstar" : "strings.inbox.action.star"),
+      },
+      { key: "move", label: t("strings.inbox.move.title") },
+      ...(aiOff ? [] : [{ key: "ask", label: t("strings.inbox.action.ask") }]),
+      { key: "select", label: t("strings.phone.select") },
+    ];
+  };
+  const pickRow = (k: string) => {
+    const id = rowMenu.current.id;
+    closePicker();
+    if (!id) return;
+    if (k === "chip") rowMenu.current.chip?.onRun();
+    else if (k === "snooze" || k === "move") openPicker(k, [id]);
+    else if (k === "ask") {
+      setFocus(id);
+      focusAgent();
+    } else if (k === "select") toggleRow(id);
+    else if (
+      k === "archive" ||
+      k === "unarchive" ||
+      k === "delete" ||
+      k === "read" ||
+      k === "unread" ||
+      k === "star" ||
+      k === "unstar"
+    ) {
+      request(k, [id]);
     }
   };
   const selectionBar = selecting ? (
@@ -2987,13 +3098,15 @@ function InboxBody({
       data-pane={pane}
     >
       <section
+        ref={listRef}
         className={`col list${selecting ? " selecting" : ""}`}
         data-fields={fields}
+        data-pull={gestures.pull === "idle" ? undefined : gestures.pull}
         aria-label={listTitle}
         onPointerOver={onListPointerOver}
       >
         {selectionBar ?? (
-          <ColHead title={listTitle} count={headCount}>
+          <ColHead title={listTitle} count={headCount} leading={<DrawerButton />}>
             {view ? view.header : null}
             {view ? null : (
               <>
@@ -3075,6 +3188,17 @@ function InboxBody({
             onLeft={pickerExit.onEnd}
           />
         ) : null}
+        {pickerExit.value === "row" ? (
+          // A row's actions on touch, where the hover actions never show.
+          <Picker
+            label={t("strings.phone.row_more")}
+            items={rowMenuItems()}
+            onPick={pickRow}
+            onClose={closePicker}
+            leaving={pickerExit.leaving}
+            onLeft={pickerExit.onEnd}
+          />
+        ) : null}
         {pickerExit.value === "snooze" ? (
           <SnoozePicker
             settings={s}
@@ -3131,6 +3255,22 @@ function InboxBody({
             layoutKey={`${shell.density}|${stream ? "stream" : "split"}|${fields}`}
             before={
               <>
+                {gestures.pull !== "idle" ? (
+                  <div
+                    className="pull"
+                    role="status"
+                    data-state={gestures.pull}
+                    style={{ height: gestures.pulled }}
+                  >
+                    {t(
+                      gestures.pull === "syncing"
+                        ? "strings.phone.syncing"
+                        : gestures.pull === "ready"
+                          ? "strings.phone.release"
+                          : "strings.phone.pull",
+                    )}
+                  </div>
+                ) : null}
                 {syncing ? (
                   <div
                     className="sync"
@@ -3293,6 +3433,7 @@ function InboxBody({
           makeTemplate={makeTemplate}
           tags={tagsOf(shownThread)}
           sheet={stream}
+          phone={phone ? { back: t("strings.phone.back") } : undefined}
           leaving={readerExit.leaving}
           onLeft={readerExit.onEnd}
           now={now}

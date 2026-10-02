@@ -50,6 +50,7 @@ import {
   type PageLayout,
   pageLayout,
 } from "./layout.ts";
+import { MOBILE_HIDE } from "./mobile.ts";
 import type { ServerProps } from "./Server.tsx";
 import { fill } from "./wizard.ts";
 
@@ -293,11 +294,14 @@ export function registerSearchEntry(section: SettingSection, group: string, sear
 
 /** The page of a section over the resolved Settings: groups, folds and the Advanced keys. */
 export function usePageLayout(section: SettingSection): PageLayout {
-  const s = useShell().settings;
+  const shell = useShell();
+  const s = shell.settings;
   const level = s["ai.level"];
+  // A phone or tablet leaves off what is about a computer (settings/mobile.ts).
+  const omit = shell.mobile ? MOBILE_HIDE : undefined;
   return useMemo(
-    () => pageLayout(section, level, s as unknown as SettingValues, panelAt(section, level)),
-    [section, level, s],
+    () => pageLayout(section, level, s as unknown as SettingValues, panelAt(section, level), omit),
+    [section, level, s, omit],
   );
 }
 

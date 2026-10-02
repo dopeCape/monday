@@ -1,6 +1,7 @@
 import "@monday/ui/tokens.css";
 import "@monday/ui/app.css";
 import "@monday/ui/views.css";
+import "@monday/ui/phone.css";
 import { Btn, Toast } from "@monday/ui";
 import { type ReactNode, StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -255,6 +256,8 @@ function Root() {
   }, [seams, sectionRules, sectionOrder, judgeThreshold, customActions]);
 
   if (!seams) return null;
+  // The phone list's pull to refresh: a sync now, the same pull a wake starts.
+  const onSync = () => store.sync();
   return (
     <App
       draftMemory={draftMemory}
@@ -266,6 +269,7 @@ function Root() {
       syncing={progress}
       search={search}
       runFeed={store}
+      onSync={onSync}
     />
   );
 }

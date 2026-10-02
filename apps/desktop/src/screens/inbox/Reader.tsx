@@ -29,6 +29,7 @@ import {
   ArchiveIcon,
   ArrowBendUpLeftIcon,
   ArrowBendUpRightIcon,
+  ArrowLeftIcon,
   BellSlashIcon,
   CalendarCheckIcon,
   CalendarPlusIcon,
@@ -146,6 +147,12 @@ export interface ReaderProps {
   chipKeys?: readonly string[] | undefined;
   tags: readonly Tag[];
   sheet: boolean;
+  /**
+   * The phone form: the reader is a full screen pushed over the list, its
+   * close is a back arrow named `back`, and the header keeps archive, snooze,
+   * delete and Ask, with the rest under More. Absent, the desktop header.
+   */
+  phone?: { back: string } | undefined;
   now: Date;
   strings: ReaderStrings;
   messageStrings?: Partial<MessageStrings> | undefined;
@@ -207,6 +214,7 @@ export function Reader({
   chipKeys,
   tags,
   sheet,
+  phone,
   now,
   strings,
   messageStrings,
@@ -380,61 +388,90 @@ export function Reader({
     >
       <ColHead
         leading={
-          <>
-            {sheet ? (
-              <>
-                <Btn icon title={title(strings.close, keys.close)} onClick={onClose}>
-                  <XIcon />
-                </Btn>
-                <span className="vr" />
-              </>
-            ) : null}
-            <Btn icon title={title(strings.archive, keys.archive)} onClick={onArchive}>
-              <ArchiveIcon />
-            </Btn>
-            <Btn icon title={title(strings.snooze, keys.snooze)} onClick={onSnooze}>
-              <ClockIcon />
-            </Btn>
-            <Btn icon title={strings.move} onClick={onMove}>
-              <FolderSimpleIcon />
-            </Btn>
-            <Btn icon title={title(strings.delete, keys.delete)} onClick={onDelete}>
-              <TrashIcon />
-            </Btn>
-            <Btn
-              icon
-              title={
-                keys.read
-                  ? title(thread.unread ? strings.read : strings.unread, keys.read)
-                  : thread.unread
-                    ? strings.read
-                    : strings.unread
-              }
-              aria-label={thread.unread ? strings.read : strings.unread}
-              data-toggle="read"
-              onClick={onToggleRead}
-            >
-              {thread.unread ? <EnvelopeSimpleOpenIcon /> : <EnvelopeSimpleIcon />}
-            </Btn>
-            {actions?.length ? <span className="vr" /> : null}
-            {actions?.map((a) => (
+          phone ? (
+            <>
               <Btn
-                key={a.id}
-                sm
-                title={a.tier === "always-ask" ? `${a.label} (${strings.asksFirst})` : a.label}
-                data-action={a.id}
-                data-tier={a.tier}
-                onClick={() => onAction?.(a.id)}
+                icon
+                className="phone-back"
+                title={phone.back}
+                aria-label={phone.back}
+                onClick={onClose}
               >
-                <LightningIcon /> {a.label}
+                <ArrowLeftIcon />
               </Btn>
-            ))}
-          </>
+              <Btn icon title={strings.archive} aria-label={strings.archive} onClick={onArchive}>
+                <ArchiveIcon />
+              </Btn>
+              <Btn icon title={strings.snooze} aria-label={strings.snooze} onClick={onSnooze}>
+                <ClockIcon />
+              </Btn>
+              <Btn icon title={strings.delete} aria-label={strings.delete} onClick={onDelete}>
+                <TrashIcon />
+              </Btn>
+            </>
+          ) : (
+            <>
+              {sheet ? (
+                <>
+                  <Btn icon title={title(strings.close, keys.close)} onClick={onClose}>
+                    <XIcon />
+                  </Btn>
+                  <span className="vr" />
+                </>
+              ) : null}
+              <Btn icon title={title(strings.archive, keys.archive)} onClick={onArchive}>
+                <ArchiveIcon />
+              </Btn>
+              <Btn icon title={title(strings.snooze, keys.snooze)} onClick={onSnooze}>
+                <ClockIcon />
+              </Btn>
+              <Btn icon title={strings.move} onClick={onMove}>
+                <FolderSimpleIcon />
+              </Btn>
+              <Btn icon title={title(strings.delete, keys.delete)} onClick={onDelete}>
+                <TrashIcon />
+              </Btn>
+              <Btn
+                icon
+                title={
+                  keys.read
+                    ? title(thread.unread ? strings.read : strings.unread, keys.read)
+                    : thread.unread
+                      ? strings.read
+                      : strings.unread
+                }
+                aria-label={thread.unread ? strings.read : strings.unread}
+                data-toggle="read"
+                onClick={onToggleRead}
+              >
+                {thread.unread ? <EnvelopeSimpleOpenIcon /> : <EnvelopeSimpleIcon />}
+              </Btn>
+              {actions?.length ? <span className="vr" /> : null}
+              {actions?.map((a) => (
+                <Btn
+                  key={a.id}
+                  sm
+                  title={a.tier === "always-ask" ? `${a.label} (${strings.asksFirst})` : a.label}
+                  data-action={a.id}
+                  data-tier={a.tier}
+                  onClick={() => onAction?.(a.id)}
+                >
+                  <LightningIcon /> {a.label}
+                </Btn>
+              ))}
+            </>
+          )
         }
       >
-        <Btn onClick={onAsk}>
-          <Mark small /> {strings.ask}
-        </Btn>
+        {phone ? (
+          <Btn icon title={strings.ask} aria-label={strings.ask} onClick={onAsk}>
+            <Mark small />
+          </Btn>
+        ) : (
+          <Btn onClick={onAsk}>
+            <Mark small /> {strings.ask}
+          </Btn>
+        )}
         <Btn icon title={strings.more} onClick={() => setMore((m) => !m)}>
           <DotsThreeIcon />
         </Btn>
@@ -443,12 +480,27 @@ export function Reader({
         <Picker
           label={strings.more}
           items={[
+            // On a phone the header's other actions live here.
+            ...(phone
+              ? [
+                  { key: "move", label: strings.move },
+                  { key: "read", label: thread.unread ? strings.read : strings.unread },
+                  ...(actions ?? []).map((a) => ({
+                    key: `action:${a.id}`,
+                    label: a.label,
+                    detail: a.tier === "always-ask" ? strings.asksFirst : undefined,
+                  })),
+                ]
+              : []),
             { key: "star", label: thread.starred ? strings.unstar : strings.star },
             ...(makeTemplate ? [{ key: "template", label: makeTemplate.label }] : []),
           ]}
           onPick={(key) => {
             setMore(false);
             if (key === "template") makeTemplate?.run();
+            else if (key === "move") onMove();
+            else if (key === "read") onToggleRead();
+            else if (key.startsWith("action:")) onAction?.(key.slice("action:".length));
             else onStar();
           }}
           onClose={() => setMore(false)}

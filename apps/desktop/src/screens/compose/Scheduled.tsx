@@ -4,6 +4,7 @@
 
 import { Btn, ColHead, formatWhen } from "@monday/ui";
 import { useSyncExternalStore } from "react";
+import { DrawerButton } from "../../shell/phone.tsx";
 import type { Composer } from "./composer.ts";
 import type { ComposeUiStrings } from "./strings.ts";
 
@@ -19,7 +20,7 @@ export function Scheduled({ composer, strings, now, onCancel }: ScheduledProps) 
   const pending = sends.filter((s) => s.status === "scheduled");
   return (
     <section className="col list scheduled" aria-label={strings.title}>
-      <ColHead title={strings.title} count={pending.length} />
+      <ColHead title={strings.title} count={pending.length} leading={<DrawerButton />} />
       <div className="col-body">
         {pending.length === 0 ? <div className="empty-line">{strings.empty}</div> : null}
         {pending.map((send) => {
