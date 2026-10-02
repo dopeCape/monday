@@ -202,8 +202,12 @@ describe("suggestions while typing (the two requests)", () => {
       gate_personal: 0.9,
       which: choice({ t_confirm_time: 0.8, none: 0.2 }),
     });
-    expect(personal).toMatchObject({ status: "none", reason: "gate" });
-    expect("maybe" in personal).toBe(false);
+    // A personal message still gets the soft line when a template is likely.
+    expect(personal).toMatchObject({
+      status: "none",
+      reason: "gate",
+      maybe: { templateId: "t_confirm_time", name: "Confirm the time", p: 0.8 },
+    });
   });
 
   test("rankOnly sends request 1 alone and answers with the ranking, gate or not", async () => {

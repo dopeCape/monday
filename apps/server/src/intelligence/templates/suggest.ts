@@ -150,8 +150,9 @@ export async function suggestTemplate(input: SuggestInput): Promise<TemplateSugg
     top && top.p >= settings.hintFloor
       ? { maybe: { templateId: top.template.id, name: top.template.name, p: top.p } }
       : {};
-  // Below the gate no template is wanted at all, so not even softly.
-  if (gate < settings.gate) return { status: "none", reason: "gate", gate, ranking };
+  // Below the gate the message looks personal: no confident line, but a likely template is
+  // still offered softly ("Maybe: X"), since the owner may want it all the same.
+  if (gate < settings.gate) return { status: "none", reason: "gate", gate, ranking, ...maybe };
 
   const shortlist = best.slice(0, settings.shortlist).map((r) => r.template);
   if (shortlist.length === 0) return { status: "none", reason: "floor", gate, ranking };
