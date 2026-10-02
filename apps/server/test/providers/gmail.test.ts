@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateFixture } from "../../src/providers/fake/fixture.ts";
-import { backoffMs, parseMultipart } from "../../src/providers/gmail/client.ts";
+import { backoffMs, GmailClient, parseMultipart } from "../../src/providers/gmail/client.ts";
 import {
   createGmailProvider,
   flagsOfLabels,
@@ -20,7 +20,12 @@ import {
 } from "../../src/providers/gmail/quota.ts";
 import { composeMime } from "../../src/providers/mime.ts";
 import { createTokenBroker, staticTokenBroker } from "../../src/providers/oauth/tokens.ts";
-import type { Credentials, OAuthAuth, WatchEvent } from "../../src/providers/types.ts";
+import {
+  type Credentials,
+  type OAuthAuth,
+  ProviderError,
+  type WatchEvent,
+} from "../../src/providers/types.ts";
 import { addedOf, collect, providerConformance, stateOf, syncAll } from "./conformance.ts";
 import { createGmailServer, type GmailServer } from "./gmail-server.ts";
 
@@ -80,6 +85,37 @@ providerConformance(
 );
 
 describe("Gmail adapter", () => {
+  test("a request that never got an answer is a network error; a read is asked again, a send is not", async () => {
+    const server = createGmailServer(fixture);
+    let calls = 0;
+    const flaky = (fail: number) => async (input: string, init?: RequestInit) => {
+      calls += 1;
+      if (calls <= fail) throw new DOMException("The operation timed out.", "TimeoutError");
+      return server.fetch(input, init);
+    };
+    const make = (fail: number) =>
+      new GmailClient({
+        auth: auth(server),
+        tokens: staticTokenBroker(),
+        fetch: flaky(fail),
+        sleep: async () => {},
+      });
+    // A read times out twice, then answers.
+    calls = 0;
+    const labels = await make(2).request<{ labels: unknown[] }>("labels");
+    expect(labels.labels.length).toBeGreaterThan(0);
+    expect(calls).toBe(3);
+    // A send times out once: it is not repeated here, and the error says network.
+    calls = 0;
+    const error = await make(1)
+      .request("messages/send", { body: { raw: "eA" } })
+      .catch((e: unknown) => e);
+    expect(calls).toBe(1);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("network");
+    expect((error as ProviderError).message).toBe("The operation timed out.");
+  });
+
   test("capabilities: threads, labels, push only with a topic, no sent copy needed", async () => {
     const server = createGmailServer(fixture);
     const provider = createGmailProvider({ fetch: server.fetch, tokens: staticTokenBroker() });
