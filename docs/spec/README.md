@@ -24,6 +24,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 | Pages locked by the AI level | `workflows.md`, `routing.md` |
 | Sync topology, jobs, cache, outbox | ADR 0005, `architecture.md` |
 | Client protocol, device pairing, TLS, versioning | ADR 0006 |
+| Phones: LAN access, the Pairing invite, the pinned certificate, what a phone cannot do | ADR 0006 amendment, `docs/dev/sidecar.md` |
 | Hosted runtimes, model roles, meter, keys | ADR 0007 |
 | Install, cloud upgrade, channels, CI | ADR 0008 |
 | The Sidecar as a background service: lifecycle, token, login start, notifications with the window closed | ADR 0013, `docs/dev/sidecar.md` |
@@ -53,7 +54,7 @@ This directory is the spec. It is an index, not a restatement: every decision li
 
 ## Out of scope for v1
 
-Mobile clients, multi-user servers, PGP, a unified inbox across accounts, shared-calendar writes, room booking, propose-new-time, voice input, Snap and the Microsoft Store, a hosted instance run by the project.
+Push wake on phones (a phone syncs while open; ADR 0006 amendment), multi-user servers, PGP, a unified inbox across accounts, shared-calendar writes, room booking, propose-new-time, voice input, Snap and the Microsoft Store, a hosted instance run by the project.
 
 ## Open items carried into implementation
 

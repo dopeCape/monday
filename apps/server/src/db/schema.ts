@@ -15,6 +15,7 @@ import type {
   CalendarSource,
   ChangeKind,
   DecisionCandidate,
+  DeviceKind,
   DraftAttachment,
   DraftKind,
   DraftStatus,
@@ -125,6 +126,8 @@ export const devices = pgTable("devices", {
   name: text("name").notNull(),
   /** SHA-256 of the bearer token, hex. The token itself is never stored. */
   tokenHash: text("token_hash").notNull().unique(),
+  /** A computer or a phone (DeviceKind); a phone never reaches the root key's routes. */
+  kind: text("kind").$type<DeviceKind>().notNull().default("computer"),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   lastSeen: timestamp("last_seen", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
@@ -154,6 +157,11 @@ export const pairingCodes = pgTable("pairing_codes", {
   expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
   confirmedAt: timestamp("confirmed_at", { withTimezone: true, mode: "date" }),
   used: boolean("used").notNull().default(false),
+  /**
+   * A Pairing invite: made by a paired Device for a phone (the QR code and the
+   * short code), confirmed from the start, redeemed by its secret or its code.
+   */
+  invite: boolean("invite").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

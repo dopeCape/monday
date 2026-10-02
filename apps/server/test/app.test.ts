@@ -165,7 +165,7 @@ describe("app", () => {
         setupAvailable: false,
       });
       const me = await app.request("/devices/me", bearer(firstToken));
-      expect(await me.json()).toEqual({ id: firstId, kind: "device" });
+      expect(await me.json()).toEqual({ id: firstId, kind: "device", deviceKind: "computer" });
 
       // Unknown code from the confirming device.
       const unknown = await app.request("/pair/confirm", json({ code: "999999" }, firstToken));

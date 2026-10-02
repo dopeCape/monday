@@ -310,12 +310,20 @@ The ordered stream of change events the client reads from a cursor; the push tra
 _Avoid_: realtime, event stream, socket
 
 **Device**:
-One installed client that holds a per-Device token for a Server. Listed and revocable in Settings.
+One installed client that holds a per-Device token for a Server. Listed and revocable in Settings. A computer or a phone; a phone never holds the root key.
 _Avoid_: session (reserved for the Agent), login
 
 **Pairing**:
 Approving a new Device from an existing one with a short code.
 _Avoid_: login, sign in
+
+**Pairing invite**:
+What a paired computer shows to add a phone: a QR code and a short code carrying the Server's addresses, a one-time secret with an expiry, and the LAN certificate's fingerprint. The phone redeems it once for its Device token (ADR 0006).
+_Avoid_: invite link, QR login
+
+**LAN access**:
+The Sidecar also listening on the computer's network address, over TLS with a certificate the phone pins, so a phone on the same network can pair and sync. Off by default; applied when the background service restarts.
+_Avoid_: remote access, port forwarding
 
 **Setup code**:
 The one-time code an install produces so the first Device can pair.

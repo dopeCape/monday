@@ -26,7 +26,9 @@ import {
   type KeyProvider,
   keyConditions,
   type MeterMonth,
+  type PairingInvite,
   type PartialSettings,
+  parsePairingPayload,
   SETTING_SECTIONS,
   type SettingEntry,
   type SettingKey,
@@ -123,6 +125,7 @@ function scriptedApi(
     devices?: Device[];
     me?: string;
     pending?: PendingPairings;
+    invite?: PairingInvite;
     meter?: MeterMonth;
     activity?: ActivityRecord[];
     voice?: VoiceProfile;
@@ -222,6 +225,15 @@ function scriptedApi(
       confirm: async (code) => {
         calls.push({ name: "confirm", args: [code] });
         return { ok: true };
+      },
+      invite: async () => {
+        calls.push({ name: "invite", args: [] });
+        if (!over.invite) throw new Error("no invite scripted");
+        return over.invite;
+      },
+      cancelInvite: async () => {
+        calls.push({ name: "cancelInvite", args: [] });
+        return new Response(null, { status: 204 });
       },
     },
     storage: async () => ({ messages: 12418, bytes: 1.9 * 1024 * 1024 * 1024 }),
@@ -1350,6 +1362,111 @@ describe("Settings › Sync server", () => {
   });
 });
 
+describe("Settings › Sync server › Add a phone", () => {
+  const lan = {
+    enabled: true,
+    listening: true,
+    port: 47820,
+    tls: true,
+    urls: ["https://192.168.1.20:47820"],
+    fingerprint: "q83vEjRWeJA",
+    error: null,
+    restartNeeded: false,
+  };
+  const invite = (over: Partial<PairingInvite> = {}): PairingInvite => {
+    const fields = {
+      name: "tejas-laptop",
+      urls: lan.urls,
+      secret: "the-secret",
+      code: "AB12CD34",
+      expiresAt: "2026-09-17T10:10:00Z",
+      fingerprint: lan.fingerprint,
+      ...over,
+    };
+    return {
+      ...fields,
+      payload: `monday://pair?v=1&n=tejas-laptop&u=${encodeURIComponent(fields.urls[0] ?? "")}&s=${fields.secret}&c=${fields.code}&e=${fields.expiresAt}&f=${fields.fingerprint}`,
+      lan,
+      ...over,
+    };
+  };
+  const open = async (scripted: Scripted) =>
+    mountOpen(
+      { initialSection: "server" },
+      {
+        api: scripted.api,
+        sidecar: { port: 4242, token: "t", running: true },
+        server: { kind: "sidecar", target: { baseUrl: "http://127.0.0.1:4242", token: "t" } },
+      },
+    );
+
+  test("the QR card shows the code, the address and the fingerprint, warns about the network, and cancels", async () => {
+    const scripted = scriptedApi({
+      devices: [
+        { id: "d1", name: "Laptop", lastSeen: "2026-09-17T09:59:00Z" },
+        { id: "d2", name: "Pixel 9", lastSeen: "2026-09-17T09:00:00Z", kind: "phone" },
+      ],
+      invite: invite(),
+    });
+    await open(scripted);
+    const card = () => q('[data-panel="add-phone"]');
+    expect(q('[data-device="d2"]')?.textContent).toContain("Phone");
+    // LAN access is off by default: a phone cannot reach this computer, and the card says so.
+    expect(card()?.querySelector('[data-warn="lan-off"]')?.textContent).toContain(
+      "Let phones connect over your network",
+    );
+    expect(q('[data-setting="server.lan.enabled"] .switch')).not.toBeNull();
+    expect(card()?.querySelector("svg.qr")).toBeNull();
+
+    await clickText("Add a phone", card() ?? document);
+    expect(scripted.calls).toContainEqual({ name: "invite", args: [] });
+    const qr = card()?.querySelector("svg.qr");
+    expect(qr?.getAttribute("aria-label")).toBe("QR code to pair a phone with this monday");
+    expect(qr?.querySelector("path")?.getAttribute("d")).toMatch(/^M4 4h7v1h-7z/);
+    expect(parsePairingPayload(qr?.getAttribute("data-qr") ?? "")).toMatchObject({
+      secret: "the-secret",
+      code: "AB12CD34",
+      urls: ["https://192.168.1.20:47820"],
+      fingerprint: "q83vEjRWeJA",
+    });
+    expect(card()?.querySelector("[data-invite-code]")?.textContent).toBe("AB12-CD34");
+    expect(card()?.querySelector("[data-invite-url]")?.textContent).toBe(
+      "https://192.168.1.20:47820",
+    );
+    expect(card()?.querySelector("[data-fingerprint]")?.textContent).toBe(
+      "Certificate AB:CD:EF:12:34:56",
+    );
+    // Listening: the port is open to the network, said plainly; no plain-HTTP warning over TLS.
+    expect(card()?.querySelector('[data-warn="lan-on"]')?.textContent).toContain("port 47820");
+    expect(card()?.querySelector('[data-warn="plain"]')).toBeNull();
+    expect(card()?.querySelector('[data-warn="lan-off"]')).toBeNull();
+
+    await clickText("Cancel", card() ?? document);
+    expect(scripted.calls).toContainEqual({ name: "cancelInvite", args: [] });
+    expect(card()?.querySelector("svg.qr")).toBeNull();
+  });
+
+  test("plain HTTP, a pending restart and an expired code are each said", async () => {
+    const scripted = scriptedApi({
+      invite: {
+        ...invite({ expiresAt: "2026-09-17T09:59:00Z", fingerprint: null }),
+        lan: { ...lan, tls: false, fingerprint: null, restartNeeded: true },
+      },
+    });
+    await open(scripted);
+    const card = () => q('[data-panel="add-phone"]');
+    await clickText("Add a phone", card() ?? document);
+    expect(card()?.querySelector('[data-warn="plain"]')?.textContent).toContain("not encrypted");
+    expect(card()?.querySelector('[data-warn="restart"]')?.textContent).toContain(
+      "Restart the background service",
+    );
+    expect(card()?.textContent).toContain("This code expired. Make a new one.");
+    expect(card()?.querySelector("svg.qr")).toBeNull();
+    await clickText("New code", card() ?? document);
+    expect(scripted.calls.filter((c) => c.name === "invite").length).toBe(2);
+  });
+});
+
 /* ------------------------------ Shortcuts ------------------------------ */
 
 describe("Settings › Shortcuts", () => {
@@ -1431,7 +1548,11 @@ describe("Settings › search", () => {
     // A raw key matches last, but matches.
     expect(keysOf("undo_toast")).toEqual(["inbox.undo_toast_ms"]);
     // A panel by its own terms and by its section name.
-    expect(keysOf("pairing")).toEqual(["panel:Devices"]);
+    expect(keysOf("pairing")).toEqual([
+      "panel:Devices",
+      "server.pairing.invite_minutes",
+      "server.pairing.max_failures",
+    ]);
     expect(keysOf("sync server")).toContain("panel:Devices");
     // Every word must match; blank finds nothing.
     expect(keysOf("font monospace")).toEqual(["appearance.monospace"]);

@@ -20,7 +20,51 @@ export const PUBLIC_PATHS: readonly string[] = [
   "/pair/setup",
   "/pair/start",
   "/pair/claim",
+  "/pair/redeem",
 ];
+
+/**
+ * What a phone may not do (ADR 0006, amended for phones): touch the root key
+ * (unlock, lock, the recovery file), add or remove Devices, or move the
+ * database. The root key never leaves the computers; a phone works with what
+ * the Server serves. Each entry is a method and a path, or a path prefix
+ * ending in "/" for every method.
+ */
+export const PHONE_REFUSED: readonly { method: string; path: string }[] = [
+  { method: "POST", path: "/unlock" },
+  { method: "POST", path: "/lock" },
+  { method: "GET", path: "/recovery" },
+  { method: "POST", path: "/pair/invite" },
+  { method: "DELETE", path: "/pair/invite" },
+  { method: "POST", path: "/pair/confirm" },
+  { method: "DELETE", path: "/devices/" },
+  { method: "*", path: "/upgrade/" },
+  { method: "POST", path: "/service/stop" },
+];
+
+/** Whether a phone's request falls under PHONE_REFUSED. */
+export function refusedToPhones(method: string, path: string): boolean {
+  return PHONE_REFUSED.some(
+    (r) =>
+      (r.method === "*" || r.method === method.toUpperCase()) &&
+      (r.path.endsWith("/") ? path.startsWith(r.path) : path === r.path),
+  );
+}
+
+/** 403 for a phone on a route that is the computers' alone. */
+export function refusePhones(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const principal = c.get("principal");
+    if (
+      principal?.kind === "device" &&
+      principal.deviceKind === "phone" &&
+      refusedToPhones(c.req.method, c.req.path)
+    ) {
+      return c.json({ error: "not_from_a_phone" }, 403);
+    }
+    return next();
+  };
+}
 
 /**
  * Path prefixes reachable without a token: provider webhooks and the cron

@@ -2,7 +2,7 @@
 // here; the entry under entry/ supplies the database, the loopback test and
 // the process-level pieces (research 22, section 2.1).
 
-import type { DeploymentMode, HostedProvider } from "@monday/shared";
+import type { DeploymentMode, HostedProvider, LanStatus } from "@monday/shared";
 import { DEPLOYMENT_FEATURES } from "@monday/shared";
 import { eq, inArray, like } from "drizzle-orm";
 import { Hono } from "hono";
@@ -16,6 +16,7 @@ import {
   type LoopbackCheck,
   PUBLIC_PATHS,
   PUBLIC_PREFIXES,
+  refusePhones,
   requireAuth,
 } from "./auth/middleware.ts";
 import { type CalendarModule, CalendarUnavailableError } from "./calendar/index.ts";
@@ -90,7 +91,7 @@ import { localRuntimeRoutes } from "./routes/local-runtime.ts";
 import { mailRoutes } from "./routes/mail.ts";
 import { MCP_CALLBACK_PATH, mcpServerRoutes } from "./routes/mcp-servers.ts";
 import { type OAuthRoutesOptions, oauthRoutes } from "./routes/oauth.ts";
-import { pairRoutes } from "./routes/pair.ts";
+import { NO_LAN, pairRoutes } from "./routes/pair.ts";
 import { peopleRoutes } from "./routes/people.ts";
 import { recommendationsRoutes } from "./routes/recommendations.ts";
 import { routingRoutes } from "./routes/routing.ts";
@@ -211,6 +212,13 @@ export interface AppOptions {
   notifier?: Notifier;
   /** The Server's public URL, the OAuth issuer, when configured; the request's origin otherwise. */
   publicUrl?: () => Promise<string | null>;
+  /**
+   * The Sidecar's LAN listener as it runs (server.lan.*), for a phone's
+   * Pairing invite; absent where there is none (a Cloud, tests).
+   */
+  lan?: () => Promise<LanStatus> | LanStatus;
+  /** This computer's name, the fallback for the server.name Setting a phone shows. */
+  hostName?: string;
   /**
    * Whether a client is connected (ADR 0013): every authenticated request
    * touches it. The Bun entry shares it with the WebSocket transport and the
@@ -495,7 +503,26 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     );
   });
 
-  app.route("/pair", pairRoutes(auth));
+  app.use("*", refusePhones());
+  app.route(
+    "/pair",
+    pairRoutes(auth, {
+      serverInfo: async () => {
+        const lan = options.lan ? await options.lan() : NO_LAN;
+        const [name, publicUrl] = await Promise.all([
+          readGlobalSettings(db, ["server.name"] as const),
+          options.publicUrl?.() ?? null,
+        ]);
+        const urls = [...(lan.listening ? lan.urls : []), ...(publicUrl ? [publicUrl] : [])];
+        return {
+          name: name["server.name"].trim() || options.hostName || "monday",
+          urls,
+          fingerprint: lan.listening && lan.tls ? lan.fingerprint : null,
+          lan,
+        };
+      },
+    }),
+  );
   app.route("/settings", settingsRoutes(db));
   app.route("/devices", devicesRoutes(auth));
   app.route("/", storageRoutes(db));

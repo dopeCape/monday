@@ -253,6 +253,13 @@
       "when": 1790939506204,
       "tag": "0036_recommendation_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790947553651,
+      "tag": "0037_phone_pairing",
+      "breakpoints": true
     }
   ]
 }
