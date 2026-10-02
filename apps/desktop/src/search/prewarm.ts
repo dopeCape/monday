@@ -77,11 +77,19 @@ export interface Prewarm {
 const GB = 1024 ** 3;
 const DAY_MS = 86_400_000;
 
-/** How many bytes of body text and html the Cache holds. */
+/**
+ * How many bytes of body text and html the Cache holds: one row the Cache's triggers keep
+ * (store.ts, body_totals), never a scan of every body, which the pre-warm used to run on
+ * each batch and which kept a core busy on a large Cache.
+ */
 export async function bodyBytes(store: Store): Promise<number> {
-  const [row] = await store.query<{ n: number | null }>(
-    "select sum(length(body_text) + coalesce(length(body_html), 0)) as n from messages where body_text is not null",
-  );
+  const [row] = await store.query<{ n: number | null }>("select bytes as n from body_totals");
+  return Number(row?.n ?? 0);
+}
+
+/** How many bodies the Cache holds, from the same row. */
+export async function bodyCount(store: Store): Promise<number> {
+  const [row] = await store.query<{ n: number | null }>("select count as n from body_totals");
   return Number(row?.n ?? 0);
 }
 
@@ -208,10 +216,7 @@ export function createPrewarm(options: PrewarmOptions): Prewarm {
     // The cap is checked before fetching, with the Cache's own average body
     // size, so the Job stops short of the cap instead of landing past it and
     // evicting what it just fetched.
-    const [held] = await store.query<{ n: number }>(
-      "select count(*) as n from messages where body_text is not null",
-    );
-    const count = Number(held?.n ?? 0);
+    const count = await bodyCount(store);
     const average = count > 0 ? bytes / count : DEFAULT_BODY_BYTES;
     if (bytes >= capBytes || (count > 0 && bytes + average * s.batch > capBytes)) {
       return finish({ kind: "capped", evicted });

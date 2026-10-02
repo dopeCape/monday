@@ -277,7 +277,9 @@ pub async fn db_query(
     params: Vec<Value>,
 ) -> Result<tauri::ipc::Response, String> {
     trim_if_pending();
+    let started = std::time::Instant::now();
     let bytes = with_conn(&app, &state, &workspace, |c| query_packed(c, &sql, &params))?;
+    log_if_slow("query", &workspace, &sql, started);
     if bytes.len() >= TRIM_AFTER_BYTES {
         TRIM_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -291,7 +293,27 @@ pub async fn db_batch(
     workspace: String,
     statements: Vec<Statement>,
 ) -> Result<(), String> {
-    with_conn(&app, &state, &workspace, |c| batch(c, &statements))
+    let started = std::time::Instant::now();
+    let done = with_conn(&app, &state, &workspace, |c| batch(c, &statements));
+    let first = statements.first().map(|s| s.sql.as_str()).unwrap_or("");
+    log_if_slow("batch", &workspace, first, started);
+    done
+}
+
+/// A Cache statement slower than MONDAY_SLOW_QUERY_MS (1000 by default) goes to the app's
+/// log with its first words, so a query that keeps the CPU busy can be named.
+fn log_if_slow(kind: &str, workspace: &str, sql: &str, started: std::time::Instant) {
+    let limit: u128 = std::env::var("MONDAY_SLOW_QUERY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    let took = started.elapsed().as_millis();
+    if took < limit {
+        return;
+    }
+    let one_line: String = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let short: String = one_line.chars().take(400).collect();
+    eprintln!("[monday] slow cache {kind} {took} ms in {workspace}: {short}");
 }
 
 /// Closes a Workspace's connection, for example when the Device is revoked and the Cache dropped.

@@ -742,3 +742,41 @@ describe("live queries", () => {
     again.close();
   });
 });
+
+describe("body totals", () => {
+  test("the triggers keep the bodies' bytes and count equal to a scan, through every kind of write", async () => {
+    const { store } = await createFakeStore({ driver: bunDriver(), seed: fixtureSeed() });
+    const scan = async () => {
+      const [row] = await store.query<{ b: number | null; n: number }>(
+        "select coalesce(sum(length(body_text) + coalesce(length(body_html), 0)), 0) as b, count(*) as n from messages where body_text is not null",
+      );
+      return { bytes: Number(row?.b ?? 0), count: Number(row?.n ?? 0) };
+    };
+    const kept = async () => {
+      const [row] = await store.query<{ bytes: number; count: number }>(
+        "select bytes, count from body_totals",
+      );
+      return { bytes: Number(row?.bytes ?? -1), count: Number(row?.count ?? -1) };
+    };
+    expect(await kept()).toEqual(await scan());
+    const [one] = await store.query<{ id: string }>("select id from messages limit 1");
+    const id = String(one?.id);
+    await store.write([
+      {
+        sql: "update messages set body_text = ?, body_html = ? where id = ?",
+        params: ["a".repeat(500), "<p>b</p>", id],
+      },
+    ]);
+    expect(await kept()).toEqual(await scan());
+    await store.write([
+      { sql: "update messages set body_text = null, body_html = null where id = ?", params: [id] },
+    ]);
+    expect(await kept()).toEqual(await scan());
+    await store.write([
+      {
+        sql: "delete from messages where body_text is not null and id in (select id from messages where body_text is not null limit 2)",
+      },
+    ]);
+    expect(await kept()).toEqual(await scan());
+  });
+});

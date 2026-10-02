@@ -303,6 +303,39 @@ const SCHEMA_VERSION_KEY = "schema_version";
 export const SCHEMA_VERSION = 4;
 
 const SENDERS_KEY = "senders_format";
+/**
+ * The bytes and count of the bodies the Cache holds, kept by triggers so the pre-warm's
+ * cap check reads one row instead of scanning (and, in the app, decrypting) every body.
+ */
+const BODY_TOTALS_KEY = "body_totals_format";
+const BODY_TOTALS_FORMAT = 1;
+const BODY_SIZE = (row: "new" | "old") =>
+  `length(${row}.body_text) + coalesce(length(${row}.body_html), 0)`;
+const BODY_TOTALS_SQL = `
+create table if not exists body_totals (
+  id integer primary key check (id = 1),
+  bytes integer not null default 0,
+  count integer not null default 0
+);
+create trigger if not exists body_totals_ai after insert on messages
+when new.body_text is not null begin
+  update body_totals set bytes = bytes + ${BODY_SIZE("new")}, count = count + 1 where id = 1;
+end;
+create trigger if not exists body_totals_ad after delete on messages
+when old.body_text is not null begin
+  update body_totals set bytes = bytes - (${BODY_SIZE("old")}), count = count - 1 where id = 1;
+end;
+create trigger if not exists body_totals_au after update of body_text, body_html on messages begin
+  update body_totals set
+    bytes = bytes
+      - (case when old.body_text is not null then ${BODY_SIZE("old")} else 0 end)
+      + (case when new.body_text is not null then ${BODY_SIZE("new")} else 0 end),
+    count = count
+      - (case when old.body_text is not null then 1 else 0 end)
+      + (case when new.body_text is not null then 1 else 0 end)
+  where id = 1;
+end;
+`;
 /** Bumped when thread_senders must be filled again from `messages`. */
 const SENDERS_FORMAT = 1;
 
@@ -336,6 +369,7 @@ const REBUILD_SQL = `
   drop table if exists threads_trgm;
   drop view if exists threads_content;
   drop table if exists messages;
+  drop table if exists body_totals;
   drop table if exists attachments;
   drop table if exists threads;
   drop table if exists thread_tags;
@@ -416,6 +450,24 @@ export async function applySchema(driver: SqlDriver): Promise<void> {
     "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
     [SCHEMA_VERSION_KEY, String(SCHEMA_VERSION)],
   );
+  await driver.exec(BODY_TOTALS_SQL);
+  const totalsRows = await driver.query("select value from meta where key = ?", [BODY_TOTALS_KEY]);
+  const totalsRow = await driver.query("select id from body_totals where id = 1");
+  if (Number(totalsRows[0]?.value ?? 0) < BODY_TOTALS_FORMAT || totalsRow.length === 0) {
+    // Counted once; the triggers keep it in step from here on.
+    await driver.batch([
+      { sql: "delete from body_totals" },
+      {
+        sql: `insert into body_totals (id, bytes, count)
+              select 1, coalesce(sum(length(body_text) + coalesce(length(body_html), 0)), 0), count(*)
+              from messages where body_text is not null`,
+      },
+      {
+        sql: "insert into meta (key, value) values (?, ?) on conflict (key) do update set value = excluded.value",
+        params: [BODY_TOTALS_KEY, String(BODY_TOTALS_FORMAT)],
+      },
+    ]);
+  }
   const sendersRows = await driver.query("select value from meta where key = ?", [SENDERS_KEY]);
   if (Number(sendersRows[0]?.value ?? 0) < SENDERS_FORMAT) {
     // A Cache from before thread_senders: its Messages' senders, filled once;
