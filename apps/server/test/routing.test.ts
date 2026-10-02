@@ -306,6 +306,7 @@ describe("routing over the fixture mailbox", () => {
       sync: engine,
       intelligence,
       remoteAddress: () => "127.0.0.1",
+      now: () => NOW,
     });
     // The recorded mailbox, headers and bodies, through the engine.
     let report = await engine.syncAccount(account.id);

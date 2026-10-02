@@ -540,7 +540,10 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
   app.route("/", draftsRoutes(drafts, mailstore));
   app.route("/", peopleRoutes(db, options.now ? { now: options.now } : {}));
   app.route("/", changesRoutes(mailstore, { bus, ...(options.sse ?? {}) }));
-  app.route("/", intelligenceRoutes(intelligence));
+  app.route(
+    "/",
+    intelligenceRoutes(intelligence, options.now ? { now: options.now } : {}),
+  );
   app.route("/", signalsRoutes(intelligence, { mode, isLoopback }));
   app.route("/", recommendationsRoutes(intelligence));
   app.route("/", localRuntimeRoutes(localBridge));

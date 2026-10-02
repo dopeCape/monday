@@ -407,6 +407,7 @@ describe("shared keys, Meter and the brief Job over Postgres", () => {
       jobs,
       intelligence,
       remoteAddress: () => "127.0.0.1",
+      now: () => NOW,
     });
     workspaceId = (await store.createWorkspace(account)).id;
     threadId = await store.upsertThread({
