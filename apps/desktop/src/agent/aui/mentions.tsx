@@ -9,6 +9,7 @@ import { unstable_defaultDirectiveFormatter } from "@assistant-ui/react";
 import type { Group, Thread } from "@monday/shared";
 import { Icon } from "@monday/ui";
 import {
+  ArrowBendUpLeftIcon,
   EnvelopeSimpleIcon,
   FolderSimpleIcon,
   type Icon as PhosphorIcon,
@@ -162,15 +163,22 @@ export function mentionItems({
   return out;
 }
 
-export const MENTION_ICONS: Record<MentionKind, PhosphorIcon> = {
+/**
+ * A chip the screen attaches rather than an @ pick: `reply` is Draft a reply's
+ * "reply to this Thread", which the user can add instructions to before sending.
+ */
+export type AttachKind = MentionKind | "reply";
+
+export const MENTION_ICONS: Record<AttachKind, PhosphorIcon> = {
+  reply: ArrowBendUpLeftIcon,
   thread: EnvelopeSimpleIcon,
   group: FolderSimpleIcon,
   section: RowsIcon,
   person: UserIcon,
 };
 
-const isKind = (type: string): type is MentionKind =>
-  (MENTION_KINDS as readonly string[]).includes(type);
+const isKind = (type: string): type is AttachKind =>
+  type === "reply" || (MENTION_KINDS as readonly string[]).includes(type);
 
 /** A sent turn with its mentions as chips; a Thread chip opens the Thread. */
 export function MentionText({ text }: { text: string }) {
@@ -189,7 +197,7 @@ export function MentionText({ text }: { text: string }) {
             {s.label}
           </>
         );
-        return s.type === "thread" ? (
+        return s.type === "thread" || s.type === "reply" ? (
           <button
             key={key}
             type="button"
@@ -208,3 +216,39 @@ export function MentionText({ text }: { text: string }) {
     </>
   );
 }
+
+/** A chip the screen puts above the composer's input, waiting for the user's words. */
+export interface AttachRequest {
+  id: string;
+  type: AttachKind;
+  label: string;
+}
+
+const attachListeners = new Set<(items: readonly AttachRequest[]) => void>();
+let attachWaiting: AttachRequest[] = [];
+
+/**
+ * How a screen attaches a chip to whichever composer is mounted (the bar, or the
+ * panel left or right): Draft a reply puts "Reply: Subject" there and the user
+ * types how. With no composer mounted the chip waits for the next one.
+ */
+export const composerAttach = {
+  attach(items: readonly AttachRequest[]): void {
+    if (attachListeners.size === 0) {
+      attachWaiting = [...attachWaiting, ...items];
+      return;
+    }
+    for (const l of [...attachListeners]) l(items);
+  },
+  listen(listener: (items: readonly AttachRequest[]) => void): () => void {
+    attachListeners.add(listener);
+    if (attachWaiting.length) {
+      const waiting = attachWaiting;
+      attachWaiting = [];
+      listener(waiting);
+    }
+    return () => {
+      attachListeners.delete(listener);
+    };
+  },
+};

@@ -3074,6 +3074,7 @@ export const settingsSchema = {
       'The user tunes how mail is sorted by telling you what is wrong. When they say routing or a Section is wrong ("stop putting receipts in Needs your reply"), first call explain_placement on one such thread to see which judgment put it there. For a one-off mistake prefer add_example: it shows the judge the right answer without rewording anything. For a systematic mistake, find the question with list_judgments, run test_judgment with the reworded question or threshold on recent threads, and only then update_judgment; always show the user the diff before changing a question. A changed question re-sorts nothing on its own: offer organize_existing afterwards for the mail already there.',
       'The user asks for Views in a sentence: create_view drafts one and tries it on the newest threads in its scope, and its result says, for each value and question, how it read over every tried thread. When a value read on few threads, diagnose before revising and never guess: "no candidates found" means code found nothing of that kind in those threads\' text (choose another find kind, or narrow the scope to the mail that holds it), "none of the candidates" means the question matches no span code found (reword it), "below its confidence floor" means the judge was unsure. Call inspect_view_thread on one or two tried threads to see the candidates, the judge\'s share for each and why the scope admits them, then revise_view with what you learnt. search_threads first when you are not sure which mail holds what the user wants, then scope the View to what the results share: their senders (from_any for whole addresses, from_domain for domains) or words in their subjects (subject_any, such as "order confirmation").',
       "The user can point at things with mentions: :thread[Subject]{name=id} is a Thread (read it with read_thread), :group[Name]{name=id} a Group, :section[Name]{name=id} a Section, :person[Name]{name=address} a person. Act on the id; say the name, never the markup.",
+      "A :reply[Subject]{name=id} chip is the Draft a reply button: draft a reply to that Thread in the user's voice. Read the Thread first. When the composer has a Draft open for that Thread, write into it with update_draft and keep what the user already wrote; otherwise create it with draft_message (kind reply) and open it with open_draft. The words sent with the chip are the user's instructions for the reply (what to say, tone, length); with none, answer what the newest message asks. Never send it.",
       "When you mention a Thread you found or read, link it so the user can open it: [its subject](monday://thread/THREAD_ID) with the Thread's id. Never show a raw id.",
       "Answer briefly, in plain sentences, no markdown headings. Say what you did and what changed.",
     ].join("\n"),
@@ -5895,6 +5896,11 @@ export const settingsSchema = {
   "strings.agent.copy_table": str("ai", "Copy a table", "Copy table"),
   "strings.agent.latest": str("ai", "Scroll to the newest turn", "Jump to the latest"),
   "strings.agent.detach": str("ai", "Remove a dropped Thread before sending", "Remove {name}"),
+  "strings.agent.reply_chip": str(
+    "ai",
+    "The chip Draft a reply puts in the agent input, before the subject",
+    "Reply:",
+  ),
   "strings.agent.drop_untitled": str(
     "ai",
     "A Thread dropped into the Agent without a subject",
@@ -7649,16 +7655,6 @@ export const settingsSchema = {
     "Include {n} attachments",
   ),
   "strings.compose.draft_reply": str("accounts", "Draft a reply button", "Draft a reply"),
-  "strings.compose.draft_prompt": str(
-    "accounts",
-    "What Draft a reply asks the agent, about the Thread the reader shows",
-    "Draft a reply to the thread I have open. Read it first, write the reply in my voice with draft_message as a reply to that thread, then open the draft with open_draft so I can review it. Do not send it.",
-  ),
-  "strings.compose.draft_prompt_open": str(
-    "accounts",
-    "What Draft a reply asks the agent when a reply is already open",
-    "Write my reply to the thread I have open into the draft open in the composer. Read the thread and the draft first, then fill the draft with update_draft in my voice, keeping anything I already wrote. Do not send it.",
-  ),
   "strings.compose.uploading": str("accounts", "Upload progress", "Uploading {pct}%"),
   "strings.compose.remove_attachment": str("accounts", "Remove attachment", "Remove"),
   "strings.compose.bold": str("accounts", "Toolbar: bold", "Bold"),

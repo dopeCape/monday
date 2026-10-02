@@ -59,7 +59,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { writeThreadDrag } from "../agent/aui/mentions.tsx";
+import { cleanLabel, composerAttach, writeThreadDrag } from "../agent/aui/mentions.tsx";
 import { Composer as AgentComposer, composerStrings, PreviewView } from "../agent/Composer.tsx";
 import { runtimeLine } from "../agent/runtimeLine.ts";
 import { suggestionsFor } from "../agent/suggestions.ts";
@@ -1419,18 +1419,20 @@ function InboxBody({
     [focusAgent],
   );
   /**
-   * Draft a reply, under the open Thread or in the inline reply: a turn about this
-   * Thread (its id rides in the turn context), not an empty agent bar.
+   * Draft a reply, under the open Thread or in the inline reply: a "Reply" chip for
+   * this Thread waits in the agent's input, where the user adds how to reply.
    */
-  const draftWithAgent = useCallback(
-    (inReply: boolean) => {
-      setAgentOpen(true);
-      void agent.send(
-        t(inReply ? "strings.compose.draft_prompt_open" : "strings.compose.draft_prompt"),
-      );
-    },
-    [agent, t],
-  );
+  const draftWithAgent = useCallback(() => {
+    if (!thread) return;
+    setAgentOpen(true);
+    composerAttach.attach([
+      {
+        id: thread.id,
+        type: "reply",
+        label: `${t("strings.agent.reply_chip")} ${cleanLabel(thread.subject)}`,
+      },
+    ]);
+  }, [thread, t]);
   // The open Thread's Judgments (slice 25), for the on-open Template suggestion.
   const judgments = useThreadJudgments(inbox, shownThreadId);
 
@@ -3261,7 +3263,7 @@ function InboxBody({
                       }))
                     : []
                 }
-                onDraft={() => draftWithAgent(true)}
+                onDraft={draftWithAgent}
                 onSent={compose.onSent}
                 onError={compose.onError}
               />
@@ -3300,7 +3302,7 @@ function InboxBody({
           }}
           onClose={() => setReaderOpen(false)}
           onAsk={focusAgent}
-          onDraftReply={() => draftWithAgent(false)}
+          onDraftReply={draftWithAgent}
           onArchive={() => request("archive", [shownThread.id])}
           onSnooze={() => openPicker("snooze", [shownThread.id])}
           onMove={() => openPicker("move", [shownThread.id])}

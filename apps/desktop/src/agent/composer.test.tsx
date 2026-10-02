@@ -499,14 +499,24 @@ describe("the composer in bottom-bar mode", () => {
     expect(card?.classList.contains("fail")).toBe(false);
   });
 
-  test("Draft a reply under a Thread sends a turn about that Thread, not an empty agent bar", async () => {
+  test("Draft a reply puts a Reply chip for the Thread in the agent input; the user's words go with it", async () => {
     const client = fakeAgentClient();
     await mount(client, undefined, "e1");
     const draft = [...document.querySelectorAll<HTMLElement>(".reply button")].find((b) =>
       b.textContent?.includes("Draft a reply"),
     );
     await click(draft);
-    expect(client.sent.at(-1)?.text).toContain("Draft a reply to the thread I have open");
+    // Nothing is sent yet: the chip waits for instructions.
+    expect(client.sent).toHaveLength(0);
+    const chip = document.querySelector<HTMLElement>('.agent-attached-chip[data-type="reply"]');
+    expect(chip?.textContent).toContain("Reply: Re: Senior Rust engineer role");
+    await typeInBar("say thanks and that Friday works");
+    await submitBar();
+    const sent = client.sent.at(-1)?.text ?? "";
+    expect(sent).toContain("say thanks and that Friday works");
+    expect(sent).toContain(":reply[");
+    expect(sent).toContain("{name=e1}");
+    expect(document.querySelector(".agent-attached-chip")).toBeNull();
   });
 
   test("switching the Runtime mid-Session puts a line in the thread before the next turn", async () => {

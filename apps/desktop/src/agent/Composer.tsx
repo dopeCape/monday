@@ -25,6 +25,7 @@ import { ComposerEnvContext, useComposerEnvValue } from "./aui/context.tsx";
 import {
   carriesThreads,
   cleanLabel,
+  composerAttach,
   type DraggedThread,
   mentionDirectives,
   readThreadDrag,
@@ -124,6 +125,15 @@ function ComposerRoot(props: ComposerProps) {
   };
   const runtime = useMondayRuntime(agent, { onSend });
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Draft a reply (and any screen) attaches a chip here; the input takes focus for the user's words.
+  useEffect(
+    () =>
+      composerAttach.listen((items) => {
+        addAttached(items);
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }),
+    [],
+  );
   const env = useComposerEnvValue(agent, strings, now, onOpenThread, props.onOpenLink ?? openLink, {
     // Edit and resend: the turn's words go back in the bar, focused at their end.
     recall: (value) => {
