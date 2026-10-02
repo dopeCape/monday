@@ -430,6 +430,14 @@ export interface ViewThread {
   row?:
     | { key: string; message?: string | null | undefined; at?: string | null | undefined }
     | undefined;
+  /**
+   * Whether the scope's full-search `query` matches it: true or false when this
+   * reader knows (the Server matched it, or the Cache holds the View's members),
+   * absent when it does not (the SQL that loaded it already asked).
+   */
+  inQuery?: boolean | undefined;
+  /** What the query matched, in words ("invoice in the body"), when it was matched here. */
+  queryTerms?: readonly string[] | undefined;
 }
 
 /** A row's own key: the Thread's id, with the item's or Message's key for an item or Message row. */
@@ -508,7 +516,41 @@ export function scopeAdmits(
   }
   // A subject not known to this reader cannot refuse: the SQL that loaded it already asked.
   if (facts.subject_any?.length && subjectHolds(facts.subject_any, t) === false) return false;
+  // A search no reader here has run cannot refuse: the membership the SQL read already did.
+  if (facts.query && t.inQuery === false) return false;
   return true;
+}
+
+/** The scope without its search: the facts SQL applies in the clear, before any text is read. */
+export function scopeWithoutQuery(facts: ViewScopeFacts): ViewScopeFacts {
+  const { query: _query, ...rest } = facts;
+  return rest;
+}
+
+/**
+ * The facts a search scope's members are found within: every clear fact but the
+ * folder, which changes as mail is filed without a new Message (archiving, a
+ * Group, a Section) and is applied when the View is read. A Thread outside the
+ * folder today is still a member when it comes back.
+ */
+export function memberFacts(facts: ViewScopeFacts): ViewScopeFacts {
+  const { query: _query, folder: _folder, ...rest } = facts;
+  return { ...rest, folder: "any" };
+}
+
+/**
+ * What a search scope's membership depends on, as one key: the query and the
+ * facts it is found within. A new key starts the membership again.
+ */
+export function memberKey(facts: ViewScopeFacts): string | null {
+  if (!facts.query) return null;
+  const f = memberFacts(facts) as Record<string, unknown>;
+  const sorted = Object.fromEntries(
+    Object.keys(f)
+      .sort()
+      .map((k) => [k, f[k]]),
+  );
+  return JSON.stringify({ query: facts.query, facts: sorted });
 }
 
 /** A date part of the scope in words: "today", "the last 365 days", "since 2026-01-01". */
@@ -568,6 +610,15 @@ export function scopeReasons(
     const hit = facts.subject_any.find((w) => prefix.includes(w.toLowerCase()));
     reasons.push(
       hit ? `the subject holds "${hit}", in subject_any` : "the subject holds none of subject_any",
+    );
+  }
+  if (facts.query) {
+    reasons.push(
+      t.inQuery === true
+        ? `the search "${facts.query}" matches it${t.queryTerms?.length ? `: ${t.queryTerms.join("; ")}` : ""}`
+        : t.inQuery === false
+          ? `the search "${facts.query}" does not match it`
+          : `the search "${facts.query}" was not run on it here`,
     );
   }
   return { admitted: scopeAdmits(facts, t, ctx), reasons };

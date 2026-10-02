@@ -231,7 +231,13 @@ describe("The test pool is the newest Threads in scope", () => {
     // Every order is tried, though all are older than the newsletters; the rest fill the pool.
     for (const o of orders) expect(draft.threadIds).toContain(o);
     expect(draft.threadIds).toHaveLength(30);
-    expect(draft.test?.pool).toEqual({ kept: 0, fresh: 30, skipped: 185, scanned: 215 });
+    expect(draft.test?.pool).toEqual({
+      kept: 0,
+      fresh: 30,
+      skipped: 185,
+      scanned: 215,
+      prefer: ["money"],
+    });
     // Looking costs no judge call: only the tried Threads holding an amount are asked, once each.
     expect(judge.calls.length - before).toBe(5);
     await db.handle.db
@@ -280,7 +286,7 @@ describe("The test pool is the newest Threads in scope", () => {
     const draftId = (out.activity.preview as { draftId: string }).draftId;
     const draft = await intelligence.views.drafting.drafts.get(draftId);
     expect(draft.doc.id).toBe("v_a_custom_view_for");
-    expect(draft.test?.coverage?.fields.find((f) => f.field === "x:total")).toEqual({
+    expect(draft.test?.coverage?.fields.find((f) => f.field === "x:total")).toMatchObject({
       field: "x:total",
       label: "Total",
       resolved: 2,
@@ -292,6 +298,13 @@ describe("The test pool is the newest Threads in scope", () => {
       examples: ["405 INR", "105 INR"],
     });
     expect(draft.test?.coverage?.senders).toEqual([{ from: "auto-confirm@amazon.in", count: 5 }]);
+    // The card's numbers travel in the tool's preview, with the Threads behind each reason.
+    const preview = out.activity.preview as { draft: typeof draft };
+    const card = preview.draft.test;
+    expect(
+      card?.coverage?.fields.find((f) => f.field === "x:total")?.threads?.noCandidates,
+    ).toEqual([id("amazon-ship")]);
+    expect((card?.shown.length ?? 0) + (card?.rest?.length ?? 0)).toBe(card?.tried ?? -1);
     expect(out.text).toContain("In scope: 5 threads.");
     expect(out.text).toContain("Tried threads come from: auto-confirm@amazon.in 5.");
     expect(out.text).toContain(

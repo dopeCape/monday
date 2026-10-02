@@ -8,7 +8,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { ViewDraft, ViewTest } from "@monday/shared";
-import { SUPPORT_TODAY_VIEW } from "@monday/shared";
+import { AMAZON_ORDERS_VIEW, SUPPORT_TODAY_VIEW } from "@monday/shared";
 import { dom } from "@monday/ui/test-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
@@ -327,5 +327,135 @@ describe("the View card", () => {
     expect(noKey.el.textContent).toContain("Views that read your mail need a TypeSafe key.");
     await click(button(noKey.el, "Keep only the lanes that need no reading"));
     expect(noKey.calls.at(-1)).toEqual({ name: "pin", args: ["bd_1", { factsOnly: true }] });
+  });
+
+  test("coverage under the Blocks: the pool line, senders, a warning below the floor, reasons that filter the rows", async () => {
+    const order = (i: number) => ({
+      ...tried(i, "ordered", ["status ordered 90%"]),
+      subject: `Your order ${i}`,
+      from: "auto-confirm@amazon.com",
+    });
+    const orders: ViewDraft = {
+      ...DRAFT,
+      doc: AMAZON_ORDERS_VIEW,
+      test: {
+        ...TEST,
+        tried: 10,
+        // Three shown; the two with no amount are among the rest.
+        shown: [order(1), order(2), order(3)],
+        rest: [order(4), order(5), order(6), order(7), order(8), order(9), order(10)],
+        counts: { delivered: 0, shipped: 0, ordered: 10, unsure: 0, others: 0 },
+        widened: null,
+        inScope: 143,
+        pool: { kept: 0, fresh: 10, skipped: 4, scanned: 120, prefer: ["money"] },
+        coverage: {
+          senders: [{ from: "auto-confirm@amazon.com", count: 10 }],
+          fields: [
+            {
+              field: "x:order_total",
+              label: "Total",
+              resolved: 4,
+              none: 1,
+              unsure: 1,
+              noCandidates: 4,
+              notRead: 0,
+              capped: 0,
+              examples: ["$41.97"],
+              threads: {
+                resolved: ["t1", "t2", "t3", "t4"],
+                none: ["t5"],
+                unsure: ["t6"],
+                noCandidates: ["t7", "t8", "t9", "t10"],
+              },
+            },
+            {
+              field: "signal:status",
+              label: "status",
+              resolved: 10,
+              none: 0,
+              unsure: 0,
+              noCandidates: 0,
+              notRead: 0,
+              capped: 0,
+              examples: ["ordered"],
+              threads: { resolved: ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10"] },
+            },
+          ],
+        },
+      },
+    };
+    const { el } = await mount(orders);
+    expect(el.querySelector(".bc-pool")?.textContent).toBe(
+      "Tried on 10 of 143 matching threads, newest first, preferring ones with amounts, passed over 4 without them",
+    );
+    expect(el.querySelector(".bc-senders")?.textContent).toBe(
+      "Mostly from auto-confirm@amazon.com (10)",
+    );
+    const total = el.querySelector('.bc-cov[data-field="x:order_total"]');
+    expect(total?.querySelector(".lab")?.textContent).toBe("Total: 4 of 10 read");
+    // The total is charted and read on 40% of the tried: marked, with the reasons beside it.
+    expect(total?.getAttribute("data-warn")).toBe("true");
+    expect(total?.querySelector(".ic")?.getAttribute("aria-label")).toBe(
+      "Total read on fewer than 50% of the tried threads",
+    );
+    expect([...(total?.querySelectorAll(".bc-reason") ?? [])].map((r) => r.textContent)).toEqual([
+      "1 none of these",
+      "1 unsure",
+      "4 had no amounts",
+    ]);
+    const status = el.querySelector('.bc-cov[data-field="signal:status"]');
+    expect(status?.querySelector(".lab")?.textContent).toBe("status: 10 of 10 clear");
+    expect(status?.hasAttribute("data-warn")).toBe(false);
+    expect(el.querySelectorAll(".bc-row")).toHaveLength(3);
+    // A reason filters the rows to the tried Threads it names, the ones not shown included.
+    await click(total?.querySelector('[data-reason="noCandidates"]'));
+    expect([...el.querySelectorAll(".bc-row")].map((r) => r.getAttribute("data-thread"))).toEqual([
+      "t7",
+      "t8",
+      "t9",
+      "t10",
+    ]);
+    expect(el.querySelector(".bc-filter")?.textContent).toContain(
+      "Showing 4 threads: Total, 4 had no amounts",
+    );
+    await click(button(el, "Show all"));
+    expect(el.querySelectorAll(".bc-row")).toHaveLength(3);
+  });
+
+  test("a draft tried before coverage was kept renders as before", async () => {
+    const { el } = await mount({ ...DRAFT, doc: AMAZON_ORDERS_VIEW });
+    expect(el.querySelector(".bc-coverage")).toBeNull();
+    expect(el.querySelectorAll(".bc-row")).toHaveLength(10);
+    // Coverage without the Threads behind it: the reasons are words, not filters.
+    await act(async () => root?.unmount());
+    root = null;
+    const { el: el2 } = await mount({
+      ...DRAFT,
+      doc: AMAZON_ORDERS_VIEW,
+      test: {
+        ...TEST,
+        coverage: {
+          senders: [],
+          fields: [
+            {
+              field: "x:order_total",
+              label: "Total",
+              resolved: 9,
+              none: 0,
+              unsure: 0,
+              noCandidates: 3,
+              notRead: 0,
+              capped: 0,
+              examples: [],
+            },
+          ],
+        },
+      },
+    });
+    const reason = el2.querySelector('.bc-cov [data-reason="noCandidates"]');
+    expect(reason?.tagName).toBe("SPAN");
+    expect(el2.querySelector(".bc-pool")?.textContent).toBe(
+      "Tried on 12 of 4 matching threads, newest first",
+    );
   });
 });

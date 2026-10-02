@@ -17,6 +17,7 @@
 //   POST   /views/:id/done                    {threadId, done, messageCount}  ->  View   a checklist item
 //   GET    /views/:id/values                  {values}   every value the View's Extractions picked, by Thread
 //   POST   /views/values                      {workspace, threadIds}  ->  {values}   the values on these Threads
+//   GET    /views/:id/members                 {threadIds}  a search scope's members, ids only
 //   GET    /views/:id/reading                 {reading}  how far a pinned View has read its scope (null: never)
 //   POST   /views/:id/reading/pause|resume|stop  ->  {reading}
 // The Agent's drafts (slice 40): the card reads and acts on them; only the user's click saves.
@@ -162,6 +163,13 @@ export function viewRoutes(views: ViewIntelligence): Hono<AppEnv> {
     } catch (error) {
       return viewRefused(c, error);
     }
+  });
+
+  // A search scope's members, ids only (docs/spec/views.md, "Scope by a search").
+  app.get("/views/:id/members", async (c) => {
+    const view = await store.get(c.req.param("id"));
+    if (!view) return c.json({ error: "not_found" }, 404);
+    return c.json({ threadIds: await views.members.list(view.id) });
   });
 
   app.post("/views/:id/done", async (c) => {

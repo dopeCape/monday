@@ -62,7 +62,7 @@ Conditions (a Lane's "when", a query's "where", an action's "when"), three-value
 - Extraction tests: {"extract": id, "present": true}; {"extract": id, "at_least": 500} for money or a quantity; {"extract": id, "before": "end_of_month"} for a date; {"extract": id, "in": ["Acme"]} for text.
 - Lane tests (not inside a Lane's own condition): {"lane": "shipped"} or {"lane": ["red", "yellow"]}.
 
-Scope facts, all of which must hold (list alternatives inside one fact): "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any" and "to_any" as whole addresses (orders@shop.com); "from_domain" and "from_domain_not" as domains (shop.com); "subject_any" as words or phrases the subject holds, case aside ("order confirmation", "dependabot"); "folder" as inbox, any, archive, group:<id> or section:<id> (use any for mail the owner may have archived, such as receipts). "limit" is the most threads looked at, newest first. Narrow the scope to the mail that holds what the sentence asks for: the test tries the newest threads in it, and a View of orders tried on newsletters reads nothing.
+Scope facts, all of which must hold (list alternatives inside one fact): "received" or "active" as {"within": "today"}, {"within": "this_week"}, {"last_days": n} or {"since": "YYYY-MM-DD"}; "from_any" and "to_any" as whole addresses (orders@shop.com); "from_domain" and "from_domain_not" as domains (shop.com); "subject_any" as words or phrases the subject holds, case aside ("order confirmation", "dependabot"); "query" as a full search in the search box's language, run over the subjects, the people and the message text of the whole mailbox: words, "quoted phrases", from:, to:, subject:, has:attachment and -word to leave out (no dates, is:, in:, tag: or label: in it: dates go in received or active, the rest in folder). When the Agent ran a search that found exactly the right threads, put that search in the scope as "query" (with the senders or dates the results share as the other facts), such as {"query": ""order confirmation" -cancelled", "from_domain": ["flomattress.com"], "folder": "any"}: the View then holds every thread the search matches, older ones and ones the words are only inside of included. Prefer subject_any when the words are in the subject; use query when they are only in the text. "folder" as inbox, any, archive, group:<id> or section:<id> (use any for mail the owner may have archived, such as receipts). "limit" is the most threads looked at, newest first. Narrow the scope to the mail that holds what the sentence asks for: the test tries the newest threads in it, and a View of orders tried on newsletters reads nothing.
 
 Lanes (only when the sentence asks for groups like red, yellow and green, or statuses): tried in order, the first whose condition holds takes the thread, a thread that cannot be decided goes to Unsure by itself; order them from the most specific. "tone" is danger, warning, ok, info or muted. A View without lanes has "lanes": [].
 
@@ -190,6 +190,36 @@ export const VIEW_SETTINGS = {
     10,
     1000,
     "How many of the newest threads in scope code looks through, without asking anything, for ones whose text holds the values the View adds up.",
+  ),
+  "views.card.warn_below": setting({
+    type: z.number().min(0).max(1),
+    default: 0.5,
+    scope: "global",
+    section: "routing",
+    group: GROUP,
+    label: "Warn when a value reads on few tried threads",
+    help: "On a new view's card, a value or question its Blocks show is marked when it read on less than this share of the tried threads, with the reasons beside it.",
+  }),
+  "views.query.count_max": limit(
+    "Matches a search scope's try counts",
+    500,
+    10,
+    100_000,
+    "When a View's scope is a full search, its try counts the matches up to this many; above it the card says at least this many.",
+  ),
+  "views.query.scan_max": limit(
+    "Threads a search scope looks through",
+    20_000,
+    100,
+    1_000_000,
+    "The most threads, newest first, a View's full-search scope reads to find its members (after its other facts), in its try and when it is pinned. Older ones are not searched.",
+  ),
+  "views.query.page_size": limit(
+    "Threads per step of a search scope",
+    200,
+    10,
+    2000,
+    "How many threads a pinned View with a full-search scope searches before its place and the members it found are saved.",
   ),
   "views.nav.show_counts": setting({
     type: z.boolean(),
@@ -515,6 +545,14 @@ export const VIEW_SETTINGS = {
     "reading bar, no judge",
     "Reading waits for a TypeSafe key: {done} of {total}",
   ),
+  "strings.views.reading_search": str(
+    "reading bar, searching",
+    "Searching {done} of {total} threads: {found} match so far",
+  ),
+  "strings.views.reading_locked": str(
+    "reading bar, locked",
+    "Reading waits for monday to unlock: {done} of {total}",
+  ),
   "strings.views.reading_paused": str("reading bar, paused", "Reading paused at {done} of {total}"),
   "strings.views.reading_pause": str("pause reading", "Pause"),
   "strings.views.reading_resume": str("resume reading", "Resume"),
@@ -563,6 +601,72 @@ export const VIEW_SETTINGS = {
   "strings.views.value_title": str("value on the card", "{label}: {value}"),
   "strings.views.card.blocks": str("card: blocks heading", "What it shows"),
   "strings.views.card.actions": str("card: actions line", "Buttons: {actions}"),
+  "strings.views.card.coverage": str("card: coverage heading", "How each value read"),
+  "strings.views.card.read": str("card: a value read", "{label}: {resolved} of {tried} read"),
+  "strings.views.card.read_values": str(
+    "card: many values read",
+    "{label}: {values} values on {resolved} of {tried}",
+  ),
+  "strings.views.card.read_signal": str(
+    "card: a question read",
+    "{label}: {resolved} of {tried} clear",
+  ),
+  "strings.views.card.read_rows": str(
+    "card: a per-row question read",
+    "{label}: clear on {resolved} rows",
+  ),
+  "strings.views.card.reason.none": str("card: reason none of these", "{count} none of these"),
+  "strings.views.card.reason.unsure": str("card: reason unsure", "{count} unsure"),
+  "strings.views.card.reason.no_candidates": str(
+    "card: reason no candidates",
+    "{count} had no {kind}",
+  ),
+  "strings.views.card.reason.not_read": str("card: reason not read", "{count} not read"),
+  "strings.views.card.reason.capped": str("card: reason capped", "{count} cut at the limit"),
+  "strings.views.card.reason.resolved": str("card: reason read", "{count} read"),
+  "strings.views.card.kind.money": str("card: kind money", "amounts"),
+  "strings.views.card.kind.date": str("card: kind date", "dates"),
+  "strings.views.card.kind.reference": str("card: kind reference", "reference numbers"),
+  "strings.views.card.kind.tracking": str("card: kind tracking", "tracking numbers"),
+  "strings.views.card.kind.email": str("card: kind email", "addresses"),
+  "strings.views.card.kind.person": str("card: kind person", "names"),
+  "strings.views.card.kind.company": str("card: kind company", "company names"),
+  "strings.views.card.kind.link": str("card: kind link", "links"),
+  "strings.views.card.kind.quantity": str("card: kind quantity", "quantities"),
+  "strings.views.card.kind.item": str("card: kind item", "item lines"),
+  "strings.views.card.kind.sentence": str("card: kind sentence", "sentences"),
+  "strings.views.card.examples": str("card: example values", "For example: {examples}"),
+  "strings.views.card.pool": str(
+    "card: how the threads were chosen",
+    "Tried on {tried} of {count} matching threads, newest first",
+  ),
+  "strings.views.card.pool_at_least": str(
+    "card: how the threads were chosen, a floor",
+    "Tried on {tried} of at least {count} matching threads, newest first",
+  ),
+  "strings.views.card.pool_query": str(
+    "card: how a search scope's threads were chosen",
+    "Tried on the newest {tried} of {count} threads its search matched",
+  ),
+  "strings.views.card.pool_query_at_least": str(
+    "card: how a search scope's threads were chosen, a floor",
+    "Tried on the newest {tried} of at least {count} threads its search matched",
+  ),
+  "strings.views.card.pool_prefer": str("card: preferred threads", "preferring ones with {kinds}"),
+  "strings.views.card.pool_kept": str("card: kept threads", "{count} tried before"),
+  "strings.views.card.pool_skipped": str("card: passed over", "passed over {count} without them"),
+  "strings.views.card.senders": str("card: senders", "Mostly from {senders}"),
+  "strings.views.card.sender": str("card: one sender", "{from} ({count})"),
+  "strings.views.card.warn": str(
+    "card: few reads",
+    "{label} read on fewer than {pct} of the tried threads",
+  ),
+  "strings.views.card.filtered": str(
+    "card: rows filtered",
+    "Showing {count} threads: {label}, {reason}",
+  ),
+  "strings.views.card.filter_clear": str("card: clear the filter", "Show all"),
+  "strings.views.card.filter_title": str("card: filter by a reason", "Show these threads"),
 
   /* Actions on items (docs/spec/views.md, "Actions on items") */
   "strings.views.action.archive": str("action: archive", "Archive"),

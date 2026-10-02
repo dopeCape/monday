@@ -75,7 +75,9 @@ function coverageLines(d: ViewDraft, t: NonNullable<ViewDraft["test"]>): string[
   const out: string[] = [];
   const p = t.pool;
   out.push(
-    `In scope: ${t.inScope} threads.${
+    `In scope: ${t.inScopeAtLeast ? "at least " : ""}${t.inScope} threads${
+      p?.query ? " its search matched (the newest are tried)" : ""
+    }.${
       p
         ? ` Tried ${t.tried}: ${p.kept ? `${p.kept} tried before and still in scope, ` : ""}${p.fresh} newest in scope${
             p.skipped

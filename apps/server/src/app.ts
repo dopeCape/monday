@@ -324,6 +324,8 @@ export function createApp(options: AppOptions): Hono<AppEnv> {
     await intelligence.judgments.threadReady(workspaceId, threadId);
     await intelligence.meetings.threadReady(workspaceId, threadId);
     await intelligence.briefs.threadReady(workspaceId, threadId);
+    // A pinned View whose scope is a search tests the Thread (a Job; docs/spec/views.md).
+    await intelligence.views.threadReady(workspaceId, threadId);
   });
   // New Threads are routed on arrival, as route Jobs (slice 12), and start
   // the Workflows that listen for arrivals, as trigger Jobs (slice 16).

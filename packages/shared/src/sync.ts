@@ -26,7 +26,12 @@ import type { MeetingChange } from "./meetings.ts";
 import type { DecisionCandidate } from "./routing/index.ts";
 import type { FactsChange, SignalDefChange, SignalsChange } from "./signals.ts";
 import type { TemplateChange } from "./templates/types.ts";
-import type { ViewChange, ViewReadingChange, ViewValuesChange } from "./view/types.ts";
+import type {
+  ViewChange,
+  ViewMembersChange,
+  ViewReadingChange,
+  ViewValuesChange,
+} from "./view/types.ts";
 
 /* ------------------------------ Intents ------------------------------ */
 
@@ -247,7 +252,9 @@ export type ChangeKind =
   /** A Thread whose values a View's Extractions picked changed: headers only, the values are sealed. */
   | "view_values"
   /** How far a pinned View has read its own scope: counts only. */
-  | "view_reading";
+  | "view_reading"
+  /** Threads that joined or left a search scope's View: ids only. */
+  | "view_members";
 
 /**
  * A Workflow Run moved: it started, reached a Step, paused for an approval or
@@ -473,7 +480,8 @@ export type ChangePayload =
   | { kind: "template"; payload: TemplateChange }
   | { kind: "view"; payload: ViewChange }
   | { kind: "view_values"; payload: ViewValuesChange }
-  | { kind: "view_reading"; payload: ViewReadingChange };
+  | { kind: "view_reading"; payload: ViewReadingChange }
+  | { kind: "view_members"; payload: ViewMembersChange };
 
 export type Change = ChangePayload & {
   seq: number;

@@ -8,7 +8,10 @@
 // its Thread stale until they are read again. A View's Blocks are computed
 // on the Device from thread_signals, thread_facts and view_values in SQLite
 // (viewThreadsSql), so opening a View never waits on the network (ADR 0011)
-// and works offline with the answers already there.
+// and works offline with the answers already there. A View whose scope is a
+// full search reads its members from `view_members` (ids the Server found by
+// reading the mail, from the feed's `view_members` rows and GET
+// /views/:id/members), so its query works offline too.
 
 import type {
   ExtractedValue,
@@ -18,6 +21,7 @@ import type {
   ViewChange,
   ViewDoc,
   ViewDone,
+  ViewMembersChange,
   ViewPlacement,
   ViewReadingChange,
   ViewScopeFacts,
@@ -53,23 +57,47 @@ export const VIEWS_SCHEMA_SQL = `
   create table if not exists view_values_stale (
     thread_id text primary key
   );
+  create table if not exists view_members (
+    view_id text not null,
+    thread_id text not null,
+    primary key (view_id, thread_id)
+  );
   create table if not exists view_reading (
     view_id text primary key,
     status text not null,
     reason text,
     done integer not null default 0,
-    total integer not null default 0
+    total integer not null default 0,
+    phase text,
+    found integer
   );
 `;
 
 /** How far a pinned View has read its scope, from the feed (counts only). */
 export function viewReadingUpsert(r: ViewReadingChange): Statement {
   return {
-    sql: `insert into view_reading (view_id, status, reason, done, total) values (?, ?, ?, ?, ?)
+    sql: `insert into view_reading (view_id, status, reason, done, total, phase, found) values (?, ?, ?, ?, ?, ?, ?)
           on conflict (view_id) do update set status = excluded.status, reason = excluded.reason,
-            done = excluded.done, total = excluded.total`,
-    params: [r.viewId, r.status, r.reason, r.done, r.total],
+            done = excluded.done, total = excluded.total, phase = excluded.phase, found = excluded.found`,
+    params: [r.viewId, r.status, r.reason, r.done, r.total, r.phase ?? null, r.found ?? null],
   };
+}
+
+/** Who joined or left a search scope's View, from the feed (ids only); `reset` empties it first. */
+export function viewMembersStatements(c: ViewMembersChange): Statement[] {
+  const out: Statement[] = [];
+  if (c.reset) out.push({ sql: "delete from view_members where view_id = ?", params: [c.viewId] });
+  for (const id of c.removed)
+    out.push({
+      sql: "delete from view_members where view_id = ? and thread_id = ?",
+      params: [c.viewId, id],
+    });
+  for (const id of c.added)
+    out.push({
+      sql: "insert or ignore into view_members (view_id, thread_id) values (?, ?)",
+      params: [c.viewId, id],
+    });
+  return out;
 }
 
 /** One View's reading, as its bar shows it. */
@@ -82,6 +110,9 @@ export function rowToViewReading(r: Row): ViewReadingChange {
     reason: (r.reason ?? null) as ViewReadingChange["reason"],
     done: Number(r.done ?? 0),
     total: Number(r.total ?? 0),
+    ...(r.phase === "search" || r.phase === "read"
+      ? { phase: r.phase, found: Number(r.found ?? 0) }
+      : {}),
   };
 }
 
@@ -236,9 +267,18 @@ export function viewThreadsSql(
   since: Date | null,
   limit: number,
   owner = "",
+  viewId?: string,
 ): { sql: string; params: SqlParam[] } {
   const where: string[] = ["t.deleted = 0"];
   const params: SqlParam[] = [owner.toLowerCase()];
+  if (facts.query) {
+    // A search scope: its members, found on the Server and mirrored here, stand in for the
+    // search; a View whose members have not reached this Cache shows none yet.
+    where.push(
+      "exists (select 1 from view_members vm where vm.view_id = ? and vm.thread_id = t.id)",
+    );
+    params.push(viewId ?? "");
+  }
   const folder = facts.folder ?? "inbox";
   if (folder === "inbox") where.push("t.archived = 0 and t.snoozed_until is null");
   else if (folder === "archive") where.push("t.archived = 1");

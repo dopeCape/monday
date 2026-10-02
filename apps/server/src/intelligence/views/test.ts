@@ -11,6 +11,14 @@
 // drawn small for the card, and the card gets views.test.shown of them
 // spread across the Lanes, least confident first, with the answers and
 // values behind each, plus the counts over all of them.
+//
+// A scope with a full-search `query` (docs/spec/views.md, "Scope by a
+// search") is tried on the newest Threads the search matches within the
+// scope's other facts: the full search runs with those facts as its clear
+// filters, counts its matches up to views.query.count_max (looking through at
+// most views.query.scan_max Threads; past either the count is "at least"), and
+// the pool takes the newest of them. A Thread tried before is matched again on
+// its own.
 
 import type {
   ExtractedValue,
@@ -34,6 +42,7 @@ import {
   correctionAgreement,
   DEFAULT_VALUE_WORDS,
   OTHERS_LANE,
+  parseScopeQuery,
   pickShown,
   placementCertainty,
   placementReasons,
@@ -42,6 +51,7 @@ import {
   readingOf,
   scopeAdmits,
   scopeSince,
+  scopeWithoutQuery,
   signalName,
   UNSURE_LANE,
   viewBase,
@@ -50,9 +60,10 @@ import {
   viewSignalDefs,
   widenScope,
 } from "@monday/shared";
+import { type SQL, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
 import type { Mailstore } from "../../mailstore/index.ts";
-import { countViewThreads, loadViewThreads } from "../../views/threads.ts";
+import { countViewThreads, loadViewThreads, scopeConditions } from "../../views/threads.ts";
 import type { HostedRuntime } from "../runtime/index.ts";
 import type { PriorAnswers, Signals } from "../signals/index.ts";
 import { eachPool } from "../signals/pool.ts";
@@ -82,6 +93,8 @@ export interface TestSettings {
   candidatesMax?: number | undefined;
   /** views.extract.many.max: the same for many values. */
   manyMax?: number | undefined;
+  /** A search scope: views.query.count_max, views.query.scan_max and the full search's paging. */
+  query?: { countMax: number; scanMax: number; pageSize: number; concurrency: number } | undefined;
 }
 
 export interface TestRun {
@@ -127,23 +140,61 @@ export async function runViewTest(
     since: scopeSince(f, ctx.now, ctx.zone),
     scope: { facts: f, now: ctx.now, zone: ctx.zone },
   });
-  const admitted = async (f: typeof facts, limit: number, exclude: readonly Id[] = []) =>
-    limit <= 0
-      ? []
-      : (await loadViewThreads(db, { ...scoped(f), limit, exclude })).filter((t) =>
-          scopeAdmits(f, t, ctx),
-        );
+  // A search scope: the full search over the scope's other facts, its matches newest first.
+  const query = facts.query ? parseScopeQuery(facts.query) : null;
+  const searches = new Map<string, { ids: Id[]; atLeast: boolean }>();
+  const search = async (f: typeof facts) => {
+    const key = JSON.stringify(f);
+    const known = searches.get(key);
+    if (known || !query) return known ?? { ids: [], atLeast: false };
+    const q = settings.query ?? { countMax: 500, scanMax: 20_000, pageSize: 500, concurrency: 3 };
+    const conditions: SQL[] = scopeConditions(workspaceId, scopeWithoutQuery(f), ctx.now, ctx.zone);
+    const events = await deps.mailstore.searchFull(workspaceId, {
+      query,
+      limit: q.countMax,
+      pageSize: q.pageSize,
+      concurrency: q.concurrency,
+      maxScan: q.scanMax,
+      ...(conditions.length ? { where: sql.join(conditions, sql` and `) } : {}),
+    });
+    const found = { ids: [] as Id[], atLeast: false };
+    for await (const e of events) {
+      if (e.type === "hit") found.ids.push(e.thread.id);
+      else if (e.type === "done") found.atLeast = e.reason === "limit";
+    }
+    searches.set(key, found);
+    return found;
+  };
+  /** The Threads, in the order of `ids`, the search having matched them. */
+  const matchedThreads = async (f: typeof facts, ids: readonly Id[]) => {
+    if (ids.length === 0) return [];
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    return (await loadViewThreads(db, { ...scoped(scopeWithoutQuery(f)), ids, limit: ids.length }))
+      .map((t) => ({ ...t, inQuery: true }))
+      .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+  };
+  const admitted = async (f: typeof facts, limit: number, exclude: readonly Id[] = []) => {
+    if (limit <= 0) return [];
+    if (query) {
+      const skip = new Set(exclude);
+      const ids = (await search(f)).ids.filter((id) => !skip.has(id)).slice(0, limit);
+      return (await matchedThreads(f, ids)).filter((t) => scopeAdmits(f, t, ctx));
+    }
+    return (await loadViewThreads(db, { ...scoped(f), limit, exclude })).filter((t) =>
+      scopeAdmits(f, t, ctx),
+    );
+  };
+  const sizeOf = async (f: typeof facts, cap: number) =>
+    query ? (await search(f)).ids.length : countViewThreads(db, scoped(f), cap);
 
   // The scope's real size; a quiet scope's dates widen so the test has Threads to try.
-  const inScope = Math.min(
-    await countViewThreads(db, scoped(facts), settings.maxThreads + 1),
-    doc.scope.limit,
-  );
+  const inScope = Math.min(await sizeOf(facts, settings.maxThreads + 1), doc.scope.limit);
+  const inScopeAtLeast = query ? (await search(facts)).atLeast : false;
   let poolFacts = facts;
   let widened: ViewTest["widened"] = null;
   if (inScope < settings.pool && (facts.received || facts.active)) {
     const wide = widenScope(facts, settings.widenDays);
-    if ((await countViewThreads(db, scoped(wide), settings.pool)) > inScope) {
+    if ((await sizeOf(wide, settings.pool)) > inScope) {
       const within = (facts.received ?? facts.active) as { within?: string };
       poolFacts = wide;
       widened = {
@@ -163,12 +214,23 @@ export async function runViewTest(
   let kept = options.threadIds?.length
     ? (
         await loadViewThreads(db, {
-          ...scoped(poolFacts),
+          ...scoped(scopeWithoutQuery(poolFacts)),
           ids: options.threadIds,
           limit: options.threadIds.length,
         })
-      ).filter((t) => scopeAdmits(poolFacts, t, ctx))
+      ).filter((t) => scopeAdmits(scopeWithoutQuery(poolFacts), t, ctx))
     : [];
+  if (query && kept.length) {
+    // A Thread tried before is in a search scope when the search matches it, however old.
+    const known = new Set((await search(poolFacts)).ids);
+    const rest = kept.filter((t) => !known.has(t.id)).map((t) => t.id);
+    const matched = rest.length
+      ? await deps.mailstore.matchThreads(workspaceId, query, rest)
+      : new Map<Id, { matched: boolean }>();
+    kept = kept
+      .map((t) => ({ ...t, inQuery: known.has(t.id) || matched.get(t.id)?.matched === true }))
+      .filter((t) => scopeAdmits(poolFacts, t, ctx));
+  }
   const before = new Map((options.threadIds ?? []).map((id, i) => [id, i]));
   kept.sort((a, b) => (before.get(a.id) ?? 0) - (before.get(b.id) ?? 0));
   kept = kept.slice(0, settings.pool);
@@ -416,17 +478,16 @@ export async function runViewTest(
   const blockActions = [...new Set(doc.blocks.flatMap((b) => b.actions ?? []))].flatMap(
     (id) => doc.actions.find((a) => a.id === id) ?? [],
   );
-  const shown: ViewTriedThread[] = [];
-  for (const p of picked) {
+  const triedRow = (p: (typeof tried)[number]): ViewTriedThread | null => {
     const t = byId.get(p.id);
-    if (!t) continue;
+    if (!t) return null;
     const row = {
       thread: t,
       threads: [t],
       lane: doc.lanes.length ? p.lane : null,
       placement: p.placement,
     };
-    shown.push({
+    return {
       threadId: t.id,
       from: t.from ?? "",
       subject: t.subject ?? "",
@@ -455,19 +516,32 @@ export async function runViewTest(
         };
       }),
       actions: blockActions.filter((a) => actionShows(base, a, row)).map((a) => a.label),
-    });
-  }
+    };
+  };
+  const shown = picked.flatMap((p) => triedRow(p) ?? []);
+  // The rest of the tried Threads, so the card's coverage can show the ones a reason names.
+  const shownIds = new Set(shown.map((r) => r.threadId));
+  const rest = tried.filter((p) => !shownIds.has(p.id)).flatMap((p) => triedRow(p) ?? []);
   const examples = Object.values(doc.examples).flat().length;
   return {
     test: {
       tried: threads.length,
       shown,
+      rest,
       counts: lanes.counts,
       widened,
       empty: threads.length === 0,
       inScope,
+      ...(inScopeAtLeast ? { inScopeAtLeast: true } : {}),
       agreement: examples ? correctionAgreement(doc, byId, lanes.lanesOf, ctx.rules) : null,
-      pool: { kept: kept.length, fresh: fresh.length, skipped, scanned },
+      pool: {
+        kept: kept.length,
+        fresh: fresh.length,
+        skipped,
+        scanned,
+        ...(kinds.length ? { prefer: kinds } : {}),
+        ...(query ? { query: true } : {}),
+      },
       coverage,
       changes: [],
       needsJudge: viewReadsSignals(doc) && (!judge || unanswered),

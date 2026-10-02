@@ -83,6 +83,7 @@ describe("migrations", () => {
       "threads",
       "view_backfills",
       "view_drafts",
+      "view_members",
       "view_versions",
       "views",
       "voice_profiles",

@@ -13,11 +13,12 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { workspaces } from "./schema.ts";
+import { threads, workspaces } from "./schema.ts";
 
 /** Raw bytes, as schema.ts declares them. */
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
@@ -110,7 +111,7 @@ export const viewBackfills = pgTable(
     status: text("status")
       .$type<"running" | "waiting" | "paused" | "done" | "cancelled">()
       .notNull(),
-    reason: text("reason").$type<"budget" | "no_judge" | "level">(),
+    reason: text("reason").$type<"budget" | "no_judge" | "level" | "locked">(),
     /** The View version the walk reads for. */
     version: integer("version").notNull(),
     /** The stored Signal ids it asks (only the questions a new version changed). */
@@ -122,9 +123,49 @@ export const viewBackfills = pgTable(
     asked: integer("asked").notNull().default(0),
     calls: integer("calls").notNull().default(0),
     lastError: text("last_error"),
+    /**
+     * A search scope (docs/spec/views.md, "Scope by a search"): the key of the query
+     * and facts its members were found for (memberKey), whether every Thread its
+     * other facts admit was searched, how many matched, and whether questions were
+     * held back while the members were found (no judge, budget, level), so the walk
+     * reads the members again once it may ask.
+     */
+    membersKey: text("members_key"),
+    membersDone: boolean("members_done").notNull().default(false),
+    found: integer("found").notNull().default(0),
+    asksHeld: boolean("asks_held").notNull().default(false),
     startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true, mode: "date" }),
   },
   (t) => [index("view_backfills_workspace_idx").on(t.workspaceId)],
+);
+
+/**
+ * A search scope's members (docs/spec/views.md, "Scope by a search"): the
+ * Threads a pinned View's full-search `query` matched, found on the Server by
+ * reading the mail in memory and kept as ids only (nothing from the mail), at
+ * the Thread's version when it was matched, so a new Message tests it again.
+ * The Changes feed carries the same ids to the Device's Cache.
+ */
+export const viewMembers = pgTable(
+  "view_members",
+  {
+    viewId: text("view_id")
+      .notNull()
+      .references(() => views.id, { onDelete: "cascade" }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** The Thread's message count when it matched. */
+    messageCount: integer("message_count").notNull(),
+    matchedAt: timestamp("matched_at", { withTimezone: true, mode: "date" }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.viewId, t.threadId] }),
+    index("view_members_thread_idx").on(t.threadId),
+  ],
 );
