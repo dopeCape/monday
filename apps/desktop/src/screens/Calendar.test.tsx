@@ -308,6 +308,27 @@ describe("the Calendar screen", () => {
     expect(el.querySelector(".cal-waiting")?.textContent).toContain("Podcast recording");
   });
 
+  test("clicking another Event while one is open moves the popover to it without closing it first", async () => {
+    const source = fixtureCalendar({ calendars, events, invites });
+    await mount(<Calendar source={source} now={NOW} />);
+    const el = host as HTMLElement;
+    const block = (text: string) =>
+      [...el.querySelectorAll<HTMLElement>(".cal-block")].find((b) =>
+        b.textContent?.includes(text),
+      ) as Element;
+    await pointer(block("Podcast recording"), "pointerdown", 10, 10);
+    await pointer(window, "pointerup", 10, 10);
+    const first = popover();
+    expect(first?.querySelector("h3")?.textContent).toBe("Podcast recording");
+    // The press on the other Event leaves the open popover in place.
+    await pointer(block("Aoife"), "pointerdown", 10, 10);
+    expect(popover()).toBe(first);
+    await pointer(window, "pointerup", 10, 10);
+    // The same popover, not a new one with its entry animation: it now shows the other Event.
+    expect(popover()).toBe(first);
+    expect(popover()?.querySelector("h3")?.textContent).toContain("Aoife");
+  });
+
   test("an Event's detail: when, the guests and their answers, Join, and Yes, Maybe, No on an invite", async () => {
     const source = fixtureCalendar({ calendars, events, invites });
     const opened: string[] = [];

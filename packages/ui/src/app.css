@@ -5667,6 +5667,8 @@ button.prov {
   background: var(--overlay);
   box-shadow: var(--shadow-lg);
   animation: cal-pop-in var(--t-fast) var(--ease);
+  /* Its own layer from the first frame: WebKit otherwise promotes it mid-animation and it flashes. */
+  will-change: opacity, transform;
 }
 .cal-pop-create {
   width: 380px;
@@ -5674,7 +5676,7 @@ button.prov {
 @keyframes cal-pop-in {
   from {
     opacity: 0;
-    transform: translateY(4px) scale(0.985);
+    transform: translateY(4px);
   }
 }
 .cal-dot {

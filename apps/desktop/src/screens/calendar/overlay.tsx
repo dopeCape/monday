@@ -81,6 +81,9 @@ export function Popover({ anchor, onClose, label, className, children }: Popover
       if (!el || !target || el.contains(target)) return;
       // A press inside another floating layer (a dialog it opened) is not outside.
       if ((target as Element).closest?.(".cal-dialog-scrim, .cal-editor-scrim, .cal-float")) return;
+      // A press on another Event is not a close: its release opens that Event in this
+      // same popover, so it moves instead of blinking out and fading back in.
+      if ((target as Element).closest?.(".cal-ev")) return;
       onClose();
     };
     document.addEventListener("pointerdown", onDown, true);
