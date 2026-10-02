@@ -12,6 +12,7 @@ import { CheckIcon, TrashIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { chordLabel, chordOf } from "../keyboard/keymaps.ts";
 import { useActiveKeymap } from "../keyboard/useKeymap.ts";
+import { DrawerButton } from "../shell/phone.tsx";
 import { useShell } from "../shell/Shell.tsx";
 import type { Composer } from "./compose/composer.ts";
 
@@ -103,7 +104,7 @@ export function Drafts({ composer, now, onOpen, toastMs }: DraftsProps) {
   return (
     <div className="main inbox drafts">
       <section className="col list" aria-label={title}>
-        <ColHead title={title} count={drafts.length || undefined} />
+        <ColHead title={title} count={drafts.length || undefined} leading={<DrawerButton />} />
         {picked.length > 0 ? (
           <div className="drafts-bar" role="toolbar" aria-label={title}>
             <span>{s["strings.inbox.selected"].replace("{n}", String(picked.length))}</span>

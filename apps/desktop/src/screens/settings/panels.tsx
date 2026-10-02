@@ -630,10 +630,46 @@ registerPanel("ai", "Activity log", ActivityPanel, {
 
 /* ------------------------------ Sync server ------------------------------ */
 
-/** The Server's mode with health. */
+/** The Server's mode with health; on a phone or tablet, the one line about the Server it was paired with. */
 export function ServerPanel(_: PanelProps) {
+  const shell = useShell();
   const screen = useSettingsScreen();
+  if (shell.mobile) return <PairedServerCard />;
   return <Server {...(screen.serverProps ?? {})} part="server" />;
+}
+
+/** The host of a Server URL, for the line ("mail.example.com"); the URL itself when it does not parse. */
+export function serverHost(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * A phone has no Sidecar and nothing to choose: it reads mail through the
+ * Server it paired with (ADR 0006). The card says which, and whether it is
+ * reachable now.
+ */
+export function PairedServerCard() {
+  const shell = useShell();
+  const s = shell.settings;
+  const paired = shell.cloud ?? shell.server?.target ?? null;
+  const host = paired ? serverHost(paired.baseUrl) : null;
+  const line =
+    host === null
+      ? s["strings.phone.unpaired"]
+      : fill(s[shell.server ? "strings.phone.connected" : "strings.phone.not_connected"], {
+          server: host,
+        });
+  return (
+    <Card
+      title={line}
+      hint={s["strings.phone.server_help"]}
+      attrs={{ "data-panel": "paired-server", "data-state": shell.server ? "online" : "offline" }}
+    />
+  );
 }
 registerPanel("server", "Server", ServerPanel, {
   title: "strings.server.talking_to",

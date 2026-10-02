@@ -112,6 +112,39 @@
   --rail-w: 60px;
 }
 
+/* The phone form (data-form="phone", set by the shell under
+   appearance.mobile_breakpoint): one column at a time, touch first. A tap
+   target is never under --tap; the safe-area tokens keep content clear of a
+   notch, rounded corners and the home indicator (index.html asks for
+   viewport-fit=cover so they are non-zero). Type grows a step on the
+   comfortable density so text reads at arm's length. */
+:root {
+  --tap: 30px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+:root[data-form="phone"] {
+  --tap: 44px;
+  --head-h: 52px;
+  --pad: 16px;
+  --gap: 10px;
+  --nav-row-h: 44px;
+  --bar-h: 52px;
+  --list-row-py: 12px;
+  --icon-btn: 20px;
+}
+:root[data-form="phone"][data-density="comfortable"] {
+  --fs-xs: 12.5px;
+  --fs-sm: 13.5px;
+  --fs-md: 15.5px;
+  --fs-lg: 17px;
+  --fs-xl: 19px;
+  --fs-2xl: 23px;
+  --fs-3xl: 28px;
+}
+
 /* ============================ GRAPHITE (default) ============================ */
 :root,
 :root[data-palette="graphite"][data-theme="light"] {

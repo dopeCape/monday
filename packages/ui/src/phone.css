@@ -1,0 +1,523 @@
+/* ------------------------------------------------------------------
+   monday · the phone form
+   Under appearance.mobile_breakpoint the shell sets data-form="phone" on the
+   root (and data-mobile="ios" or "android" on a phone or tablet OS). One
+   column at a time: the sidebar is a drawer, the list fills the screen, the
+   reader and compose are full screens pushed over it, and the agent is a
+   bottom sheet whose bar sits on the home indicator's safe area. Touch
+   first: every target at least --tap, nothing that only shows on hover, no
+   key hints. Loaded after app.css and views.css so its rules win at equal
+   specificity.
+------------------------------------------------------------------ */
+
+/* ---------- The page: safe areas, no rubber band, no tap flash, no zoom on focus ---------- */
+:root[data-form="phone"] body {
+  padding: calc(var(--titlebar-h) + var(--safe-top)) var(--safe-right) 0 var(--safe-left);
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+:root[data-form="phone"] .app {
+  height: calc(100vh - var(--titlebar-h) - var(--safe-top));
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh with a vh fallback */
+  height: calc(100dvh - var(--titlebar-h) - var(--safe-top));
+}
+:root[data-form="phone"] :is(button, a, [role="option"], label) {
+  touch-action: manipulation;
+}
+/* iOS zooms into any field under 16px when it takes focus. */
+:root[data-form="phone"] :is(input, textarea, select, [contenteditable="true"]) {
+  font-size: max(16px, var(--fs-md));
+}
+/* Momentum scrolling that stays in its own pane: a list scrolled to its end
+   does not drag the page or the pane behind it. */
+:root[data-form="phone"]
+:is(
+  .col-body,
+  .vlist,
+  .reader-body,
+  .settings-body,
+  .settings-nav,
+  .agent-thread,
+  .page-wrap,
+  .c-body,
+  .nav,
+  .pop,
+  .cmdk
+) {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+/* Key hints have no keyboard to point at. */
+:root[data-form="phone"] :is(.kbd, kbd, .search-key) {
+  display: none;
+}
+
+/* ---------- The bar over a page that has no list header (Routing, Workflows) ---------- */
+.phone-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+}
+.phone-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--head-h);
+  padding: 0 calc(var(--pad) - 8px);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.phone-bar h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+/* ---------- Tap targets ---------- */
+:root[data-form="phone"] .btn {
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .btn.icon {
+  width: var(--tap);
+  min-width: var(--tap);
+}
+:root[data-form="phone"] .btn.sm {
+  min-height: 36px;
+  padding: 0 12px;
+}
+:root[data-form="phone"] :is(.nav-item, .pop-item, .settings-nav .nav-item) {
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .col-head {
+  gap: 2px;
+  padding: 0 calc(var(--pad) - 8px);
+}
+:root[data-form="phone"] .col-head h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-form="phone"] .col-head .count {
+  margin-left: 6px;
+}
+
+/* ---------- The drawer: the sidebar from the left ---------- */
+.phone-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+.phone-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  animation: fade var(--t-med) var(--ease);
+}
+.phone-drawer-in {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(320px, 86vw);
+  padding: var(--safe-top) 0 var(--safe-bottom) var(--safe-left);
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in var(--t-med) var(--ease);
+}
+.phone-drawer-in > .nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 0;
+}
+/* The drawer's own fade is the leave the exit hook waits for. */
+.phone-drawer.leaving {
+  pointer-events: none;
+  animation: fade-out var(--t-med) var(--ease-in) forwards;
+}
+.phone-drawer.leaving .phone-drawer-in {
+  animation: drawer-out var(--t-med) var(--ease-in) forwards;
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes drawer-out {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+/* ---------- The list: two lines per row, the actions behind a tap ---------- */
+:root[data-form="phone"] .list-search {
+  width: auto;
+  flex: 1 1 120px;
+  min-width: 0;
+  height: 36px;
+}
+:root[data-form="phone"] .list-search:focus-within,
+:root[data-form="phone"] .list-search.on {
+  width: auto;
+  flex-basis: 200px;
+}
+:root[data-form="phone"] .col.list .col-head > h2 + .count,
+:root[data-form="phone"] .col.list .col-head:has(.list-search.on) > h2 {
+  display: none;
+}
+:root[data-form="phone"] .filter-btn {
+  font-size: 0;
+  gap: 0;
+  width: var(--tap);
+  padding: 0;
+}
+:root[data-form="phone"] .filter-btn .filter-n {
+  font-size: var(--fs-xs);
+}
+:root[data-form="phone"] .row {
+  grid-template-columns: 10px minmax(0, 1fr) auto var(--tap);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 3px;
+  padding: var(--list-row-py) 4px var(--list-row-py) var(--pad);
+  min-height: 68px;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+:root[data-form="phone"] .row:hover {
+  background: transparent;
+}
+:root[data-form="phone"] .row.on {
+  background: transparent;
+}
+:root[data-form="phone"] .row.picked {
+  background: var(--active);
+}
+:root[data-form="phone"] .row .dot {
+  grid-column: 1;
+  grid-row: 1;
+}
+:root[data-form="phone"] .row .from {
+  grid-column: 2;
+  grid-row: 1;
+}
+:root[data-form="phone"] .row .time {
+  grid-column: 3;
+  grid-row: 1;
+}
+:root[data-form="phone"] .row .subj {
+  grid-column: 2 / span 2;
+  grid-row: 2;
+}
+:root[data-form="phone"] .row .subj .snip {
+  display: block;
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+:root[data-form="phone"] .row .meta {
+  display: none;
+}
+:root[data-form="phone"] .row .actions {
+  display: none;
+}
+:root[data-form="phone"] .row:hover :is(.time, .meta) {
+  visibility: visible;
+}
+:root[data-form="phone"] .row .check {
+  display: none;
+}
+:root[data-form="phone"] .col.list.selecting .row .check {
+  display: inline-grid;
+  top: calc(var(--list-row-py) + 4px);
+  margin-top: 0;
+}
+:root[data-form="phone"] .col.list.selecting .row .dot {
+  display: none;
+}
+/* A tap leaves the row "hovered" on touch screens: the dot stays. */
+:root[data-form="phone"] .row:hover .dot {
+  visibility: visible;
+}
+.row .row-more {
+  display: none;
+}
+:root[data-form="phone"] .row .row-more {
+  display: inline-flex;
+  grid-column: 4;
+  grid-row: 1 / span 2;
+  color: var(--fg-faint);
+}
+/* A row on its way across: the strip it uncovers says what letting go does,
+   in the action's color once it has gone far enough. */
+:root[data-form="phone"] .row[data-swipe] {
+  transform: translateX(var(--swipe-x, 0px));
+  transition: none;
+  z-index: 1;
+  background: var(--panel);
+  box-shadow: calc(-1 * var(--swipe-x, 0px)) 0 0 0 var(--hover);
+}
+:root[data-form="phone"] .row[data-swipe-armed][data-swipe="right"] {
+  box-shadow: calc(-1 * var(--swipe-x, 0px)) 0 0 0 var(--accent-soft);
+}
+:root[data-form="phone"] .row[data-swipe-armed][data-swipe="left"] {
+  box-shadow: calc(-1 * var(--swipe-x, 0px)) 0 0 0
+    color-mix(in srgb, var(--warning) 22%, transparent);
+}
+/* Pull to sync: the line above the rows grows with the finger. */
+.pull {
+  display: grid;
+  place-items: end center;
+  overflow: hidden;
+  padding-bottom: 8px;
+  color: var(--fg-faint);
+  font-size: var(--fs-sm);
+}
+.pull[data-state="ready"],
+.pull[data-state="syncing"] {
+  color: var(--fg);
+}
+/* The last rows clear the agent bar and the home indicator. */
+:root[data-form="phone"] .vlist {
+  padding-bottom: calc(var(--bar-h) + 28px + var(--safe-bottom));
+}
+:root[data-form="phone"] .sel-bar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: var(--head-h);
+}
+:root[data-form="phone"] .sel-actions {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* ---------- Menus become action sheets along the bottom ---------- */
+:root[data-form="phone"] .pop {
+  position: fixed;
+  top: auto;
+  left: 8px;
+  right: 8px;
+  bottom: calc(8px + var(--safe-bottom));
+  min-width: 0;
+  max-height: 70dvh;
+  overflow-y: auto;
+  z-index: 65;
+}
+:root[data-form="phone"] .pop-item {
+  font-size: var(--fs-md);
+}
+
+/* ---------- The reader: a full screen pushed over the list ---------- */
+:root[data-form="phone"] .reader.sheet {
+  width: 100%;
+  left: 0;
+  border-left: 0;
+  box-shadow: none;
+  animation: push-in var(--t-med) var(--ease);
+}
+:root[data-form="phone"] .reader.sheet.leaving {
+  animation: push-out var(--t-med) var(--ease-in) forwards;
+}
+@keyframes push-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes push-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+:root[data-form="phone"] .reader-inner {
+  padding: 20px var(--pad) calc(var(--bar-h) + 40px + var(--safe-bottom));
+}
+:root[data-form="phone"] .reader h1 {
+  font-size: var(--fs-xl);
+}
+:root[data-form="phone"] .reader :is(iframe, img, video, table) {
+  max-width: 100%;
+}
+:root[data-form="phone"] .reader .col-head {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* ---------- The agent: its bar along the bottom, its panel a bottom sheet ---------- */
+:root[data-form="phone"] .agent-dock,
+:root[data-form="phone"][data-list="stream"] .main.has-sheet .agent-dock {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  transform: none;
+  padding: 8px calc(8px + var(--safe-right)) calc(8px + var(--safe-bottom))
+    calc(8px + var(--safe-left));
+}
+:root[data-form="phone"] .agent-bar {
+  min-height: var(--bar-h);
+  border-radius: 16px;
+}
+:root[data-form="phone"] .agent-panel {
+  max-height: calc(100dvh - var(--safe-top) - var(--bar-h) - 40px);
+  margin-bottom: 8px;
+  border-radius: 16px;
+}
+:root[data-form="phone"] .agent-dock:has(.agent-panel)::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+/* The reader fills the screen: its own reply box is at the bottom, so the
+   bar steps aside until Ask opens the sheet. */
+:root[data-form="phone"] .main.has-sheet .agent-dock:not(:has(.agent-panel)) {
+  display: none;
+}
+
+/* ---------- Compose: a full screen ---------- */
+:root[data-form="phone"] .scrim {
+  padding: 0;
+  place-items: stretch;
+}
+:root[data-form="phone"] .compose,
+:root[data-form="phone"] .compose.is-docked {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  border: 0;
+  padding-bottom: var(--safe-bottom);
+}
+:root[data-form="phone"] .c-field label {
+  width: auto;
+  min-width: 36px;
+}
+:root[data-form="phone"] .c-tools {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* ---------- Palette and other centered boxes fit the width ---------- */
+:root[data-form="phone"] .cmdk,
+:root[data-form="phone"] .batch {
+  width: calc(100% - 16px);
+  max-width: none;
+}
+:root[data-form="phone"] .scrim:has(> .cmdk) {
+  padding-top: 8px;
+  place-items: start center;
+}
+:root[data-form="phone"] .toast {
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--bar-h) + 24px + var(--safe-bottom));
+  height: auto;
+  min-height: var(--tap);
+}
+:root[data-form="phone"] .toast.ready-note {
+  bottom: calc(16px + var(--safe-bottom));
+}
+
+/* ---------- Settings: the sections as a list, then one as a page ---------- */
+.settings-nav h4 .phone-menu {
+  margin: 0 4px 0 -8px;
+}
+.settings-nav h4:has(.phone-menu) {
+  display: flex;
+  align-items: center;
+}
+:root[data-form="phone"] .settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+:root[data-form="phone"] .settings-nav {
+  position: static;
+  border-right: 0;
+  padding: 12px 8px calc(24px + var(--safe-bottom));
+  overflow-y: auto;
+  min-height: 0;
+}
+:root[data-form="phone"] .settings[data-phone="list"] .settings-body,
+:root[data-form="phone"] .settings[data-phone="page"] .settings-nav {
+  display: none;
+}
+:root[data-form="phone"] .settings-in {
+  padding: 0 var(--pad) calc(140px + var(--safe-bottom));
+}
+:root[data-form="phone"] .settings-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 0;
+}
+:root[data-form="phone"] .settings-search-box {
+  flex: 1;
+  min-width: 0;
+  height: var(--tap);
+}
+:root[data-form="phone"] .settings-index {
+  display: none;
+}
+:root[data-form="phone"] .settings-cols {
+  display: block;
+}
+:root[data-form="phone"] .scard-main {
+  flex-wrap: wrap;
+}
+
+/* ---------- Pages: one column, the page's own padding ---------- */
+:root[data-form="phone"] .page-in {
+  padding-left: var(--pad);
+  padding-right: var(--pad);
+  max-width: 100%;
+}
+:root[data-form="phone"] .choice-cards,
+:root[data-form="phone"] .choice-cards[data-count="2"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---------- Nothing waits for a hover: what a pointer would reveal shows ---------- */
+:root[data-form="phone"]
+:is(.agent-meta, .agent-answer-acts .agent-time, .env-copy, .view-move, .view-acts),
+:root[data-form="phone"] .draft-row .btn {
+  opacity: 1;
+}
+:root[data-form="phone"] .cal-list-acts {
+  display: inline-flex;
+}
+:root[data-form="phone"] .cal-list-row .cal-list-tag {
+  display: none;
+}
+
+/* ---------- The Calendar: the view alone; the side panel needs a wider screen ---------- */
+:root[data-form="phone"] .cal-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+:root[data-form="phone"] .cal-side {
+  display: none;
+}
+:root[data-form="phone"] .cal-wrap .col-head {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+:root[data-form="phone"] .cal-wrap .col-head .count {
+  white-space: nowrap;
+}
+
+/* ---------- Compose's foot wraps rather than running off the side ---------- */
+:root[data-form="phone"] .c-foot {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}

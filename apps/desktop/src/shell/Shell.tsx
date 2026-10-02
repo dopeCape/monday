@@ -40,6 +40,7 @@ import {
   type Picked,
   saveCloudTarget,
 } from "../platform/cloud.ts";
+import { type Form, formOf, type MobileOs, mobileOs, viewport } from "../platform/form.ts";
 import {
   adoptDemoTarget,
   type ConfigFile,
@@ -73,7 +74,19 @@ export interface CustomPalette {
 export interface ShellState {
   settings: Settings;
   pinned: ReadonlySet<SettingKey>;
+  /** The layout in effect: the knobs, or one column at a time in the phone form. */
   layout: Layout;
+  /**
+   * One column at a time ("phone", under appearance.mobile_breakpoint) or the
+   * desktop's columns. A narrow desktop window gets the phone form too.
+   */
+  form: Form;
+  /**
+   * The phone or tablet OS this runs on, or null on a desktop. A mobile OS
+   * has no window frame, no Sidecar, no Config file and no Local runtime: it
+   * is a client of the Server it was paired with.
+   */
+  mobile: MobileOs | null;
   density: Density;
   mode: ThemeMode;
   /** The mode in effect: "system" resolved against the OS preference. */
@@ -175,6 +188,46 @@ export function mergeStored(
     if (isSettingKey(key) && settingScope(key) === "device") out[key] = value;
   }
   return out as PartialSettings;
+}
+
+/** The phone form's layout: no sidebar column (it is a drawer), the agent along the bottom, the stream. */
+export const PHONE_LAYOUT: Layout = { nav: "hidden", agent: "bottom", list: "stream" };
+
+/** The layout in effect for a form: the knobs on a desktop, one column at a time on a phone. */
+export function layoutFor(form: Form, knobs: Layout): Layout {
+  return form === "phone" ? PHONE_LAYOUT : knobs;
+}
+
+/**
+ * What a mobile OS changes in the resolved Settings: the agent runs Hosted,
+ * on the Server, since no command-line runtime runs on a phone.
+ */
+export function forMobile(settings: Settings, mobile: MobileOs | null): Settings {
+  if (!mobile || settings["ai.mode"] === "hosted") return settings;
+  return { ...settings, "ai.mode": "hosted" };
+}
+
+/** The form now and on every resize and turn, for the breakpoint and the OS. */
+export function useForm(breakpoint: number, mobile: MobileOs | null): Form {
+  const [size, setSize] = useState(viewport);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const on = () => setSize(viewport());
+    window.addEventListener("resize", on);
+    window.addEventListener("orientationchange", on);
+    return () => {
+      window.removeEventListener("resize", on);
+      window.removeEventListener("orientationchange", on);
+    };
+  }, []);
+  return formOf(size, breakpoint, mobile);
+}
+
+/** Writes the form and the mobile OS onto the root for the CSS (data-form, data-mobile). */
+export function applyForm(root: HTMLElement, form: Form, mobile: MobileOs | null): void {
+  root.dataset.form = form;
+  if (mobile) root.dataset.mobile = mobile;
+  else delete root.dataset.mobile;
 }
 
 function systemPrefersDark(): boolean {
@@ -279,6 +332,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const [sidecarError, setSidecarError] = useState<string | null>(null);
   const [spawn, setSpawn] = useState<ProcessRunner | null>(null);
   const [hostKind, setHostKind] = useState<"tauri" | "browser" | null>(null);
+  // The OS the platform names, or the user agent's until it answers.
+  const [mobile, setMobile] = useState<MobileOs | null>(() => mobileOs());
   // A demo server (scripts/demo.ts) in the browser: no CLI can be spawned here,
   // so its assistant runs Hosted, on the demo server's scripted runtime.
   const [demo, setDemo] = useState(false);
@@ -298,8 +353,10 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     };
     void platformOf().then(async (p) => {
       if (!alive) return;
-      // Only a Tauri host can spawn a Local runtime's CLI; the browser dev server cannot.
-      if (p.isTauri) setSpawn(() => p.spawn);
+      const os = mobileOs(p);
+      setMobile(os);
+      // Only a desktop Tauri host can spawn a Local runtime's CLI; the browser dev server and a phone cannot.
+      if (p.isTauri && !os) setSpawn(() => p.spawn);
       setHostKind(p.isTauri ? "tauri" : "browser");
       // The browser dev server is the design fixture, whose world has the assistant
       // everywhere: its Workspace's saved Settings say the full AI level. A demo
@@ -361,7 +418,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       ),
     [config.values, stored, demo],
   );
-  const settings = resolved.settings;
+  const settings = useMemo(() => forMobile(resolved.settings, mobile), [resolved.settings, mobile]);
+  const form = useForm(settings["appearance.mobile_breakpoint"], mobile);
 
   // A new picker (and so a new api) only when a target or the preference changes.
   const prefer = settings["server.prefer"];
@@ -477,7 +535,10 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
   const nav = settings["layout.nav"];
   const agent = settings["layout.agent"];
   const list = settings["layout.list"];
-  const layout = useMemo<Layout>(() => ({ nav, agent, list }), [nav, agent, list]);
+  const layout = useMemo<Layout>(
+    () => layoutFor(form, { nav, agent, list }),
+    [form, nav, agent, list],
+  );
   const density = settings["appearance.density"];
   const mode = settings["appearance.mode"];
   const palette = settings["appearance.palette"];
@@ -497,7 +558,18 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
     r.dataset.list = layout.list;
     // "auto" still honours the system's reduce-motion preference (tokens.css); "off" stops everything.
     r.dataset.transitions = transitions ? "auto" : "off";
-  }, [resolvedMode, palette, density, layout.nav, layout.agent, layout.list, transitions]);
+    applyForm(r, form, mobile);
+  }, [
+    resolvedMode,
+    palette,
+    density,
+    layout.nav,
+    layout.agent,
+    layout.list,
+    transitions,
+    form,
+    mobile,
+  ]);
 
   // Light to dark and back crossfade: the root carries data-theme-fade for one
   // slow beat after the mode flips, and app.css transitions colors under it.
@@ -623,6 +695,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       settings,
       pinned: resolved.pinned,
       layout,
+      form,
+      mobile,
       density,
       mode,
       resolvedMode,
@@ -645,6 +719,8 @@ export function Shell({ children, host }: { children: ReactNode; host?: Platform
       settings,
       resolved.pinned,
       layout,
+      form,
+      mobile,
       density,
       mode,
       resolvedMode,
@@ -696,6 +772,8 @@ export function StaticShell({
           | "pinned"
           | "config"
           | "customPalette"
+          | "form"
+          | "mobile"
         >
       >
     | undefined;
@@ -732,15 +810,23 @@ export function StaticShell({
       // Offline: the Settings in hand stay.
     }
   }, [api, scripted]);
+  const form = shellOverrides.form ?? "desktop";
+  const mobile = shellOverrides.mobile ?? null;
+  // The root carries the form for the CSS, as the real Shell writes it.
+  useEffect(() => {
+    if (typeof document !== "undefined") applyForm(document.documentElement, form, mobile);
+  }, [form, mobile]);
   const value = useMemo<ShellState>(
     () => ({
-      settings,
+      settings: forMobile(settings, mobile),
       pinned,
-      layout: {
+      layout: layoutFor(form, {
         nav: settings["layout.nav"],
         agent: settings["layout.agent"],
         list: settings["layout.list"],
-      },
+      }),
+      form,
+      mobile,
       density: settings["appearance.density"],
       mode: settings["appearance.mode"],
       resolvedMode: settings["appearance.mode"] === "dark" ? "dark" : "light",
@@ -760,7 +846,7 @@ export function StaticShell({
       set,
       refresh,
     }),
-    [settings, api, set, refresh, pinned, shellOverrides],
+    [settings, api, set, refresh, pinned, shellOverrides, form, mobile],
   );
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }

@@ -50,6 +50,7 @@ import { chordLabel, type KeyAction } from "../keyboard/keymaps.ts";
 import { type KeyContext, type KeyHandlers, useKeymap } from "../keyboard/useKeymap.ts";
 import { type PeopleSource, withList } from "../people/lookup.ts";
 import { openExternal } from "../platform/open.ts";
+import { DrawerButton } from "../shell/phone.tsx";
 import { useShell } from "../shell/Shell.tsx";
 import { useWorkspace } from "../workspace.tsx";
 import { Agenda, CalendarEmpty } from "./calendar/Agenda.tsx";
@@ -192,7 +193,10 @@ export function Calendar({
   const rawCalendars = useSyncExternalStore(source.subscribe, source.calendars, source.calendars);
   const events = useSyncExternalStore(source.subscribe, source.events, source.events);
   const accounts = useSyncExternalStore(source.subscribe, source.accounts, source.accounts);
-  const [view, setView] = useState<CalendarView>(initialView ?? s["calendar.default_view"]);
+  // A week does not fit a phone: the phone form opens on calendar.phone_view (Agenda or Day).
+  const [view, setView] = useState<CalendarView>(
+    initialView ?? (shell.form === "phone" ? s["calendar.phone_view"] : s["calendar.default_view"]),
+  );
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(nowProp ?? new Date()));
   const [pop, setPop] = useState<Pop | null>(null);
   const [quick, setQuick] = useState<Draft | null>(null);
@@ -998,7 +1002,7 @@ export function Calendar({
   return (
     <div className="main page">
       <div className={`page-wrap cal-wrap${sidebar ? "" : " no-side"}`}>
-        <ColHead title={s["strings.calendar.title"]} count={heading}>
+        <ColHead title={s["strings.calendar.title"]} count={heading} leading={<DrawerButton />}>
           <Vr />
           <Btn
             icon

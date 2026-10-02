@@ -1,7 +1,13 @@
 // One Thread in the list. The same markup serves both list knobs: the CSS
 // under :root[data-list="split"] reflows it into two lines.
 import type { Tag, Thread } from "@monday/shared";
-import { ArchiveIcon, CheckIcon, ClockIcon, PaperclipIcon } from "@phosphor-icons/react";
+import {
+  ArchiveIcon,
+  CheckIcon,
+  ClockIcon,
+  DotsThreeIcon,
+  PaperclipIcon,
+} from "@phosphor-icons/react";
 import type { DragEvent, MouseEvent, ReactNode } from "react";
 import { cx, formatListTime, highlightParts, personName } from "../format.ts";
 import { Icon } from "./icon.tsx";
@@ -47,6 +53,13 @@ export interface MessageRowProps {
     | undefined;
   /** The Thread has an open Draft: the marker's word ("Draft") beside the sender. */
   draft?: string | undefined;
+  /**
+   * A trailing actions button that is always shown, for touch, where nothing
+   * hovers: it opens the row's actions as a menu. Absent, none.
+   */
+  onMore?: ((threadId: string) => void) | undefined;
+  /** The actions button's name. */
+  moreLabel?: string | undefined;
 }
 
 /** Text with the matched words in <mark>. */
@@ -78,6 +91,8 @@ export function MessageRow({
   checkLabel,
   action,
   draft,
+  onMore,
+  moreLabel,
 }: MessageRowProps) {
   const from = personName(thread.participants[0]);
   const label = tags?.[0]?.name;
@@ -160,6 +175,18 @@ export function MessageRow({
           <Mark small />
         </Btn>
       </span>
+      {onMore ? (
+        <Btn
+          icon
+          className="row-more"
+          title={moreLabel ?? "Actions"}
+          aria-label={moreLabel ?? "Actions"}
+          aria-haspopup="menu"
+          onClick={act(onMore)}
+        >
+          <Icon icon={DotsThreeIcon} />
+        </Btn>
+      ) : null}
     </div>
   );
 }

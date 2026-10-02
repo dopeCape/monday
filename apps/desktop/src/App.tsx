@@ -95,7 +95,9 @@ import { Workflows, type WorkflowsView } from "./screens/Workflows.tsx";
 import type { WorkflowsApi } from "./screens/workflows/workflow-data.ts";
 import type { SearchModule } from "./search/index.ts";
 import { useIsActivePane } from "./shell/active.ts";
+import { useBack, useEdgeSwipeBack } from "./shell/back.ts";
 import { groupIconFor, navModel } from "./shell/nav.ts";
+import { DrawerButton, PhoneDrawer, type PhoneNav, PhoneNavContext } from "./shell/phone.tsx";
 import { useShell } from "./shell/Shell.tsx";
 import { sectionsShown, useRuntimeStateOf } from "./shell/sorting-ai.ts";
 import { titleWithWaiting, useWindowBadge, useWindowTitle, windowTitle } from "./shell/title.ts";
@@ -145,6 +147,8 @@ export interface AppProps {
    * Approvals queue follow them. Absent, they are read on start only.
    */
   runFeed?: RunFeed | undefined;
+  /** Syncs now, for the phone list's pull to refresh; the Store's sync in the app. Absent, no pull. */
+  onSync?: (() => Promise<unknown>) | undefined;
 }
 
 /** Detection as the Settings screens and onboarding read it, from what the Device found. */
@@ -214,6 +218,7 @@ export function App({
   calendar,
   draftMemory,
   runFeed,
+  onSync,
 }: AppProps) {
   const shell = useShell();
   const ws = useWorkspace();
@@ -706,7 +711,35 @@ export function App({
     [routingApi, ws.id, shell.settings],
   );
   // New message opens the compose window over the screen that is open.
-  const onCompose = () => compose.openNew();
+  const onCompose = () => {
+    setDrawerOpen(false);
+    compose.openNew();
+  };
+
+  /* ------------------------------ The phone form ------------------------------ */
+
+  // One column at a time: the sidebar is a drawer, and back (the system back,
+  // a swipe in from the left edge, a back button) walks the stack of what is
+  // open: the drawer, the agent sheet, compose, a screen over the Inbox.
+  const phone = shell.form === "phone";
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Any move to another screen, or out of the phone form, closes the drawer.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the screen changing is the trigger
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [phone, active]);
+  const phoneNav = useMemo<PhoneNav>(() => ({ openDrawer: () => setDrawerOpen(true) }), []);
+  useBack(phone && active !== "inbox" && active !== "onboarding", () => setActive("inbox"));
+  useBack(phone && bottomOpen, () => setBottomOpen(false));
+  useBack(phone && compose.overlay !== null, compose.closeOverlay);
+  const backSwipe = shell.settings["appearance.back_swipe"];
+  useEdgeSwipeBack(
+    phone && (backSwipe === "on" || (backSwipe === "auto" && shell.mobile === "ios")),
+    {
+      edge: shell.settings["appearance.back_swipe_edge_px"],
+      distance: shell.settings["inbox.swipe.distance_px"],
+    },
+  );
 
   /** The stream is the Inbox and its lenses; everything else is a page with no stream under it. */
   const onStream = (key: string) =>
@@ -1053,41 +1086,47 @@ export function App({
 
   // The nav's Workflows entry always opens the Workflow list.
   const selectNav = (key: string) => {
+    // A pick in the phone's drawer closes it.
+    setDrawerOpen(false);
     if (key === "workflows") navigate("workflows");
     else if (key === "approvals") setApprovalsOpen((open) => !open);
     else setActive(key);
   };
   const cols: string[] = [];
   const parts: React.ReactNode[] = [];
+  const sidebar = (
+    <NavSidebar
+      key="nav"
+      workspace={nav.workspace}
+      labels={nav.labels}
+      folders={nav.folders}
+      calendar={nav.calendar}
+      groups={navGroups}
+      groupIcon={nav.groupIcon}
+      counts={nav.counts}
+      views={nav.views}
+      sections={nav.sections}
+      // The line waits for the runtimes to answer, so it never flashes on start.
+      sectionsHint={
+        nav.sectionsHint && runtimeState !== null
+          ? { ...nav.sectionsHint, onAction: () => navigate("settings:ai") }
+          : undefined
+      }
+      automation={nav.automation}
+      active={active}
+      onSelect={selectNav}
+      onSearch={() => {
+        setDrawerOpen(false);
+        openSearch();
+      }}
+      onCompose={onCompose}
+      onWorkspace={toggleSwitcher}
+      switcher={switcher}
+    />
+  );
   if (shell.layout.nav === "full") {
     cols.push("var(--nav-w)");
-    parts.push(
-      <NavSidebar
-        key="nav"
-        workspace={nav.workspace}
-        labels={nav.labels}
-        folders={nav.folders}
-        calendar={nav.calendar}
-        groups={navGroups}
-        groupIcon={nav.groupIcon}
-        counts={nav.counts}
-        views={nav.views}
-        sections={nav.sections}
-        // The line waits for the runtimes to answer, so it never flashes on start.
-        sectionsHint={
-          nav.sectionsHint && runtimeState !== null
-            ? { ...nav.sectionsHint, onAction: () => navigate("settings:ai") }
-            : undefined
-        }
-        automation={nav.automation}
-        active={active}
-        onSelect={selectNav}
-        onSearch={openSearch}
-        onCompose={onCompose}
-        onWorkspace={toggleSwitcher}
-        switcher={switcher}
-      />,
-    );
+    parts.push(sidebar);
   }
   // A Group in the nav opens the Inbox as a lens on it; a Section placed in the nav likewise.
   const groupLens = navGroups.some((g) => g.id === active) ? active : undefined;
@@ -1145,7 +1184,7 @@ export function App({
     parts.push(column("left"));
   }
   cols.push("minmax(0, 1fr)");
-  parts.push(
+  const screen =
     active === "settings" ? (
       <Settings
         key={`screen-${settingsSection ?? ""}-${settingsSearch}`}
@@ -1223,6 +1262,20 @@ export function App({
       />
     ) : (
       inboxView(undefined)
+    );
+  // The pages without a list header of their own get the phone's bar: the
+  // drawer button and the page's name over the page.
+  parts.push(
+    phone && (active === "routing" || active === "workflows") ? (
+      <div key="screen" className="phone-stack">
+        <header className="phone-bar">
+          <DrawerButton />
+          <h2>{screenName}</h2>
+        </header>
+        {screen}
+      </div>
+    ) : (
+      screen
     ),
   );
   function inboxView(view: ViewLens | undefined) {
@@ -1255,6 +1308,7 @@ export function App({
         folder={folderLens}
         judge={shell.api.judge}
         meetings={shell.api.meetings}
+        onRefresh={onSync}
       />
     );
   }
@@ -1291,74 +1345,81 @@ export function App({
   const app = (
     <ComposerMentionsContext.Provider value={mentions}>
       <BacklogContext.Provider value={backlogFollow}>
-        <div
-          className="app"
-          data-online={online ? "true" : "false"}
-          style={{ gridTemplateColumns: cols.join(" ") }}
-        >
-          {parts}
-          {reauth}
-          <TemplatesBridge composer={composer} onManage={manageTemplates} />
-          <ComposeLayer
-            compose={compose}
-            composer={composer}
-            now={composeNow}
-            toastMs={shell.settings["inbox.undo_toast_ms"]}
-            undoKey={chordLabel(
-              composeKeymap.undo,
-              typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
-            )}
-            undoLabel={shell.settings["strings.inbox.undo"]}
-          />
-          {approvalsOpen && !aiOff ? (
-            <ApprovalsSheet
-              items={approvals.items}
-              strings={shell.settings}
-              now={now}
-              onDecide={async (item, decision, standing) => {
-                if (item.kind === "run") await approvals.decideRun(item.run, decision, standing);
-                else if (item.kind === "session") {
-                  // The Session's own approval stream resumes the paused turn (ADR 0002).
-                  if (decision === "approved") await agent.approve(item.call.id);
-                  else await agent.decline(item.call.id);
-                }
-              }}
-              onOpenRun={(item) => {
-                setApprovalsOpen(false);
-                navigate(`workflow-run:${item.run.workflowId}:${item.run.id}`);
-              }}
-              onOpenThread={(threadId) => {
-                setApprovalsOpen(false);
-                navigate(`thread:${threadId}`);
-              }}
-              onOpenSession={(item) => {
-                setApprovalsOpen(false);
-                const session = item.kind === "external" ? item.sessionId : null;
-                if (session) void agent.openSession(session);
-                askHere();
-              }}
-              onClose={() => setApprovalsOpen(false)}
-            />
-          ) : null}
-          {approvalNote ? (
-            <Toast
-              key={approvalNote.key}
-              className="ready-note"
-              text={`${approvalNote.title}. ${approvalNote.body}`}
-              undoLabel={shell.settings["strings.nav.approvals"]}
+        <PhoneNavContext.Provider value={phone ? phoneNav : null}>
+          <div
+            className="app"
+            data-online={online ? "true" : "false"}
+            style={{ gridTemplateColumns: cols.join(" ") }}
+          >
+            {parts}
+            {phone ? (
+              <PhoneDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)}>
+                {sidebar}
+              </PhoneDrawer>
+            ) : null}
+            {reauth}
+            <TemplatesBridge composer={composer} onManage={manageTemplates} />
+            <ComposeLayer
+              compose={compose}
+              composer={composer}
+              now={composeNow}
+              toastMs={shell.settings["inbox.undo_toast_ms"]}
               undoKey={chordLabel(
-                composeKeymap["approvals.open"],
+                composeKeymap.undo,
                 typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
               )}
-              onUndo={() => {
-                setApprovalNote(null);
-                setApprovalsOpen(true);
-              }}
-              ms={shell.settings["notifications.note_ms"]}
-              onExpire={() => setApprovalNote(null)}
+              undoLabel={shell.settings["strings.inbox.undo"]}
             />
-          ) : null}
-        </div>
+            {approvalsOpen && !aiOff ? (
+              <ApprovalsSheet
+                items={approvals.items}
+                strings={shell.settings}
+                now={now}
+                onDecide={async (item, decision, standing) => {
+                  if (item.kind === "run") await approvals.decideRun(item.run, decision, standing);
+                  else if (item.kind === "session") {
+                    // The Session's own approval stream resumes the paused turn (ADR 0002).
+                    if (decision === "approved") await agent.approve(item.call.id);
+                    else await agent.decline(item.call.id);
+                  }
+                }}
+                onOpenRun={(item) => {
+                  setApprovalsOpen(false);
+                  navigate(`workflow-run:${item.run.workflowId}:${item.run.id}`);
+                }}
+                onOpenThread={(threadId) => {
+                  setApprovalsOpen(false);
+                  navigate(`thread:${threadId}`);
+                }}
+                onOpenSession={(item) => {
+                  setApprovalsOpen(false);
+                  const session = item.kind === "external" ? item.sessionId : null;
+                  if (session) void agent.openSession(session);
+                  askHere();
+                }}
+                onClose={() => setApprovalsOpen(false)}
+              />
+            ) : null}
+            {approvalNote ? (
+              <Toast
+                key={approvalNote.key}
+                className="ready-note"
+                text={`${approvalNote.title}. ${approvalNote.body}`}
+                undoLabel={shell.settings["strings.nav.approvals"]}
+                undoKey={chordLabel(
+                  composeKeymap["approvals.open"],
+                  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+                )}
+                onUndo={() => {
+                  setApprovalNote(null);
+                  setApprovalsOpen(true);
+                }}
+                ms={shell.settings["notifications.note_ms"]}
+                onExpire={() => setApprovalNote(null)}
+              />
+            ) : null}
+          </div>
+        </PhoneNavContext.Provider>
       </BacklogContext.Provider>
     </ComposerMentionsContext.Provider>
   );
