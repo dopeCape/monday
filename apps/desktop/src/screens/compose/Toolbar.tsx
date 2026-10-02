@@ -3,9 +3,12 @@
 // button names its shortcut, and the shortcuts work with the toolbar hidden
 // (compose.toolbar off). The link opens a small field anchored to its button
 // instead of the browser's prompt, which a desktop webview may not show.
+// In the phone form the row keeps bold, italic, link and bullets and puts
+// numbered, quote and clear formatting behind a More button, as a sheet.
 
 import { Btn, Icon } from "@monday/ui";
 import {
+  DotsThreeIcon,
   LinkSimpleIcon,
   ListBulletsIcon,
   ListNumbersIcon,
@@ -17,6 +20,7 @@ import {
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
 import { chordLabel } from "../../keyboard/keymaps.ts";
+import { useShellForm } from "../../shell/Shell.tsx";
 import { clearFormatting, type EditorStrings, setLink } from "./Editor.tsx";
 import { AnchoredMenu } from "./Menu.tsx";
 
@@ -69,7 +73,11 @@ export function Toolbar({
 }: ToolbarProps) {
   useEditorTick(editor);
   const linkButton = useRef<HTMLButtonElement>(null);
+  const moreButton = useRef<HTMLButtonElement>(null);
   const [href, setHref] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
+  // The phone form folds what does not fit into the More sheet.
+  const compact = useShellForm() === "phone";
 
   useEffect(() => {
     if (linkOpen && editor)
@@ -139,6 +147,9 @@ export function Toolbar({
   ) : null;
 
   if (hidden) return linkField;
+  const numbered = (e: TiptapEditor) => e.chain().focus().toggleOrderedList().run();
+  const quote = (e: TiptapEditor) => e.chain().focus().toggleBlockquote().run();
+  const moreLabel = strings.more ?? strings.formatting;
   return (
     <div className={className ?? "c-tools"} role="toolbar" aria-label={strings.formatting}>
       {tool(
@@ -175,24 +186,38 @@ export function Toolbar({
         (e) => e.chain().focus().toggleBulletList().run(),
         active("bulletList"),
       )}
-      {tool(
-        "ol",
-        strings.numbered,
-        "mod+shift+7",
-        ListNumbersIcon,
-        (e) => e.chain().focus().toggleOrderedList().run(),
-        active("orderedList"),
+      {compact ? (
+        <Btn
+          ref={moreButton}
+          icon
+          sm
+          className="c-tools-more"
+          title={moreLabel}
+          aria-label={moreLabel}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          on={moreOpen || active("orderedList") || active("blockquote")}
+          disabled={!editor}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setMoreOpen((o) => !o)}
+        >
+          <Icon icon={DotsThreeIcon} />
+        </Btn>
+      ) : (
+        <>
+          {tool(
+            "ol",
+            strings.numbered,
+            "mod+shift+7",
+            ListNumbersIcon,
+            numbered,
+            active("orderedList"),
+          )}
+          {tool("q", strings.quote, "mod+shift+b", QuotesIcon, quote, active("blockquote"))}
+          <span className="vr" />
+          {tool("x", strings.clearFormat, "mod+\\", TextTSlashIcon, clearFormatting, false)}
+        </>
       )}
-      {tool(
-        "q",
-        strings.quote,
-        "mod+shift+b",
-        QuotesIcon,
-        (e) => e.chain().focus().toggleBlockquote().run(),
-        active("blockquote"),
-      )}
-      <span className="vr" />
-      {tool("x", strings.clearFormat, "mod+\\", TextTSlashIcon, clearFormatting, false)}
       {templates ? (
         <>
           <span className="vr" />
@@ -202,6 +227,26 @@ export function Toolbar({
       <span className="sp" />
       {assist}
       {linkField}
+      {compact && moreOpen ? (
+        <AnchoredMenu
+          anchor={moreButton.current}
+          label={moreLabel}
+          items={[
+            { key: "ol", label: strings.numbered },
+            { key: "q", label: strings.quote },
+            { key: "x", label: strings.clearFormat },
+          ]}
+          onPick={(key) => {
+            setMoreOpen(false);
+            if (!editor) return;
+            if (key === "ol") numbered(editor);
+            else if (key === "q") quote(editor);
+            else clearFormatting(editor);
+          }}
+          onClose={() => setMoreOpen(false)}
+          className="c-tools-sheet"
+        />
+      ) : null}
     </div>
   );
 }

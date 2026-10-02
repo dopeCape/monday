@@ -6,7 +6,7 @@
 // above it when there is not. Arrows or J/K move, Enter picks, Escape and a
 // click outside close, and the focus goes back to the button.
 
-import { cx, type Placement, placeMenu } from "@monday/ui";
+import { anchoredStyle, cx, type Placement, placeMenu } from "@monday/ui";
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -17,6 +17,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useShellForm } from "../../shell/Shell.tsx";
 
 export interface MenuItem {
   key: string;
@@ -56,6 +57,8 @@ export function AnchoredMenu({
   const host = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
+  // In the phone form the menu is a sheet along the bottom.
+  const sheet = useShellForm() === "phone";
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -133,18 +136,18 @@ export function AnchoredMenu({
   return createPortal(
     <div
       ref={host}
-      className={cx("pop anchored", place?.above && "above", className)}
+      className={cx("pop anchored", place?.above && "above", sheet && "sheet", className)}
       role="menu"
       aria-label={label}
-      data-placement={place ? (place.above ? "above" : "below") : undefined}
-      style={{
-        top: place?.top ?? 0,
-        left: place?.left ?? 0,
-        visibility: place ? undefined : "hidden",
-      }}
+      data-placement={sheet ? "sheet" : place ? (place.above ? "above" : "below") : undefined}
+      style={anchoredStyle(place, sheet)}
       onKeyDown={onKey}
     >
-      {title ? <div className="pop-h">{title}</div> : null}
+      {title ? (
+        <div className="pop-h">{title}</div>
+      ) : sheet ? (
+        <div className="pop-h sheet-h">{label}</div>
+      ) : null}
       {items.map((it, i) => (
         <button
           key={it.key}

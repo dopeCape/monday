@@ -19,6 +19,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useShellForm } from "../../shell/Shell.tsx";
 import { useTemplateCompose } from "../../templates/compose.tsx";
 import { useTemplateLink } from "../../templates/link.ts";
 import { UnfilledPlaceholderError } from "../../templates/placeholders.ts";
@@ -155,9 +156,12 @@ export function ComposeWindow({
     [editor, onSent, onError, draftId, delaySeconds, strings.noRecipients, blocked],
   );
 
-  const minimize = link
-    ? () => link.minimize(draftId, { content: state.current.content, dirty: editor.saving })
-    : undefined;
+  // A phone has no dock to minimize into: compose is a full screen there.
+  const phone = useShellForm() === "phone";
+  const minimize =
+    link && !phone
+      ? () => link.minimize(draftId, { content: state.current.content, dirty: editor.saving })
+      : undefined;
   const discard = link
     ? () => {
         editor.stop();

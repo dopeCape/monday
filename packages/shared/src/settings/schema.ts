@@ -4741,6 +4741,17 @@ export const settingsSchema = {
   "strings.phone.pull": str("appearance", "Phone: pull to sync", "Pull to sync"),
   "strings.phone.release": str("appearance", "Phone: release to sync", "Release to sync"),
   "strings.phone.syncing": str("appearance", "Phone: syncing after a pull", "Syncing"),
+  "strings.phone.more": str("appearance", "Phone: a header's button for what does not fit", "More"),
+  "strings.phone.more_formatting": str(
+    "appearance",
+    "Phone: compose's button for the formatting that does not fit",
+    "More formatting",
+  ),
+  "strings.phone.compose": str(
+    "appearance",
+    "Phone: the list header's new message button",
+    "New message",
+  ),
   "strings.phone.connected": str("server", "Phone: the server line", "Connected to {server}"),
   "strings.phone.not_connected": str(
     "server",

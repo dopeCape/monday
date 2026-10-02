@@ -19,7 +19,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cx } from "../format.ts";
-import { type Placement, placeMenu } from "../placement.ts";
+import { anchoredStyle, opensAsSheet, type Placement, placeMenu } from "../placement.ts";
 import { Icon } from "./icon.tsx";
 
 export interface SelectOption<V extends string> {
@@ -119,6 +119,8 @@ export function Select<V extends string>({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
+  // In the phone form the list opens as a sheet along the bottom, read when it opens.
+  const sheet = open && opensAsSheet();
   const listId = useId();
   const type = useTypeahead();
   const selected = options.findIndex((o) => o.value === value);
@@ -252,15 +254,22 @@ export function Select<V extends string>({
         ? createPortal(
             <div
               ref={host}
-              className={cx("pop anchored dd-float", place?.above && "above", panelClassName)}
-              data-placement={place ? (place.above ? "above" : "below") : undefined}
-              style={{
-                top: place?.top ?? 0,
-                left: place?.left ?? 0,
-                minWidth: button.current?.getBoundingClientRect().width || undefined,
-                visibility: place ? undefined : "hidden",
-              }}
+              className={cx(
+                "pop anchored dd-float",
+                place?.above && "above",
+                sheet && "sheet",
+                panelClassName,
+              )}
+              data-placement={
+                sheet ? "sheet" : place ? (place.above ? "above" : "below") : undefined
+              }
+              style={anchoredStyle(
+                place,
+                sheet,
+                button.current?.getBoundingClientRect().width || undefined,
+              )}
             >
+              {sheet && label ? <div className="pop-h sheet-h">{label}</div> : null}
               <div
                 ref={list}
                 id={listId}
