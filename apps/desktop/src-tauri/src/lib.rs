@@ -1,4 +1,5 @@
 mod config;
+mod links;
 mod db;
 mod notify;
 mod power;
@@ -45,6 +46,7 @@ pub fn run() {
             webview_memory::webview_memory_save,
         ])
         .setup(|app| {
+            links::create_main_window(app)?;
             for window in app.webview_windows().values() {
                 webview_memory::lean_cache(window);
             }

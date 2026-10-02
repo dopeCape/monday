@@ -3,7 +3,7 @@
 // in, its height fitted to the content, links handed to the opener, inline
 // parts resolved with the device token, remote images shown on request.
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   appLook,
   appScheme,
@@ -78,6 +78,9 @@ function prepare(
       .catch(() => {});
   }
 
+  // WebKit runs no listener in a frame with scripts off, so a click never reaches onClick
+  // there: every link opens as a new window, which the Shell sends to the system browser.
+  for (const a of doc.querySelectorAll("a[href]")) a.setAttribute("target", "_blank");
   const onClick = (e: Event) => {
     const target = (e.target as Element | null)?.closest?.("a[href]");
     if (!target) return;
@@ -133,31 +136,36 @@ export function HtmlBody({
   const attachmentRef = useRef(attachmentSrc);
   attachmentRef.current = attachmentSrc;
 
+  // Wires the loaded document: links, images, folds, height. React adds the frame's
+  // onLoad before the srcdoc starts loading, so a body that loads fast is never missed.
+  const teardownRef = useRef<(() => void) | null>(null);
+  const wire = useCallback(() => {
+    const frame = frameRef.current;
+    teardownRef.current?.();
+    teardownRef.current = null;
+    const doc = frame?.contentDocument;
+    if (!frame || !doc?.querySelector(".monday-mail")) return;
+    teardownRef.current = prepare(frame, doc, {
+      host: hostRef.current,
+      images: imagesShown,
+      quotedOpen: quotedRef.current,
+      openLink: (href) => openRef.current?.(href),
+      attachmentSrc: attachmentRef.current
+        ? (id) => attachmentRef.current?.(id) ?? Promise.reject(new Error("no attachments"))
+        : undefined,
+    });
+  }, [imagesShown]);
+
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame || !srcDoc) return;
-    let teardown: (() => void) | null = null;
-    const onLoad = () => {
-      teardown?.();
-      teardown = null;
-      const doc = frame.contentDocument;
-      if (!doc?.querySelector(".monday-mail")) return;
-      teardown = prepare(frame, doc, {
-        host: hostRef.current,
-        images: imagesShown,
-        quotedOpen: quotedRef.current,
-        openLink: (href) => openRef.current?.(href),
-        attachmentSrc: attachmentRef.current
-          ? (id) => attachmentRef.current?.(id) ?? Promise.reject(new Error("no attachments"))
-          : undefined,
-      });
-    };
-    frame.addEventListener("load", onLoad);
+    // Already loaded with this body (a remount, or a load before React listened): wire it now.
+    if (frame.contentDocument?.readyState === "complete") wire();
     return () => {
-      frame.removeEventListener("load", onLoad);
-      teardown?.();
+      teardownRef.current?.();
+      teardownRef.current = null;
     };
-  }, [srcDoc, imagesShown]);
+  }, [srcDoc, wire]);
 
   // Folding and unfolding the history needs no reload, only a new height.
   useEffect(() => {
@@ -182,6 +190,7 @@ export function HtmlBody({
           title={strings.frameTitle}
           sandbox="allow-same-origin allow-popups"
           srcDoc={srcDoc}
+          onLoad={wire}
         />
       </div>
       {hasQuoted || (hasBlocked && !imagesShown) ? (
