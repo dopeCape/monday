@@ -81,9 +81,18 @@ export function templateErrors(input: TemplateInput): string[] {
  * The input tidied for saving: trimmed text, a reply without a subject, and
  * the Placeholders in order of first use (unknown order keeps declaration order).
  */
+/** `{{name}}` (the way many tools write it) read as monday's `{name}`; `{{ Name? }}` too. */
+export function singleBraces(text: string): string {
+  return text.replace(
+    /\{\{\s*([A-Za-z][A-Za-z0-9_]{0,63})\s*(\?)?\s*\}\}/g,
+    (_, name: string, optional?: string) => `{${name.toLowerCase()}${optional ?? ""}}`,
+  );
+}
+
 export function tidyTemplate(input: TemplateInput): TemplateInput {
-  const subject = input.kind === "starter" ? input.subject?.trim() || null : null;
-  const body = input.body.replace(/\r\n/g, "\n").trim();
+  const subject =
+    input.kind === "starter" ? singleBraces(input.subject ?? "").trim() || null : null;
+  const body = singleBraces(input.body.replace(/\r\n/g, "\n")).trim();
   const order = templateUses({ subject, body }).map((u) => u.name);
   const rank = (name: string) => {
     const i = order.indexOf(name);

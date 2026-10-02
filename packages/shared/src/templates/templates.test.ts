@@ -299,3 +299,20 @@ describe("Markdown files", () => {
     expect(templateFileName("  ")).toBe("template.md");
   });
 });
+
+describe("double braces", () => {
+  test("{{firstname}} saves as {firstname}, so a filled reply never shows a stray brace", () => {
+    const tidy = tidyTemplate({
+      name: "Rejection",
+      fitsWhen: "A candidate follows up and there is no position",
+      kind: "reply",
+      subject: null,
+      body: "hi {{firstname}} ,\nthanks, {{ Role? }} is closed",
+      placeholders: [
+        { name: "firstname", type: "first_name", optional: false, hint: "their first name" },
+        { name: "role", type: "text", optional: true, hint: "the role" },
+      ],
+    } as TemplateInput);
+    expect(tidy.body).toBe("hi {firstname} ,\nthanks, {role?} is closed");
+  });
+});

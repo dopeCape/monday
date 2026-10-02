@@ -11820,6 +11820,8 @@ button.appr-link:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* The card's own inset, as .scard-main gives the other Settings cards. */
+  padding: 18px 22px;
 }
 .tpl-field {
   display: flex;
