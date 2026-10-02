@@ -142,7 +142,17 @@ export class GmailClient {
   private readonly maxRetries: number;
 
   constructor(private readonly options: GmailClientOptions) {
-    this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
+    const base = options.fetch ?? ((input, init) => fetch(input, init));
+    // A request that never got an answer (a timeout, a dropped connection, no
+    // network) is a network error: Jobs retry it, a send backs off and tries again.
+    this.fetch = async (input, init) => {
+      try {
+        return await base(input, init);
+      } catch (error) {
+        if (error instanceof ProviderError) throw error;
+        throw new ProviderError(error instanceof Error ? error.message : String(error), "network");
+      }
+    };
     this.quota =
       options.quota ??
       gmailQuotaBucket({
@@ -177,18 +187,30 @@ export class GmailClient {
     for (let attempt = 0; ; attempt++) {
       const token = await this.token();
       const isJson = options.body !== undefined && !(options.body instanceof Uint8Array);
-      const response = await this.fetch(target, {
-        method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/json",
-          ...(isJson ? { "content-type": "application/json" } : {}),
-          ...(options.headers ?? {}),
-        },
-        ...(options.body !== undefined
-          ? { body: isJson ? JSON.stringify(options.body) : (options.body as Uint8Array) }
-          : {}),
-      });
+      const method = options.method ?? (options.body !== undefined ? "POST" : "GET");
+      let response: Response;
+      try {
+        response = await this.fetch(target, {
+          method,
+          headers: {
+            authorization: `Bearer ${token}`,
+            accept: "application/json",
+            ...(isJson ? { "content-type": "application/json" } : {}),
+            ...(options.headers ?? {}),
+          },
+          ...(options.body !== undefined
+            ? { body: isJson ? JSON.stringify(options.body) : (options.body as Uint8Array) }
+            : {}),
+        });
+      } catch (error) {
+        // A read can be asked again at once; a write (a send) is left to its Job, which
+        // knows whether trying again is safe.
+        if (method === "GET" && attempt < this.maxRetries) {
+          await this.sleep(backoffMs(attempt, this.random));
+          continue;
+        }
+        throw error;
+      }
       if (response.ok) return response;
       if (response.status === 401 && !refreshed) {
         refreshed = true;
