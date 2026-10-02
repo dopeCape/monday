@@ -245,9 +245,10 @@ export interface Store {
   /**
    * Cache-only writes that are not intents and never reach the Outbox: bodies
    * landing from the content routes, meta rows, evictions. One transaction;
-   * live queries over the touched tables refresh.
+   * live queries over the touched tables refresh; with `threadIds`, only those
+   * Threads' live queries (a reader) and rows.
    */
-  write(statements: Statement[]): Promise<void>;
+  write(statements: Statement[], threadIds?: readonly Id[]): Promise<void>;
   /** Stores decrypted bodies for Messages the Cache already has headers for; returns how many landed. */
   applyBodies(bodies: readonly MessageBodyRow[], at?: IsoDate): Promise<number>;
   /** Drains the Outbox in order, then pulls the Changes feed from the cursor. Never throws. */
@@ -1935,8 +1936,8 @@ export async function createStore(options: StoreOptions): Promise<Store> {
       ]);
     },
 
-    async write(statements) {
-      await write(statements);
+    async write(statements, threadIds) {
+      await write(statements, threadIds);
     },
 
     async applyBodies(bodies, at = now().toISOString()) {

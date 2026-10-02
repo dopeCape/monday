@@ -2655,6 +2655,16 @@ export const settingsSchema = {
     label: "Recent searches",
     help: "How many recent searches the palette remembers. Per device.",
   }),
+  "search.prewarm_pause_ms": setting({
+    type: z.int().min(0).max(60_000),
+    default: 400,
+    scope: "device",
+    section: "server",
+    group: "Storage",
+    tier: "advanced",
+    label: "Pause between pre-warm batches",
+    help: "How long the background fill of mail bodies waits between batches, in milliseconds. Longer is gentler on the CPU while it fills; shorter fills sooner. Per device.",
+  }),
   "search.prewarm_batch": setting({
     type: z.int().min(1).max(1000),
     default: 200,

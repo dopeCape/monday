@@ -31,6 +31,8 @@ export interface PrewarmSettings {
   onBattery: boolean;
   /** Bodies per request. */
   batch: number;
+  /** The wait between batches (search.prewarm_pause_ms); the timing option's when absent. */
+  pauseMs?: number | undefined;
 }
 
 export interface PrewarmConditions {
@@ -252,7 +254,13 @@ export function createPrewarm(options: PrewarmOptions): Prewarm {
         params: [stamp, windowStart, before],
       });
     }
-    if (marks.length > 0) await store.write(marks);
+    // The Threads the marks touch, so only their open readers look again.
+    // The Threads the marks touch, so only their open readers look again; a gap mark (a date
+    // range with no bodies) names none, so every reader checks.
+    const gap = landed === 0 && page.bodies.length === 0;
+    if (marks.length > 0) {
+      await store.write(marks, gap ? undefined : [...new Set(page.bodies.map((b) => b.threadId))]);
+    }
     bytes = await bodyBytes(store);
     log(`pre-warm: ${landed} bodies landed, ${bytes} bytes held`);
     return finish({ kind: "fetched", landed, evicted });
@@ -270,7 +278,8 @@ export function createPrewarm(options: PrewarmOptions): Prewarm {
         let delay = timing.idleMs;
         try {
           const result = await step();
-          if (result.kind === "fetched") delay = timing.betweenBatchesMs;
+          if (result.kind === "fetched")
+            delay = options.settings().pauseMs ?? timing.betweenBatchesMs;
           else if (result.kind === "paused") delay = timing.pausedMs;
         } catch (error) {
           log(`pre-warm failed: ${error instanceof Error ? error.message : String(error)}`);

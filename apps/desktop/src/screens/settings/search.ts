@@ -189,6 +189,11 @@ export function searchSettings(
   }
   hits.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    // On a tie a panel (a whole page, such as Devices) comes before the single settings
+    // that matched the same words, so adding settings to a section never pushes it out.
+    const ap = a.entry.kind === "panel" ? 0 : 1;
+    const bp = b.entry.kind === "panel" ? 0 : 1;
+    if (ap !== bp) return ap - bp;
     const ac = a.entry.section === options.current ? 0 : 1;
     const bc = b.entry.section === options.current ? 0 : 1;
     if (ac !== bc) return ac - bc;

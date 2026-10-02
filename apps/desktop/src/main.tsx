@@ -102,6 +102,7 @@ function Root() {
           onMetered: settingsRef.current["search.prewarm_on_metered"],
           onBattery: settingsRef.current["search.prewarm_on_battery"],
           batch: settingsRef.current["search.prewarm_batch"],
+          pauseMs: settingsRef.current["search.prewarm_pause_ms"],
         }),
         log: (m) => console.info(`[search] ${m}`),
       });
