@@ -577,6 +577,8 @@ function InboxBody({
   );
   const cacheFilter = inbox.list !== undefined && !isFilterEmpty(resolved);
   const listKey: ThreadListKey = cacheFilter ? filterListKey(baseKey, resolved) : baseKey;
+  // A list whose first page is not read yet is loading, not empty (Sent, Archive, a Group).
+  const listLoading = inbox.listLoaded ? !inbox.listLoaded(listKey) : false;
   const streamOf = useCallback(
     () =>
       cacheFilter
@@ -3167,7 +3169,11 @@ function InboxBody({
                   <StreamTodayPanel calendar={calendar} now={now} settings={settings} />
                 ) : null}
                 {!searching ? panels : null}
-                {items.length === 0 && !syncing ? (
+                {items.length === 0 && !syncing && listLoading && !searching ? (
+                  <div className="empty-line" role="status">
+                    {t("strings.inbox.list_loading")}
+                  </div>
+                ) : items.length === 0 && !syncing ? (
                   lens && !searching && !filtering ? (
                     // A Group routes new mail as it arrives; what was already here moves
                     // only when it is sorted, which the Agent does with a preview first.

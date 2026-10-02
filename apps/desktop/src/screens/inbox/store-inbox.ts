@@ -132,6 +132,11 @@ export interface StoreInboxOptions {
   owner?: string | undefined;
   /** The inbox.memory_window Setting: the rows each list holds at first and reads per page. */
   memoryWindow?: (() => number) | undefined;
+  /**
+   * How many rows a list reads before it first shows (inbox.first_page): the rest of
+   * its window follows in the background, so a folder opens at once.
+   */
+  firstPage?: (() => number) | undefined;
   /** The inbox.memory_lookups Setting: Threads read by id kept once nothing shows them. */
   memoryLookups?: (() => number) | undefined;
   log?: ((message: string) => void) | undefined;
@@ -531,6 +536,7 @@ export async function createStoreInbox(
   }
   const lists = new Map<ThreadListKey, Held>();
   const windowSize = () => Math.max(1, Math.floor(options.memoryWindow?.() ?? 1500));
+  const firstPage = () => Math.max(1, Math.floor(options.firstPage?.() ?? 100));
   /** How far under its window a list may fall (Threads archived away) before it reads more. */
   const slack = () => Math.floor(windowSize() / 4);
   /** Threads read by id outside every list (a search result, a link), with the ones asked for since the last pass. */
@@ -655,10 +661,13 @@ export async function createStoreInbox(
   const fill = async (h: Held): Promise<boolean> => {
     if (lists.get(h.key) !== h) return false;
     if (!h.loaded) {
-      const rows = (await readPage(h, null, h.want)).map(canon);
+      // A small first page shows the list at once; the rest of its window reads next.
+      const first = Math.min(h.want, firstPage());
+      const rows = (await readPage(h, null, first)).map(canon);
       setRows(h, rows);
-      h.complete = rows.length < h.want;
+      h.complete = rows.length < first;
       h.loaded = true;
+      if (!h.complete && rows.length < h.want) needFill.add(h);
       return true;
     }
     if (h.complete || h.rows.length >= h.want) return false;
@@ -898,6 +907,11 @@ export async function createStoreInbox(
             const ask = [...lookups];
             lookups.clear();
             if (await lookUp(ask)) changed = true;
+          }
+          // Rows first: a list shows as soon as its page is in, before any count is read.
+          if (changed) {
+            project();
+            changed = false;
           }
           let countsChanged = false;
           if (countsStale) {
@@ -1167,6 +1181,9 @@ export async function createStoreInbox(
     folder: (key) => ensureList(key).threads,
     group: (groupId) => ensureList(`group:${groupId}`).threads,
     list: (key) => ensureList(key).threads,
+    listLoaded(key) {
+      return lists.get(key)?.loaded ?? false;
+    },
     listTotal(key) {
       const h = lists.get(key);
       if (!h?.loaded) return null;

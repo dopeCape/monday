@@ -78,6 +78,28 @@ describe("the Store's folders", () => {
     return Object.assign(inbox, { store: fake.store });
   }
 
+  test("a folder is loading, not empty, until its first page is read; it shows that page, then the rest of its window", async () => {
+    const fake = await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } });
+    const inbox = await createStoreInbox(fake.store, { owner: OWNER, firstPage: () => 1 });
+    expect(inbox.listLoaded?.("archive")).toBe(false);
+    inbox.folder("archive");
+    expect(inbox.listLoaded?.("archive")).toBe(false);
+    // How many Archive holds, read whole by a seam with the default first page.
+    const whole = await createStoreInbox(
+      (await createFakeStore({ driver: bunDriver(), backoff: { minMs: 5, maxMs: 20 } })).store,
+      { owner: OWNER },
+    );
+    whole.folder("archive");
+    await settled(() => whole.listLoaded?.("archive") === true);
+    const archived = whole.folder("archive").length;
+    whole.close();
+    expect(archived).toBeGreaterThan(1);
+    await settled(() => inbox.listLoaded?.("archive") === true);
+    // The rest of the window follows the first page of one.
+    await settled(() => inbox.folder("archive").length === archived);
+    inbox.close();
+  });
+
   test("each folder follows the Cache after an action, and hands out a stable list", async () => {
     const inbox = await open();
     // Each folder reads its own query on first use.

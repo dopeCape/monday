@@ -105,6 +105,8 @@ export interface InboxSource {
    * someone asks (the selection bar's "Select all").
    */
   listTotal?(key: ThreadListKey): number | null;
+  /** Whether a list's first page has been read: until then it is loading, not empty. */
+  listLoaded?(key: ThreadListKey): boolean;
   /**
    * Every Thread id of a list over the whole Cache, in the list's order, not
    * only the ones held in memory: "Select all" acts on these.
