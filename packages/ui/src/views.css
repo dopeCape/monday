@@ -196,9 +196,20 @@
   color: var(--fg);
   background: var(--hover);
 }
-.view-move-pop {
-  top: 36px;
-  right: 8px;
+/* The Move to menu floats over the page at its button (ViewBlocks' FloatingAt). */
+.view-float {
+  position: fixed;
+  z-index: 60;
+  width: 0;
+  height: 0;
+}
+.view-float .view-move-pop {
+  top: 0;
+  right: 0;
+}
+.view-float[data-up] .view-move-pop {
+  top: auto;
+  bottom: 0;
 }
 
 /* counts: one line of Lane counts, each a button that filters */

@@ -194,7 +194,11 @@ interface Mounted {
   opened: string[];
 }
 
-async function mount(v: View, threads: CachedViewThread[]): Promise<Mounted> {
+async function mount(
+  v: View,
+  threads: CachedViewThread[],
+  onMove?: (threadId: string, lane: string | null) => void,
+): Promise<Mounted> {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -217,6 +221,7 @@ async function mount(v: View, threads: CachedViewThread[]): Promise<Mounted> {
           out.actions.push({ id: a.id, rows: rows.map((x) => x.thread.id), where })
         }
         onDone={(id, isDone, n) => out.done.push([id, isDone, n])}
+        onMove={onMove}
       />,
     ),
   );
@@ -229,6 +234,23 @@ const click = async (el: Element | null | undefined) => {
 };
 
 describe("the Blocks on the Device", () => {
+  test("Move to opens over the page, outside the sideways-scrolling lanes, and a pick moves the row", async () => {
+    const moved: Array<[string, string | null]> = [];
+    const { el } = await mount(view(AMAZON_ORDERS_VIEW), amazon(), (id, lane) =>
+      moved.push([id, lane]),
+    );
+    const row = el.querySelector<HTMLElement>('[data-block="orders"] .view-row');
+    await click(row?.querySelector(".view-move"));
+    const pop = document.querySelector(".view-float .view-move-pop");
+    expect(pop).not.toBeNull();
+    // Not inside the lanes, whose sideways scroll clips what hangs below them.
+    expect(el.querySelector(".view-lanes .view-move-pop")).toBeNull();
+    await click(pop?.querySelector(".pop-item"));
+    expect(moved).toHaveLength(1);
+    expect(moved[0]?.[0]).toBe(row?.getAttribute("data-thread") ?? "");
+    expect(document.querySelector(".view-float")).toBeNull();
+  });
+
   test("Amazon orders: this month's spend, a bar a month, one card per order in its Lane", async () => {
     const { el, actions } = await mount(view(AMAZON_ORDERS_VIEW), amazon());
     expect(el.querySelector('[data-block="spend"] .view-stat .num')?.textContent).toBe("$120.00");

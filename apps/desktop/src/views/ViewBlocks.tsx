@@ -72,7 +72,8 @@ import {
   TagIcon,
   TruckIcon,
 } from "@phosphor-icons/react";
-import { type DragEvent, type ReactNode, useMemo, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { carriesThreads, readThreadDrag } from "../agent/aui/mentions.tsx";
 import { Picker } from "../screens/inbox/Picker.tsx";
 import type { CachedViewThread } from "../store/views.ts";
@@ -311,6 +312,7 @@ function LaneRow({
   actions: readonly ViewAction[];
 }) {
   const [picking, setPicking] = useState(false);
+  const moveRef = useRef<HTMLButtonElement>(null);
   const s = props.settings;
   const doc = props.view.doc;
   const lanes = [
@@ -330,6 +332,7 @@ function LaneRow({
       {movable ? (
         <button
           type="button"
+          ref={moveRef}
           className="view-move"
           title={s["strings.views.move_to"]}
           aria-label={`${s["strings.views.move_to"]}: ${thread.thread.subject}`}
@@ -339,17 +342,19 @@ function LaneRow({
         </button>
       ) : null}
       {picking && props.onMove ? (
-        <Picker
-          className="view-move-pop"
-          label={s["strings.views.move_to"]}
-          title={s["strings.views.move_to"]}
-          items={lanes}
-          onPick={(key) => {
-            setPicking(false);
-            props.onMove?.(thread.id, key);
-          }}
-          onClose={() => setPicking(false)}
-        />
+        <FloatingAt anchor={moveRef.current} onAway={() => setPicking(false)}>
+          <Picker
+            className="view-move-pop"
+            label={s["strings.views.move_to"]}
+            title={s["strings.views.move_to"]}
+            items={lanes}
+            onPick={(key) => {
+              setPicking(false);
+              props.onMove?.(thread.id, key);
+            }}
+            onClose={() => setPicking(false)}
+          />
+        </FloatingAt>
       ) : null}
     </div>
   );
@@ -998,5 +1003,46 @@ export function ViewBlocks(props: ViewBlocksProps) {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A popover laid over the page at its anchor, outside the Block: the lanes scroll
+ * sideways, which clips anything that hangs below them. It opens under the anchor,
+ * or over it when the window has no room below, and closes when anything scrolls.
+ */
+function FloatingAt({
+  anchor,
+  onAway,
+  children,
+}: {
+  anchor: HTMLElement | null;
+  onAway: () => void;
+  children: ReactNode;
+}) {
+  const [box] = useState(() => anchor?.getBoundingClientRect() ?? null);
+  useEffect(() => {
+    const away = () => onAway();
+    window.addEventListener("resize", away);
+    window.addEventListener("scroll", away, true);
+    return () => {
+      window.removeEventListener("resize", away);
+      window.removeEventListener("scroll", away, true);
+    };
+  }, [onAway]);
+  if (!box || typeof document === "undefined") return null;
+  const up = window.innerHeight - box.bottom < Math.min(320, box.top);
+  return createPortal(
+    <div
+      className="view-float"
+      data-up={up || undefined}
+      style={{
+        top: up ? box.top - 4 : box.bottom + 4,
+        left: box.right,
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
   );
 }
