@@ -9481,6 +9481,22 @@ export const settingsSchema = {
     "Phone: certificate mismatch",
     "The computer at that address is not the one that made this code. Pairing stopped.",
   ),
+  "strings.mobile.unreachable.title": str(
+    "server",
+    "Phone: paired Server not answering",
+    "Cannot reach {name}",
+  ),
+  "strings.mobile.unreachable.body": str(
+    "server",
+    "Phone: why the Server may not answer",
+    "monday on your computer is not answering. Check that it is running and that this phone is on the same network, then try again.",
+  ),
+  "strings.mobile.unreachable.retry": str("server", "Phone: try the Server again", "Try again"),
+  "strings.mobile.unreachable.pair_again": str(
+    "server",
+    "Phone: pair with another computer",
+    "Pair again",
+  ),
   "strings.mobile.status.connected": str("server", "Phone: connected", "Connected to {name}"),
   "strings.mobile.status.connecting": str(
     "server",

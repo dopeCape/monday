@@ -5,7 +5,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import type { FetchLike } from "../platform/cloud.ts";
 import type { RemoteTarget } from "../platform/remote.ts";
-import { Connect, type ConnectProps, RemoteStatus } from "./Connect.tsx";
+import { Connect, type ConnectProps, PhoneUnreachable, RemoteStatus } from "./Connect.tsx";
 
 let createRoot: Awaited<ReturnType<typeof dom>>["createRoot"];
 beforeAll(async () => {
@@ -124,5 +124,24 @@ describe("Connect to your monday", () => {
     expect(q("[data-remote-state]")?.textContent).toBe(
       "Your monday is locked. Open it on your computer.",
     );
+  });
+
+  test("a paired phone whose computer does not answer says so, with Try again and Pair again", async () => {
+    const calls: string[] = [];
+    await render(
+      <PhoneUnreachable
+        name="tejas-laptop"
+        onRetry={() => calls.push("retry")}
+        onPairAgain={() => calls.push("pair again")}
+      />,
+    );
+    expect(q("h1")?.textContent).toBe("Cannot reach tejas-laptop");
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>("[data-screen=unreachable] button"),
+    ];
+    expect(buttons.map((b) => b.textContent)).toEqual(["Try again", "Pair again"]);
+    await act(async () => buttons[0]?.click());
+    await act(async () => buttons[1]?.click());
+    expect(calls).toEqual(["retry", "pair again"]);
   });
 });

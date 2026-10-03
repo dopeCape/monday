@@ -188,3 +188,34 @@ export function RemoteStatus({
     </div>
   );
 }
+
+/**
+ * A paired phone whose Server does not answer (the computer is off, monday is not
+ * running there, or the phone is on another network): what happened, Try again,
+ * and Pair again for a phone that should talk to another computer.
+ */
+export function PhoneUnreachable({
+  name,
+  settings,
+  onRetry,
+  onPairAgain,
+}: {
+  name: string;
+  settings?: Settings | undefined;
+  onRetry: () => void;
+  onPairAgain: () => void;
+}) {
+  const s = settings ?? defaultSettings();
+  return (
+    <main className="connect-phone phone-unreachable" data-screen="unreachable" role="alert">
+      <h1>{s["strings.mobile.unreachable.title"].replaceAll("{name}", name)}</h1>
+      <p>{s["strings.mobile.unreachable.body"]}</p>
+      <div className="connect-actions">
+        <Btn primary onClick={onRetry}>
+          {s["strings.mobile.unreachable.retry"]}
+        </Btn>
+        <Btn onClick={onPairAgain}>{s["strings.mobile.unreachable.pair_again"]}</Btn>
+      </div>
+    </main>
+  );
+}

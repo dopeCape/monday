@@ -3245,6 +3245,12 @@ form.agent-bar {
   font-size: var(--fs-2xl);
   font-weight: 600;
 }
+.connect-phone .connect-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
 .connect-phone .err {
   color: var(--danger);
 }

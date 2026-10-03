@@ -11,7 +11,7 @@ import { newMailNotice } from "./notifications/new-mail.ts";
 import { sidecarToldOnce } from "./notifications/sidecar-told.ts";
 import type { AccountView } from "./platform/api.ts";
 import { platform, platformNotifier } from "./platform/tauri.ts";
-import { Connect } from "./screens/Connect.tsx";
+import { Connect, PhoneUnreachable } from "./screens/Connect.tsx";
 import { createStoreCalendar, type StoreCalendar } from "./screens/calendar/calendar-data.ts";
 import { createStoreComposer, type StoreComposer } from "./screens/compose/store-composer.ts";
 import { FirstSyncGate } from "./screens/FirstSync.tsx";
@@ -328,9 +328,12 @@ function WorkspaceGate() {
 function Gate(): ReactNode {
   const shell = useShell();
   const [accounts, setAccounts] = useState<AccountView[] | null>(null);
+  /** Try again on the phone's unreachable screen: asks for the Accounts at once. */
+  const [retry, setRetry] = useState(0);
   const server = shell.server;
   const pollMs = shell.settings["server.first_run_poll_seconds"] * 1000;
   const appOpen = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Try again bumps retry to ask at once
   useEffect(() => {
     if (!server) return;
     let stopped = false;
@@ -352,7 +355,7 @@ function Gate(): ReactNode {
       stopped = true;
       if (timer) clearTimeout(timer);
     };
-  }, [server, shell.api, pollMs]);
+  }, [server, shell.api, pollMs, retry]);
 
   // The workspace switcher writes workspace.current; the Account it names opens here.
   const picked = pickAccount(accounts, shell.settings["workspace.current"]);
@@ -443,6 +446,17 @@ function Gate(): ReactNode {
   // says what happened and offers the Cloud) rather than a blank window.
   const waitMs = shell.settings["server.probe_seconds"] * 1000;
   const [waited, setWaited] = useState(false);
+  // A phone waits as long for its paired Server before it says it cannot reach it.
+  const [phoneWaited, setPhoneWaited] = useState(false);
+  const phoneWaiting = !!shell.phone && !!server && accounts === null;
+  useEffect(() => {
+    if (!phoneWaiting) {
+      setPhoneWaited(false);
+      return;
+    }
+    const timer = setTimeout(() => setPhoneWaited(true), waitMs);
+    return () => clearTimeout(timer);
+  }, [phoneWaiting, waitMs]);
   useEffect(() => {
     if (shell.host !== "tauri" || server) {
       setWaited(false);
@@ -452,6 +466,23 @@ function Gate(): ReactNode {
     return () => clearTimeout(timer);
   }, [shell.host, server, waitMs]);
 
+  // A phone whose paired Server has not answered within the probe wait: say so and offer
+  // Try again and Pair again, rather than a blank screen while it keeps asking.
+  if (shell.phone && shell.remote && server && accounts === null && phoneWaited) {
+    const remote = shell.remote;
+    return (
+      <PhoneUnreachable
+        name={remote.name}
+        settings={shell.settings}
+        onRetry={() => {
+          setPhoneWaited(false);
+          void shell.refreshServers();
+          setRetry((n) => n + 1);
+        }}
+        onPairAgain={() => void shell.setRemote(null)}
+      />
+    );
+  }
   // The host is unknown, the Sidecar is still starting, or the Accounts have not answered.
   if (shell.host === null || (server && accounts === null)) return null;
   // The dev server's first sync screen over fixture progress (no Server to read).
