@@ -143,5 +143,15 @@ describe("Connect to your monday", () => {
     await act(async () => buttons[0]?.click());
     await act(async () => buttons[1]?.click());
     expect(calls).toEqual(["retry", "pair again"]);
+    // While it asks again the screen stays, and Try again says it is trying.
+    await act(async () =>
+      root?.render(
+        <PhoneUnreachable name="tejas-laptop" retrying onRetry={() => {}} onPairAgain={() => {}} />,
+      ),
+    );
+    expect(q("h1")?.textContent).toBe("Cannot reach tejas-laptop");
+    const retry = document.querySelector<HTMLButtonElement>("[data-screen=unreachable] button");
+    expect(retry?.textContent).toBe("Trying again…");
+    expect(retry?.disabled).toBe(true);
   });
 });

@@ -197,11 +197,14 @@ export function RemoteStatus({
 export function PhoneUnreachable({
   name,
   settings,
+  retrying = false,
   onRetry,
   onPairAgain,
 }: {
   name: string;
   settings?: Settings | undefined;
+  /** Try again is asking right now: the button says so and waits. */
+  retrying?: boolean | undefined;
   onRetry: () => void;
   onPairAgain: () => void;
 }) {
@@ -211,8 +214,8 @@ export function PhoneUnreachable({
       <h1>{s["strings.mobile.unreachable.title"].replaceAll("{name}", name)}</h1>
       <p>{s["strings.mobile.unreachable.body"]}</p>
       <div className="connect-actions">
-        <Btn primary onClick={onRetry}>
-          {s["strings.mobile.unreachable.retry"]}
+        <Btn primary disabled={retrying} onClick={onRetry}>
+          {s[retrying ? "strings.mobile.unreachable.retrying" : "strings.mobile.unreachable.retry"]}
         </Btn>
         <Btn onClick={onPairAgain}>{s["strings.mobile.unreachable.pair_again"]}</Btn>
       </div>

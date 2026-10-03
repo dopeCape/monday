@@ -4487,6 +4487,16 @@ export const settingsSchema = {
     label: "Wrong codes allowed",
     help: "Wrong short codes the server accepts while a phone code is open before it cancels every open code, so a guesser on the network cannot keep trying.",
   }),
+  "server.phone_wait_seconds": setting({
+    type: z.int().min(1).max(120),
+    default: 8,
+    scope: "device",
+    section: "server",
+    group: "Connection",
+    tier: "advanced",
+    label: "Phone: wait before saying the computer is unreachable",
+    help: "How long a paired phone waits for its computer to answer before it says it cannot reach it and offers Try again and Pair again. It keeps asking meanwhile.",
+  }),
   "server.probe_seconds": setting({
     type: z.int().min(5).max(600),
     default: 30,
@@ -9492,6 +9502,11 @@ export const settingsSchema = {
     "monday on your computer is not answering. Check that it is running and that this phone is on the same network, then try again.",
   ),
   "strings.mobile.unreachable.retry": str("server", "Phone: try the Server again", "Try again"),
+  "strings.mobile.unreachable.retrying": str(
+    "server",
+    "Phone: asking the Server again",
+    "Trying again…",
+  ),
   "strings.mobile.unreachable.pair_again": str(
     "server",
     "Phone: pair with another computer",

@@ -448,15 +448,23 @@ function Gate(): ReactNode {
   const [waited, setWaited] = useState(false);
   // A phone waits as long for its paired Server before it says it cannot reach it.
   const [phoneWaited, setPhoneWaited] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const phoneWaiting = !!shell.phone && !!server && accounts === null;
+  const phoneWaitMs = shell.settings["server.phone_wait_seconds"] * 1000;
   useEffect(() => {
     if (!phoneWaiting) {
       setPhoneWaited(false);
       return;
     }
-    const timer = setTimeout(() => setPhoneWaited(true), waitMs);
+    const timer = setTimeout(() => setPhoneWaited(true), phoneWaitMs);
     return () => clearTimeout(timer);
-  }, [phoneWaiting, waitMs]);
+  }, [phoneWaiting, phoneWaitMs]);
+  // Try again shows its progress for one poll; a failed ask leaves the screen as it was.
+  useEffect(() => {
+    if (!retrying) return;
+    const timer = setTimeout(() => setRetrying(false), Math.max(2000, pollMs));
+    return () => clearTimeout(timer);
+  }, [retrying, pollMs]);
   useEffect(() => {
     if (shell.host !== "tauri" || server) {
       setWaited(false);
@@ -474,8 +482,10 @@ function Gate(): ReactNode {
       <PhoneUnreachable
         name={remote.name}
         settings={shell.settings}
+        retrying={retrying}
         onRetry={() => {
-          setPhoneWaited(false);
+          // The screen stays while it asks again; only an answer takes it away.
+          setRetrying(true);
           void shell.refreshServers();
           setRetry((n) => n + 1);
         }}
